@@ -34,6 +34,7 @@ outputs/
 grad_cam_outputs/
 workspace_traces/
 slipnet_snapshots/
+developer/ # <--- NEW: Explicitly ignore the developer folder
 
 # Common temporary/generated files/folders to always ignore
 __pycache__/

@@ -422,7 +422,6 @@ def add_clutter(img, add_clutter_p, num_clutter_patches, clutter_max_factor):
             continue
 
         y = random.randint(0, h - patch_h) if h - patch_h > 0 else 0
-        # Corrected: Use patch_w instead of pw
         x = random.randint(0, w - patch_w) if w - patch_w > 0 else 0 
 
         if random.random() < 0.5:
@@ -507,7 +506,7 @@ def _process_single_image_for_generation(args):
     local_difficulty_scores = []
 
     try: # Comprehensive try-except block for all image processing and augmentation
-        img_raw = cv2.imread(p, cv2.IMREAD_COLOR)
+        img_raw = cv2.imread(str(p), cv2.IMREAD_COLOR) # Convert Path to string for cv2.imread
         if img_raw is None:
             logging.getLogger().warning(f"Worker could not read raw image: {p}. Skipping.")
             return []
@@ -628,7 +627,7 @@ def _process_single_image_for_generation(args):
                 f.write("\n".join(yolo_labels_variant))
             
             annotation_data = {
-                'original_filename': p,
+                'original_filename': str(p), # Convert PosixPath to string here
                 'variant_id': i,
                 'image_size': img_variant.shape[:2],
                 'objects': objects_attrs_variant,

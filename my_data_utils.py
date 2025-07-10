@@ -393,7 +393,7 @@ def add_clutter(img, num_clutter_patches, clutter_max_factor):
             continue
 
         y = random.randint(0, h - patch_h) if h - patch_h > 0 else 0
-        x = random.randint(0, w - patch_w) if w - pw > 0 else 0
+        x = random.randint(0, w - patch_w) if w - patch_w > 0 else 0  # FIXED: Changed pw to patch_w
 
         # Randomly choose between noise or simple shape
         if random.random() < 0.5: # Add random noise patch
@@ -567,6 +567,30 @@ def draw_koch(img_size=(224, 224), level=3, color=(255, 255, 255)):
 
 # --- End of Helper Functions ---
 
+# --- Python function for clamping and casting to UINT8 ---
+def clamp_to_uint8(x: np.ndarray):
+    """
+    Clips float values to [0, 255] and casts to uint8.
+    This is used as a Python function hook in DALI.
+    """
+    return np.clip(x, 0.0, 255.0).astype(np.uint8)
+
+# --- Python function for JPEG compression/decompression using OpenCV ---
+def jpeg_np(x: np.ndarray, quality_range: tuple):
+    """
+    Performs JPEG compression and decompression using OpenCV.
+    Args:
+        x (np.ndarray): Input image (HWC, uint8).
+        quality_range (tuple): A tuple (min_quality, max_quality) for random selection.
+    Returns:
+        np.ndarray: JPEG compressed and decompressed image (HWC, uint8).
+    """
+    q = int(np.random.uniform(*quality_range))
+    # Ensure input is uint8 for imencode
+    _, buf = cv2.imencode('.jpg', x, [cv2.IMWRITE_JPEG_QUALITY, q])
+    return cv2.imdecode(buf, cv2.IMREAD_COLOR)
+# ---------------------------------------------------------
+
 
 if HAS_DALI:
     class BongardDaliPipeline(Pipeline):
@@ -574,7 +598,7 @@ if HAS_DALI:
             super().__init__(
                 batch_size=config['batch_size'],
                 num_threads=config['dali_num_threads'], 
-                device_id=device_id,
+                device_id=device_id, # This device_id is passed to the DALI backend
                 seed=config['seed'],
                 py_num_workers=config.get('dali_py_num_workers', 0),
                 prefetch_queue_depth=config['dali_prefetch_queue'], 
@@ -584,11 +608,22 @@ if HAS_DALI:
             self.file_root = str(file_root)
             self.file_list = str(file_list)
 
+            # Initialize a counter for debug logging within Python functions
+            self.debug_log_limit = 2 # Log only for the first 2 batches
+            self.debug_log_counter = 0
+
             dali_logger.info(f"DALI Pipeline Initialized: batch_size={config['batch_size']}, threads={config['dali_num_threads']}, device_id={device_id}")
             dali_logger.info(f"DALI Reader configured with: file_root='{self.file_root}', file_list='{self.file_list}'")
 
-            self.dali_op_device = "gpu" if device_id != -1 else "cpu"
-            self.decode_device = "mixed" if device_id != -1 else "cpu" 
+            # Determine DALI operator device based on config and actual device_id
+            # If force_cpu_dali is True, always use CPU for DALI ops
+            if config.get('force_cpu_dali', False):
+                self.dali_op_device = "cpu"
+                self.decode_device = "cpu"
+                dali_logger.warning("DALI operations are forced to CPU as per configuration.")
+            else:
+                self.dali_op_device = "gpu" if device_id != -1 else "cpu"
+                self.decode_device = "mixed" if device_id != -1 else "cpu" 
 
             dali_logger.info(f"[NVML Check] DALI pipeline device_id={self.device_id}, decode device='{self.decode_device}'")
 
@@ -598,7 +633,7 @@ if HAS_DALI:
                 file_root     = self.file_root,
                 file_list     = self.file_list,
                 random_shuffle= True,
-                name          = "Reader"
+                name           = "Reader"
             )
             dali_logger.info(f"[DALI define_graph] Reader outputs (DataNodes): images_raw_data={images_raw_data}, labels={labels}") 
             dali_logger.info(f"[DALI] Reader instantiated with: file_root={self.file_root}, file_list={self.file_list}") 
@@ -608,13 +643,14 @@ if HAS_DALI:
                 device=self.decode_device, 
                 output_type=types.RGB
             )
-            dali_logger.info(f"[DALI define_graph] Decoded images (DataNode after decode): {decoded_images}")
-            dali_logger.info(f"[DALI] Applied decoder") 
+            # dali_logger.info(f"[DALI define_graph] Decoded images (DataNode after decode): {decoded_images}") # Removed per-batch log
+            # dali_logger.info(f"[DALI] Applied decoder") # Removed per-batch log
             
+            # If decode was on CPU but ops are on GPU, copy to GPU
             if self.decode_device == "cpu" and self.dali_op_device == "gpu":
-                dali_logger.info(f"[DALI] Moving decoded_images from CPU to GPU before GPU-bound resize.")
+                # dali_logger.info(f"[DALI] Moving decoded_images from CPU to GPU before GPU-bound resize.") # Removed per-batch log
                 decoded_images = fn.copy(decoded_images, device="gpu") 
-            dali_logger.info(f"[DALI] decoded_images after potential GPU copy: {decoded_images}")
+            # dali_logger.info(f"[DALI] decoded_images after potential GPU copy: {decoded_images}") # Removed per-batch log
 
 
             resized_images = fn.resize(
@@ -624,20 +660,21 @@ if HAS_DALI:
                 interp_type=types.INTERP_LINEAR,
                 device=self.dali_op_device 
             )
-            dali_logger.info(f"[DALI define_graph] Resized images (DataNode after resize): {resized_images}")
-            dali_logger.info(f"[DALI] Resized images node: {resized_images}") 
-            dali_logger.info(f"[DALI] Resize called with: image tensor={decoded_images}, resize_x={self.config['image_size'][1]}, resize_y={self.config['image_size'][0]}, device={self.dali_op_device}") 
+            # dali_logger.info(f"[DALI define_graph] Resized images (DataNode after resize): {resized_images}") # Removed per-batch log
+            # dali_logger.info(f"[DALI] Resized images node: {resized_images}") # Removed per-batch log
+            # dali_logger.info(f"[DALI] Resize called with: image tensor={decoded_images}, resize_x={self.config['image_size'][1]}, resize_y={self.config['image_size'][0]}, device={self.dali_op_device}") # Removed per-batch log
 
             imgs_augmented = resized_images 
 
             # Elastic Transform / Warp Affine Fallback
             if self.config.get('elastic_p', 0.0) > 0:
-                dali_logger.info(f"[DALI] coin_flip probability for elastic warp: {self.config['elastic_p']}")
+                # dali_logger.info(f"[DALI] coin_flip probability for elastic warp: {self.config['elastic_p']}") # Removed per-batch log
                 coin_flip_elastic = fn.random.coin_flip(probability=self.config['elastic_p'])
-                dali_logger.info(f"[DALI] coin_flip DataNode for elastic: {coin_flip_elastic}")
+                # dali_logger.info(f"[DALI] coin_flip DataNode for elastic: {coin_flip_elastic}") # Removed per-batch log
 
+                # dali_logger.info(f"[DALI DEBUG] Before Elastic/Warp: Shape={fn.shapes(imgs_augmented)}, Dtype={fn.cast(imgs_augmented, dtype=types.FLOAT)}") # Removed per-batch log
                 if hasattr(fn, 'elastic_transform'):
-                    dali_logger.info("Using DALI elastic_transform (available).")
+                    # dali_logger.info("Using DALI elastic_transform (available).") # Removed per-batch log
                     e_transformed = fn.elastic_transform(
                         imgs_augmented, 
                         alpha=(self.config['elastic']['alpha'], self.config['elastic']['alpha']),
@@ -646,13 +683,13 @@ if HAS_DALI:
                         device=self.dali_op_device
                     )
                 else:
-                    dali_logger.warning("DALI fn.elastic_transform not available. Using fn.warp_affine as fallback for elastic distortion.")
+                    # dali_logger.warning("DALI fn.elastic_transform not available. Using fn.warp_affine as fallback for elastic distortion.") # Removed per-batch log
                     angle = fn.random.uniform(range=(-5.0, 5.0)) 
                     affine_matrix = fn.transforms.rotation(
                         angle=angle,
                         device="cpu" 
                     )
-                    dali_logger.info(f"[DALI] Affine matrix device (should be CPU): {affine_matrix.device}") 
+                    # dali_logger.info(f"[DALI] Affine matrix device (should be CPU): {affine_matrix.device}") # Removed per-batch log
                     
                     e_transformed = fn.warp_affine(
                         imgs_augmented,
@@ -662,69 +699,124 @@ if HAS_DALI:
                         device=self.dali_op_device
                     )
 
-                dali_logger.info(f"[DALI] Input tensor before elastic/warp_affine: {imgs_augmented}")
-                dali_logger.info(f"[DALI] Output tensor after elastic/warp_affine: {e_transformed}")
+                # dali_logger.info(f"[DALI] Input tensor before elastic/warp_affine: {imgs_augmented}") # Removed per-batch log
+                # dali_logger.info(f"[DALI] Output tensor after elastic/warp_affine: {e_transformed}") # Removed per-batch log
                 
+                # The result of this arithmetic operation is float.
                 imgs_augmented = fn.cast(coin_flip_elastic, dtype=types.FLOAT) * e_transformed + \
                                  (1 - fn.cast(coin_flip_elastic, dtype=types.FLOAT)) * imgs_augmented
-
-                dali_logger.info(f"[DALI define_graph] Images after Elastic Transform/Warp Affine (DataNode): {imgs_augmented}")
-                dali_logger.info(f"[DALI] Augmented image node after conditional selection (elastic): {imgs_augmented}")
+                # dali_logger.info(f"[DALI DEBUG] After Elastic/Warp (conditional): Shape={fn.shapes(imgs_augmented)}, Dtype={fn.cast(imgs_augmented, dtype=types.FLOAT)}") # Removed per-batch log
+                # dali_logger.info(f"[DALI define_graph] Images after Elastic Transform/Warp Affine (DataNode): {imgs_augmented}") # Removed per-batch log
+                # dali_logger.info(f"[DALI] Augmented image node after conditional selection (elastic): {imgs_augmented}") # Removed per-batch log
 
 
             # Gaussian Blur
             if self.config.get('phot_blur_p', 0.0) > 0:
-                dali_logger.info(f"[DALI] coin_flip probability for gaussian_blur: {self.config['phot_blur_p']}")
+                # dali_logger.info(f"[DALI] coin_flip probability for gaussian_blur: {self.config['phot_blur_p']}") # Removed per-batch log
                 coin_flip_blur = fn.random.coin_flip(probability=self.config['phot_blur_p'])
-                dali_logger.info(f"[DALI] coin_flip DataNode for blur: {coin_flip_blur}")
+                # dali_logger.info(f"[DALI] coin_flip DataNode for blur: {coin_flip_blur}") # Removed per-batch log
 
-                dali_logger.info(f"[DALI] Applying gaussian_blur with sigma={self.config['phot_blur']}, device={self.dali_op_device}")
-                dali_logger.info(f"[DALI] Input tensor before gaussian_blur: {imgs_augmented}")
+                # dali_logger.info(f"[DALI DEBUG] Before Gaussian Blur: Shape={fn.shapes(imgs_augmented)}, Dtype={fn.cast(imgs_augmented, dtype=types.FLOAT)}") # Removed per-batch log
+                # dali_logger.info(f"[DALI] Applying gaussian_blur with sigma={self.config['phot_blur']}, device={self.dali_op_device}") # Removed per-batch log
+                # dali_logger.info(f"[DALI] Input tensor before gaussian_blur: {imgs_augmented}") # Removed per-batch log
                 b_blurred = fn.gaussian_blur(
                     imgs_augmented,
                     sigma=tuple(self.config['phot_blur']),
                     device=self.dali_op_device
                 )
-                dali_logger.info(f"[DALI] Output tensor after gaussian_blur: {b_blurred}")
+                # dali_logger.info(f"[DALI] Output tensor after gaussian_blur: {b_blurred}") # Removed per-batch log
                 
+                # The result of this arithmetic operation is float.
                 imgs_augmented = fn.cast(coin_flip_blur, dtype=types.FLOAT) * b_blurred + \
                                  (1 - fn.cast(coin_flip_blur, dtype=types.FLOAT)) * imgs_augmented
-                dali_logger.info(f"[DALI define_graph] Images after Gaussian Blur (DataNode): {imgs_augmented}")
-                dali_logger.info(f"[DALI] Augmented image node after conditional selection (blur): {imgs_augmented}")
+                # dali_logger.info(f"[DALI DEBUG] After Gaussian Blur (conditional): Shape={fn.shapes(imgs_augmented)}, Dtype={fn.cast(imgs_augmented, dtype=types.FLOAT)}") # Removed per-batch log
+                # dali_logger.info(f"[DALI define_graph] Images after Gaussian Blur (DataNode): {imgs_augmented}") # Removed per-batch log
+                # dali_logger.info(f"[DALI] Augmented image node after conditional selection (blur): {imgs_augmented}") # Removed per-batch log
 
 
-            # UPDATED: JPEG Compression Distortion
+            # --- Debug Hook 1: Inspect imgs_augmented before JPEG processing ---
+            def inspect_imgs_augmented(img_np):
+                if self.debug_log_counter < self.debug_log_limit:
+                    dali_logger.info(f">>> DEBUG HOOK (Pre-JPEG aug): Dtype={img_np.dtype}, Shape={img_np.shape}, Min={img_np.min()}, Max={img_np.max()}")
+                return img_np
+
+            imgs_augmented_hooked = fn.python_function(
+                imgs_augmented,
+                function=inspect_imgs_augmented,
+                device="cpu", # Run on CPU to access NumPy array directly
+                num_outputs=1
+            )
+            # --- End Debug Hook 1 ---
+
+
+            # UPDATED: JPEG Compression Distortion using OpenCV Fallback
             if self.config.get('jpeg_p', 0.0) > 0:
-                dali_logger.info(f"[DALI] coin_flip probability for jpeg_compression_distortion: {self.config['jpeg_p']}")
+                # dali_logger.info(f"[DALI] coin_flip probability for jpeg_compression_distortion: {self.config['jpeg_p']}") # Removed per-batch log
                 coin_flip_jpeg = fn.random.coin_flip(probability=self.config['jpeg_p'])
-                dali_logger.info(f"[DALI] coin_flip DataNode for JPEG: {coin_flip_jpeg}")
+                # dali_logger.info(f"[DALI] coin_flip DataNode for JPEG: {coin_flip_jpeg}") # Removed per-batch log
 
-                dali_logger.info(f"[DALI] Applying jpeg_compression_distortion with quality={self.config['jpeg_q']}, device={self.dali_op_device}")
-                dali_logger.info(f"[DALI] Input tensor before jpeg_compression_distortion: {imgs_augmented}")
+                # dali_logger.info(f"[DALI] Applying JPEG distortion via OpenCV fallback with quality={self.config['jpeg_q']}") # Removed per-batch log
+                # dali_logger.info(f"[DALI] Input tensor before JPEG distortion (OpenCV): {imgs_augmented_hooked}") # Removed per-batch log
                 
-                # Apply JPEG compression distortion
-                j_compressed = fn.jpeg_compression_distortion(
-                    imgs_augmented,
-                    quality=fn.random.uniform(range=tuple(self.config['jpeg_q'])), # Random quality within range
-                    device=self.dali_op_device
+                # Use Python function to clamp and cast to UINT8
+                imgs_uint8 = fn.python_function(
+                    imgs_augmented_hooked,
+                    function=clamp_to_uint8,
+                    device="cpu",        # runs on CPU so you can use numpy
+                    num_outputs=1
                 )
-                dali_logger.info(f"[DALI] Output tensor after jpeg_compression_distortion: {j_compressed}")
+                # Force materialization before passing to jpeg_np (optional but safe)
+                jpeg_ready = fn.copy(imgs_uint8) 
                 
-                # Probabilistically select between original and compressed
-                imgs_augmented = fn.cast(coin_flip_jpeg, dtype=types.FLOAT) * j_compressed + \
-                                 (1 - fn.cast(coin_flip_jpeg, dtype=types.FLOAT)) * imgs_augmented
-                dali_logger.info(f"[DALI define_graph] Images after JPEG Compression Distortion (DataNode): {imgs_augmented}")
-                dali_logger.info(f"[DALI] Augmented image node after conditional selection (jpeg): {imgs_augmented}")
+                # dali_logger.info(f"[DALI] Tensor *immediately before* JPEG distortion (OpenCV, after clamp, cast to UINT8, and copy): {jpeg_ready}") # Removed per-batch log
+                # dali_logger.info(f"[DALI DEBUG] Before JPEG Distortion (OpenCV): Shape={fn.shapes(jpeg_ready)}, Dtype={fn.cast(jpeg_ready, dtype=types.FLOAT)}") # Removed per-batch log
 
+                # --- Debug Hook 2: Inspect jpeg_ready (input to jpeg_np) ---
+                def inspect_jpeg_ready(img_np):
+                    if self.debug_log_counter < self.debug_log_limit:
+                        dali_logger.info(f">>> DEBUG HOOK (Post-Clamp-Cast-Copy Pre-OpenCV JPEG): Dtype={img_np.dtype}, Shape={img_np.shape}, Min={img_np.min()}, Max={img_np.max()}")
+                    return img_np
+
+                jpeg_ready_hooked = fn.python_function(
+                    jpeg_ready,
+                    function=inspect_jpeg_ready,
+                    device="cpu", # Run on CPU to access NumPy array directly
+                    num_outputs=1
+                )
+                # --- End Debug Hook 2 ---
+
+                # Perform JPEG compression/decompression using OpenCV via python_function
+                j_compressed_uint8 = fn.python_function(
+                    jpeg_ready_hooked, 
+                    function=lambda x: jpeg_np(x, self.config['jpeg_q']), 
+                    device="cpu", # OpenCV operations run on CPU
+                    num_outputs=1
+                )
+
+                # dali_logger.info(f"[DALI] Output tensor after JPEG distortion (OpenCV): {j_compressed_uint8}") # Removed per-batch log
+                # dali_logger.info(f"[DALI DEBUG] After JPEG Distortion (OpenCV): Shape={fn.shapes(j_compressed_uint8)}, Dtype={fn.cast(j_compressed_uint8, dtype=types.FLOAT)}") # Removed per-batch log
+                
+                # Convert j_compressed_uint8 back to float for the rest of your pipeline:
+                j_float = fn.cast(j_compressed_uint8, dtype=types.FLOAT)
+                imgs_augmented = fn.cast(coin_flip_jpeg, dtype=types.FLOAT) * j_float + \
+                                 (1 - fn.cast(coin_flip_jpeg, dtype=types.FLOAT)) * imgs_augmented
+                # dali_logger.info(f"[DALI define_graph] Images after JPEG Compression Distortion (DataNode): {imgs_augmented}") # Removed per-batch log
+                # dali_logger.info(f"[DALI] Augmented image node after conditional selection (jpeg): {imgs_augmented}") # Removed per-batch log
+
+            # Increment the counter after all conditional logging for this batch
+            self.debug_log_counter += 1
 
             # Normalize and change layout to NCHW float [0,1]
+            # dali_logger.info(f"[DALI DEBUG] Before CropMirrorNormalize: Shape={fn.shapes(imgs_augmented)}, Dtype={fn.cast(imgs_augmented, dtype=types.FLOAT)}") # Removed per-batch log
             final_images = fn.crop_mirror_normalize(
                     imgs_augmented,
                     dtype=types.FLOAT,
                     output_layout=types.NCHW,
                     mean=[0.0,0.0,0.0],
                     std=[255.0,255.0,255.0])
-            dali_logger.info(f"[DALI define_graph] Final images before output (DataNode): {final_images}")
-            dali_logger.info(f"[DALI] Final normalized output: {final_images}")
+            # dali_logger.info(f"[DALI define_graph] Final images before output (DataNode): {final_images}") # Removed per-batch log
+            # dali_logger.info(f"[DALI] Final normalized output: {final_images}") # Removed per-batch log
+            # dali_logger.info(f"[DALI DEBUG] Final Output: Shape={fn.shapes(final_images)}, Dtype={fn.cast(final_images, dtype=types.FLOAT)}") # Removed per-batch log
 
-            return final_images, labels 
+
+            return final_images, labels

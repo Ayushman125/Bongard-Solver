@@ -1,6 +1,5 @@
 # Folder: bongard_solver/
 # File: training.py
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -34,37 +33,27 @@ from config import (
     ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_TEXTURE_MAP,
     RELATION_MAP
 )
-
 # Import from utils
 from utils import set_seed, get_symbolic_embedding_dims, make_edge_index_map
-
 # Import from data
-from data import build_dali_image_processor, BongardSyntheticDataset, CurriculumSampler, load_bongard_data, RealBongardDataset, BongardGenerator, _calculate_iou # Added _calculate_iou
-
+from data import build_dali_image_processor, BongardSyntheticDataset, CurriculumSampler, load_bongard_data, RealBongardDataset, BongardGenerator, _calculate_iou
 # Import bongard_rules
-from bongard_rules import ALL_BONGARD_RULES, BongardRule # Added BongardRule for RL
-
+from bongard_rules import ALL_BONGARD_RULES, BongardRule
 # Import from models
-from models import PerceptionModule, SimCLREncoder # Added SimCLREncoder
-
+from models import PerceptionModule, SimCLREncoder, LitSimCLR # LitSimCLR added for pretraining
 # Import from losses
-from losses import LabelSmoothingCrossEntropy, FeatureConsistencyLoss, DistillationLoss, SymbolicConsistencyLoss, FocalLoss, NTXentLoss # Added NTXentLoss
-
+from losses import LabelSmoothingCrossEntropy, FeatureConsistencyLoss, DistillationLoss, SymbolicConsistencyLoss, FocalLoss, NTXentLoss
 # Import from replay_buffer
 from replay_buffer import KnowledgeReplayBuffer
-
 # Import from xai (for Grad-CAM)
 from xai import generate_grad_cam
-
 # Import optimizers and schedulers from the new optimizers.py module
 from optimizers import get_optimizer, get_scheduler, SAM # SAM and SophiaG imported here
-
 # Import rule_evaluator
 from rule_evaluator import find_best_rules, evaluate_rule_on_support_set
-
 # Import new symbolic_engine and rl_module
-from symbolic_engine import SymbolicEngine, RuleInducer, AlephRuleInducer # Added for DSL/ILP
-from rl_module import BongardEnv, RulePolicy, RuleGraphSpace # Added for RL
+from symbolic_engine import SymbolicEngine, RuleInducer, AlephRuleInducer
+from rl_module import BongardEnv, RulePolicy, RuleGraphSpace
 
 logger = logging.getLogger(__name__)
 
@@ -76,25 +65,35 @@ if HAS_TORCH_QUANTIZATION:
         logger.warning("PyTorch Quantization not found. QAT/PTQ will be disabled.")
         HAS_TORCH_QUANTIZATION = False
 
-
 # --- Quantization Functions ---
 def quantize_model_qat(model: nn.Module, config: Dict[str, Any]) -> nn.Module:
+    """
+    Prepares a model for Quantization Aware Training (QAT).
+    """
     if not HAS_TORCH_QUANTIZATION:
         logger.error("PyTorch Quantization is not available. Cannot perform QAT.")
         return model
-
     logger.info("Applying Quantization Aware Training (QAT)...")
     
-    if hasattr(model, 'module'):
-        base_model = model.module
-    else:
-        base_model = model
+    # Unwrap DDP model if necessary
+    base_model = model.module if isinstance(model, DDP) else model
     
     # Fuse modules before QAT
-    if hasattr(base_model, 'fuse_model'):
+    # This requires specific fuse_model methods implemented in your PerceptionModule
+    # or its sub-modules (e.g., AttributeModel's backbone).
+    # For a ResNet backbone, fusion is typically done on the Conv-BN-ReLU blocks.
+    # If your model structure doesn't have a generic `fuse_model` method,
+    # you'd need to manually fuse or apply QAT to individual layers.
+    if hasattr(base_model, 'fuse_model'): # Check if the model has a custom fusion method
         base_model.fuse_model()
     else:
-        logger.warning("Model does not have a 'fuse_model' method. Fusion skipped for QAT.")
+        logger.warning("Model does not have a 'fuse_model' method. Automatic fusion skipped for QAT.")
+        # Attempt to apply fusions to common patterns if possible
+        # For example, if AttributeModel has Conv-BN-ReLU, you can fuse them.
+        # This is a generic attempt; specific fusion might be needed per model architecture.
+        for name, module in base_model.named_modules():
+            if isinstance(module, nn.Sequential):
+                torch.quantization.fuse_modules(module, inplace=True)
 
     base_model.qconfig = tq.get_default_qat_qconfig('fbgemm') # fbgemm for server-side, qnnpack for mobile
     tq.prepare_qat(base_model, inplace=True)
@@ -102,80 +101,64 @@ def quantize_model_qat(model: nn.Module, config: Dict[str, Any]) -> nn.Module:
     logger.info("Model prepared for QAT. Remember to fine-tune the model with QAT enabled.")
     return model
 
-def quantize_model_ptq(model: nn.Module, calibration_loader: Any, config: Dict[str, Any]) -> nn.Module:
+def quantize_model_ptq(model: nn.Module, calibration_loader: Any, dali_image_processor: Any, config: Dict[str, Any]) -> nn.Module:
+    """
+    Applies Post-Training Quantization (PTQ) to a model.
+    """
     if not HAS_TORCH_QUANTIZATION:
         logger.error("PyTorch Quantization is not available. Cannot perform PTQ.")
         return model
-
     logger.info("Applying Post-Training Quantization (PTQ)...")
 
-    if hasattr(model, 'module'):
-        base_model = model.module
-    else:
-        base_model = model
-
+    # Unwrap DDP model if necessary
+    base_model = model.module if isinstance(model, DDP) else model
+    
     # Fuse modules before PTQ
     if hasattr(base_model, 'fuse_model'):
         base_model.fuse_model()
     else:
-        logger.warning("Model does not have a 'fuse_model' method. Fusion skipped for PTQ.")
+        logger.warning("Model does not have a 'fuse_model' method. Automatic fusion skipped for PTQ.")
+        for name, module in base_model.named_modules():
+            if isinstance(module, nn.Sequential):
+                torch.quantization.fuse_modules(module, inplace=True)
 
     base_model.qconfig = tq.get_default_qconfig('fbgemm') # fbgemm for server-side, qnnpack for mobile
     tq.prepare(base_model, inplace=True)
-
+    
     logger.info("PTQ: Performing calibration step...")
     # Calibration: run a few batches through the prepared model
+    base_model.eval() # Set to eval mode for calibration
     with torch.no_grad():
         for batch_idx, batch_data in tqdm(enumerate(calibration_loader), total=len(calibration_loader), desc="PTQ Calibration"):
-            # Assuming calibration_loader yields images for calibration
-            # For Bongard, use query_images_view1
-            # Need to get raw images and process through DALI first
-            raw_images_view1_np = batch_data[0] # List of numpy arrays
-            raw_images_view2_np = batch_data[1] # List of numpy arrays
-            raw_support_images_flat_np = batch_data[9] # List of numpy arrays
-
-            # Assuming calibration_loader's collate_fn provides raw numpy arrays
-            # and we need a DALIImageProcessor for calibration
-            # This function needs to receive dali_image_processor
+            # Unpack raw NumPy arrays from collate_fn output
+            raw_query_images_view1_np = batch_data[0]
+            raw_query_images_view2_np = batch_data[1] # Not needed for calibration
+            query_gts_json_view1 = batch_data[3]
+            raw_support_images_flat_np = batch_data[9]
             
-            # For now, let's simplify calibration to just use the first view of query images
-            # and assume they are already augmented/normalized if PTQ is called without DALI processor.
-            # A proper PTQ calibration would involve DALI processor here.
-            # For this context, we'll assume `calibration_loader` provides already processed tensors
-            # or that the `dali_image_processor` is passed.
+            # Process raw images through DALI Image Processor
+            processed_query_images_view1, _, processed_support_images_flat = dali_image_processor.run(
+                raw_query_images_view1_np,
+                raw_query_images_view2_np, # Pass view2 for DALI input, even if not used by model
+                raw_support_images_flat_np
+            )
+            # Reshape flattened support images back to (B, N_support, C, H, W)
+            max_support_imgs = CONFIG['data']['synthetic_data_config']['max_support_images_per_problem']
+            batch_size_actual = processed_query_images_view1.shape[0]
+            processed_support_images_reshaped = processed_support_images_flat.view(
+                batch_size_actual, max_support_imgs, 
+                processed_query_images_view1.shape[1], processed_query_images_view1.shape[2], processed_query_images_view1.shape[3]
+            )
             
-            # If `calibration_loader` provides raw images, we need a DALI processor here.
-            # If it provides processed tensors, then the `dali_image_processor` from `run_training_process`
-            # would need to be passed to this function.
-            
-            # For simplicity, if `calibration_loader` is a standard PyTorch DataLoader,
-            # it will yield processed tensors if the collate_fn includes a DALI processor.
-            # If not, this section needs a `dali_image_processor` argument.
-            
-            # Let's assume the `calibration_loader` provides the processed tensors directly for calibration.
-            # This implies the `main.py`'s `val_loader` (which uses DALI processor via collate_fn)
-            # is passed as `calibration_loader`.
-            
-            # Unpack processed tensors from batch_data (assuming collate_fn has processed them)
-            # If `calibration_loader` is the `val_loader` from `main.py`, its `collate_fn`
-            # will have already run DALI.
-            images_view1 = batch_data[0].float().to(DEVICE) # This would be the *processed* tensor
-
-            # Only need to run forward pass, no need for full Bongard problem inference
-            # The model's forward needs to be adaptable for this.
-            # Here, we'll just pass the images to the backbone for calibration.
-            # If the model is a DDP model, access the base_model.
-            if hasattr(base_model.attribute_classifier, 'feature_extractor'):
-                _ = base_model.attribute_classifier.feature_extractor(images_view1)
-            else:
-                _ = base_model(images_view1, ground_truth_json_strings=[], support_images=torch.empty(0,0,0,0,0)) # Dummy inputs for full model
+            # Run forward pass for calibration. The model's forward needs all its inputs.
+            _ = base_model(processed_query_images_view1.to(DEVICE), 
+                           ground_truth_json_strings=query_gts_json_view1, 
+                           support_images=processed_support_images_reshaped.to(DEVICE))
             
             if batch_idx >= config['training']['pruning_config'].get('calibration_batches', 10): # Calibrate for a few batches
                 break
-
-
-    tq.convert(base_model, inplace=True)
     
+    tq.convert(base_model, inplace=True)
     logger.info("Model quantized using Post-Training Quantization (PTQ).")
     return model
 
@@ -190,13 +173,11 @@ def compute_layer_sensitivity(model: nn.Module, val_loader: Any, dali_image_proc
         val_loader (Any): DataLoader for validation data.
         dali_image_processor (Any): The DALIImageProcessor instance.
         current_rank (int): Current GPU rank for DDP.
-
     Returns:
         Dict[str, float]: A dictionary mapping layer names to their sensitivity scores (loss increase).
     """
     if current_rank != 0: # Only compute on rank 0 to avoid redundant computation
         return {}
-
     logger.info("Starting layer sensitivity analysis for pruning...")
     sensitivities = {}
     
@@ -204,24 +185,25 @@ def compute_layer_sensitivity(model: nn.Module, val_loader: Any, dali_image_proc
     model.eval()
     
     # Get base loss
-    base_metrics = _validate_model_ensemble(model, val_loader, dali_image_processor, current_rank, False, 0) # is_ddp_initialized=False for base model
+    # Use _validate_model_ensemble which is adapted for DALI and full model forward
+    base_metrics = _validate_model_ensemble(model, val_loader, dali_image_processor, current_rank, False, 0, limit_batches=20) # Limit for speed
     base_loss = base_metrics['loss']
     logger.info(f"Base validation loss for sensitivity analysis: {base_loss:.4f}")
 
     # Access the base model if it's DDP wrapped
-    if hasattr(model, 'module'):
-        base_model = model.module
-    else:
-        base_model = model
-
-    # Collect convolutional layers to test
+    base_model = model.module if isinstance(model, DDP) else model
+    
+    # Collect convolutional layers to test (focus on backbone layers)
     conv_layers = []
-    for name, module in base_model.named_modules():
-        if isinstance(module, nn.Conv2d) and 'downsample' not in name and 'classifier' not in name and 'head' not in name:
-            conv_layers.append((name, module))
+    # Assuming AttributeModel's encoder contains the Conv2d layers
+    if hasattr(base_model, 'perception_module') and hasattr(base_model.perception_module, 'attribute_model') and \
+       hasattr(base_model.perception_module.attribute_model, 'encoder'):
+        for name, module in base_model.perception_module.attribute_model.encoder.named_modules():
+            if isinstance(module, nn.Conv2d) and 'downsample' not in name and 'classifier' not in name and 'head' not in name:
+                conv_layers.append((f"perception_module.attribute_model.encoder.{name}", module))
     
     if not conv_layers:
-        logger.warning("No Conv2d layers found for sensitivity analysis.")
+        logger.warning("No suitable Conv2d layers found for sensitivity analysis in AttributeModel encoder.")
         return {}
 
     for name, module in tqdm(conv_layers, desc="Computing layer sensitivity"):
@@ -246,10 +228,8 @@ def compute_layer_sensitivity(model: nn.Module, val_loader: Any, dali_image_proc
     logger.info("Layer sensitivities (loss increase, higher means more sensitive):")
     for name, sens in sorted_sensitivities:
         logger.info(f"  {name}: {sens:.4f}")
-
     logger.info("Sensitivity analysis completed.")
     return sensitivities
-
 
 def apply_structured_pruning(
     model: nn.Module,
@@ -262,30 +242,32 @@ def apply_structured_pruning(
     is_ddp_initialized: bool = False,
     sensitivity_scores: Optional[Dict[str, float]] = None
 ) -> nn.Module:
-    pruning_config = config['pruning_config']
+    """
+    Applies structured pruning to the model and fine-tunes it iteratively.
+    """
+    pruning_config = config['training']['pruning'] # Access pruning config under 'training'
     pruning_method = pruning_config['method']
     pruning_amount = pruning_config['amount']
     pruning_iterations = pruning_config['iterations']
     fine_tune_epochs_per_iter = pruning_config['fine_tune_epochs_per_iter']
-    fine_tune_lr = pruning_config['fine_tune_lr']
-    use_sensitivity_analysis = pruning_config['use_sensitivity_analysis']
-    pruning_target_layers_ratio = pruning_config['pruning_target_layers_ratio']
-
+    fine_tune_lr = config['training']['learning_rate'] # Use main learning rate for fine-tuning
+    use_sensitivity_analysis = pruning_config['use_sensitivity'] # Renamed from use_sensitivity_analysis
+    pruning_target_layers_ratio = pruning_config.get('pruning_target_layers_ratio', 0.5) # New config for ratio
+    
     logger.info(f"Applying structured pruning using {pruning_method} with amount {pruning_amount} "
                 f"over {pruning_iterations} iterations, fine-tuning for {fine_tune_epochs_per_iter} epochs each.")
 
     # Access the base model if it's DDP wrapped
-    if hasattr(model, 'module'):
-        base_model = model.module
-    else:
-        base_model = model
-
-    # Identify parameters to prune
+    base_model = model.module if isinstance(model, DDP) else model
+    
+    # Identify parameters to prune (focus on AttributeModel's encoder)
     parameters_to_prune = []
     all_conv_layers = []
-    for name, module in base_model.named_modules():
-        if isinstance(module, nn.Conv2d) and 'downsample' not in name and 'classifier' not in name and 'head' not in name:
-            all_conv_layers.append((name, module))
+    if hasattr(base_model, 'perception_module') and hasattr(base_model.perception_module, 'attribute_model') and \
+       hasattr(base_model.perception_module.attribute_model, 'encoder'):
+        for name, module in base_model.perception_module.attribute_model.encoder.named_modules():
+            if isinstance(module, nn.Conv2d) and 'downsample' not in name and 'classifier' not in name and 'head' not in name:
+                all_conv_layers.append((f"perception_module.attribute_model.encoder.{name}", module))
     
     if not all_conv_layers:
         logger.warning("No suitable Conv2d layers found for structured pruning. Skipping pruning.")
@@ -299,7 +281,7 @@ def apply_structured_pruning(
         num_layers_to_prune = max(1, int(len(sorted_layers) * pruning_target_layers_ratio))
         target_layer_names = [name for name, _ in sorted_layers[:num_layers_to_prune]]
         logger.info(f"Sensitivity analysis: Targeting {num_layers_to_prune} least sensitive layers for pruning: {target_layer_names}")
-
+        
         for name, module in all_conv_layers:
             if name in target_layer_names:
                 parameters_to_prune.append((module, 'weight'))
@@ -322,11 +304,10 @@ def apply_structured_pruning(
             elif pruning_method == 'random_unstructured':
                 prune.random_unstructured(module, name=name, amount=pruning_amount)
             elif pruning_method == 'ln_structured':
-                # For structured pruning (e.g., filter pruning), dim=0 for Conv2d weights
                 prune.ln_structured(module, name=name, amount=pruning_amount, n=2, dim=0) # L2 norm for filters
             else:
                 raise ValueError(f"Unsupported pruning method: {pruning_method}")
-
+        
         # Log sparsity
         total_zero_weights = 0
         total_weights = 0
@@ -341,7 +322,7 @@ def apply_structured_pruning(
             model=model,
             train_loader=train_loader,
             val_loader=val_loader,
-            dali_image_processor=dali_image_processor, # Pass DALI processor
+            dali_image_processor=dali_image_processor,
             epochs=fine_tune_epochs_per_iter,
             learning_rate=fine_tune_lr,
             current_rank=current_rank,
@@ -354,7 +335,6 @@ def apply_structured_pruning(
         for module, name in parameters_to_prune:
             prune.remove_pruning(module, name)
         logger.info(f"Pruning reparameterization removed after iteration {i+1}.")
-
     logger.info("Structured pruning process completed.")
     return model
 
@@ -371,9 +351,12 @@ def fine_tune_model(
 ):
     """
     Helper function to fine-tune the model after pruning or for QAT.
+    This is a simplified training loop, not a full PyTorch Lightning Trainer.
     """
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=CONFIG['training']['weight_decay'])
-    criterion = LabelSmoothingCrossEntropy(smoothing=CONFIG['training']['label_smoothing'])
+    # Use CrossEntropyLoss for Bongard classification. If labels are soft (Mixup/Cutmix), use KLDivLoss.
+    bongard_criterion = nn.CrossEntropyLoss(reduction='mean')
+    
     scaler = GradScaler() if CONFIG['training']['use_amp'] else None
 
     for epoch in range(epochs):
@@ -384,26 +367,22 @@ def fine_tune_model(
         # Set epoch for sampler if it has a set_epoch method (e.g., DistributedSampler, CurriculumSampler)
         if hasattr(train_loader.sampler, 'set_epoch'):
             train_loader.sampler.set_epoch(epoch)
-
+        
         pbar = tqdm(enumerate(train_loader), total=len(train_loader), 
                     desc=f"Fine-tune Epoch {epoch+1}/{epochs} (Rank {current_rank})", disable=(current_rank != 0))
         
         for batch_idx, batch_data in pbar:
             # Unpack raw NumPy arrays and other data from collate_fn output
+            # (raw_query_images_view1_np, raw_query_images_view2_np, query_labels,
+            #  query_gts_json_view1, query_gts_json_view2, difficulties, affine1, affine2, original_indices,
+            #  raw_support_images_flat_np, support_labels_flat, support_sgs_flat_bytes, num_support_per_problem,
+            #  tree_indices, is_weights)
+            
             raw_query_images_view1_np = batch_data[0]
-            # raw_query_images_view2_np = batch_data[1] # Not needed for fine-tuning loss
             query_labels = batch_data[2].long().to(DEVICE)
             query_gts_json_view1 = batch_data[3]
-            # query_gts_json_view2 = batch_data[4] # Not needed for fine-tuning loss
-            # difficulties = batch_data[5]
-            # affine1 = batch_data[6]
-            # affine2 = batch_data[7]
-            # original_indices = batch_data[8]
             raw_support_images_flat_np = batch_data[9]
-            # support_labels_flat = batch_data[10]
-            # support_sgs_flat_bytes = batch_data[11]
-            num_support_per_problem = batch_data[12] # Tensor of counts
-
+            
             # Process raw images through DALI Image Processor
             processed_query_images_view1, _, processed_support_images_flat = dali_image_processor.run(
                 raw_query_images_view1_np,
@@ -418,14 +397,13 @@ def fine_tune_model(
                 batch_size_actual, max_support_imgs, 
                 processed_query_images_view1.shape[1], processed_query_images_view1.shape[2], processed_query_images_view1.shape[3]
             )
-
-
+            
             optimizer.zero_grad()
             with autocast(enabled=CONFIG['training']['use_amp']):
                 outputs = model(processed_query_images_view1, ground_truth_json_strings=query_gts_json_view1,
                                 support_images=processed_support_images_reshaped)
                 bongard_logits = outputs['bongard_logits']
-                loss = criterion(bongard_logits, query_labels)
+                loss = bongard_criterion(bongard_logits, query_labels)
             
             if scaler:
                 scaler.scale(loss).backward()
@@ -438,7 +416,7 @@ def fine_tune_model(
             total_loss += loss.item()
             num_batches += 1
             pbar.set_postfix(loss=f"{total_loss / num_batches:.4f}", lr=optimizer.param_groups[0]['lr'])
-
+        
         val_metrics = _validate_model_ensemble(model, val_loader, dali_image_processor, current_rank, is_ddp_initialized, model_idx)
         if current_rank == 0:
             logger.info(f"  Fine-tune Epoch {epoch+1} Val Accuracy: {val_metrics['accuracy']:.4f}, Loss: {val_metrics['loss']:.4f}")
@@ -462,22 +440,20 @@ class MixupCutmix:
         self.cutmix_prob = config.get('cutmix_prob', 0.5)
         self.label_smoothing = config.get('label_smoothing', 0.1)
         logger.info(f"MixupCutmix initialized. Mixup alpha: {self.mixup_alpha}, CutMix alpha: {self.cutmix_alpha}")
-
     def __call__(self, images: torch.Tensor, labels: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         do_mixup = random.random() < self.mixup_prob
         do_cutmix = random.random() < self.cutmix_prob
-
         if do_mixup and do_cutmix:
             if random.random() < 0.5:
                 do_cutmix = False
             else:
                 do_mixup = False
-
         if do_mixup:
             return self._mixup(images, labels)
         elif do_cutmix:
             return self._cutmix(images, labels)
         else:
+            # If no augmentation, apply label smoothing to original labels
             one_hot_labels = F.one_hot(labels, num_classes=self.num_classes).float().to(labels.device)
             smoothed_labels = one_hot_labels * (1.0 - self.label_smoothing) + self.label_smoothing / self.num_classes
             return images, smoothed_labels
@@ -486,19 +462,16 @@ class MixupCutmix:
         lam = np.random.beta(self.mixup_alpha, self.mixup_alpha)
         batch_size = images.size(0)
         index = torch.randperm(batch_size).to(images.device)
-
         mixed_images = lam * images + (1 - lam) * images[index, :]
         
         one_hot_labels = F.one_hot(labels, num_classes=self.num_classes).float().to(labels.device)
         mixed_labels = lam * one_hot_labels + (1 - lam) * one_hot_labels[index, :]
         
         return mixed_images, mixed_labels
-
     def _cutmix(self, images: torch.Tensor, labels: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         lam = np.random.beta(self.cutmix_alpha, self.cutmix_alpha)
         batch_size = images.size(0)
         index = torch.randperm(batch_size).to(images.device)
-
         r_x = np.random.uniform(0, images.shape[3])
         r_y = np.random.uniform(0, images.shape[2])
         r_w = images.shape[3] * np.sqrt(1 - lam)
@@ -507,20 +480,15 @@ class MixupCutmix:
         r_y = int(r_y - r_h / 2)
         r_w = int(r_w)
         r_h = int(r_h)
-
         x1 = np.clip(r_x, 0, images.shape[3])
         y1 = np.clip(r_y, 0, images.shape[2])
         x2 = np.clip(r_x + r_w, 0, images.shape[3])
         y2 = np.clip(r_y + r_h, 0, images.shape[2])
-
         images[:, :, y1:y2, x1:x2] = images[index, :, y1:y2, x1:x2]
         lam = 1 - ((x2 - x1) * (y2 - y1) / (images.shape[2] * images.shape[3]))
-
         one_hot_labels = F.one_hot(labels, num_classes=self.num_classes).float().to(labels.device)
         mixed_labels = lam * one_hot_labels + (1 - lam) * one_hot_labels[index, :]
-
         return images, mixed_labels
-
 
 # Placeholder for asynchronous priority update
 def async_update_priorities(replay_buffer: KnowledgeReplayBuffer, tree_indices: List[int], losses: List[float]):
@@ -535,7 +503,6 @@ def async_update_priorities(replay_buffer: KnowledgeReplayBuffer, tree_indices: 
     thread.start()
     logger.debug(f"Initiated async priority update for {len(tree_indices)} samples.")
 
-
 def _get_ensemble_teacher_logits(
     teacher_models: List[nn.Module],
     raw_images_np: List[np.ndarray], # Raw NumPy images for DALI
@@ -547,7 +514,6 @@ def _get_ensemble_teacher_logits(
     """
     Computes teacher logits from an ensemble of models, applying dropout and
     optionally generating a distillation mask.
-
     Args:
         teacher_models (List[nn.Module]): A list of teacher models (ensemble members).
         raw_images_np (List[np.ndarray]): Raw input images (NumPy arrays) for which to get logits.
@@ -555,7 +521,6 @@ def _get_ensemble_teacher_logits(
         raw_support_images_np (List[np.ndarray]): Raw support images (NumPy arrays) for the batch.
         distillation_config (Dict[str, Any]): Distillation configuration.
         dali_image_processor (Any): The DALIImageProcessor instance to augment teacher inputs.
-
     Returns:
         Tuple[torch.Tensor, Optional[torch.Tensor]]:
         - Averaged teacher logits (Batch_size, Num_classes).
@@ -568,13 +533,11 @@ def _get_ensemble_teacher_logits(
     mask_agreement_threshold = distillation_config.get('mask_agreement_threshold', 0.9)
 
     # Process raw images through DALI Image Processor for teacher inputs
-    # Use dummy view2 and support images for the DALI call if only view1 is needed for teacher inference
     processed_query_images_view1, _, processed_support_images_flat = dali_image_processor.run(
         raw_images_np,
-        [np.zeros_like(raw_images_np[0])] * len(raw_images_np), # Dummy view2
+        [np.zeros_like(raw_images_np[0])] * len(raw_images_np), # Dummy view2 for DALI
         raw_support_images_np
     )
-
     # Reshape flattened support images back to (B, N_support, C, H, W)
     max_support_imgs = CONFIG['data']['synthetic_data_config']['max_support_images_per_problem']
     batch_size_actual = processed_query_images_view1.shape[0]
@@ -582,7 +545,6 @@ def _get_ensemble_teacher_logits(
         batch_size_actual, max_support_imgs, 
         processed_query_images_view1.shape[1], processed_query_images_view1.shape[2], processed_query_images_view1.shape[3]
     )
-
 
     for teacher_model in teacher_models:
         # Randomly drop a teacher model for diversity
@@ -594,13 +556,11 @@ def _get_ensemble_teacher_logits(
                                         support_images=processed_support_images_reshaped)
                 logits = outputs['bongard_logits']
                 logits_list.append(logits)
-            # No need to set back to train mode, as teachers are always eval during student training
-
+    
     if not logits_list:
         logger.warning("No teacher models selected for ensemble logits. Returning zero logits.")
-        # Return zero tensor with correct shape
         num_classes = CONFIG['model']['bongard_head_config']['num_classes']
-        return torch.zeros(raw_images_np.shape[0], num_classes, device=DEVICE), None # Use raw_images_np for batch size
+        return torch.zeros(processed_query_images_view1.shape[0], num_classes, device=DEVICE), None
 
     stacked_logits = torch.stack(logits_list) # (N_selected_teachers, Batch_size, Num_classes)
     averaged_logits = stacked_logits.mean(dim=0) # (Batch_size, Num_classes)
@@ -617,11 +577,9 @@ def _get_ensemble_teacher_logits(
         max_probs, predicted_classes = avg_probs.max(dim=1)
         
         # Create a mask where agreement is high
-        # A simple agreement check: if the max probability is above a threshold
         distillation_mask = (max_probs > mask_agreement_threshold).float() # (B,)
         
     return averaged_logits, distillation_mask
-
 
 def _run_single_training_session_ensemble(
     model: Union[PerceptionModule, DDP],
@@ -641,7 +599,6 @@ def _run_single_training_session_ensemble(
     """
     Runs a single training session for one model/ensemble member.
     Handles training, validation, logging, and checkpointing.
-
     Args:
         model: The model to train (can be DDP wrapped).
         train_loader: PyTorch DataLoader for training.
@@ -656,7 +613,6 @@ def _run_single_training_session_ensemble(
         total_epochs (int): Total number of epochs for this training session.
         teacher_models (Optional[List[nn.Module]]): A list of teacher models for knowledge distillation.
         dali_image_processor (Any): The DALIImageProcessor instance for GPU augmentation.
-
     Returns:
         Tuple[float, float, Dict[str, Any]]: Best validation accuracy, best validation loss,
                                               and dictionary of best metrics.
@@ -664,21 +620,20 @@ def _run_single_training_session_ensemble(
     training_config = CONFIG['training']
     model_config = CONFIG['model']
     debug_config = CONFIG['debug']
-
     best_val_accuracy = 0.0
     best_val_loss = float('inf')
     best_metrics = {}
-
     scaler = GradScaler() if training_config['use_amp'] else None
     
     # Initialize loss functions
     # Bongard criterion is always 'none' reduction if PER is used, so it returns per-sample losses
-    bongard_criterion = LabelSmoothingCrossEntropy(smoothing=training_config['label_smoothing'], reduction='none')
+    # Otherwise, it's 'mean'
+    bongard_criterion = nn.CrossEntropyLoss(reduction='none' if (training_config['curriculum_learning'] and training_config['curriculum_config']['difficulty_sampling']) else 'mean')
     
-    attribute_criterion = LabelSmoothingCrossEntropy(smoothing=training_config['label_smoothing'])
+    # Attribute criterion is for multi-class classification per attribute
+    attribute_criterion = nn.CrossEntropyLoss(reduction='mean') # Assuming single-label per attribute
     
-    relation_criterion = LabelSmoothingCrossEntropy(smoothing=training_config['label_smoothing'], reduction='mean')
-
+    relation_criterion = nn.CrossEntropyLoss(reduction='mean')
     feature_consistency_criterion = FeatureConsistencyLoss(loss_type='mse')
     
     # Symbolic Consistency Loss
@@ -686,7 +641,6 @@ def _run_single_training_session_ensemble(
         all_bongard_rules=ALL_BONGARD_RULES,
         loss_weight=training_config['consistency_loss_weight']
     )
-
     # Distillation loss (if applicable)
     distillation_criterion = None
     if training_config['use_knowledge_distillation']:
@@ -698,10 +652,9 @@ def _run_single_training_session_ensemble(
                 alpha=training_config['distillation_config']['alpha'],
                 reduction='none' # Set reduction to 'none' for per-sample losses for masking
             )
-
     # SimCLR Contrastive Loss
     nt_xent_criterion = NTXentLoss(temperature=model_config['simclr_config']['temperature'])
-
+    
     # SWA setup
     if training_config['use_swa'] and current_rank == 0:
         swa_model = swa_utils.AveragedModel(model.module if is_ddp_initialized else model)
@@ -710,9 +663,9 @@ def _run_single_training_session_ensemble(
     else:
         swa_model = None
         swa_scheduler = None
-
+    
     mixup_cutmix_augmenter = MixupCutmix(training_config, num_classes=CONFIG['model']['bongard_head_config']['num_classes'])
-
+    
     # Pre-compute the edge index map (needed for GT edge labels)
     MAX_GNN_OBJECTS = CONFIG['model']['MAX_GNN_OBJECTS']
     edge_index_map = make_edge_index_map(MAX_GNN_OBJECTS)
@@ -721,12 +674,34 @@ def _run_single_training_session_ensemble(
     # Initialize SymbolicEngine for DSL/ILP (if needed for rule induction outside RL)
     symbolic_engine = SymbolicEngine(CONFIG)
 
-
     # --- SimCLR Pretraining Phase ---
-    if model_config['simclr_config']['enabled'] and model_config['simclr_config']['pretrain_epochs'] > 0:
+    if model_config['simclr_config']['enabled'] and model_config['simclr_config']['pretrain_epochs'] > 0 and current_rank == 0:
         logger.info(f"Starting SimCLR pretraining for {model_config['simclr_config']['pretrain_epochs']} epochs...")
+        
+        # Create a LitSimCLR model for pretraining
+        simclr_model = LitSimCLR(CONFIG).to(DEVICE)
+        
+        # Create a separate DataLoader for SimCLR pretraining if needed, or use the main one if it provides two views
+        # Assuming the main train_loader is already configured to provide two views if SimCLR is enabled.
+        # If not, you would need a dedicated SimCLR DataLoader here.
+        # For this plan, we assume `get_dataloader` when `is_simclr_pretraining=True` provides two views.
+        # In main.py, LitSimCLR is trained directly. So this block is more for a standalone pretraining script.
+        # However, if it's part of the main training, we'd need to ensure the `model` passed here
+        # is a `LitSimCLR` instance or has a `simclr_encoder` and `attribute_model` accessible.
+        
+        # Given that `model` is `PerceptionModule` or `DDP(PerceptionModule)`,
+        # we need to ensure its `forward` method handles `is_simclr_pretraining`.
+        
+        # The LitSimCLR in models.py is a separate LightningModule.
+        # So, this part of `_run_single_training_session_ensemble` should be removed
+        # if `train_simclr.py` is a separate script.
+        # For now, I'll keep it as a conceptual block, assuming `model` refers to `PerceptionModule`.
+        
+        # If `model` is `PerceptionModule`, its forward method needs to return `simclr_embeddings`
+        # when `is_simclr_pretraining` is True.
+        
         simclr_optimizer = get_optimizer(
-            model=model.module.simclr_encoder if is_ddp_initialized else model.simclr_encoder,
+            model=model.module if is_ddp_initialized else model, # Optimize the full PerceptionModule
             optimizer_name=training_config['optimizer'],
             learning_rate=model_config['simclr_config']['pretrain_lr'],
             weight_decay=training_config['weight_decay']
@@ -738,34 +713,33 @@ def _run_single_training_session_ensemble(
             total_simclr_loss = 0.0
             num_simclr_batches = 0
             
-            # Set epoch for sampler (if using DistributedSampler or CurriculumSampler)
             if hasattr(train_loader.sampler, 'set_epoch'):
                 train_loader.sampler.set_epoch(pretrain_epoch)
-
+            
             pbar_simclr = tqdm(enumerate(train_loader), total=len(train_loader), 
                                 desc=f"SimCLR Pretrain Epoch {pretrain_epoch+1}", disable=(current_rank != 0))
-
+            
             for batch_idx, batch_data in pbar_simclr:
                 # Unpack raw NumPy arrays from collate_fn output
                 raw_images_view1_np = batch_data[0]
                 raw_images_view2_np = batch_data[1]
-                # Other batch_data elements are not directly used for SimCLR loss
-
+                raw_support_images_flat_np = batch_data[9] # Dummy for DALI input
+                
                 # Process raw images through DALI Image Processor
                 processed_images_view1, processed_images_view2, _ = dali_image_processor.run(
                     raw_images_view1_np,
                     raw_images_view2_np,
-                    [np.zeros_like(raw_images_view1_np[0])] * len(raw_images_view1_np) # Dummy support images for DALI call
+                    raw_support_images_flat_np
                 )
-
+                
                 simclr_optimizer.zero_grad()
-
                 with autocast(enabled=training_config['use_amp']):
-                    simclr_embeddings1 = model(processed_images_view1, is_simclr_pretraining=True)['simclr_embeddings']
-                    simclr_embeddings2 = model(processed_images_view2, is_simclr_pretraining=True)['simclr_embeddings']
+                    # Call PerceptionModule in SimCLR pretraining mode
+                    simclr_embeddings1 = model(processed_images_view1, ground_truth_json_strings=[], support_images=torch.empty(1,1,3,224,224).to(DEVICE), is_simclr_pretraining=True)['simclr_embeddings']
+                    simclr_embeddings2 = model(processed_images_view2, ground_truth_json_strings=[], support_images=torch.empty(1,1,3,224,224).to(DEVICE), is_simclr_pretraining=True)['simclr_embeddings']
                     
                     loss_simclr = nt_xent_criterion(simclr_embeddings1, simclr_embeddings2)
-
+                
                 if simclr_scaler:
                     simclr_scaler.scale(loss_simclr).backward()
                     simclr_scaler.step(simclr_optimizer)
@@ -777,7 +751,7 @@ def _run_single_training_session_ensemble(
                 total_simclr_loss += loss_simclr.item()
                 num_simclr_batches += 1
                 pbar_simclr.set_postfix(simclr_loss=f"{total_simclr_loss / num_simclr_batches:.4f}")
-
+            
             avg_simclr_loss = total_simclr_loss / num_simclr_batches
             logger.info(f"SimCLR Pretrain Epoch {pretrain_epoch+1} - Avg Loss: {avg_simclr_loss:.4f}")
             if HAS_WANDB and CONFIG['training']['use_wandb']:
@@ -786,23 +760,18 @@ def _run_single_training_session_ensemble(
         
         logger.info("SimCLR pretraining finished.")
 
-
     # --- RL Reformulation Phase ---
     if training_config['use_rl_reformulation'] and current_rank == 0: # RL typically runs on one rank
         logger.info("Starting RL-based rule search...")
         rl_config = training_config['rl_config']
+        num_rl_episodes = rl_config['num_episodes']
         
         # Initialize RulePolicy network
         policy_input_dim = model_config['support_set_encoder_config']['output_dim']
         rule_policy = RulePolicy(policy_input_dim, RuleGraphSpace().num_actions).to(DEVICE)
         policy_optimizer = optim.Adam(rule_policy.parameters(), lr=rl_config['policy_lr'])
 
-        # To get actual support set features and scene graphs for RL environment:
-        # We need to iterate through the training loader to get real Bongard problems
-        # and use their support sets.
-        
         # Create a separate PyTorch DataLoader for RL episodes to sample support sets
-        # This uses the same underlying dataset but with a batch size of 1 for problem-by-problem processing.
         rl_data_loader = DataLoader(
             train_loader.dataset, # Use the same underlying dataset
             batch_size=1, # Process one problem at a time for RL episode
@@ -815,7 +784,6 @@ def _run_single_training_session_ensemble(
         for episode in range(num_rl_episodes):
             try:
                 # Get a single Bongard problem (query + support) from the RL data loader
-                # No need to call reset on PyTorch DataLoader directly, just iterate
                 batch_data = next(iter(rl_data_loader))
                 
                 # Unpack relevant support set data from the batch
@@ -829,9 +797,6 @@ def _run_single_training_session_ensemble(
                     continue
 
                 # Process raw support images through DALI Image Processor
-                # DALI processor expects lists of numpy arrays for each input
-                # So, we pass a list containing the single flattened support image array
-                # And dummy query images.
                 processed_support_images_flat_tensor = dali_image_processor.run(
                     [np.zeros((CONFIG['data']['image_size'], CONFIG['data']['image_size'], 3), dtype=np.uint8)], # Dummy query1
                     [np.zeros((CONFIG['data']['image_size'], CONFIG['data']['image_size'], 3), dtype=np.uint8)], # Dummy query2
@@ -849,29 +814,48 @@ def _run_single_training_session_ensemble(
                 actual_processed_support_images = processed_support_images_reshaped_for_encoder[:num_support_per_problem]
                 actual_support_sgs = [json.loads(sg.decode('utf-8')) for sg in support_sgs_flat_bytes[:num_support_per_problem]]
 
-
                 # Process support images through the PerceptionModule to get features
                 # Run in eval mode for feature extraction
                 model.eval()
                 with torch.no_grad():
                     # Extract features from the full image using the backbone
-                    # (B_support_actual, C, H, W)
-                    # Need to handle if model is DDP wrapped
                     base_model_for_rl = model.module if is_ddp_initialized else model
-                    support_batch_feature_maps = base_model_for_rl.attribute_classifier.feature_extractor(actual_processed_support_images)
+                    # This calls the PerceptionModule's forward in SimCLR pretraining mode to get raw features
+                    # Then we feed these features to the support set encoder.
                     
-                    # Global pool to get (B_support_actual, C_feats)
-                    support_features_global_pooled = F.adaptive_avg_pool2d(support_batch_feature_maps, (1,1)).flatten(1)
+                    # Call PerceptionModule to get object features for support images
+                    # This will run object detection, attribute model etc. on each support image
+                    # For RL, we need the *object features* from the support images.
+                    # This is a bit indirect. Let's assume we can get the object features from PerceptionModule.
                     
-                    # Pass through DeepSets encoder to get a single context vector
-                    # DeepSets expects (N_elements, Feature_dim) and returns (Output_dim,)
-                    # So, we pass the entire set of support features to it.
-                    current_support_context_vector = base_model_for_rl.support_set_encoder(support_features_global_pooled).unsqueeze(0) # (1, D_context)
+                    # A more direct way would be to run `attribute_model` on each support image.
+                    # For now, let's use a simplified approach by getting features from the attribute model directly.
+                    
+                    # Need to process each support image individually to get its objects and features
+                    support_object_features_list = []
+                    for s_img_tensor in actual_processed_support_images:
+                        s_img_np = (s_img_tensor.permute(1,2,0).cpu().numpy()*255).astype(np.uint8)
+                        s_bboxes, s_masks, _ = base_model_for_rl.object_detector(s_img_np)
+                        if s_bboxes:
+                            s_boxes_tensor = torch.tensor(s_bboxes, dtype=torch.float32, device=DEVICE)
+                            s_batch_indices_for_roi = torch.zeros(s_boxes_tensor.shape[0], 1, dtype=torch.float32, device=DEVICE)
+                            s_rois = torch.cat([s_batch_indices_for_roi, s_boxes_tensor], dim=1)
+                            s_roi_aligned_patches = roi_align(s_img_tensor.unsqueeze(0), s_rois, output_size=(CONFIG['data']['image_size'], CONFIG['data']['image_size']), spatial_scale=1.0)
+                            s_pooled_features, _ = base_model_for_rl.attribute_model(s_roi_aligned_patches)
+                            support_object_features_list.append(s_pooled_features)
+                    
+                    if support_object_features_list:
+                        # Concatenate all support object features for this problem
+                        all_support_objects_for_problem = torch.cat(support_object_features_list, dim=0) # (Total_objects_in_problem, Feature_dim)
+                        current_support_context_vector = base_model_for_rl.support_set_encoder(all_support_objects_for_problem).unsqueeze(0) # (1, D_context)
+                    else:
+                        current_support_context_vector = torch.zeros(1, policy_input_dim, device=DEVICE) # No objects detected, zero context
+
                 model.train() # Set back to train mode
 
                 # Reset RL environment with the new support problem
                 rl_env = BongardEnv(
-                    support_set_features=[sf.cpu() for sf in support_features_global_pooled], # Convert to list of CPU tensors for env
+                    support_set_features=[sf.cpu() for sf in support_object_features_list], # List of CPU tensors for env
                     support_set_labels=support_labels_flat,
                     support_set_scene_graphs=actual_support_sgs,
                     max_steps=rl_config['max_steps_per_episode']
@@ -880,9 +864,7 @@ def _run_single_training_session_ensemble(
                 log_probs = []
                 rewards = []
                 entropies = []
-
-                observation = rl_env.support_set_features # Initial observation (list of features)
-
+                
                 for step in range(rl_config['max_steps_per_episode']):
                     action_logits = rule_policy(current_support_context_vector) # Policy takes the single context vector
                     action_dist = torch.distributions.Categorical(logits=action_logits)
@@ -892,11 +874,10 @@ def _run_single_training_session_ensemble(
 
                     # Take a step in the environment
                     _, reward, done, info = rl_env.step(action.item())
-
                     log_probs.append(log_prob)
                     rewards.append(reward)
                     entropies.append(entropy)
-
+                    
                     if done:
                         break
                 
@@ -911,7 +892,7 @@ def _run_single_training_session_ensemble(
                 # Normalize rewards (optional but common)
                 if len(discounted_rewards) > 1:
                     discounted_rewards = (discounted_rewards - discounted_rewards.mean()) / (discounted_rewards.std() + 1e-9)
-
+                
                 # Calculate policy loss
                 policy_loss = []
                 for lp, dr, ent in zip(log_probs, discounted_rewards, entropies):
@@ -922,41 +903,37 @@ def _run_single_training_session_ensemble(
                 policy_optimizer.step()
 
                 if (episode + 1) % 10 == 0:
-                    logger.info(f"RL Episode {episode+1}/{num_rl_episodes} - Total Reward: {sum(rewards):.2f}, Rule Accuracy: {info['rule_accuracy']:.2f}")
+                    logger.info(f"RL Episode {episode+1}/{num_rl_episodes} - Total Reward: {sum(rewards):.2f}, Rule Accuracy: {info.get('rule_accuracy', 0.0):.2f}")
                     if HAS_WANDB and CONFIG['training']['use_wandb']:
                         import wandb
                         wandb.log({
                             f"RL/Total_Reward_member_{model_idx}": sum(rewards),
                             f"RL/Policy_Loss_member_{model_idx}": torch.stack(policy_loss).sum().item(),
-                            f"RL/Rule_Accuracy_member_{model_idx}": info['rule_accuracy'],
+                            f"RL/Rule_Accuracy_member_{model_idx}": info.get('rule_accuracy', 0.0),
                             "rl_episode": episode
                         })
-
             except StopIteration:
                 logger.info("RL data loader exhausted. Resetting for next RL epoch.")
-                # If you want more episodes than available unique problems, you'd reset the loader here.
-                # For now, we just stop if the loader runs out.
                 break
             except Exception as e:
                 logger.error(f"Error during RL episode {episode+1}: {e}")
                 continue
-
         logger.info("RL-based rule search finished.")
         # After RL, the `rule_policy` can be used to propose rules.
         # You might want to save the trained policy.
-
+        torch.save(rule_policy.state_dict(), os.path.join(debug_config['save_model_checkpoints'], f"rl_policy_member_{model_idx}.pth"))
+        logger.info(f"RL policy saved to {os.path.join(debug_config['save_model_checkpoints'], f'rl_policy_member_{model_idx}.pth')}")
 
     # --- Quantization Setup (QAT) ---
-    if training_config['use_quantization_aware_training'] and HAS_TORCH_QUANTIZATION:
+    if training_config['quantization']['qat'] and HAS_TORCH_QUANTIZATION:
         logger.info("Preparing model for Quantization Aware Training (QAT)...")
         # Ensure model is on CPU for fusion before preparing for QAT
-        # DDP models need to be unwrapped for fusion and QAT preparation
         if is_ddp_initialized:
             model_to_quantize = model.module.to('cpu')
         else:
             model_to_quantize = model.to('cpu')
         
-        model_to_quantize = quantize_model_qat(model_to_quantize, training_config)
+        model_to_quantize = quantize_model_qat(model_to_quantize, CONFIG) # Pass full CONFIG
         
         # Move back to GPU if DDP or single GPU
         if is_ddp_initialized:
@@ -964,7 +941,6 @@ def _run_single_training_session_ensemble(
         else:
             model = model_to_quantize.to(DEVICE)
         logger.info("Model ready for QAT fine-tuning.")
-
 
     # --- Main Training Loop ---
     for epoch in range(start_epoch, total_epochs):
@@ -987,21 +963,20 @@ def _run_single_training_session_ensemble(
             replay_buffer.update_beta(epoch, total_epochs) # Beta annealing
 
         # --- Structured Pruning Application (Iterative) ---
-        if training_config['use_structured_pruning'] and training_config['pruning_config']['enabled'] and \
-           (epoch + 1) % training_config['pruning_config']['prune_interval_epochs'] == 0 and current_rank == 0:
+        if training_config['pruning']['enabled'] and \
+           (epoch + 1) % training_config['pruning']['prune_interval_epochs'] == 0 and current_rank == 0:
             logger.info(f"Applying structured pruning at epoch {epoch+1}...")
             
             sensitivity_scores = None
-            if training_config['pruning_config']['use_sensitivity_analysis']:
-                # Compute sensitivity on a subset of validation data for speed
+            if training_config['pruning']['use_sensitivity']:
                 sensitivity_scores = compute_layer_sensitivity(model, val_loader, dali_image_processor, current_rank)
-
+            
             apply_structured_pruning(
                 model=model,
-                config=training_config,
-                train_loader=train_loader, # Pass train_loader for fine-tuning
-                val_loader=val_loader,     # Pass val_loader for fine-tuning
-                dali_image_processor=dali_image_processor, # Pass DALI processor
+                config=CONFIG, # Pass full CONFIG for pruning
+                train_loader=train_loader,
+                val_loader=val_loader,
+                dali_image_processor=dali_image_processor,
                 model_idx=model_idx,
                 current_rank=current_rank,
                 is_ddp_initialized=is_ddp_initialized,
@@ -1009,11 +984,15 @@ def _run_single_training_session_ensemble(
             )
             logger.info(f"Structured pruning applied for epoch {epoch+1}.")
 
-
         pbar = tqdm(enumerate(train_loader), total=len(train_loader), desc=f"Epoch {epoch+1}/{total_epochs} (Rank {current_rank})", disable=(current_rank != 0))
         
         for batch_idx, batch_data in pbar:
             # Unpack raw NumPy arrays and other data from collate_fn output
+            # (raw_query_images_view1_np, raw_query_images_view2_np, query_labels,
+            #  query_gts_json_view1, query_gts_json_view2, difficulties, affine1, affine2, original_indices,
+            #  raw_support_images_flat_np, support_labels_flat, support_sgs_flat_bytes, num_support_per_problem,
+            #  tree_indices, is_weights)
+            
             raw_query_images_view1_np = batch_data[0]
             raw_query_images_view2_np = batch_data[1]
             query_labels = batch_data[2].long().to(DEVICE)
@@ -1023,15 +1002,13 @@ def _run_single_training_session_ensemble(
             affine1 = batch_data[6].float().to(DEVICE)
             affine2 = batch_data[7].float().to(DEVICE)
             original_indices = batch_data[8].long().to(DEVICE)
-
             raw_support_images_flat_np = batch_data[9]
             support_labels_flat = batch_data[10].long().to(DEVICE)
             support_sgs_flat_bytes = batch_data[11]
             num_support_per_problem = batch_data[12] # This is a tensor/list of counts per problem in batch
-
-
             tree_indices = None
             is_weights = None
+            
             # Check if PER info is present in the batch (last two elements from collate_fn)
             if len(batch_data) > 13 and batch_data[13] is not None: 
                 tree_indices = batch_data[13].long().to(DEVICE)
@@ -1059,8 +1036,8 @@ def _run_single_training_session_ensemble(
             else:
                 images_view1_aug = processed_query_images_view1
                 images_view2_aug = processed_query_images_view2
-                labels_mixed = None
-
+                labels_mixed = F.one_hot(query_labels, num_classes=CONFIG['model']['bongard_head_config']['num_classes']).float() # For consistency loss
+            
             # Handle SAM optimizer's first_step
             if training_config['use_sam'] and isinstance(optimizer, SAM):
                 with autocast(enabled=training_config['use_amp']):
@@ -1068,7 +1045,7 @@ def _run_single_training_session_ensemble(
                                      support_images=processed_support_images_reshaped)
                     bongard_logits1 = outputs1['bongard_logits']
                     
-                    if labels_mixed is not None:
+                    if training_config.get('use_mixup_cutmix', False):
                         loss_for_sam_first_step = F.kl_div(F.log_softmax(bongard_logits1, dim=-1), labels_mixed, reduction='batchmean')
                     else:
                         loss_for_sam_first_step = bongard_criterion(bongard_logits1, query_labels).mean()
@@ -1080,9 +1057,8 @@ def _run_single_training_session_ensemble(
                     loss_for_sam_first_step.backward()
                 
                 optimizer.first_step(zero_grad=True)
-
+            
             optimizer.zero_grad()
-
             with autocast(enabled=training_config['use_amp']):
                 # Forward pass for view 1
                 outputs1 = model(images_view1_aug, ground_truth_json_strings=query_gts_json_view1, 
@@ -1098,16 +1074,12 @@ def _run_single_training_session_ensemble(
                 outputs2 = model(images_view2_aug, ground_truth_json_strings=query_gts_json_view2, 
                                  support_images=processed_support_images_reshaped)
                 bongard_logits2 = outputs2['bongard_logits']
-                attribute_logits2 = outputs2['attribute_logits']
-                relation_logits2 = outputs2['relation_logits']
                 attribute_features2 = outputs2['attribute_features']
-                global_graph_embeddings2 = outputs2['global_graph_embeddings']
                 scene_graphs2 = outputs2['scene_graphs']
-
 
                 # --- Calculate Losses ---
                 # 1. Bongard Classification Loss
-                if labels_mixed is not None:
+                if training_config.get('use_mixup_cutmix', False):
                     per_sample_bongard_losses = F.kl_div(F.log_softmax(bongard_logits1, dim=-1), labels_mixed, reduction='none').sum(dim=1)
                 else:
                     per_sample_bongard_losses = bongard_criterion(bongard_logits1, query_labels)
@@ -1117,8 +1089,7 @@ def _run_single_training_session_ensemble(
                     loss_bongard = (per_sample_bongard_losses * is_weights).mean()
                 else:
                     loss_bongard = per_sample_bongard_losses.mean()
-
-
+                
                 # 2. Attribute Classification Loss
                 loss_attribute = torch.tensor(0.0, device=DEVICE)
                 num_attribute_losses = 0
@@ -1138,11 +1109,8 @@ def _run_single_training_session_ensemble(
                                     break
                         
                         if gt_obj:
-                            for attr_name, num_classes in model_config['attribute_classifier_config'].items():
-                                if attr_name not in ['backbone_name', 'pretrained', 'freeze_backbone'] and \
-                                   attr_name in gt_obj['attributes'] and attr_name in attribute_logits1 and attribute_logits1[attr_name].numel() > 0:
-                                    
-                                    # Ensure the flat index is within bounds of attribute_logits1[attr_name]
+                            for attr_name, num_classes in CONFIG['model']['attribute_classifier_config'].items():
+                                if attr_name in gt_obj['attributes'] and attr_name in attribute_logits1 and attribute_logits1[attr_name].numel() > 0:
                                     if current_flat_idx < attribute_logits1[attr_name].shape[0]:
                                         attr_map = globals().get(f"ATTRIBUTE_{attr_name.upper()}_MAP")
                                         if attr_map and gt_obj['attributes'][attr_name] in attr_map:
@@ -1150,24 +1118,16 @@ def _run_single_training_session_ensemble(
                                             predicted_logits = attribute_logits1[attr_name][current_flat_idx].unsqueeze(0)
                                             loss_attribute += attribute_criterion(predicted_logits, torch.tensor([gt_attr_label], device=DEVICE))
                                             num_attribute_losses += 1
-                                        else:
-                                            logger.warning(f"Attribute map or value not found for {attr_name}: {gt_obj['attributes'][attr_name]}")
-                        
-                        # Increment for the next inferred object, regardless of whether it was matched to GT
                         current_flat_idx += 1
-
-
                 if num_attribute_losses > 0:
                     loss_attribute /= num_attribute_losses
-
-
+                
                 # 3. Relation Classification Loss
                 loss_relation = torch.tensor(0.0, device=DEVICE)
                 if relation_logits1.numel() > 0:
                     B_current, _, R = relation_logits1.shape
                     
                     gt_edge_labels = torch.full((B_current, E_max), fill_value=RELATION_MAP['none'], dtype=torch.long, device=DEVICE)
-
                     for b in range(B_current):
                         sg_gt = json.loads(query_gts_json_view1[b].decode('utf-8'))
                         num_gt_objects = len(sg_gt['objects'])
@@ -1178,20 +1138,16 @@ def _run_single_training_session_ensemble(
                             subj_id = rel['subject_id']
                             obj_id = rel['object_id']
                             rel_type = rel['type']
-
                             if (subj_id, obj_id) in edge_map_for_img and rel_type in RELATION_MAP:
                                 edge_idx_flat = edge_map_for_img[(subj_id, obj_id)]
                                 gt_edge_labels[b, edge_idx_flat] = RELATION_MAP[rel_type]
                             else:
                                 logger.debug(f"Skipping unmapped relation: {(subj_id, obj_id, rel_type)} in GT for batch {b}.")
-
                     logits_flat = relation_logits1.view(-1, R)
                     labels_flat = gt_edge_labels.view(-1)
                     
                     loss_relation = relation_criterion(logits_flat, labels_flat)
-                    total_relation_loss += loss_relation.item()
-
-
+                
                 # 4. Consistency Losses
                 loss_consistency = torch.tensor(0.0, device=DEVICE)
                 if training_config['consistency_loss_weight'] > 0:
@@ -1203,16 +1159,13 @@ def _run_single_training_session_ensemble(
                             logger.debug("Skipping feature consistency loss: no objects detected in one or both views.")
                     
                     # Symbolic Consistency Loss
-                    if training_config['symbolic_consistency_weight'] > 0:
-                        # For symbolic consistency, we need the *ground truth* scene graphs
-                        # for the query images to find the best rule.
+                    if training_config['symbolic_consistency_weight'] > 0 and symbolic_consistency_criterion:
                         gt_positive_sgs = [json.loads(g.decode('utf-8')) for i, g in enumerate(query_gts_json_view1) if query_labels[i].item() == 1]
                         gt_negative_sgs = [json.loads(g.decode('utf-8')) for i, g in enumerate(query_gts_json_view1) if query_labels[i].item() == 0]
-
+                        
                         hypothesized_rules_for_batch = []
                         if gt_positive_sgs and gt_negative_sgs:
-                            top_rules = find_best_rules(
-                                all_rules=list(ALL_BONGARD_RULES.values()), # Evaluate against known rules
+                            top_rules = symbolic_engine.find_best_rules(
                                 positive_scene_graphs=gt_positive_sgs,
                                 negative_scene_graphs=gt_negative_sgs,
                                 k=1
@@ -1225,14 +1178,13 @@ def _run_single_training_session_ensemble(
                                 logger.debug(f"No best rule found for batch {batch_idx+1}.")
                         else:
                             logger.debug(f"Skipping rule evaluation for batch {batch_idx+1}: insufficient positive/negative GT samples.")
-
+                        
                         loss_symbolic_consistency = symbolic_consistency_criterion(
                             scene_graphs1=scene_graphs1, # Inferred scene graphs for view 1
                             scene_graphs2=scene_graphs2, # Inferred scene graphs for view 2
                             labels=query_labels,
                             hypothesized_rules_info=hypothesized_rules_for_batch
                         )
-                        total_symbolic_consistency_loss += loss_symbolic_consistency.item()
                         loss_consistency += training_config['symbolic_consistency_weight'] * loss_symbolic_consistency
                 
                 # 5. Knowledge Distillation Loss (if enabled)
@@ -1241,46 +1193,35 @@ def _run_single_training_session_ensemble(
                     # Get streaming teacher logits with ensemble dropout and optional mask
                     teacher_logits_batch, distillation_mask = _get_ensemble_teacher_logits(
                         teacher_models=teacher_models,
-                        raw_images_np=raw_query_images_view1_np, # Pass raw images for teacher's DALI processing
-                        raw_gt_json_strings=query_gts_json_view1, # Pass raw GT JSON for teacher's forward
-                        raw_support_images_np=raw_support_images_flat_np, # Pass raw support images for teacher's DALI processing
+                        raw_images_np=raw_query_images_view1_np,
+                        raw_gt_json_strings=query_gts_json_view1,
+                        raw_support_images_np=raw_support_images_flat_np,
                         distillation_config=training_config['distillation_config'],
-                        dali_image_processor=dali_image_processor # Pass the DALI processor
+                        dali_image_processor=dali_image_processor
                     )
                     
                     if teacher_logits_batch.numel() > 0: # Ensure we got valid logits
-                        # DistillationLoss returns per-sample soft and hard losses
                         per_sample_soft_loss, per_sample_hard_loss = distillation_criterion(
                             bongard_logits1, teacher_logits_batch, query_labels
                         )
                         
                         # Apply mask if enabled
                         if distillation_mask is not None and training_config['distillation_config']['use_mask_distillation']:
-                            # Ensure mask is broadcastable if needed (e.g., (B,) for (B,1) losses)
-                            # KLDivLoss with reduction='none' already gives (B,) loss
-                            # CrossEntropyLoss with reduction='none' also gives (B,) loss
                             masked_soft_loss = per_sample_soft_loss * distillation_mask
                             masked_hard_loss = per_sample_hard_loss * distillation_mask
                             loss_distillation = (training_config['distillation_config']['alpha'] * masked_soft_loss + \
                                                  (1. - training_config['distillation_config']['alpha']) * masked_hard_loss).mean()
                         else:
-                            # If no mask or mask distillation is off, just take the mean
                             loss_distillation = (training_config['distillation_config']['alpha'] * per_sample_soft_loss + \
                                                  (1. - training_config['distillation_config']['alpha']) * per_sample_hard_loss).mean()
                         
-                        total_distillation_loss += loss_distillation.item()
-                    else:
-                        logger.warning("No teacher logits generated for distillation in this batch.")
-
-
                 # Combine all losses
                 current_batch_loss = loss_bongard
                 if loss_attribute > 0: current_batch_loss += loss_attribute
                 if loss_relation > 0: current_batch_loss += training_config['relation_loss_weight'] * loss_relation
                 if loss_consistency > 0: current_batch_loss += training_config['consistency_loss_weight'] * loss_consistency
                 if loss_distillation > 0: current_batch_loss += loss_distillation
-
-
+            
             # Backward pass
             if scaler:
                 scaler.scale(current_batch_loss).backward()
@@ -1298,36 +1239,28 @@ def _run_single_training_session_ensemble(
             # Handle SAM optimizer's second_step
             if training_config['use_sam'] and isinstance(optimizer, SAM):
                 optimizer.second_step(zero_grad=True)
-
-            # Update total losses
+            
+            # Update total losses for logging
             total_loss += current_batch_loss.item()
             total_bongard_loss += loss_bongard.item()
             total_attribute_loss += loss_attribute.item()
             total_relation_loss += loss_relation.item()
             total_consistency_loss += loss_consistency.item()
             total_distillation_loss += loss_distillation.item()
-            total_symbolic_consistency_loss += total_symbolic_consistency_loss # This was a bug, should be loss_symbolic_consistency.item()
-            # Corrected:
-            # total_symbolic_consistency_loss += loss_symbolic_consistency.item() # This line was causing double counting.
-            # The value `loss_symbolic_consistency.item()` is already added to `total_consistency_loss`.
-            # If `total_symbolic_consistency_loss` is meant to track only the symbolic part,
-            # then it should be added like this:
-            # total_symbolic_consistency_loss += loss_symbolic_consistency.item()
-            # However, since `loss_consistency` already sums it up, and `total_consistency_loss` tracks that,
-            # keeping `total_symbolic_consistency_loss` separate and adding its raw item value is fine for logging.
-            # Let's assume the previous line was meant to be the correct one:
-            # total_symbolic_consistency_loss += loss_symbolic_consistency.item()
+            total_symbolic_consistency_loss += loss_symbolic_consistency.item() if training_config['symbolic_consistency_weight'] > 0 and symbolic_consistency_criterion else 0.0
+            
             num_batches += 1
 
             # Update PER buffer if enabled and at specified frequency
             if replay_buffer and training_config['curriculum_config']['difficulty_sampling'] and \
-               (batch_idx + 1) % training_config['curriculum_config']['difficulty_update_frequency_batches'] == 0:
+               (batch_idx + 1) % training_config['curriculum_config']['difficulty_update_frequency_batches'] == 0 and \
+               tree_indices is not None and is_weights is not None:
                 
                 losses_np = per_sample_bongard_losses.detach().cpu().numpy()
                 tree_indices_np = tree_indices.cpu().numpy()
                 
                 async_update_priorities(replay_buffer, tree_indices_np.tolist(), losses_np.tolist())
-
+            
             # Log training metrics
             if (batch_idx + 1) % training_config['log_interval_batches'] == 0 and current_rank == 0:
                 avg_loss = total_loss / num_batches
@@ -1336,7 +1269,7 @@ def _run_single_training_session_ensemble(
                 avg_relation_loss = total_relation_loss / num_batches
                 avg_symbolic_consistency_loss = total_symbolic_consistency_loss / num_batches
                 avg_distillation_loss = total_distillation_loss / num_batches
-
+                
                 pbar.set_postfix(loss=f"{avg_loss:.4f}", bongard_loss=f"{avg_bongard_loss:.4f}", 
                                   attr_loss=f"{avg_attribute_loss:.4f}",
                                   rel_loss=f"{avg_relation_loss:.4f}",
@@ -1356,7 +1289,7 @@ def _run_single_training_session_ensemble(
                         f"train/lr_member_{model_idx}": optimizer.param_groups[0]['lr'],
                         "global_step": epoch * len(train_loader) + batch_idx
                     })
-
+            
             # Validate at specified batch frequency
             if training_config['validation_frequency_batches'] and \
                (batch_idx + 1) % training_config['validation_frequency_batches'] == 0:
@@ -1370,7 +1303,7 @@ def _run_single_training_session_ensemble(
                             f"val/loss_member_{model_idx}": val_metrics['loss'],
                             "global_step": epoch * len(train_loader) + batch_idx
                         })
-                model.train()
+                model.train() # Set back to train mode
 
         # End of epoch
         if scheduler and not isinstance(scheduler, OneCycleLR):
@@ -1385,7 +1318,6 @@ def _run_single_training_session_ensemble(
             logger.info(f"SWA model updated. SWA LR: {optimizer.param_groups[0]['lr']}")
 
         val_metrics = _validate_model_ensemble(model, val_loader, dali_image_processor, current_rank, is_ddp_initialized, model_idx)
-
         if current_rank == 0:
             logger.info(f"Epoch {epoch+1} Summary (Member {model_idx}):")
             logger.info(f"  Train Loss: {total_loss / num_batches:.4f}")
@@ -1444,10 +1376,11 @@ def _run_single_training_session_ensemble(
                 f"swa_val/loss_member_{model_idx}": val_metrics_swa['loss'],
             })
         
+        # Swap back to original model parameters
         swa_utils.swap_parameters_with_averaged_model(model.module if is_ddp_initialized else model, swa_model)
 
     # --- Post-Training Quantization (PTQ) ---
-    if training_config['use_post_training_quantization'] and HAS_TORCH_QUANTIZATION and current_rank == 0:
+    if training_config['quantization']['ptq'] and HAS_TORCH_QUANTIZATION and current_rank == 0:
         logger.info("Applying Post-Training Quantization (PTQ)...")
         # Ensure model is on CPU for PTQ
         if is_ddp_initialized:
@@ -1455,7 +1388,7 @@ def _run_single_training_session_ensemble(
         else:
             model_to_quantize = model.to('cpu')
         
-        model_quantized_ptq = quantize_model_ptq(model_to_quantize, val_loader, training_config)
+        model_quantized_ptq = quantize_model_ptq(model_to_quantize, val_loader, dali_image_processor, CONFIG)
         logger.info("PTQ applied. Evaluating quantized model.")
         
         # Evaluate quantized model
@@ -1473,7 +1406,7 @@ def _run_single_training_session_ensemble(
         model = model_quantized_ptq.to(DEVICE) # Move back to GPU for consistency if needed
 
     # --- Export Quantized Model ---
-    if training_config['export_quantized_model'] and current_rank == 0:
+    if training_config['quantization']['export_quantized_model'] and current_rank == 0: # Check the new config path
         logger.info("Exporting quantized model to ONNX...")
         try:
             # Create dummy inputs for all arguments of PerceptionModule.forward
@@ -1484,29 +1417,62 @@ def _run_single_training_session_ensemble(
             # Dummy support images: (B, N_support, C, H, W)
             dummy_support_images = torch.zeros(1, CONFIG['data']['synthetic_data_config']['max_support_images_per_problem'], 
                                                3, CONFIG['data']['image_size'], CONFIG['data']['image_size']).to(DEVICE)
-
+            
             # Ensure model is in eval mode before export
             model.eval()
-
+            
             # Export the model
             export_path = os.path.join(debug_config['save_model_checkpoints'], f"bongard_model_member_{model_idx}_quantized.onnx")
+            os.makedirs(debug_config['save_model_checkpoints'], exist_ok=True)
+            
+            # Define dynamic axes for ONNX export
+            dynamic_axes = {
+                'input_images': {0: 'batch_size'},
+                'support_images': {0: 'batch_size'},
+                'bongard_logits': {0: 'batch_size'},
+                # Attribute logits and relation logits will have dynamic first dimension (total objects/edges)
+                # This needs careful handling for ONNX export if they are direct outputs.
+                # For now, let's simplify for ONNX export by only including bongard_logits
+                # or ensure the other outputs are fixed-size for ONNX.
+                # If PerceptionModule outputs lists/dicts, ONNX export will be complex.
+                # For simplicity, let's assume the main output for ONNX is just bongard_logits.
+                # If full graph outputs are needed, a custom ONNX exporter might be required.
+            }
+            
+            # Adjust output names based on what PerceptionModule.forward returns
+            # If PerceptionModule returns a dict, ONNX export needs to know which keys to expect.
+            # For ONNX, it's usually a tuple of tensors.
+            # So, we might need a wrapper for ONNX export that flattens outputs.
+            
+            # For now, let's export only the main bongard_logits for simplicity.
+            # If the user wants to export the full dictionary, it's a more advanced ONNX topic.
+            
+            # Create a wrapper for ONNX export if the model's forward returns a dict
+            class ONNXExportWrapper(nn.Module):
+                def __init__(self, model_to_wrap):
+                    super().__init__()
+                    self.model = model_to_wrap
+                
+                def forward(self, images, gt_json_strings, support_images, is_simclr_pretraining):
+                    outputs = self.model(images, gt_json_strings, support_images, is_simclr_pretraining)
+                    # Return only the main bongard_logits for ONNX export
+                    return outputs['bongard_logits']
+            
+            onnx_model = ONNXExportWrapper(model)
+
             torch.onnx.export(
-                model,
+                onnx_model,
                 (dummy_images, dummy_gt_json_strings, dummy_support_images, False), # Arguments for model.forward
                 export_path,
                 export_params=True,
                 opset_version=13, # Recommended opset
                 do_constant_folding=True,
-                input_names=['input_images', 'gt_json_strings', 'support_images', 'is_simclr_pretraining'], # Match model.forward args
-                output_names=['bongard_logits', 'attribute_logits', 'relation_logits', 'attribute_features', 
-                              'global_graph_embeddings', 'scene_graphs'], # Match model.forward outputs
+                input_names=['input_images', 'gt_json_strings', 'support_images', 'is_simclr_pretraining'],
+                output_names=['bongard_logits'], # Only export main logits
                 dynamic_axes={
                     'input_images': {0: 'batch_size'},
                     'support_images': {0: 'batch_size'},
                     'bongard_logits': {0: 'batch_size'},
-                    'attribute_logits': {0: 'total_objects'}, # Dynamic for total objects
-                    'relation_logits': {0: 'batch_size'},
-                    # Add other dynamic axes as needed based on output shapes
                 }
             )
             logger.info(f"Model exported to {export_path}")
@@ -1514,14 +1480,13 @@ def _run_single_training_session_ensemble(
             logger.error(f"Failed to export model to ONNX: {e}")
             logger.info("Attempting to export to TorchScript instead...")
             try:
+                # TorchScript can handle dict outputs more gracefully
                 traced_model = torch.jit.trace(model, (dummy_images, dummy_gt_json_strings, dummy_support_images, False))
                 export_path = os.path.join(debug_config['save_model_checkpoints'], f"bongard_model_member_{model_idx}_quantized.pt")
                 traced_model.save(export_path)
                 logger.info(f"Model exported to TorchScript at {export_path}")
             except Exception as jit_e:
                 logger.error(f"Failed to export model to TorchScript: {jit_e}")
-
-
     return best_val_accuracy, best_val_loss, best_metrics
 
 # --- Validation Function (used by training and sensitivity analysis) ---
@@ -1545,9 +1510,9 @@ def _validate_model_ensemble(
     total_samples = 0
     
     # Loss functions for validation
-    bongard_criterion = LabelSmoothingCrossEntropy(smoothing=CONFIG['training']['label_smoothing'])
-    attribute_criterion = LabelSmoothingCrossEntropy(smoothing=CONFIG['training']['label_smoothing'])
-    relation_criterion = LabelSmoothingCrossEntropy(smoothing=CONFIG['training']['label_smoothing'], reduction='mean')
+    bongard_criterion = nn.CrossEntropyLoss(reduction='mean')
+    attribute_criterion = nn.CrossEntropyLoss(reduction='mean')
+    relation_criterion = nn.CrossEntropyLoss(reduction='mean')
 
     MAX_GNN_OBJECTS = CONFIG['model']['MAX_GNN_OBJECTS']
     E_max = MAX_GNN_OBJECTS * (MAX_GNN_OBJECTS - 1)
@@ -1562,30 +1527,20 @@ def _validate_model_ensemble(
         for batch_idx, batch_data in pbar:
             if limit_batches is not None and batch_idx >= limit_batches:
                 break
-
+            
             # Unpack raw NumPy arrays and other data from collate_fn output
             raw_query_images_view1_np = batch_data[0]
-            # raw_query_images_view2_np = batch_data[1] # Not used for validation loss calculation
+            raw_query_images_view2_np = batch_data[1] # Not used for validation loss calculation
             query_labels = batch_data[2].long().to(DEVICE)
             query_gts_json_view1 = batch_data[3]
-            # query_gts_json_view2 = batch_data[4]
-            # difficulties = batch_data[5]
-            # affine1 = batch_data[6]
-            # affine2 = batch_data[7]
-            # original_indices = batch_data[8]
             raw_support_images_flat_np = batch_data[9]
-            # support_labels_flat = batch_data[10]
-            # support_sgs_flat_bytes = batch_data[11]
-            num_support_per_problem = batch_data[12] # Tensor of counts
-
-
+            
             # Process raw images through DALI Image Processor
             processed_query_images_view1, _, processed_support_images_flat = dali_image_processor.run(
                 raw_query_images_view1_np,
-                [np.zeros_like(raw_query_images_view1_np[0])] * len(raw_query_images_view1_np), # Dummy view2
+                raw_query_images_view2_np, # Pass view2 for DALI input, even if not used by model
                 raw_support_images_flat_np
             )
-
             # Reshape flattened support images back to (B, N_support, C, H, W)
             max_support_imgs = CONFIG['data']['synthetic_data_config']['max_support_images_per_problem']
             batch_size_actual = processed_query_images_view1.shape[0]
@@ -1621,8 +1576,7 @@ def _validate_model_ensemble(
                                 break
                     if gt_obj:
                         for attr_name, num_classes in CONFIG['model']['attribute_classifier_config'].items():
-                            if attr_name not in ['backbone_name', 'pretrained', 'freeze_backbone'] and \
-                               attr_name in gt_obj['attributes'] and attr_name in attribute_logits and attribute_logits[attr_name].numel() > 0:
+                            if attr_name in gt_obj['attributes'] and attr_name in attribute_logits and attribute_logits[attr_name].numel() > 0:
                                 if current_flat_idx < attribute_logits[attr_name].shape[0]:
                                     attr_map = globals().get(f"ATTRIBUTE_{attr_name.upper()}_MAP")
                                     if attr_map and gt_obj['attributes'][attr_name] in attr_map:
@@ -1631,9 +1585,10 @@ def _validate_model_ensemble(
                                         loss_attribute += attribute_criterion(predicted_logits, torch.tensor([gt_attr_label], device=DEVICE))
                                         num_attribute_losses += 1
                     current_flat_idx += 1
+            
             if num_attribute_losses > 0:
                 loss_attribute /= num_attribute_losses
-
+            
             # Relation Loss
             loss_relation = torch.tensor(0.0, device=DEVICE)
             if relation_logits.numel() > 0:
@@ -1645,7 +1600,7 @@ def _validate_model_ensemble(
                     edge_map_for_img = make_edge_index_map(num_gt_objects)
                     for rel in sg_gt['relations']:
                         subj_id = rel['subject_id']
-                        obj_id = rel['object_id'] # Assuming 'id' is object_id for relation
+                        obj_id = rel['object_id']
                         rel_type = rel['type']
                         if (subj_id, obj_id) in edge_map_for_img and rel_type in RELATION_MAP:
                             edge_idx_flat = edge_map_for_img[(subj_id, obj_id)]
@@ -1662,7 +1617,6 @@ def _validate_model_ensemble(
             predictions = torch.argmax(bongard_logits, dim=1)
             correct_predictions += (predictions == query_labels).sum().item()
             total_samples += query_labels.size(0)
-
             pbar.set_postfix(loss=f"{total_loss / (batch_idx + 1):.4f}", acc=f"{correct_predictions / total_samples:.4f}")
 
     avg_loss = total_loss / len(val_loader)
@@ -1673,11 +1627,11 @@ def _validate_model_ensemble(
         gathered_loss = [torch.tensor(0.0, device=DEVICE) for _ in range(dist.get_world_size())]
         gathered_correct = [torch.tensor(0.0, device=DEVICE) for _ in range(dist.get_world_size())]
         gathered_total = [torch.tensor(0.0, device=DEVICE) for _ in range(dist.get_world_size())]
-
+        
         dist.all_gather(gathered_loss, torch.tensor(total_loss, device=DEVICE))
         dist.all_gather(gathered_correct, torch.tensor(correct_predictions, device=DEVICE))
         dist.all_gather(gathered_total, torch.tensor(total_samples, device=DEVICE))
-
+        
         total_loss = sum(l.item() for l in gathered_loss)
         correct_predictions = sum(c.item() for c in gathered_correct)
         total_samples = sum(t.item() for t in gathered_total)

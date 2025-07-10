@@ -1,16 +1,15 @@
 # Folder: bongard_solver/
 # File: utils.py
-
 import torch
 import numpy as np
 import random
 import os
 import logging
-import sys # Added for setup_logging
+import sys  # Added for setup_logging
 import json
 from typing import List, Dict, Any, Tuple, Optional
-from numba import njit # For JIT compilation of Python functions
-from functools import lru_cache # For caching
+from numba import njit  # For JIT compilation of Python functions
+from functools import lru_cache  # For caching
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +20,7 @@ def setup_logging(log_level: str = 'INFO', log_file: Optional[str] = None):
     Args:
         log_level (str): The minimum level of messages to log (e.g., 'DEBUG', 'INFO', 'WARNING', 'ERROR').
         log_file (Optional[str]): Path to a file where logs should also be written.
-                                 If None, logs only to console.
+                                   If None, logs only to console.
     """
     # Ensure the root logger is configured only once
     if not logging.root.handlers:
@@ -72,7 +71,7 @@ def load_config(config_path: str) -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: The loaded configuration dictionary.
     """
-    import yaml # Import yaml here to avoid circular dependency if config.py imports utils
+    import yaml  # Import yaml here to avoid circular dependency if config.py imports utils
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     logger.info(f"Configuration loaded from {config_path}")
@@ -90,13 +89,6 @@ def _calculate_iou(box1: List[float], box2: List[float]) -> float:
     Returns:
         float: IoU value.
     """
-    # Convert lists to NumPy arrays for Numba compatibility
-    # Numba can directly work with Python lists of numbers, but explicit conversion
-    # might sometimes help clarity or type inference for complex cases.
-    # For simple lists of floats, it's often not strictly necessary.
-    # box1_np = np.array(box1)
-    # box2_np = np.array(box2)
-
     x1_inter = np.maximum(box1[0], box2[0])
     y1_inter = np.maximum(box1[1], box2[1])
     x2_inter = np.minimum(box1[2], box2[2])
@@ -110,9 +102,7 @@ def _calculate_iou(box1: List[float], box2: List[float]) -> float:
     
     return inter_area / union_area if union_area > 0 else 0.0
 
-
 # --- Scene Graph Utilities ---
-
 def get_symbolic_embedding_dims(config: Dict[str, Any]) -> Dict[str, int]:
     """
     Returns the expected embedding dimensions for each symbolic attribute.
@@ -135,7 +125,7 @@ def get_symbolic_embedding_dims(config: Dict[str, Any]) -> Dict[str, int]:
     logger.debug(f"Symbolic embedding dimensions: {dims}")
     return dims
 
-@lru_cache(maxsize=128) # Cache the mapping for common max_objects values
+@lru_cache(maxsize=128)  # Cache the mapping for common max_objects values
 def make_edge_index_map(num_objects: int) -> Dict[Tuple[int, int], int]:
     """
     Creates a consistent mapping from (subject_id, object_id) pairs to a linear edge index.
@@ -151,7 +141,7 @@ def make_edge_index_map(num_objects: int) -> Dict[Tuple[int, int], int]:
     idx = 0
     for i in range(num_objects):
         for j in range(num_objects):
-            if i == j: continue   # Skip self-loops
+            if i == j: continue    # Skip self-loops
             edge_index_map[(i, j)] = idx
             idx += 1
     return edge_index_map
@@ -161,19 +151,19 @@ def get_predicted_relation(
     relations: List[Dict[str, Any]],
     image_width: int,
     image_height: int,
-    bbox_iou_threshold: float = 0.1,  # For 'overlapping' and 'touching'
-    spatial_tolerance_ratio: float = 0.1  # For 'above', 'below', 'left_of', 'right_of'
+    bbox_iou_threshold: float = 0.1,    # For 'overlapping' and 'touching'
+    spatial_tolerance_ratio: float = 0.1    # For 'above', 'below', 'left_of', 'right_of'
 ) -> List[Dict[str, Any]]:
     """
-    Infers relations between objects based on their attributes and spatial positions.
+    Inf`ers relations between objects based on their attributes and spatial positions.
     This is a conceptual function and needs robust implementation based on your
     definition of relations and how they are derived from object properties.
     Args:
         objects (List[Dict[str, Any]]): A list of detected/ground truth objects,
                                         each with 'id', 'shape', 'color', 'bbox', etc.
         relations (List[Dict[str, Any]]): Existing relations (e.g., from ground truth).
-                                          New relations might be added or existing
-                                          ones validated.
+                                        New relations might be added or existing
+                                        ones validated.
         image_width (int): Width of the image.
         image_height (int): Height of the image.
         bbox_iou_threshold (float): IoU threshold to consider objects overlapping/touching.
@@ -230,14 +220,14 @@ def get_predicted_relation(
             if iou > bbox_iou_threshold:
                 inferred_relations.append({'type': 'overlapping', 'subject_id': obj1['id'], 'object_id': obj2['id']})
                 inferred_relations.append({'type': 'overlapping', 'subject_id': obj2['id'], 'object_id': obj1['id']})
-            elif iou > 0:  # Small overlap, but not significant enough for 'overlapping'
+            elif iou > 0:    # Small overlap, but not significant enough for 'overlapping'
                 inferred_relations.append({'type': 'touching', 'subject_id': obj1['id'], 'object_id': obj2['id']})
                 inferred_relations.append({'type': 'touching', 'subject_id': obj2['id'], 'object_id': obj1['id']})
             elif iou == 0 and (
-                abs(bbox1[2] - bbox2[0]) < spatial_tolerance_ratio * image_width or  # right edge of 1 near left edge of 2
-                abs(bbox2[2] - bbox1[0]) < spatial_tolerance_ratio * image_width or  # right edge of 2 near left edge of 1
-                abs(bbox1[3] - bbox2[1]) < spatial_tolerance_ratio * image_height or  # bottom edge of 1 near top edge of 2
-                abs(bbox2[3] - bbox1[1]) < spatial_tolerance_ratio * image_height     # bottom edge of 2 near top edge of 1
+                abs(bbox1[2] - bbox2[0]) < spatial_tolerance_ratio * image_width or    # right edge of 1 near left edge of 2
+                abs(bbox2[2] - bbox1[0]) < spatial_tolerance_ratio * image_width or    # right edge of 2 near left edge of 1
+                abs(bbox1[3] - bbox2[1]) < spatial_tolerance_ratio * image_height or    # bottom edge of 1 near top edge of 2
+                abs(bbox2[3] - bbox1[1]) < spatial_tolerance_ratio * image_height      # bottom edge of 2 near top edge of 1
             ):
                 # Check if bounding boxes are very close but not overlapping
                 inferred_relations.append({'type': 'touching', 'subject_id': obj1['id'], 'object_id': obj2['id']})
@@ -265,7 +255,6 @@ def get_predicted_relation(
                        bbox_inner[1] >= bbox_outer[1] and \
                        bbox_inner[2] <= bbox_outer[2] and \
                        bbox_inner[3] <= bbox_outer[3]
-
             if is_bbox_inside(bbox1, bbox2):
                 inferred_relations.append({'type': 'inside', 'subject_id': obj1['id'], 'object_id': obj2['id']})
                 inferred_relations.append({'type': 'outside', 'subject_id': obj2['id'], 'object_id': obj1['id']})
@@ -275,6 +264,59 @@ def get_predicted_relation(
     
     logger.debug(f"Inferred {len(inferred_relations)} relations.")
     return inferred_relations
+
+def cross_attend(query: torch.Tensor, context: torch.Tensor, embed_dim: int, num_heads: int = 1) -> torch.Tensor:
+    """
+    Performs cross-attention between a query and a context.
+
+    Args:
+        query (torch.Tensor): The query tensor (Batch_size, Query_dim).
+                              This will be unsqueezed to (Batch_size, 1, Query_dim) for attention.
+        context (torch.Tensor): The context tensor (Batch_size, Context_dim).
+                                This will be unsqueezed to (Batch_size, 1, Context_dim) for attention.
+        embed_dim (int): The embedding dimension for the attention mechanism.
+                         This should typically match the `Query_dim` of the query.
+        num_heads (int): Number of attention heads.
+
+    Returns:
+        torch.Tensor: The output of the cross-attention (Batch_size, Query_dim).
+    """
+    if query.dim() == 1: # Handle single query
+        query = query.unsqueeze(0)
+    if context.dim() == 1: # Handle single context
+        context = context.unsqueeze(0)
+
+    # Ensure query and context have a sequence length dimension (L, N, E) for MultiheadAttention
+    # Here, L=1 for both query and context as we're treating them as single vectors per batch item.
+    query_seq = query.unsqueeze(1)    # (B, 1, Query_dim)
+    context_seq = context.unsqueeze(1) # (B, 1, Context_dim)
+
+    # MultiheadAttention expects embed_dim to be the dimension of the query, key, and value.
+    # If query_dim != embed_dim, we might need a projection layer before attention.
+    # For simplicity, we assume query_dim == embed_dim here.
+    # If context_dim != embed_dim, MultiheadAttention's kdim and vdim should be set.
+    
+    # We will use the query's dimension as the embed_dim for MultiheadAttention
+    # and specify kdim/vdim for the context.
+    
+    attn = nn.MultiheadAttention(
+        embed_dim=query.shape[-1], # Query_dim
+        num_heads=num_heads,
+        kdim=context.shape[-1],    # Context_dim
+        vdim=context.shape[-1],    # Context_dim
+        batch_first=True           # Input/output tensors are (batch, seq_len, feature)
+    ).to(query.device) # Ensure attention module is on the same device as inputs
+
+    # attn_output: (B, 1, Query_dim)
+    attn_output, _ = attn(
+        query=query_seq,
+        key=context_seq,
+        value=context_seq
+    )
+    
+    return attn_output.squeeze(1) # Remove sequence length dimension: (B, Query_dim)
+
+
 
 # --- Caching Notes ---
 # Memory-Mapped Index Cache:
@@ -286,11 +328,9 @@ def get_predicted_relation(
 # when loading manifest files.
 # Example:
 # image_paths = np.load('image_manifest.npy', mmap_mode='r') # in data.py
-
 # Fractal Cache with LRU:
 # The `@lru_cache` decorator (from functools) is already used above for `make_edge_index_map`.
 # If there were functions generating fractals or other complex procedural content
 # that are deterministic for given inputs, `@lru_cache` would be applied to them
 # to store results in memory and avoid recomputation for repeated inputs.
 # Ensure `maxsize` is tuned to balance memory usage and caching effectiveness.
-
