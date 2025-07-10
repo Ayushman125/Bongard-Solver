@@ -1,0 +1,52 @@
+# Ignore everything by default
+*
+
+# EXCEPT:
+# Un-ignore all Python files
+!*.py
+
+# Un-ignore essential Git configuration files
+!.gitignore
+!.gitattributes
+
+# Un-ignore directories themselves, so Git can traverse to find .py files within them
+# IMPORTANT: This means Git will still *scan* directories, but only track .py files.
+# If a directory like 'data/' contains only non-Python files, it won't be committed.
+!*/
+
+# Explicitly re-ignore specific large data folders and files for performance
+# These will NOT be included, even if they contain .py files, due to their size/nature.
+bongard_dataset.zip
+datasets/
+yolo_bongard_dataset/
+YOLO_Bongard_Objects/
+ShapeBongard_V2/
+__MACOSX/
+backgrounds/
+difficulty_summary.csv
+fractal_cache/
+.wandb_run_id
+checkpoints/
+runs/
+wandb/
+logs/
+outputs/
+grad_cam_outputs/
+workspace_traces/
+slipnet_snapshots/
+
+# Common temporary/generated files/folders to always ignore
+__pycache__/
+*.pyc
+env/
+venv/
+.venv/
+.ipynb_checkpoints/
+*.ipynb_checkpoints/
+*.pth
+*.pt
+*.onnx
+*.log
+.DS_Store
+Thumbs.db
+.env
