@@ -7,7 +7,7 @@ import numpy as np
 import os
 import logging
 from PIL import Image
-from typing import Dict, Any, Optional, Union, Callable
+from typing import Dict, Any, Optional, Union, Callable, List
 
 # Import torchvision transforms for consistent preprocessing/denormalization
 from torchvision import transforms as T
@@ -134,13 +134,13 @@ def generate_grad_cam(
     Image.fromarray(cam_overlay).save(output_path)
     logger.info(f"Grad-CAM saved to: {output_path}")
 
-def attention_rollout(attn_mats: list[torch.Tensor], discard_ratio: float = 0.9) -> torch.Tensor:
+def rollout_attention(attns: List[torch.Tensor], discard_ratio: float = 0.9) -> torch.Tensor:
     """
     Computes attention rollout for Transformer-based models.
     Reference: Abnar & Zuidema, “Quantifying Attention Flow in Transformers,” EMNLP 2020.
     
     Args:
-        attn_mats (list[torch.Tensor]): A list of attention matrices from each layer.
+        attns (list[torch.Tensor]): A list of attention matrices from each layer.
                                         Each tensor in the list should be of shape [B, heads, N, N],
                                         where B is batch size, heads is number of attention heads,
                                         N is the sequence length (e.g., num_patches + 1 for CLS token).
@@ -151,39 +151,40 @@ def attention_rollout(attn_mats: list[torch.Tensor], discard_ratio: float = 0.9)
         torch.Tensor: The attention rollout matrix of shape [B, N, N], representing
                       the aggregated attention flow from the input tokens to all other tokens.
     """
-    if not attn_mats:
+    if not attns:
         logger.warning("No attention matrices provided for attention rollout.")
         return torch.empty(0) # Return an empty tensor or handle as appropriate
 
     # Initialize the result with an identity matrix, representing direct connections.
     # Shape of result will be [B, N, N]
-    batch_size, _, seq_len, _ = attn_mats[0].shape
-    result = torch.eye(seq_len, device=attn_mats[0].device).unsqueeze(0).repeat(batch_size, 1, 1) # [B, N, N]
+    batch_size, _, seq_len, _ = attns[0].shape
+    result = torch.eye(seq_len, device=attns[0].device).unsqueeze(0).repeat(batch_size, 1, 1) # [B, N, N]
 
-    for mat in attn_mats:
+    for a in attns: # Iterate through each layer's attention matrix
         # Average attention weights across heads for each layer
-        avg_heads = mat.mean(dim=1)  # [B, N, N]
+        avg = a.mean(dim=1)  # [B, N, N]
 
         # Apply discard ratio: set weakest attention weights to zero
         # Flatten for quantile calculation per batch item
-        flat = avg_heads.flatten(start_dim=-2) # [B, N*N]
+        flat = avg.flatten(start_dim=-2) # [B, N*N]
         # Calculate quantile threshold for each item in the batch
-        # unsqueeze(-1) to make it broadcastable with avg_heads
+        # unsqueeze(-1) to make it broadcastable with avg
         threshold = torch.quantile(flat, discard_ratio, dim=-1).unsqueeze(-1).unsqueeze(-1) # [B, 1, 1]
         
         # Create a mask for values below the threshold
-        mask = avg_heads < threshold
+        mask = avg < threshold
         # Apply the mask: set values below threshold to 0
-        layer_attn_processed = avg_heads.clone()
-        layer_attn_processed[mask] = 0
+        avg[mask] = 0 # This is the missing part from the user's snippet
 
         # Add identity matrix to allow self-connections and direct paths
         # This ensures that even if a token doesn't attend to others, its own importance propagates.
-        layer_attn_processed = layer_attn_processed + torch.eye(seq_len, device=mat.device).unsqueeze(0)
+        layer_attn_processed = avg + torch.eye(seq_len, device=a.device).unsqueeze(0)
 
         # Normalize the attention weights so that each row sums to 1
         # This is crucial for proper propagation of attention flow
-        layer_attn_processed = layer_attn_processed / layer_attn_processed.sum(dim=-1, keepdim=True)
+        # Handle potential division by zero if a row sums to zero after thresholding
+        row_sums = layer_attn_processed.sum(dim=-1, keepdim=True)
+        layer_attn_processed = layer_attn_processed / (row_sums + 1e-8) # Add small epsilon for stability
 
         # Multiply with the cumulative attention flow
         # This propagates the attention from previous layers to the current layer

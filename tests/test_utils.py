@@ -12,45 +12,30 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'b
 # Assuming utils.py is in the bongard_solver directory
 from utils import infer_feature_dim, graph_pool # Make sure these functions exist in utils.py
 
-def test_infer_feature_dim_creates_correct_dim():
+def test_infer_feature_dim():
     """
     Test for infer_feature_dim: Ensures it correctly calculates the output
     feature dimension for a dummy convolutional model.
     """
-    # Create a dummy convolutional model
-    dummy_model = torch.nn.Conv2d(3, 16, 3, stride=1, padding=1)
-    
-    # Infer the feature dimension for a 32x32 input image
-    # The output size of a Conv2d layer with stride 1 and padding 1 for input_size x input_size
-    # is still input_size x input_size. So, 16 channels * 32 * 32.
-    dim = infer_feature_dim(dummy_model, img_size=32, device='cpu')
-    
-    expected_dim = 16 * 32 * 32
-    assert dim == expected_dim, f"Expected feature dimension {expected_dim}, but got {dim}"
-    print(f"test_infer_feature_dim_creates_correct_dim passed: {dim} == {expected_dim}")
+    conv = torch.nn.Conv2d(3, 16, 3, padding=1)
+    d = infer_feature_dim(conv, img_size=32, device='cpu')
+    assert d == 16 * 32 * 32, f"Expected feature dimension {16 * 32 * 32}, but got {d}"
+    print(f"test_infer_feature_dim passed: {d} == {16 * 32 * 32}")
 
-def test_graph_pool_identity():
+def test_graph_pool():
     """
     Test for graph_pool: Ensures that when all nodes belong to the same batch
     (batch=0 for all), graph_pool returns the mean of the nodes.
     """
-    # Create dummy nodes and a batch tensor where all nodes are in the same graph
-    nodes = torch.randn(10, 8) # 10 nodes, 8 features each
-    batch = torch.zeros(10, dtype=torch.long) # All nodes belong to batch 0
-    
-    # Apply graph pooling
+    nodes = torch.randn(5, 8) # 5 nodes, 8 features each
+    batch = torch.zeros(5, dtype=torch.long) # All nodes belong to batch 0
     pooled = graph_pool(nodes, batch)
-    
-    # Expected pooled shape: (num_graphs, num_features) = (1, 8)
     assert pooled.shape == (1, 8), f"Expected pooled shape (1, 8), but got {pooled.shape}"
-    
-    # Expected pooled value: mean of all nodes
+    # Additionally, check if the pooled value is the mean of the nodes
     expected_pooled = nodes.mean(dim=0, keepdim=True)
-    
-    # Check if the pooled result is close to the expected mean
     assert torch.allclose(pooled, expected_pooled, atol=1e-6), \
         f"Pooled result {pooled} is not close to expected mean {expected_pooled}"
-    print("test_graph_pool_identity passed.")
+    print("test_graph_pool passed.")
 
 # --- Placeholder for other test files ---
 

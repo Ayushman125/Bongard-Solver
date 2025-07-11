@@ -17,7 +17,7 @@ from data import BongardSyntheticDataset, RealBongardDataset, BongardGenerator
 from bongard_rules import ALL_BONGARD_RULES
 
 # Import XAI functions
-from xai import generate_grad_cam, attention_rollout # Import the attention_rollout function
+from xai import generate_grad_cam, rollout_attention # Updated import to rollout_attention
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -181,33 +181,6 @@ def visualize_attention_heatmap(
     """
     model.eval()
     with torch.no_grad():
-        # Assuming the model's forward pass or a specific method returns attention weights
-        # This part needs to be adapted to how your model exposes attention weights.
-        # For example, if your model is a ViT, it might have a method like:
-        # `attn_weights = model.get_attention_weights(input_tensor)`
-        
-        # Dummy attention weights for demonstration if model.get_attention_weights is not implemented
-        # In a real scenario, you'd get these from your actual model.
-        # Example: if your model has a list of transformer layers, and each layer has an attention module.
-        # This requires modifying your model to expose these.
-        
-        # For a ViT-like model, the input_tensor might first be passed through a patch embedding layer
-        # to get tokens, then these tokens pass through transformer blocks.
-        # The attention_rollout expects attention matrices from each layer.
-        
-        # Example of how you might get attention weights if your model is a custom ViT:
-        # If your model has a `forward_with_attention` method or hooks for attention
-        
-        # Placeholder: You need to implement `model.get_attention_weights(input_tensor)`
-        # in your model definition (e.g., PerceptionModule if it contains a Transformer)
-        # This method should return a list of attention tensors, e.g., from each Transformer block.
-        
-        # For demonstration, let's assume `model` directly has a `get_attention_weights` method
-        # that returns a list of [B, heads, N, N] tensors.
-        
-        # If your model is a LitBongard, you might need to access its internal perception_module
-        # and then call a method on that module to get attention weights.
-        
         attn_weights = []
         if hasattr(model, 'get_attention_weights') and callable(model.get_attention_weights):
             attn_weights = model.get_attention_weights(input_tensor)
@@ -219,76 +192,40 @@ def visualize_attention_heatmap(
             logger.warning("No attention weights obtained from the model. Skipping attention rollout visualization.")
             return
 
-        rollout_matrix = attention_rollout(attn_weights, discard_ratio=discard_ratio) # [B, N, N]
+        rollout_matrix = rollout_attention(attn_weights, discard_ratio=discard_ratio) # [B, N, N]
 
         if rollout_matrix.numel() == 0:
             logger.warning("Attention rollout matrix is empty. Skipping visualization.")
             return
 
-        # Assuming we are interested in the attention from the CLS token (first token, index 0)
-        # to all other tokens (patches).
-        # The CLS token usually aggregates global information.
-        # If your model doesn't use a CLS token, you might average across all tokens or pick a specific one.
-        
-        # For a single image (batch size 1), take the first item
-        # And take the first row (CLS token's attention to all patches)
-        # Assuming N is (num_patches + 1) where index 0 is CLS token.
-        # If no CLS token, you might average `rollout_matrix.mean(dim=1)` for global importance.
-        
-        # If the model uses a CLS token, the first row of rollout_matrix[0]
-        # represents the importance of each patch for the overall classification.
-        # If there's no CLS token, you might sum or average over a relevant dimension.
-        
-        # Example for a ViT-like model with CLS token:
-        # The attention map for the image is usually derived from the CLS token's attention to patches.
-        # The first token (index 0) is typically the CLS token.
-        # The remaining N-1 tokens correspond to image patches.
-        
-        # Reshape the attention scores to a 2D heatmap
-        # Assuming square patches for simplicity, e.g., 14x14 patches for 224x224 image
-        # N = num_patches + 1 => num_patches = N - 1
-        # Side length of patch grid = sqrt(num_patches)
-        
         if rollout_matrix.shape[1] > 1: # Ensure there are patches beyond CLS token
-            # Extract attention from CLS token to patches
-            # Assuming CLS token is at index 0, patches start from index 1
-            # If no CLS token, you might need to adapt this logic, e.g., sum attention to all tokens.
             attention_to_patches = rollout_matrix[0, 0, 1:] # [num_patches]
             
-            # Calculate grid size for patches
             num_patches = attention_to_patches.shape[0]
             grid_size = int(np.sqrt(num_patches))
             if grid_size * grid_size != num_patches:
                 logger.warning(f"Number of patches ({num_patches}) is not a perfect square. Heatmap reshaping might be inaccurate.")
             
-            # Reshape to a square heatmap
             heatmap = attention_to_patches.reshape(grid_size, grid_size).cpu().numpy()
             
-            # Resize heatmap to original image dimensions for visualization
             original_image = Image.open(image_path).convert("RGB")
             original_size = original_image.size # (width, height)
             
-            # Resize heatmap to match original image size
             from skimage.transform import resize
             heatmap_resized = resize(heatmap, original_size, anti_aliasing=True)
             
-            # Normalize heatmap to [0, 1]
             heatmap_resized = (heatmap_resized - heatmap_resized.min()) / (heatmap_resized.max() - heatmap_resized.min() + 1e-8)
             
-            # Apply a colormap (e.g., jet)
             import matplotlib.cm as cm
             cmap = cm.get_cmap('jet')
             heatmap_colored = cmap(heatmap_resized)[:, :, :3] # Take RGB channels
             
-            # Overlay heatmap on original image
             original_image_np = np.array(original_image) / 255.0 # Normalize to [0, 1]
             
-            # Blend the image and heatmap
             alpha = 0.5 # Transparency of the heatmap
             overlay_image = (original_image_np * (1 - alpha)) + (heatmap_colored * alpha)
             overlay_image = (overlay_image * 255).astype(np.uint8) # Convert back to 0-255 range
             
-            # Save the output image
             os.makedirs(save_dir, exist_ok=True)
             base_filename = os.path.basename(image_path).replace('.png', '').replace('.jpg', '')
             output_filename = f"{base_filename}_attention_rollout{file_suffix}.png"
@@ -298,16 +235,36 @@ def visualize_attention_heatmap(
         else:
             logger.warning("Attention rollout matrix has no patches to visualize. Skipping heatmap generation.")
 
-# Main inference function
-def run_inference(cfg: Dict[str, Any], model_path: str, problem_data_path: str, visualize_xai: bool = False):
+def export_onnx(model: nn.Module, dummy_input: torch.Tensor, out_path: str):
     """
-    Runs inference on Bongard problems and optionally generates XAI visualizations.
+    Exports the PyTorch model to ONNX format.
+    Args:
+        model (nn.Module): The PyTorch model to export.
+        dummy_input (torch.Tensor): A dummy input tensor with the expected shape and type.
+        out_path (str): The output path for the ONNX file.
+    """
+    import torch.onnx
+    logger.info(f"Exporting model to ONNX at: {out_path}")
+    try:
+        torch.onnx.export(model, dummy_input, out_path,
+                          input_names=['input'], output_names=['logits'],
+                          dynamic_axes={'input':{0:'batch'}, 'logits':{0:'batch'}},
+                          opset_version=11) # Specify opset version for broader compatibility
+        logger.info("Model successfully exported to ONNX.")
+    except Exception as e:
+        logger.error(f"Error exporting model to ONNX: {e}")
+
+# Main inference function
+def run_inference(cfg: Dict[str, Any], model_path: str, problem_data_path: str, visualize_xai: bool = False, export_onnx_model: bool = False):
+    """
+    Runs inference on Bongard problems and optionally generates XAI visualizations or exports to ONNX.
     Args:
         cfg (Dict[str, Any]): Configuration dictionary.
         model_path (str): Path to the trained model checkpoint.
         problem_data_path (str): Path to a JSON file defining Bongard problems for inference.
                                  Format: {'problem_id': {'positive': [...], 'negative': [...]}}
         visualize_xai (bool): If True, generate Grad-CAM and Attention Rollout visualizations.
+        export_onnx_model (bool): If True, export the model to ONNX format.
     """
     logger.info(f"--- Starting Inference with model: {model_path} ---")
     
@@ -315,6 +272,16 @@ def run_inference(cfg: Dict[str, Any], model_path: str, problem_data_path: str, 
     if model is None:
         logger.error("Failed to load model. Exiting inference.")
         return
+
+    # ONNX Export
+    if export_onnx_model:
+        # Create a dummy input based on expected image size and channels
+        dummy_input = torch.randn(1, 3, cfg['data']['image_size'], cfg['data']['image_size']).to(DEVICE)
+        onnx_output_path = cfg['onnx']['path'] # Assuming 'onnx' and 'path' are in config
+        os.makedirs(os.path.dirname(onnx_output_path) or './', exist_ok=True)
+        export_onnx(model, dummy_input, onnx_output_path)
+        # If the primary goal is ONNX export, we might exit here or continue with inference
+        # For now, let's continue with inference as well.
 
     try:
         with open(problem_data_path, 'r') as f:
@@ -348,20 +315,13 @@ def run_inference(cfg: Dict[str, Any], model_path: str, problem_data_path: str, 
                 input_tensor = preprocess_image(sample_image_path, image_size=(cfg['data']['image_size'], cfg['data']['image_size']))
                 if input_tensor is not None:
                     # Find a suitable target layer for Grad-CAM
-                    # This depends on your model's architecture.
-                    # Example: if your model has a 'features' block with a final conv layer.
                     target_layer = None
                     if hasattr(model, 'perception_module') and isinstance(model.perception_module, nn.Module):
-                        # Try to find the last convolutional layer in the perception module
                         for name, module in model.perception_module.named_modules():
-                            if isinstance(module, (nn.Conv2d, nn.Linear)) and not list(module.children()): # Check if it's a leaf module
+                            if isinstance(module, (nn.Conv2d, nn.Linear)) and not list(module.children()):
                                 target_layer = module
-                                # You might want to be more specific, e.g., target the last conv block
-                                # For a ResNet, it might be model.perception_module.layer4[-1]
-                                # For a ViT, it might be the last attention block's output
                         if target_layer is None:
                             logger.warning("Could not find a suitable target layer for Grad-CAM in perception_module. Trying top-level model.")
-                            # Fallback to model's last layer if perception_module specific layer not found
                             for name, module in model.named_modules():
                                 if isinstance(module, (nn.Conv2d, nn.Linear)) and not list(module.children()):
                                     target_layer = module
@@ -372,7 +332,7 @@ def run_inference(cfg: Dict[str, Any], model_path: str, problem_data_path: str, 
                             model=model,
                             input_tensor=input_tensor,
                             target_layer=target_layer,
-                            target_category=result['predicted_class'], # Explain the predicted class
+                            target_category=result['predicted_class'],
                             image_path=sample_image_path,
                             save_dir='./xai_outputs/grad_cam',
                             file_suffix=f'_problem_{problem_id}'
@@ -382,13 +342,7 @@ def run_inference(cfg: Dict[str, Any], model_path: str, problem_data_path: str, 
                 else:
                     logger.warning(f"Skipping Grad-CAM for problem {problem_id}: Failed to preprocess image {sample_image_path}.")
 
-            # For Attention Rollout, it's typically for Transformer-based models.
-            # This requires your model to expose attention weights.
-            # Assuming your model's forward pass (or a specific method) collects attention weights.
-            # If your model is not a Transformer, this visualization won't apply.
-            if cfg['model'].get('use_transformer', False): # Check if transformer is enabled in config
-                # For attention rollout, we might want to visualize for a specific image,
-                # or perhaps an aggregated view. Let's use the first positive image again.
+            if cfg['model'].get('use_transformer', False):
                 if problem_data['positive']:
                     sample_image_path = problem_data['positive'][0]
                     input_tensor = preprocess_image(sample_image_path, image_size=(cfg['data']['image_size'], cfg['data']['image_size']))
@@ -423,11 +377,13 @@ if __name__ == "__main__":
                         help="Path to a JSON file containing Bongard problems for inference.")
     parser.add_argument("--visualize_xai", action="store_true",
                         help="Enable generation of XAI visualizations (Grad-CAM, Attention Rollout).")
+    parser.add_argument("--export_onnx", action="store_true",
+                        help="Export the model to ONNX format.")
     
     args = parser.parse_args()
 
     # Example usage:
-    # python inference.py --config config.yaml --model_path ./checkpoints/optimized_bongard_model.pth --problem_data_path ./data/sample_problems.json --visualize_xai
+    # python inference.py --config config.yaml --model_path ./checkpoints/optimized_bongard_model.pth --problem_data_path ./data/sample_problems.json --visualize_xai --export_onnx
 
     # Ensure your config.yaml has:
     # data:
@@ -437,6 +393,8 @@ if __name__ == "__main__":
     #   # ... other model specific configs
     # debug:
     #   save_model_checkpoints: "./checkpoints" # Ensure this path exists
+    # onnx:
+    #   path: "./onnx_models/bongard_solver.onnx" # Added for ONNX export
 
     # Create dummy directories if they don't exist for testing
     os.makedirs("./xai_outputs/grad_cam", exist_ok=True)
@@ -475,4 +433,4 @@ if __name__ == "__main__":
         logger.info(f"Created sample problem data at: {args.problem_data_path}")
     
     # Run the inference
-    run_inference(load_config(args.config), args.model_path, args.problem_data_path, args.visualize_xai)
+    run_inference(load_config(args.config), args.model_path, args.problem_data_path, args.visualize_xai, args.export_onnx)

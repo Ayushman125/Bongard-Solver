@@ -182,8 +182,8 @@ def main_yolo_finetune():
     if torch.cuda.is_available():
         torch.cuda.manual_seed(CONFIG['seed'])
         torch.cuda.manual_seed_all(CONFIG['seed'])
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False # Set to False for reproducibility
+        torch.backends.cudnn.deterministic = False # Set to False for potential speedup
+        torch.backends.cudnn.benchmark = True # Enable cuDNN auto-tuner for speedup
 
     # 1. Create data.yaml for Ultralytics
     data_yaml_path = Path(CONFIG['data_root']) / 'data.yaml'
@@ -212,15 +212,13 @@ def main_yolo_finetune():
         lr0=CONFIG['learning_rate'], # Initial learning rate
         lrf=0.01, # Final learning rate (factor of lr0)
         optimizer='AdamW', # AdamW is a good choice for fine-tuning
-        # Augmentations are handled internally by Ultralytics' train method
-        # e.g., mosaic=1.0, mixup=0.0, copy_paste=0.0 (default values)
-        # You can adjust these in the train call if needed.
         project=Path(CONFIG['model_save_dir']).parent, # Parent directory for runs
         name=Path(CONFIG['model_save_dir']).name, # Specific run name
         save=True, # Save checkpoints
         val=True, # Validate every epoch
         seed=CONFIG['seed'],
         workers=os.cpu_count() // 2, # Number of DataLoader workers
+        amp=True # Enable Automatic Mixed Precision for GPU optimization
         # resume is now handled by explicit model loading
         # patience=50, # Optional: Early stopping patience
     )

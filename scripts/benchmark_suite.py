@@ -6,7 +6,7 @@ import torch
 import os
 import sys
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 # Add the parent directory to the Python path to import modules from bongard_solver
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'bongard_solver')))
@@ -14,6 +14,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'b
 # Assuming metrics.py and config.py are in the bongard_solver directory
 from metrics import compute_bongard_accuracy, compute_relation_map # Ensure these functions are defined
 from config import load_config, DEVICE # Assuming load_config and DEVICE are available
+from models import PerceptionModule # Import your model class
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -24,7 +25,7 @@ def main():
                         help="List of paths to model checkpoint files (e.g., best.pt, other.pt).")
     parser.add_argument("--config", type=str, default="config.yaml",
                         help="Path to the main configuration YAML file.")
-    parser.add_argument("--output_file", type=str, default="benchmarks.json",
+    parser.add_argument("--output_file", type=str, default="metrics.json", # Changed default to metrics.json
                         help="Path to save the benchmark results JSON file.")
     args = parser.parse_args()
 
@@ -39,8 +40,6 @@ def main():
         try:
             # Load the model. This might need to be adapted based on how your models are saved.
             # Assuming it's a state_dict of PerceptionModule or LitBongard.
-            # You might need to instantiate the model class first.
-            from models import PerceptionModule # Import your model class
             model = PerceptionModule(cfg).to(DEVICE)
             checkpoint = torch.load(model_path, map_location=DEVICE)
             if 'state_dict' in checkpoint: # For Lightning checkpoints
@@ -68,6 +67,9 @@ def main():
         except Exception as e:
             logger.error(f"Error benchmarking {model_name}: {e}")
             results[model_name] = {"error": str(e)}
+
+    # Print results to stdout (for CI pipeline capture)
+    print(json.dumps(results, indent=2))
 
     # Save results to JSON file
     with open(args.output_file, "w") as f:
