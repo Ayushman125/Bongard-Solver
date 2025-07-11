@@ -33,7 +33,7 @@ def fine_tune_yolo(cfg: Dict[str, Any]) -> Optional[str]:
         logger.error("ultralytics library not found. Cannot fine-tune YOLO.")
         return None
 
-    yolo_config = cfg['object_detector']
+    yolo_config = cfg # The object_detector config is passed directly here
     
     pretrained_weights = yolo_config.get('yolo_pretrained', 'yolov8n.pt')
     data_yaml_path = yolo_config.get('yolo_data_yaml')
@@ -62,9 +62,10 @@ def fine_tune_yolo(cfg: Dict[str, Any]) -> Optional[str]:
             batch=batch_size,
             lr0=lr0,
             # Add other training arguments as needed, e.g., device, project, name
-            # device='0' if torch.cuda.is_available() else 'cpu',
-            # project='yolo_finetune',
-            # name='bongard_yolo_run'
+            # device='0' if torch.cuda.is_available() else 'cpu', # Ultralytics handles device automatically if not specified
+            project='yolo_finetune',
+            name='bongard_yolo_run',
+            exist_ok=True # Allow overwriting previous runs
         )
         
         # The `results` object contains information about the training run.
@@ -73,7 +74,8 @@ def fine_tune_yolo(cfg: Dict[str, Any]) -> Optional[str]:
         
         # Ultralytics typically saves to `runs/detect/trainX/weights/best.pt`
         # The `results` object after `train` has a `save_dir` attribute.
-        best_weights_path = os.path.join(results.save_dir, 'weights', 'best.pt')
+        # `results.save_dir` is a Path object, convert to string.
+        best_weights_path = os.path.join(str(results.save_dir), 'weights', 'best.pt')
         
         if os.path.exists(best_weights_path):
             logger.info(f"YOLO fine-tuning successful. Best model saved to: {best_weights_path}")
@@ -90,34 +92,32 @@ if __name__ == "__main__":
     # Example usage:
     # This requires a dummy config that mimics the structure expected by fine_tune_yolo
     dummy_config = {
-        'object_detector': {
-            'yolo_pretrained': 'yolov8n.pt', # Or path to a local .pt file
-            'yolo_data_yaml': './data/bongard_yolo.yaml', # Create this dummy file for testing
-            'fine_tune_epochs': 1, # Keep low for quick test
-            'img_size': 224,
-            'batch_size': 2,
-            'lr': 0.001
-        }
+        'yolo_pretrained': 'yolov8n.pt', # Or path to a local .pt file
+        'yolo_data_yaml': './data/yolo_dataset/data.yaml', # Create this dummy file for testing
+        'fine_tune_yolo': True, # Set to True to actually run fine-tuning
+        'fine_tune_epochs': 1, # Keep low for quick test
+        'img_size': 224,
+        'batch_size': 2,
+        'lr': 0.001
     }
 
     # Create a dummy data.yaml for YOLO training if it doesn't exist
-    dummy_data_yaml_path = dummy_config['object_detector']['yolo_data_yaml']
+    dummy_data_yaml_path = dummy_config['yolo_data_yaml']
     if not os.path.exists(dummy_data_yaml_path):
         os.makedirs(os.path.dirname(dummy_data_yaml_path), exist_ok=True)
         dummy_data_yaml_content = """
-        path: ../datasets/bongard/ # Root dataset directory
-        train: images/train/ # train images (relative to 'path')
-        val: images/val/ # val images (relative to 'path')
-        test: images/test/ # test images (optional)
-
-        # Classes
-        names:
-          0: object # Example class name for generic objects
+names:
+  0: object # Example class name for generic objects
+path: ../datasets/bongard/ # Root dataset directory
+train: images/train/ # train images (relative to 'path')
+val: images/val/ # val images (relative to 'path')
+test: images/test/ # test images (optional)
         """
         with open(dummy_data_yaml_path, 'w') as f:
             f.write(dummy_data_yaml_content)
         logger.info(f"Created dummy YOLO data YAML at: {dummy_data_yaml_path}")
         logger.warning("You might need to create dummy image directories (e.g., data/datasets/bongard/images/train) for YOLO training to run without errors.")
+        logger.warning("For a real test, populate data/datasets/bongard/images/train and val with images and labels.")
 
     best_weights = fine_tune_yolo(dummy_config)
     if best_weights:

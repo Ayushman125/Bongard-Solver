@@ -77,7 +77,7 @@ except ImportError:
                 'sample_per_gpu': 1, 'sample_mode': 'random', 'decode_device': 'mixed', 'aug_device': 'gpu',
             },
             'curriculum_learning': False,
-            'curriculum_config': {'enabled': False},
+            'curriculum_config': {'enabled': False, 'difficulty_sampling': False}, # Added difficulty_sampling
             'per_config': {'capacity': 1000, 'alpha': 0.6, 'beta_start': 0.4, 'beta_end': 1.0},
             'augmentation_config': { # Dummy augmentation config
                 'use_autoaugment': False, 'autoaugment_policy': 'imagenet',
@@ -98,10 +98,11 @@ except ImportError:
     ALL_BONGARD_RULES = {}
     class KnowledgeReplayBuffer:
         def __init__(self, *args, **kwargs): pass
-        def add(self, *args): pass
-        def sample(self, *args): return [], [], []
+        def add(self, *args, **kwargs): pass
+        def sample(self, *args): return list(range(10)), list(range(10)), [1.0]*10 # Dummy sample
         def update_beta(self, *args): pass
-        def set_current_batch_info(self, *args): pass
+        def update(self, *args): pass # Added update method
+        def set_current_batch_info(self, *args): pass # Dummy, will be removed
     # Dummy _calculate_iou if utils.py cannot be imported
     def _calculate_iou(box1: List[float], box2: List[float]) -> float:
         x1_inter = max(box1[0], box2[0])
@@ -113,7 +114,6 @@ except ImportError:
         box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
         union_area = float(box1_area + box2_area - inter_area)
         return inter_area / union_area if union_area > 0 else 0.0
-
 logger = logging.getLogger(__name__)
 
 # --- Dataset Classes ---
@@ -141,7 +141,8 @@ class BongardSyntheticDataset(Dataset):
     def __len__(self):
         return self.num_samples
 
-    def __getitem__(self, idx: int) -> Tuple[np.ndarray, np.ndarray, int, bytes, bytes, float, np.ndarray, np.ndarray, int, List[np.ndarray], List[int], List[bytes], int, Optional[int], Optional[float]]:
+    # Modified __getitem__ to accept tree_index and is_weight from sampler
+    def __getitem__(self, idx: int, tree_index: Optional[int] = None, is_weight: Optional[float] = None) -> Tuple[np.ndarray, np.ndarray, int, bytes, bytes, float, np.ndarray, np.ndarray, int, List[np.ndarray], List[int], List[bytes], int, Optional[int], Optional[float]]:
         """
         Generates a single Bongard problem (query image pair, label, GT scene graphs, difficulty)
         and a set of support images with their labels and scene graphs.
@@ -156,20 +157,7 @@ class BongardSyntheticDataset(Dataset):
         # Get current image size from curriculum sampler if available, else use default
         image_size_for_gen = self.current_image_size if self.curriculum_sampler else CONFIG['data']['image_size']
         original_index = idx   # Default original index
-        tree_index = None
-        is_weight = None
-
-        # If curriculum learning with PER is enabled, get the actual index from the replay buffer
-        if self.curriculum_sampler and self.curriculum_sampler.use_difficulty_sampling and self.curriculum_sampler.replay_buffer:
-            # The sampler provides the original_index, tree_index, and is_weight
-            # when it yields indices. This information needs to be passed through.
-            # However, __getitem__ is called by the DataLoader with *its* index (0 to len-1).
-            # The sampler's role is to provide a mapping from DataLoader's index to dataset's original index
-            # and associated PER info.
-            # The `custom_collate_fn` will be responsible for extracting this info if the sampler yields it.
-            # For now, `idx` is the dataset index. The PER info will be handled in `custom_collate_fn`.
-            pass # PER info will be added by custom_collate_fn
-
+        
         # Generate a Bongard problem with support set
         (query_img1, query_img2, query_label, query_sg1, query_sg2,
          support_imgs, support_labels, support_sgs) = \
@@ -195,7 +183,7 @@ class BongardSyntheticDataset(Dataset):
         return (query_img1_np, query_img2_np, query_label, query_sg1_bytes, query_sg2_bytes,
                 difficulty, affine_matrix_view1, affine_matrix_view2, original_index,
                 support_imgs_np_list, support_labels, support_sgs_bytes_list,
-                num_actual_support_images, tree_index, is_weight) # tree_index and is_weight are None here, filled by collate_fn
+                num_actual_support_images, tree_index, is_weight) # tree_index and is_weight are passed through
 
 class RealBongardDataset(Dataset):
     """
@@ -215,7 +203,8 @@ class RealBongardDataset(Dataset):
     def __len__(self):
         return len(self.data_list)
 
-    def __getitem__(self, idx: int) -> Tuple[np.ndarray, np.ndarray, int, bytes, bytes, float, np.ndarray, np.ndarray, int, List[np.ndarray], List[int], List[bytes], int, Optional[int], Optional[float]]:
+    # Modified __getitem__ to accept tree_index and is_weight from sampler
+    def __getitem__(self, idx: int, tree_index: Optional[int] = None, is_weight: Optional[float] = None) -> Tuple[np.ndarray, np.ndarray, int, bytes, bytes, float, np.ndarray, np.ndarray, int, List[np.ndarray], List[int], List[bytes], int, Optional[int], Optional[float]]:
         item = self.data_list[idx]
         
         # Load query images
@@ -233,15 +222,12 @@ class RealBongardDataset(Dataset):
         difficulty = item.get('difficulty', 0.5)
         affine_matrix_view1 = np.eye(3, dtype=np.float32)   # Dummy
         affine_matrix_view2 = np.eye(3, dtype=np.float32)   # Dummy
-        tree_index = None
-        is_weight = None
-
+        
         # --- Support Set for Real Data ---
         support_imgs_np_list = []
         support_labels = []
         support_sgs_bytes_list = []
         num_actual_support_images = 0
-
         # If your real dataset includes explicit support sets, load them here.
         if 'support_images' in item and 'support_labels' in item and 'support_scene_graphs' in item:
             for s_img_path, s_label, s_sg_data in zip(item['support_images'], item['support_labels'], item['support_scene_graphs']):
@@ -257,7 +243,7 @@ class RealBongardDataset(Dataset):
         return (query_img1_np, query_img2_np, query_label, query_sg1_bytes, query_sg2_bytes,
                 difficulty, affine_matrix_view1, affine_matrix_view2, idx,
                 support_imgs_np_list, support_labels, support_sgs_bytes_list,
-                num_actual_support_images, tree_index, is_weight) # tree_index and is_weight are None here, filled by collate_fn
+                num_actual_support_images, tree_index, is_weight) # tree_index and is_weight are passed through
 
 def load_bongard_data(data_root_path: str, dataset_name: str, train_split_ratio: float) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
@@ -369,7 +355,6 @@ class CurriculumSampler(torch.utils.data.Sampler):
         else:
             self.replay_buffer = None
             logger.info("CurriculumSampler: Difficulty sampling (PER) disabled.")
-
         logger.info(f"CurriculumSampler initialized. Initial image size: {self.current_image_size}")
 
     def __iter__(self):
@@ -392,12 +377,10 @@ class CurriculumSampler(torch.utils.data.Sampler):
             # The `sample` method returns (original_data_indices, tree_indices_batch, is_weights_batch)
             original_data_indices, tree_indices_batch, is_weights_batch = self.replay_buffer.sample(self.num_samples_per_replica) 
             
-            # Store PER info in the replay buffer for retrieval by the training loop's collate_fn
-            # This is a bit of a hack, as the sampler itself doesn't directly return these to the DataLoader.
-            # The collate_fn will need to fetch this.
-            self.replay_buffer.set_current_batch_info(original_data_indices, tree_indices_batch, is_weights_batch)
-            
-            yield from original_data_indices
+            # Yield tuples of (original_data_index, tree_index, is_weight)
+            # The DataLoader will then pass these to __getitem__
+            for i in range(len(original_data_indices)):
+                yield (original_data_indices[i], tree_indices_batch[i], is_weights_batch[i])
         else:
             # Standard random sampling if PER is not used
             indices = list(range(self.num_samples))
@@ -408,7 +391,9 @@ class CurriculumSampler(torch.utils.data.Sampler):
             end_idx = min((self.rank + 1) * self.num_samples_per_replica, self.num_samples)
             indices_this_replica = indices[start_idx:end_idx]
             
-            yield from indices_this_replica
+            # Yield only the original_index, tree_index and is_weight will be None
+            for idx in indices_this_replica:
+                yield (idx, None, None)
 
     def __len__(self):
         return self.num_samples_per_replica
@@ -490,7 +475,9 @@ class PrototypicalSampler(Sampler):
             # The DataLoader's collate_fn will then process these indices.
             if len(support_indices) == self.n_way * self.k_shot and \
                len(query_indices) == self.n_way * self.q_query:
-                yield support_indices + query_indices
+                # For PrototypicalSampler, we don't have PER info (tree_index, is_weight)
+                # So we yield (original_index, None, None) for each.
+                yield [(idx, None, None) for idx in (support_indices + query_indices)]
             else:
                 logger.warning(f"Generated incomplete episode. Support: {len(support_indices)}, Query: {len(query_indices)}. Skipping.")
 
@@ -522,7 +509,6 @@ class BongardAugmentationPipeline(pipeline_def): # Changed to inherit from pipel
         self.augmentation_config = augmentation_config # Store augmentation config
         self.mean = [m * 255 for m in IMAGENET_MEAN]
         self.std = [s * 255 for s in IMAGENET_STD]
-
         # DALI Augmentation parameters from config
         dali_aug_config = CONFIG['data']['dali_augmentations']
         self.jpeg_p = dali_aug_config['jpeg_p']
@@ -540,7 +526,6 @@ class BongardAugmentationPipeline(pipeline_def): # Changed to inherit from pipel
         self.query_img1_input = fn.external_source(name="query_img1", device="cpu", dtype=types.UINT8, layout="HWC")
         self.query_img2_input = fn.external_source(name="query_img2", device="cpu", dtype=types.UINT8, layout="HWC")
         self.support_imgs_flat_input = fn.external_source(name="support_imgs_flat", device="cpu", dtype=types.UINT8, layout="HWC")
-
         logger.info(f"DALI Augmentation Pipeline initialized. Device: {self.dali_op_device}, Target Image Size: {self.image_size}")
 
     def define_graph(self):
@@ -660,7 +645,6 @@ class DALIImageProcessor:
         
         if not HAS_DALI:
             raise ImportError("NVIDIA DALI is not installed. Cannot use DALIImageProcessor.")
-
         self.pipeline = BongardAugmentationPipeline(
             batch_size=batch_size,
             num_threads=num_threads,
@@ -769,6 +753,7 @@ class BongardGenerator:
         outline_color = (0, 0, 0)   # Always black outline for now
         obj_width = int(image_size * size_factor)
         obj_height = int(image_size * size_factor)
+
         min_obj_size = self.synthetic_config['object_size_range'][0]
         obj_width = max(obj_width, min_obj_size)
         obj_height = max(obj_height, min_obj_size)
@@ -782,6 +767,7 @@ class BongardGenerator:
         y1 = max(0, y1)
         x2 = min(image_size, x2)
         y2 = min(image_size, y2)
+
         bbox_xyxy = [x1, y1, x2, y2]
 
         # Draw shape
@@ -922,8 +908,8 @@ class BongardGenerator:
                 cx1 = (obj1['bbox'][0] + obj1['bbox'][2]) / 2
                 cy1 = (obj1['bbox'][1] + obj1['bbox'][3]) / 2
                 cx2 = (obj2['bbox'][0] + obj2['bbox'][2]) / 2
-                cy2 = (obj2['bbox'][1] + obj2['bbox'][3]) / 2
-
+                cy2 = (obj2['bbox'][1] + obj2['bbox'][3]) / 3
+                
                 if cx1 < cx2 - 10:
                     scene_graph['relations'].append({'subject_id': obj1['id'], 'object_id': obj2['id'], 'type': 'left_of'})
                     scene_graph['relations'].append({'subject_id': obj2['id'], 'object_id': obj1['id'], 'type': 'right_of'})
@@ -957,7 +943,6 @@ class BongardGenerator:
                 if not (bbox1[2] < bbox2[0] or bbox1[0] > bbox2[2] or bbox1[3] < bbox2[1] or bbox1[1] > bbox2[3]):
                     scene_graph['relations'].append({'subject_id': obj1['id'], 'object_id': obj2['id'], 'type': 'intersects'})
                     scene_graph['relations'].append({'subject_id': obj2['id'], 'object_id': obj1['id'], 'type': 'intersects'})
-
         return img, scene_graph
 
     def _apply_rule_constraints_for_generation(self,
@@ -1097,96 +1082,38 @@ def custom_collate_fn(batch: List[Tuple[Any, ...]]) -> Tuple[Any, ...]:
     Handles different data types and pads lists for batching.
     This function also injects PER weights if a CurriculumSampler is used with PER.
     """
-    # Each item in batch is:
+    # Each item in batch is now expected to be:
+    # (original_index, tree_index, is_weight) from sampler,
+    # and then dataset.__getitem__(original_index) returns:
     # (query_img1_np, query_img2_np, query_label, query_sg1_bytes, query_sg2_bytes,
-    #  difficulty, affine_matrix_view1, affine_matrix_view2, original_index,
+    #  difficulty, affine_matrix_view1, affine_matrix_view2, original_index_from_dataset,
     #  support_imgs_np_list, support_labels_list, support_sgs_bytes_list,
-    #  num_actual_support_images, tree_index, is_weight)
-
+    #  num_actual_support_images)
+    
+    # So, `batch` is a list of tuples where each tuple is:
+    # (data_from_getitem_tuple, tree_index_from_sampler, is_weight_from_sampler)
+    
     # Separate out components
-    query_img1_np_list = [item[0] for item in batch]
-    query_img2_np_list = [item[1] for item in batch]
-    query_labels = torch.tensor([item[2] for item in batch], dtype=torch.long)
-    query_gts_json_view1 = [item[3] for item in batch]
-    query_gts_json_view2 = [item[4] for item in batch]
-    difficulties = torch.tensor([item[5] for item in batch], dtype=torch.float)
-    affine_matrix_view1 = torch.stack([torch.from_numpy(item[6]) for item in batch])
-    affine_matrix_view2 = torch.stack([torch.from_numpy(item[7]) for item in batch])
-    original_indices = torch.tensor([item[8] for item in batch], dtype=torch.long)
+    query_img1_np_list = [item[0][0] for item in batch]
+    query_img2_np_list = [item[0][1] for item in batch]
+    query_labels = torch.tensor([item[0][2] for item in batch], dtype=torch.long)
+    query_gts_json_view1 = [item[0][3] for item in batch]
+    query_gts_json_view2 = [item[0][4] for item in batch]
+    difficulties = torch.tensor([item[0][5] for item in batch], dtype=torch.float)
+    affine_matrix_view1 = torch.stack([torch.from_numpy(item[0][6]) for item in batch])
+    affine_matrix_view2 = torch.stack([torch.from_numpy(item[0][7]) for item in batch])
+    original_indices = torch.tensor([item[0][8] for item in batch], dtype=torch.long)
     
-    support_imgs_np_list_of_lists = [item[9] for item in batch] # List of lists of numpy arrays
-    support_labels_list_of_lists = [item[10] for item in batch] # List of lists of ints
-    support_sgs_bytes_list_of_lists = [item[11] for item in batch] # List of lists of bytes
-    num_support_per_problem = torch.tensor([item[12] for item in batch], dtype=torch.long)
+    support_imgs_np_list_of_lists = [item[0][9] for item in batch] # List of lists of numpy arrays
+    support_labels_list_of_lists = [item[0][10] for item in batch] # List of lists of ints
+    support_sgs_bytes_list_of_lists = [item[0][11] for item in batch] # List of lists of bytes
+    num_support_per_problem = torch.tensor([item[0][12] for item in batch], dtype=torch.long)
 
-    # Handle PER info from sampler if available
-    # This requires the DataLoader to have access to the sampler's current batch info.
-    # A cleaner way is for the sampler to yield (index, tree_index, is_weight) tuples,
-    # and then __getitem__ uses that index to fetch data and pass through the PER info.
-    # For now, we'll assume the sampler has set this info and we can retrieve it.
+    # Extract tree_index and is_weight directly from the batch item (from sampler)
+    tree_indices = torch.tensor([item[1] if item[1] is not None else -1 for item in batch], dtype=torch.long)
+    is_weights = torch.tensor([item[2] if item[2] is not None else 1.0 for item in batch], dtype=torch.float)
     
-    # This is a bit tricky with PyTorch's DataLoader. If CurriculumSampler is used,
-    # it yields `original_data_indices`. The `__getitem__` then receives these.
-    # The PER info (tree_indices, is_weights) should ideally be passed from `__getitem__`.
-    # Since __getitem__ returns (..., tree_index, is_weight) as None initially,
-    # we need to retrieve it from the sampler's stored info, if any.
-    
-    # This requires a reference to the sampler. The DataLoader doesn't directly pass it to collate_fn.
-    # A common workaround is to make the `replay_buffer` accessible via the dataset.
-    
-    # Check if any item in the batch has non-None tree_index/is_weight (from PER)
-    # If using CurriculumSampler with PER, the sampler would have filled these.
-    # The `__getitem__` returns them as None, so we need to fetch them from the buffer.
-    
-    # This is a critical point: The `tree_index` and `is_weight` must come from the sampler's `sample` call.
-    # The `__getitem__` receives `idx` from the DataLoader. If `idx` is an `original_data_index` from PER,
-    # then the `replay_buffer` needs to provide the `tree_index` and `is_weight` for that `original_data_index`.
-    
-    # The current `CurriculumSampler.__iter__` sets `self.replay_buffer.set_current_batch_info`.
-    # This means the collate_fn needs to access this. This is not standard.
-    # The most robust way is for `__getitem__` to return `tree_index` and `is_weight`
-    # when the sampler provides them.
-    
-    # Let's assume the `idx` passed to `__getitem__` is the `original_data_index` from PER.
-    # And the `is_weight` and `tree_index` are then looked up from the `replay_buffer`.
-    # This means `__getitem__` needs access to the `replay_buffer`.
-    # `dataset.curriculum_sampler.replay_buffer` is how it's linked.
-    
-    tree_indices = []
-    is_weights = []
-    
-    # This loop needs to be careful: the `batch` here contains what `__getitem__` returned.
-    # If `__getitem__` returns `None` for tree_index/is_weight, we need to fetch it.
-    # The `original_indices` are the keys to fetch from the replay buffer.
-    
-    # This is a common pattern for PER with PyTorch DataLoaders:
-    # The sampler yields `(original_idx, tree_idx, is_weight)`.
-    # The `__getitem__` receives `original_idx` and returns `data`.
-    # The `collate_fn` receives a batch of `(data, tree_idx, is_weight)`.
-    
-    # Given the current `__getitem__` returns `tree_index=None, is_weight=None`,
-    # the `custom_collate_fn` will receive `None` values.
-    # We need to modify `CurriculumSampler.__iter__` to yield `(original_index, tree_index, is_weight)`.
-    # And `DataLoader` with `batch_sampler` will then pass these tuples to `collate_fn`.
-    
-    # Let's adjust the `CurriculumSampler.__iter__` to yield tuples of (index, tree_index, is_weight)
-    # and then `custom_collate_fn` can correctly unpack them.
-    # This will require `__getitem__` to only return the data, and the PER info is passed separately.
-    
-    # For now, I will assume the `tree_index` and `is_weight` are passed from `__getitem__`
-    # if the sampler is properly configured to provide them.
-    # If they are `None` as per the current `__getitem__` signature, they will remain `None`.
-    # The `training_step` in `models.py` will then check if `is_weights` is not None.
-
-    # For `custom_collate_fn`, let's assume `item[13]` and `item[14]` are `tree_index` and `is_weight`.
-    # If they are `None`, then they will be `None` in the final batched output.
-    tree_indices = torch.tensor([item[13] if item[13] is not None else -1 for item in batch], dtype=torch.long)
-    is_weights = torch.tensor([item[14] if item[14] is not None else 1.0 for item in batch], dtype=torch.float)
-
     # Flatten support images and labels for batching
-    # Calculate total number of support images across the batch
-    total_support_images_flat = sum(len(s_list) for s_list in support_imgs_np_list_of_lists)
-    
     # Pad support images and labels to the maximum number of support images in the batch
     max_support_in_batch = max(num_support_per_problem).item() if num_support_per_problem.numel() > 0 else 0
     
@@ -1195,26 +1122,25 @@ def custom_collate_fn(batch: List[Tuple[Any, ...]]) -> Tuple[Any, ...]:
     padded_support_sgs_bytes_list = []
 
     if max_support_in_batch > 0:
+        # Get shape of a dummy image for padding
+        # Use a default if query_img1_np_list is empty (e.g., for some edge cases or tests)
+        if query_img1_np_list and len(query_img1_np_list[0].shape) == 3:
+            dummy_img = np.zeros_like(query_img1_np_list[0])
+        else: # Fallback dummy image if no real images are present
+            dummy_img = np.zeros((CONFIG['data']['image_size'], CONFIG['data']['image_size'], 3), dtype=np.uint8)
+
         for i, num_s in enumerate(num_support_per_problem):
             current_s_imgs = support_imgs_np_list_of_lists[i]
             current_s_labels = support_labels_list_of_lists[i]
             current_s_sgs = support_sgs_bytes_list_of_lists[i]
 
-            # Pad images with a dummy black image (or mean image)
-            dummy_img = np.zeros_like(query_img1_np_list[0]) # Use shape of first query image for dummy
-            
             padded_imgs = current_s_imgs + [dummy_img] * (max_support_in_batch - num_s)
             padded_labels = current_s_labels + [-1] * (max_support_in_batch - num_s) # -1 for dummy labels
             padded_sgs = current_s_sgs + [b'{}'] * (max_support_in_batch - num_s) # Empty JSON for dummy SGs
-
+            
             padded_support_imgs_np_list.extend(padded_imgs)
             padded_support_labels_list.extend(padded_labels)
             padded_support_sgs_bytes_list.extend(padded_sgs)
-
-        # Reshape the flattened padded lists back to (B, Max_support, ...)
-        # This will be done in the DALI processor or in the training_step after DALI.
-        # For now, return them as flat lists.
-        # The `training_step` will then view them as (B, Max_support, ...)
     else:
         # If no support images in the entire batch, return empty lists with appropriate types
         img_h, img_w, img_c = query_img1_np_list[0].shape if query_img1_np_list else (224, 224, 3)
@@ -1228,95 +1154,65 @@ def custom_collate_fn(batch: List[Tuple[Any, ...]]) -> Tuple[Any, ...]:
             padded_support_imgs_np_list, torch.tensor(padded_support_labels_list, dtype=torch.long), padded_support_sgs_bytes_list,
             num_support_per_problem, tree_indices, is_weights)
 
-
-def get_dataloader(cfg: Dict[str, Any], is_train: bool, rank: int = 0, world_size: int = 1, simclr_mode: bool = False):
+def get_dataloader(cfg: Dict[str, Any], dataset: Dataset, is_train: bool, rank: int = 0, world_size: int = 1, simclr_mode: bool = False):
     """
     Provides a DataLoader (either PyTorch's or DALI's DALIGenericIterator)
     based on the configuration.
     """
-    # Determine dataset
-    if cfg['data']['use_synthetic_data']:
-        # Create a dummy BongardGenerator if not already defined
-        if 'bongard_generator' not in globals():
-            global bongard_generator
-            bongard_generator = BongardGenerator(cfg['data'], ALL_BONGARD_RULES)
-        dataset = BongardSyntheticDataset(
-            cfg,
-            bongard_generator,
-            num_samples=cfg['training']['batch_size'] * 1000 if is_train else cfg['training']['batch_size'] * 100
-        )
-    else:
-        train_data_list, val_data_list = load_bongard_data(
-            cfg['data']['real_data_config']['dataset_path'], # Changed from data_root_path
-            cfg['data']['real_data_config']['dataset_name'],
-            cfg['data']['real_data_config']['train_split'] # Changed from train_split_ratio
-        )
-        dataset = RealBongardDataset(train_data_list if is_train else val_data_list)
-    
     # Determine image processor (DALI or torchvision transforms)
     image_transforms = None
-    dali_processor = None
-    if cfg['training']['use_dali'] and HAS_DALI:
-        logger.info(f"Using DALI for {'training' if is_train else 'validation'}.")
-        dali_processor = build_dali_image_processor(
-            batch_size=cfg['training']['batch_size'],
-            num_threads=cfg['data']['dataloader_workers'],
-            device_id=rank,
-            image_size=cfg['data']['image_size'],
-            is_training=is_train,
-            curriculum_config=cfg['training']['curriculum_config'],
-            augmentation_config=cfg['training']['augmentation_config'] # Pass augmentation config
-        )
-        # When using DALIImageProcessor, the DataLoader yields raw numpy arrays,
-        # and the DALI processor is called in `training_step`/`validation_step`.
-        # So, no torchvision transforms are needed here.
+    
+    # DALI is now handled by the LightningDataModule in training.py.
+    # This `get_dataloader` function will primarily configure the PyTorch DataLoader
+    # and its transforms.
+    
+    logger.info(f"Using PyTorch DataLoader with torchvision transforms for {'training' if is_train else 'validation'}.")
+    transform_list = [
+        T.ToPILImage(), # Convert NumPy array to PIL Image for torchvision transforms
+        T.Resize((cfg['data']['image_size'], cfg['data']['image_size'])),
+    ]
+    if is_train:
+        aug_cfg = cfg['training']['augmentation_config']
+        
+        # AutoAugment / RandAugment / Erasing transforms (as per prompt)
+        if aug_cfg.get('use_autoaugment', False) and HAS_AUTOAUGMENT:
+            policy_type = aug_cfg.get('autoaugment_policy', 'imagenet').lower()
+            if policy_type == 'imagenet':
+                transform_list.append(ImageNetPolicy())
+                logger.info("AutoAugment (ImageNetPolicy) enabled.")
+            elif policy_type == 'cifar10':
+                transform_list.append(CIFAR10Policy())
+                logger.info("AutoAugment (CIFAR10Policy) enabled.")
+            else:
+                logger.warning(f"Unknown AutoAugment policy: {policy_type}. Skipping AutoAugment.")
+        
+        if aug_cfg.get('use_randaugment', False):
+            transform_list.append(T.RandAugment(
+                num_ops=aug_cfg.get('randaugment_num_ops', 2),
+                magnitude=aug_cfg.get('randaugment_magnitude', 9)
+            ))
+            logger.info("RandAugment enabled.")
+        
+        # AugMix would require a custom transform or external library integration
+        if aug_cfg.get('use_augmix', False):
+            logger.warning("AugMix requested but not implemented. Skipping AugMix.")
+        
+        transform_list.append(T.ToTensor()) # Convert back to tensor
+        
+        if aug_cfg.get('use_random_erasing', False):
+            transform_list.append(RandomErasing(p=aug_cfg.get('random_erasing_p', 0.5)))
+            logger.info("Random Erasing enabled.")
+    else: # Validation/Test
+        transform_list.append(T.ToTensor())
+
+    transform_list.append(T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD))
+    image_transforms = T.Compose(transform_list)
+
+    # Attach transforms to dataset if it supports it
+    if hasattr(dataset, 'transform'):
+        dataset.transform = image_transforms
     else:
-        logger.info(f"Using PyTorch DataLoader with torchvision transforms for {'training' if is_train else 'validation'}.")
-        transform_list = [
-            T.ToPILImage(), # Convert NumPy array to PIL Image for torchvision transforms
-            T.Resize((cfg['data']['image_size'], cfg['data']['image_size'])),
-        ]
-
-        if is_train:
-            aug_cfg = cfg['training']['augmentation_config']
-            if aug_cfg.get('use_autoaugment', False) and HAS_AUTOAUGMENT:
-                policy_type = aug_cfg.get('autoaugment_policy', 'imagenet').lower()
-                if policy_type == 'imagenet':
-                    transform_list.append(ImageNetPolicy())
-                    logger.info("AutoAugment (ImageNetPolicy) enabled.")
-                elif policy_type == 'cifar10':
-                    transform_list.append(CIFAR10Policy())
-                    logger.info("AutoAugment (CIFAR10Policy) enabled.")
-                else:
-                    logger.warning(f"Unknown AutoAugment policy: {policy_type}. Skipping AutoAugment.")
-            
-            if aug_cfg.get('use_randaugment', False):
-                transform_list.append(T.RandAugment(
-                    num_ops=aug_cfg.get('randaugment_num_ops', 2),
-                    magnitude=aug_cfg.get('randaugment_magnitude', 9)
-                ))
-                logger.info("RandAugment enabled.")
-            
-            # AugMix would require a custom transform or external library integration
-            if aug_cfg.get('use_augmix', False):
-                logger.warning("AugMix requested but not implemented. Skipping AugMix.")
-
-            transform_list.append(T.ToTensor()) # Convert back to tensor
-            
-            if aug_cfg.get('use_random_erasing', False):
-                transform_list.append(RandomErasing(p=aug_cfg.get('random_erasing_p', 0.5)))
-                logger.info("Random Erasing enabled.")
-        else: # Validation/Test
-            transform_list.append(T.ToTensor())
-
-        transform_list.append(T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD))
-        image_transforms = T.Compose(transform_list)
-
-        # Attach transforms to dataset if it supports it
-        if hasattr(dataset, 'transform'):
-            dataset.transform = image_transforms
-        else:
-            logger.warning("Dataset does not have a 'transform' attribute. Transforms might not be applied.")
+        logger.warning("Dataset does not have a 'transform' attribute. Transforms might not be applied.")
 
     # Determine sampler
     sampler = None
@@ -1372,4 +1268,3 @@ def get_dataloader(cfg: Dict[str, Any], is_train: bool, rank: int = 0, world_siz
         collate_fn=custom_collate_fn, # Always use custom collate function
         drop_last=True # Ensure consistent batch sizes
     )
-

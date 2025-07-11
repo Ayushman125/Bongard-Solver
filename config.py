@@ -46,6 +46,7 @@ CONFIG: Dict[str, Any] = {
             'dataset_path': './data/real_bongard', # Full path to the real dataset root
             'train_split': 0.8, # Train-validation split ratio for real data
         },
+        'use_dali': False, # Flag to enable NVIDIA DALI (set dynamically by main.py based on HAS_DALI)
         'dali_augmentations': { # DALI-specific augmentation parameters
             'jpeg_p': 0.1, # Probability of applying JPEG compression distortion
             'jpeg_q': (50, 100), # Quality range for JPEG compression
@@ -141,9 +142,9 @@ CONFIG: Dict[str, Any] = {
 
     # --- Model Configuration ---
     'model': {
-        'backbone': 'resnet18', # Options: 'resnet18', 'mobilenet_v3_small', 'efficientnet_b0'
+        'backbone': 'resnet18', # Options: 'resnet18', 'mobilenet_v3_small', 'efficientnet_b0', 'vit_base_patch16_224', 'swin_base_patch4_window7_224'
         'pretrained': True, # Use ImageNet pretrained weights for backbone
-        'feature_dim': 512, # Output feature dimension from backbone
+        'feature_dim': None, # This will be dynamically inferred in AttributeModel.__init__
 
         'attribute_classifier_config': {
             'shape': 4, # circle, square, triangle, star
@@ -171,7 +172,7 @@ CONFIG: Dict[str, Any] = {
             'drop_prob': 0.1,
         },
         'use_stochastic_depth': False, # Use Stochastic Depth regularization
-        'stochastic_depth_p': 0.1, # Probability of dropping a layer
+        'stochastic_depth_p': 0.1, # Probability of dropping a layer (for ViT/Swin)
 
         'use_persistent_homology': True, # Use topological features from persistent homology
         'ph_pixel_thresh': 0.5, # Pixel intensity threshold for binarizing masks for PH
@@ -294,7 +295,7 @@ HAS_AUTOAUGMENT = False
 HAS_DALI = False
 HAS_ULTRALYTICS = False
 HAS_SAM = False
-HAS_YOLO = False
+HAS_YOLO = False # Redundant with HAS_ULTRALYTICS, but kept for clarity with sam_utils
 HAS_TOPOLOGY_LIBS = False
 
 
