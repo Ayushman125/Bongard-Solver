@@ -42,8 +42,9 @@ except ImportError:
     ATTRIBUTE_SIZE_MAP = {'small': 0, 'medium': 1, 'large': 2}
     ATTRIBUTE_ORIENTATION_MAP = {'upright': 0, 'inverted': 1}
     ATTRIBUTE_TEXTURE_MAP = {'none': 0, 'striped': 1, 'dotted': 2}
-    CONFIG = {'model': {'use_persistent_homology': False}} # Dummy config for topo
+    CONFIG = {'model': {'use_persistent_homology': False, 'ph_pixel_thresh': 0.5, 'ph_feature_dim': 64}} # Dummy config for topo
 logger = logging.getLogger(__name__)
+
 class SceneGraphBuilder:
     """
     Builds a structured scene graph from detected objects and their attributes.
@@ -51,6 +52,7 @@ class SceneGraphBuilder:
     Incorporates topological features.
     """
     def __init__(self, config: Dict[str, Any]):
+        super().__init__()
         self.config = config
         self.image_size = config['data']['image_size']
         
@@ -65,16 +67,16 @@ class SceneGraphBuilder:
         }
         self.relation_map = RELATION_MAP  # Use imported RELATION_MAP
         self.reverse_relation_map = {v: k for k, v in self.relation_map.items()}
+        
         self.topo_feature_extractor = None
         # Check for 'topo' key in config and its 'enabled' status
         if HAS_TOPO_FEATURES and self.config.get('model', {}).get('use_persistent_homology', False):
-            # The prompt says CONFIG['topo']['pixel_thr'], but config.py puts it under model.
-            # Let's use the correct path from config.py: config['model']['ph_pixel_thresh']
             self.topo_feature_extractor = TopologicalFeatureExtractor(
                 thr=self.config['model'].get('ph_pixel_thresh', 0.5),
                 feature_dim=self.config['model'].get('ph_feature_dim', 64)
             )
             logger.info(f"SceneGraphBuilder: Initialized TopologicalFeatureExtractor with pixel threshold {self.config['model'].get('ph_pixel_thresh', 0.5)} and feature_dim {self.config['model'].get('ph_feature_dim', 64)}.")
+
     def build_scene_graph(
         self,
         image_np: np.ndarray,  # Original image (H, W, C) for context if needed
@@ -130,10 +132,11 @@ class SceneGraphBuilder:
                 'mask': mask.tolist(),  # Convert numpy mask to list for JSON serialization
                 'attributes': inferred_attributes
             }
-            # Add topological features (as per prompt: `desc['topo'] = ph.tolist()`)
+            
+            # Add topological features
             if self.topo_feature_extractor and HAS_TOPO_FEATURES:
-                ph_features = self.topo_feature_extractor.extract(mask)
-                obj_entry['topo_features'] = ph_features.tolist()  # Convert to list for JSON
+                ph_vector = self.topo_feature_extractor.extract(mask)
+                obj_entry['topo_features'] = ph_vector.tolist()  # Convert to list for JSON
             
             scene_graph['objects'].append(obj_entry)
         

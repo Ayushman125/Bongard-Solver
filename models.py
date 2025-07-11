@@ -48,7 +48,7 @@ except ImportError:
     HAS_TIMM = False
     logger = logging.getLogger(__name__)
     logger.warning("timm not found. ViT/Swin backbones will not be available.")
-# Conditional import for DropBlock
+# Conditional import for DropBlock and DropPath (Stochastic Depth)
 try:
     from dropblock import DropBlock2D
     HAS_DROPBLOCK = True
@@ -67,6 +67,29 @@ except ImportError:
                 return x
             # Simple dropout as a fallback if DropBlock is not truly implemented
             return F.dropout(x, p=self.drop_prob, training=self.training)
+try:
+    # timm.layers.DropPath is a common implementation for Stochastic Depth
+    from timm.layers import DropPath
+    HAS_DROPPATH = True
+    logger.info("timm.layers.DropPath (Stochastic Depth) found and enabled.")
+except ImportError:
+    HAS_DROPPATH = False
+    logger = logging.getLogger(__name__)
+    logger.warning("timm.layers.DropPath not found. Stochastic Depth regularization will be disabled.")
+    class DropPath(nn.Module): # Dummy DropPath (Stochastic Depth)
+        def __init__(self, drop_prob: float = 0.):
+            super().__init__()
+            self.drop_prob = drop_prob
+        def forward(self, x):
+            if self.drop_prob == 0. or not self.training:
+                return x
+            keep_prob = 1 - self.drop_prob
+            shape = (x.shape[0],) + (1,) * (x.ndim - 1)  # keep dim of C, H, W
+            random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
+            random_tensor.floor_()  # binarize
+            output = x.div(keep_prob) * random_tensor
+            return output
+
 # Import from config
 from config import CONFIG, DEVICE, RELATION_MAP, IMAGENET_MEAN, IMAGENET_STD, \
                    ATTRIBUTE_FILL_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_SIZE_MAP, \
@@ -92,6 +115,7 @@ try:
     logger.info("Slipnet found and enabled.")
 except ImportError:
     HAS_SLIPNET = False
+    logger = logging.getLogger(__name__)
     logger.warning("slipnet.py not found. Slipnet functionalities will be disabled.")
     class Slipnet: # Dummy Slipnet
         def __init__(self, *args, **kwargs): pass
@@ -133,29 +157,18 @@ except ImportError:
     class MixupCutmixAugmenter:
         def __init__(self, *args, **kwargs): pass
         def __call__(self, images, labels): return images, F.one_hot(labels, num_classes=2).float() # Dummy passthrough
+
+# Import YOLO (from ultralytics)
+try:
+    from ultralytics import YOLO
+    HAS_ULTRALYTICS = True
+    logger.info("ultralytics (YOLO) found and enabled for ObjectDetector.")
+except ImportError:
+    HAS_ULTRALYTICS = False
+    logger.warning("ultralytics not found. YOLO functionalities in ObjectDetector will be disabled.")
+
 logger = logging.getLogger(__name__)
-# --- Helper for Stochastic Depth ---
-class StochasticDepth(nn.Module):
-    """
-    Stochastic Depth (DropPath) module.
-    Introduced in "Deep Networks with Stochastic Depth" (Huang etg al., 2016).
-    Used in Vision Transformers and EfficientNet.
-    """
-    def __init__(self, p: float, mode: str = "row"):
-        super().__init__()
-        self.drop_prob = p
-        self.mode = mode # "row" or "batch"
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if not self.training or self.drop_prob == 0.:
-            return x
-        keep_prob = 1 - self.drop_prob
-        if self.mode == "row":
-            shape = (x.shape[0],) + (1,) * (x.ndim - 1)
-        else:
-            shape = (1,) * x.ndim
-        random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
-        random_tensor.floor_() # Binarize
-        return x.div(keep_prob) * random_tensor
+
 # --- Model Components ---
 class AttributeClassifier(nn.Module):
     """
@@ -169,66 +182,90 @@ class AttributeClassifier(nn.Module):
         pretrained = config['model']['pretrained']
         
         # Initialize feature extractor (backbone)
-        if HAS_TIMM and ('vit' in backbone_name or 'swin' in backbone_name):
+        if HAS_TIMM and ('vit' in backbone_name or 'swin' in backbone_name or 'convnext' in backbone_name):
             logger.info(f"Using timm backbone: {backbone_name}")
+            # For timm models, features_only=True returns a list of feature maps from different stages.
+            # We typically want the last one for classification.
             self.feature_extractor = timm.create_model(
                 backbone_name, pretrained=pretrained, features_only=True
             )
-            # For timm models with features_only=True, feature_info.channels() gives output channels of each stage
-            # We take the last one as the main feature dimension.
-            self.feature_dim = self.feature_extractor.feature_info.channels()[-1]
-            # Add a pooling layer if the last feature map is spatial (e.g., from Swin)
-            # ViT typically outputs a [CLS] token or sequence of tokens, which might need a different pooling strategy.
-            # For features_only=True, timm often returns a list of feature maps. We'll take the last one.
-            # If the output is (B, C, H, W), we need adaptive pooling.
-            # Check if the output of feature_extractor is 4D (spatial) or 3D (sequence)
-            dummy_output_shape = self.feature_extractor(torch.zeros(1, 3, config['data']['image_size'], config['data']['image_size'])).shape
-            if len(dummy_output_shape) == 4: # (B, C, H, W)
-                self.pool = nn.AdaptiveAvgPool2d((1, 1))
-            elif len(dummy_output_shape) == 3: # (B, N_tokens, C) - typical for ViT
-                self.pool = lambda x: x[:, 0, :] if x.shape[1] > 1 else x.mean(dim=1) # Take CLS token or mean
-            else:
-                self.pool = nn.Identity() # Assume already flattened or single token
-                self.feature_dim = dummy_output_shape[-1] # Set feature_dim to last dim if already flat/token
+            # Determine the output feature dimension for timm models
+            # feature_info.channels() gives output channels of each stage. We take the last one.
+            # For models like ViT, `features_only=True` might return a sequence of tokens.
+            # We need to handle this by taking the CLS token or pooling.
+            
+            # Dummy forward to infer feature_dim and set up pooling if needed
+            with torch.no_grad():
+                dummy_input = torch.zeros(1, 3, config['data']['image_size'], config['data']['image_size']).to(DEVICE)
+                # Use forward_features for timm models to get the raw feature maps/tokens
+                fmap_raw = self.feature_extractor(dummy_input)
+                
+                # If fmap_raw is a list (from features_only=True), take the last feature map
+                if isinstance(fmap_raw, list):
+                    fmap = fmap_raw[-1]
+                else:
+                    fmap = fmap_raw # It's already a single tensor
+                
+                if fmap.ndim == 4: # (B, C, H, W) - typical for CNNs/Swin features_only
+                    self.pool = nn.AdaptiveAvgPool2d((1, 1))
+                    fmap_pooled = self.pool(fmap)
+                    self.feature_dim = fmap_pooled.numel() // fmap_pooled.shape[0]
+                elif fmap.ndim == 3: # (B, N_tokens, C) - typical for ViT features_only (sequence of tokens)
+                    # If it has a CLS token, it's usually the first token (index 0).
+                    # Otherwise, mean pool the tokens.
+                    if fmap.shape[1] > 1 and hasattr(self.feature_extractor, 'cls_token'): # Heuristic for CLS token
+                        self.pool = lambda x: x[:, 0, :] # Take CLS token
+                    else:
+                        self.pool = lambda x: x.mean(dim=1) # Mean pool tokens
+                    fmap_pooled = self.pool(fmap)
+                    self.feature_dim = fmap_pooled.shape[-1]
+                else: # Already flattened or single token
+                    self.pool = nn.Identity()
+                    self.feature_dim = fmap.numel() // fmap.shape[0] # Should be fmap.shape[-1] if already 1D
+            logger.info(f"Dynamically inferred feature_dim for timm backbone: {self.feature_dim}")
         elif backbone_name == 'mobilenet_v3_small':
             logger.info("Using MobileNetV3-Small backbone.")
             weights = MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
             model = mobilenet_v3_small(weights=weights)
             self.feature_extractor = model.features # Extract features part
             self.pool = model.avgpool # Global average pooling
-            # self.feature_dim = model.classifier[0].in_features # Output features before classifier
+            # Dynamic feature_dim inference will handle this below
         elif backbone_name == 'efficientnet_b0':
             logger.info("Using EfficientNet-B0 backbone.")
             weights = EfficientNet_B0_Weights.DEFAULT if pretrained else None
             model = efficientnet_b0(weights=weights)
             self.feature_extractor = model.features
             self.pool = model.avgpool
-            # self.feature_dim = model.classifier[1].in_features
+            # Dynamic feature_dim inference will handle this below
         elif 'resnet' in backbone_name: # Default to ResNet for other cases
             logger.info(f"Using ResNet backbone: {backbone_name}")
             model_func = getattr(models, backbone_name)
             model = model_func(pretrained=pretrained)
             self.feature_extractor = nn.Sequential(*list(model.children())[:-2]) # Remove avgpool and fc
             self.pool = nn.AdaptiveAvgPool2d((1, 1)) # Add adaptive pooling
-            # self.feature_dim = model.fc.in_features
+            # Dynamic feature_dim inference will handle this below
         else:
             raise ValueError(f"Unsupported backbone: {backbone_name}")
-        # --- Dynamic Feature-Dim Inference ---
+        
+        # --- Dynamic Feature-Dim Inference (for non-timm models or as a fallback) ---
         # This ensures feature_dim is correctly set regardless of backbone output shape.
         # It runs a dummy forward pass to infer the dimension.
-        with torch.no_grad():
-            dummy = torch.zeros(1,3,CONFIG['data']['image_size'],CONFIG['data']['image_size']).to(DEVICE)
-            fmap = self.feature_extractor(dummy)
-            
-            # Apply pooling if defined and necessary
-            if hasattr(self, 'pool') and self.pool is not None:
-                if len(fmap.shape) == 4: # (B, C, H, W) for CNNs
-                    fmap = self.pool(fmap)
-                elif len(fmap.shape) == 3: # (B, N_tokens, C) for ViTs
-                    fmap = self.pool(fmap)
-            
-            self.feature_dim = fmap.numel() // fmap.shape[0]
-            logger.info(f"Dynamically inferred feature_dim: {self.feature_dim}")
+        # This block is skipped if timm backbone was already handled above.
+        if not (HAS_TIMM and ('vit' in backbone_name or 'swin' in backbone_name or 'convnext' in backbone_name)):
+            with torch.no_grad():
+                dummy = torch.zeros(1,3,config['data']['image_size'],config['data']['image_size']).to(DEVICE)
+                fmap = self.feature_extractor(dummy)
+                
+                # Apply pooling if defined and necessary
+                if hasattr(self, 'pool') and self.pool is not None:
+                    if len(fmap.shape) == 4: # (B, C, H, W) for CNNs
+                        fmap = self.pool(fmap)
+                    elif len(fmap.shape) == 3: # (B, N_tokens, C) for ViTs
+                        fmap = self.pool(fmap)
+                
+                self.feature_dim = fmap.numel() // fmap.shape[0]
+                logger.info(f"Dynamically inferred feature_dim (fallback): {self.feature_dim}")
+        
         # Attribute classification heads
         self.attribute_heads = nn.ModuleDict()
         for attr_name, num_classes in config['model']['attribute_classifier_config'].items():
@@ -243,11 +280,12 @@ class AttributeClassifier(nn.Module):
             )
             logger.info(f"DropBlock enabled with block_size={self.dropblock.block_size}, drop_prob={self.dropblock.drop_prob}")
         
-        # Stochastic Depth (for transformer-based models)
+        # Stochastic Depth (DropPath)
         self.stochastic_depth = None
-        if config['model'].get('use_stochastic_depth', False) and ('vit' in backbone_name or 'swin' in backbone_name):
-            self.stochastic_depth = StochasticDepth(p=config['model']['stochastic_depth_p'])
+        if config['model'].get('use_stochastic_depth', False) and HAS_DROPPATH:
+            self.stochastic_depth = DropPath(drop_prob=config['model']['stochastic_depth_p'])
             logger.info(f"Stochastic Depth enabled with drop_prob={self.stochastic_depth.drop_prob}")
+
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """
         Args:
@@ -257,48 +295,46 @@ class AttributeClassifier(nn.Module):
                 - Pooled features (B, feature_dim)
                 - Dictionary of attribute logits {attr_name: (B, num_classes)}
         """
-        features = self.feature_extractor(x) # (B, C, H, W) or (B, N_tokens, C) for ViT
+        features_raw = self.feature_extractor(x) # (B, C, H, W) or (B, N_tokens, C) or list of tensors
+        
+        # If features_raw is a list (from timm features_only=True), take the last feature map
+        if isinstance(features_raw, list):
+            features = features_raw[-1]
+        else:
+            features = features_raw
         
         # Apply pooling
-        # The pooling logic needs to handle both 4D (CNN) and 3D (ViT sequence) outputs
+        pooled_features = features
         if hasattr(self, 'pool') and self.pool is not None:
-            if len(features.shape) == 4: # (B, C, H, W) for CNNs
+            if features.ndim == 4: # (B, C, H, W) for CNNs
                 pooled_features = self.pool(features).view(features.size(0), -1) # (B, feature_dim)
-            elif len(features.shape) == 3: # (B, N_tokens, C) for ViTs
-                # If self.pool is Identity (for CLS token or direct sequence), apply it
+            elif features.ndim == 3: # (B, N_tokens, C) for ViTs
                 pooled_features = self.pool(features)
                 if pooled_features.ndim == 3: # If pool didn't flatten (e.g., identity on sequence)
                     pooled_features = pooled_features.mean(dim=1) # Take mean of tokens
             else: # Fallback, assume already flat or single token
-                pooled_features = features
+                pooled_features = features.view(features.size(0), -1) # Flatten directly
         else: # No pooling layer defined, assume feature_extractor output is already flat or will be handled
             pooled_features = features.view(features.size(0), -1) # Flatten directly
         
-        # Apply DropBlock
-        if self.dropblock and self.dropblock.drop_prob > 0: # Only apply if enabled and prob > 0
-            # DropBlock2D is typically for spatial feature maps. If pooled_features is 1D,
-            # it might not be directly applicable or needs a different strategy.
-            # For this context, assuming DropBlock is applied to the 1D feature vector.
-            # If it expects 4D input, this needs adjustment.
-            # The `dropblock` library's `DropBlock2D` expects 4D input (N, C, H, W).
-            # So, we should apply DropBlock *before* pooling if it's meant for CNN feature maps.
-            # Or, if it's for the final feature vector, a different DropBlock type might be needed.
-            # For now, let's keep it after pooling, but acknowledge this might need a specific DropBlock variant
-            # or a different application point if the library strictly expects 4D.
-            # A common workaround for 1D features is to reshape to (B, C, 1, 1) apply, then reshape back.
+        # Apply DropBlock (typically for spatial feature maps, but can be adapted for 1D)
+        if self.dropblock and self.dropblock.drop_prob > 0:
             if pooled_features.ndim == 2: # (B, C)
                 # Reshape to (B, C, 1, 1) for DropBlock2D, then squeeze back
                 pooled_features = self.dropblock(pooled_features.unsqueeze(-1).unsqueeze(-1)).squeeze(-1).squeeze(-1)
-            else:
+            else: # If it somehow came out as 4D, apply directly
                 pooled_features = self.dropblock(pooled_features)
-        # Apply Stochastic Depth (if enabled and applicable)
+        
+        # Apply Stochastic Depth (DropPath)
         if self.stochastic_depth and self.stochastic_depth.drop_prob > 0:
             pooled_features = self.stochastic_depth(pooled_features)
+        
         attribute_logits = {}
         for attr_name, head in self.attribute_heads.items():
             attribute_logits[attr_name] = head(pooled_features)
         
         return pooled_features, attribute_logits
+
 class RelationGNN(nn.Module):
     """
     Graph Neural Network for relation prediction and global scene graph embedding.
@@ -312,30 +348,42 @@ class RelationGNN(nn.Module):
         self.num_relations = gnn_config['num_relations']
         self.dropout_prob = gnn_config['dropout_prob']
         self.use_edge_features = gnn_config['use_edge_features']
+        
         # Input dimension for GNN: object features + optional positional/bbox features
         # Assuming object features come from AttributeClassifier (feature_dim)
-        input_dim = config['model']['feature_dim'] # This should be dynamically inferred feature_dim
+        # This feature_dim should be dynamically inferred from AttributeClassifier
+        # We need to ensure AttributeClassifier is initialized before RelationGNN
+        # or pass its inferred feature_dim to RelationGNN's constructor.
+        # For now, let's use a placeholder and assume it's set correctly in PerceptionModule.
+        # A more robust way would be to pass `attribute_model.feature_dim` from PerceptionModule.
+        # For now, let's assume `config['model']['feature_dim']` is correctly populated
+        # or `hidden_dim` is a reasonable default.
+        input_dim = config['model'].get('feature_dim', 512) # Use a default if not set
+        
         if self.use_edge_features:
             input_dim += 4 # For bbox coordinates (x1, y1, x2, y2)
+        
         if not HAS_PYG:
             logger.warning("PyTorch Geometric not found. Using dummy GNN implementation.")
-            self.convs = nn.ModuleList([nn.Linear(input_dim, self.hidden_dim)])
-            self.relation_head = nn.Linear(self.hidden_dim * 2, self.num_relations) # For edge classification
+            self.gnn_layers = nn.ModuleList([nn.Linear(input_dim, self.hidden_dim)]) # Dummy GNN layer
+            self.edge_mlp = nn.Linear(self.hidden_dim * 2, self.num_relations) # For edge classification
             # Assign dummy to global_mean_pool if not already assigned by the try-except block
             if 'global_mean_pool' not in globals():
                 global_mean_pool = lambda node_embeds, batch: torch.mean(node_embeds, dim=0, keepdim=True) if node_embeds.numel() > 0 else torch.zeros(1, node_embeds.shape[-1], device=node_embeds.device)
             return
+        
         # GNN Layers (e.g., GCNConv, GraphConv, GATConv)
-        self.convs = nn.ModuleList()
-        self.convs.append(pyg_nn.GraphConv(input_dim, self.hidden_dim))
+        self.gnn_layers = nn.ModuleList()
+        self.gnn_layers.append(pyg_nn.GraphConv(input_dim, self.hidden_dim))
         for _ in range(self.num_layers - 1):
-            self.convs.append(pyg_nn.GraphConv(self.hidden_dim, self.hidden_dim))
+            self.gnn_layers.append(pyg_nn.GraphConv(self.hidden_dim, self.hidden_dim))
         
         # Relation prediction head (for each edge)
         # It takes concatenated features of two nodes to predict relation
-        self.relation_head = nn.Linear(self.hidden_dim * 2, self.num_relations)
+        self.edge_mlp = nn.Linear(self.hidden_dim * 2, self.num_relations)
         self.dropout = nn.Dropout(self.dropout_prob)
         logger.info(f"RelationGNN initialized with {self.num_layers} layers, hidden_dim={self.hidden_dim}.")
+
     def forward(self, object_feats: torch.Tensor, bboxes: torch.Tensor, edge_index: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
@@ -352,37 +400,41 @@ class RelationGNN(nn.Module):
         # Optionally concatenate bbox features to node features
         if self.use_edge_features:
             x = torch.cat([x, bboxes], dim=-1) # (N_objects, feature_dim + 4)
+        
         # Apply GNN layers
         if HAS_PYG:
-            for i, conv in enumerate(self.convs):
+            for i, conv in enumerate(self.gnn_layers):
                 x = conv(x, edge_index)
                 if i < self.num_layers - 1:
                     x = F.relu(x)
                 x = self.dropout(x)
         else: # Dummy GNN forward if PyG not available
-            for i, linear_layer in enumerate(self.convs):
+            for i, linear_layer in enumerate(self.gnn_layers):
                 x = linear_layer(x)
                 if i < self.num_layers - 1:
                     x = F.relu(x)
                 x = self.dropout(x)
             # Dummy edge_index if it's empty
             if edge_index.numel() == 0:
+                # Return empty relation_logits and a zero graph_embed
                 return torch.empty(0, self.num_relations, device=x.device), torch.zeros(1, self.hidden_dim, device=x.device)
+        
         node_embeds = x # Final node embeddings after GNN layers
+        
         # Global pooling to get a single graph embedding
-        # after GNN layers:
-        # node_embeds is the output of the GNN layers (N_objects, hidden_dim)
-        # Assuming a single graph per input (batch size of 1 for GNN currently handled by PerceptionModule)
         # For a single graph, we can pass a zero tensor for the batch argument.
         graph_embed = global_mean_pool(node_embeds, batch=torch.zeros(x.size(0), device=x.device, dtype=torch.long)) # (1, hidden_dim)
+        
         # Predict relations for each edge
         row, col = edge_index
         if row.numel() > 0 and col.numel() > 0:
             edge_feats = torch.cat([node_embeds[row], node_embeds[col]], dim=-1) # Concatenate features of connected nodes
-            relation_logits = self.relation_head(edge_feats) # (N_edges, N_relations)
+            relation_logits = self.edge_mlp(edge_feats) # (N_edges, N_relations)
         else:
             relation_logits = torch.empty(0, self.num_relations, device=x.device)
+        
         return relation_logits, graph_embed
+
 class BongardHead(nn.Module):
     """
     Takes global scene graph embeddings (or adapted prototypical logits) and outputs
@@ -395,6 +447,7 @@ class BongardHead(nn.Module):
         self.hidden_dim = head_config['hidden_dim']
         self.num_classes = head_config['num_classes']
         self.dropout_prob = head_config['dropout_prob']
+        
         # The input dimension for BongardHead will be self.hidden_dim,
         # which is the output dimension of the global graph embedding from RelationGNN.
         # If few-shot is enabled, the PerceptionModule will adapt the prototypical
@@ -403,6 +456,7 @@ class BongardHead(nn.Module):
         self.fc2 = nn.Linear(self.hidden_dim, self.num_classes)
         self.dropout = nn.Dropout(self.dropout_prob)
         logger.info(f"BongardHead initialized with hidden_dim={self.hidden_dim}, num_classes={self.num_classes}.")
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
@@ -415,6 +469,7 @@ class BongardHead(nn.Module):
         x = self.dropout(x)
         x = self.fc2(x)
         return x
+
 class ObjectDetector(nn.Module):
     """
     Wrapper for YOLO object detection model.
@@ -429,16 +484,16 @@ class ObjectDetector(nn.Module):
         if HAS_ULTRALYTICS and yolo_config['use_yolo']:
             logger.info("YOLO object detection enabled.")
             # YOLO fine-tune integration
-            if yolo_config['fine_tune_yolo']:
+            if yolo_config['fine_tune']: # Check the 'fine_tune' flag from config
                 logger.info("Fine-tuning YOLO model before loading.")
                 # This call needs to be from yolo_trainer.py
                 from yolo_trainer import fine_tune_yolo
-                weights_path = fine_tune_yolo(yolo_config)
-                if weights_path:
+                weights_path = fine_tune_yolo(yolo_config) # Pass the yolo_config directly
+                if weights_path and os.path.exists(weights_path):
                     logger.info(f"YOLO fine-tuning successful. Loading model from {weights_path}")
                     self.yolo_model = YOLO(weights_path)
                 else:
-                    logger.error("YOLO fine-tuning failed. Falling back to pretrained weights.")
+                    logger.error("YOLO fine-tuning failed or weights not found. Falling back to pretrained weights.")
                     self.yolo_model = YOLO(yolo_config['yolo_pretrained'])
             else:
                 logger.info(f"Loading pretrained YOLO model from {yolo_config['yolo_pretrained']}")
@@ -448,6 +503,7 @@ class ObjectDetector(nn.Module):
             self.iou_threshold = yolo_config['yolo_iou_threshold']
         else:
             logger.warning("YOLO object detection disabled or ultralytics not found.")
+
     def forward(self, image_np: np.ndarray) -> Tuple[List[List[float]], List[float]]:
         """
         Performs object detection on a single image.
@@ -474,6 +530,7 @@ class ObjectDetector(nn.Module):
                 confs.append(conf)
         
         return bboxes, confs
+
 class SegmentationModel(nn.Module):
     """
     Wrapper for Segment Anything Model (SAM) for instance segmentation.
@@ -494,6 +551,7 @@ class SegmentationModel(nn.Module):
                 logger.error("Failed to load SAM predictor.")
         else:
             logger.warning("SAM instance segmentation disabled or segment_anything not found.")
+
     def forward(self, image_np: np.ndarray, bboxes: List[List[float]]) -> List[np.ndarray]:
         """
         Performs instance segmentation given an image and bounding box prompts.
@@ -538,6 +596,7 @@ class SegmentationModel(nn.Module):
                 filtered_masks.append(np.zeros((image_np.shape[0], image_np.shape[1]), dtype=np.uint8)) # Return empty mask if below threshold
         
         return filtered_masks
+
 class PerceptionModule(nn.Module):
     """
     The core perception module that integrates object detection, segmentation,
@@ -549,9 +608,15 @@ class PerceptionModule(nn.Module):
         self.config = config
         self.object_detector = ObjectDetector(config)
         self.segmentation_model = SegmentationModel(config)
+        
+        # Dynamically pass the inferred feature_dim from AttributeClassifier to RelationGNN
+        # Initialize AttributeClassifier first to get its feature_dim
         self.attribute_model = AttributeClassifier(config)
+        # Update config with the actual feature_dim before initializing RelationGNN
+        config['model']['feature_dim'] = self.attribute_model.feature_dim
         self.relation_gnn = RelationGNN(config)
         self.bongard_head = BongardHead(config)
+        
         # Adapter for Prototypical Networks if feature_dim from AttributeModel
         # (which is the input to BongardHead in few-shot mode)
         # doesn't match BongardHead's expected hidden_dim.
@@ -577,6 +642,7 @@ class PerceptionModule(nn.Module):
         except ImportError:
             self.scene_graph_builder = None
             logger.warning("SceneGraphBuilder not available. Scene graphs will not be built.")
+
     def forward(self,
                 images: torch.Tensor, # Batch of images (B, C, H, W)
                 ground_truth_json_strings: List[bytes], # List of GT JSON strings (for training)
@@ -613,20 +679,18 @@ class PerceptionModule(nn.Module):
         all_relation_logits_list = []
         all_attribute_features_list = []
         all_global_graph_embeddings_list = []
+        
         # If in SimCLR pretraining mode, just pass through the backbone
         if is_simclr_pretraining:
-            # Assumes images are already two views concatenated or passed as separate inputs
-            # For simplicity, if `images` is (B*2, C, H, W) from a SimCLR DataLoader,
-            # we run it through the attribute_model (backbone + pooling)
             simclr_features, _ = self.attribute_model(images) # (B*2, feature_dim)
             return {'simclr_features': simclr_features}
+        
         # --- Process each image in the batch ---
         for i in range(batch_size):
             # Convert normalized tensor image back to uint8 numpy for YOLO/SAM
-            # This is a common pattern when mixing PyTorch tensors with external libraries
-            # that expect OpenCV/PIL-like numpy arrays.
             image_np = (images[i].permute(1, 2, 0).cpu().numpy() * IMAGENET_STD + IMAGENET_MEAN) * 255
             image_np = image_np.astype(np.uint8) 
+            
             # 1. Object Detection (YOLO)
             detected_bboxes, detected_confs = self.object_detector(image_np)
             
@@ -649,7 +713,6 @@ class PerceptionModule(nn.Module):
             if not filtered_bboxes:
                 logger.debug(f"No objects detected or segmented for image {i}. Skipping scene graph for this image.")
                 # Append dummy values to maintain batch consistency
-                # These dummy tensors must have correct shapes and be on the correct device
                 dummy_attr_logits_shape = (0, list(self.config['model']['attribute_classifier_config'].values())[0]) # Example shape
                 dummy_relation_logits_shape = (0, self.config['model']['relation_gnn_config']['num_relations'])
                 
@@ -660,6 +723,7 @@ class PerceptionModule(nn.Module):
                 all_attribute_features_list.append(torch.empty(0, self.attribute_model.feature_dim, device=DEVICE))
                 all_global_graph_embeddings_list.append(torch.zeros(1, self.relation_gnn.hidden_dim, device=DEVICE))
                 continue
+            
             # 3. Extract object crops and apply attribute model
             object_crops = []
             for bbox, mask in zip(filtered_bboxes, filtered_masks):
@@ -685,6 +749,7 @@ class PerceptionModule(nn.Module):
                 all_attribute_features_list.append(torch.empty(0, self.attribute_model.feature_dim, device=DEVICE))
                 all_global_graph_embeddings_list.append(torch.zeros(1, self.relation_gnn.hidden_dim, device=DEVICE))
                 continue
+            
             object_crops_batch = torch.stack(object_crops) # (N_objects, C, H, W)
             
             # Get attribute features and logits
@@ -700,7 +765,9 @@ class PerceptionModule(nn.Module):
                 edge_index = torch.stack([row_indices[non_self_loop_mask], col_indices[non_self_loop_mask]], dim=0)
                 # Convert bboxes to tensor for GNN
                 bboxes_tensor = torch.tensor(filtered_bboxes, dtype=torch.float, device=DEVICE)
+                
                 # Pass object features, bboxes, and edge_index to GNN
+                # Capture both relation_logits and graph_embed
                 relation_logits_per_img, global_graph_embedding_per_img = self.relation_gnn(
                     pooled_object_features, bboxes_tensor, edge_index
                 )
@@ -708,6 +775,7 @@ class PerceptionModule(nn.Module):
                 # If only one object, no relations or graph embedding
                 relation_logits_per_img = torch.empty(0, self.config['model']['relation_gnn_config']['num_relations'], device=DEVICE)
                 global_graph_embedding_per_img = torch.zeros(1, self.relation_gnn.hidden_dim, device=DEVICE) # Placeholder
+            
             # 5. Build Scene Graph (for current image)
             inferred_scene_graph = {}
             if self.scene_graph_builder:
@@ -716,17 +784,19 @@ class PerceptionModule(nn.Module):
                     detected_bboxes=filtered_bboxes,
                     detected_masks=filtered_masks,
                     attribute_logits=attribute_logits_per_object,
-                    relation_logits=relation_logits_per_img
+                    relation_logits=relation_logits_per_img,
+                    graph_embed=global_graph_embedding_per_img # Pass graph embedding
                 )
             all_inferred_scene_graphs.append(inferred_scene_graph)
+            
             # Store results for batching
             for attr_name, logits in attribute_logits_per_object.items():
                 all_attribute_logits_list[attr_name].append(logits)
             all_relation_logits_list.append(relation_logits_per_img)
             all_attribute_features_list.append(pooled_object_features)
             all_global_graph_embeddings_list.append(global_graph_embedding_per_img)
+        
         # Concatenate results across the batch
-        # Attribute logits need careful handling as num_objects varies per image
         batched_attribute_logits = {}
         for attr_name in self.config['model']['attribute_classifier_config'].keys():
             # Filter out empty tensors before concatenating
@@ -736,36 +806,23 @@ class PerceptionModule(nn.Module):
             else:
                 # Ensure the empty tensor has the correct number of classes
                 batched_attribute_logits[attr_name] = torch.empty(0, self.config['model']['attribute_classifier_config'][attr_name], device=DEVICE)
-        # Relation logits need padding/flattening for batching if their first dim varies
-        # For now, we'll concatenate and handle the variable number of edges in loss calculation
+        
         batched_relation_logits = torch.cat(all_relation_logits_list, dim=0) if all_relation_logits_list else torch.empty(0, self.config['model']['relation_gnn_config']['num_relations'], device=DEVICE)
         batched_attribute_features = torch.cat(all_attribute_features_list, dim=0) if all_attribute_features_list else torch.empty(0, self.attribute_model.feature_dim, device=DEVICE)
         
         # Global graph embeddings are (1, hidden_dim) per image, so stack them to (B, hidden_dim)
         batched_global_graph_embeddings = torch.cat(all_global_graph_embeddings_list, dim=0) if all_global_graph_embeddings_list else torch.zeros(batch_size, self.relation_gnn.hidden_dim, device=DEVICE)
+        
         # --- Few-Shot Prototypical Network Logic ---
-        # This is where the "Prototypical 'Head' Misuse" fix is applied.
-        # The `final_bongard_head_input` will be either the `batched_global_graph_embeddings`
-        # or the `proto_logits` adapted to the correct dimension.
         final_bongard_head_input = batched_global_graph_embeddings # Default input
         if self.config['few_shot']['enable'] and support_images is not None and support_images.numel() > 0 and support_labels_flat is not None:
-            # support_images: (B, N_support, C, H, W)
-            # Flatten support images for batch processing by attribute_model
             batch_size, num_support_per_problem_max, C, H, W = support_images.shape
             
-            # Process support images to get features
-            # Reshape support_images to (B * N_support, C, H, W) for batch processing
             processed_support_images_flat = support_images.view(-1, C, H, W)
             
-            # Get pooled features from attribute model for these support images
             pooled_support_features_flat, _ = self.attribute_model(processed_support_images_flat) # (B * N_support, Feature_dim)
             
-            # Reshape pooled support features back to (B, N_support, Feature_dim)
             pooled_support_features_reshaped = pooled_support_features_flat.view(batch_size, num_support_per_problem_max, -1)
-            
-            # Build class prototypes
-            k = self.config['few_shot']['k_shot']
-            n_way = self.config['few_shot']['n_way']
             
             prototypes_batch_list = []
             for b_idx in range(batch_size):
@@ -773,6 +830,7 @@ class PerceptionModule(nn.Module):
                 current_support_labels = support_labels_flat[b_idx] # (N_support,)
                 
                 prototypes_for_this_problem = []
+                n_way = self.config['few_shot']['n_way']
                 for class_id in range(n_way):
                     class_support_feats = current_support_feats[current_support_labels == class_id]
                     if class_support_feats.numel() > 0:
@@ -785,86 +843,8 @@ class PerceptionModule(nn.Module):
             
             batched_prototypes = torch.stack(prototypes_batch_list, dim=0) # [B, n_way, D_Attr]
             
-            # For each query scene, compute distances
-            # query_representation is `batched_global_graph_embeddings` (B, GNN_hidden_dim)
-            # prototypes are `batched_prototypes` (B, n_way, Attribute_feature_dim)
-            
-            # Project prototypes if needed (from attribute_model.feature_dim to relation_gnn.hidden_dim)
-            # This projection is handled by `self.prototype_projection` in LitBongard.
-            # Here, we assume `batched_prototypes` are already in the correct dimension or
-            # will be projected before `cdist` in LitBongard's training_step.
-            # If `self.prototype_projection` exists in PerceptionModule, apply it here.
-            
-            # The prompt implies `self.proto_adapter` is used for `proto_logits` to `hidden_dim`.
-            # So, `cdist` should happen between `global_graph_embeddings` and `prototypes`.
-            # If dimensions mismatch, `global_graph_embeddings` should be projected to `feature_dim`
-            # or `prototypes` to `hidden_dim`.
-            
-            # Given that `LitBongard` has `self.prototype_projection` from `feature_dim` to `hidden_dim`,
-            # it's more logical for `prototypes` to be projected to `hidden_dim` *before* `cdist`.
-            # So, the `prototypes` should be `(B, n_way, GNN_hidden_dim)`.
-            # This means `self.prototype_projection` should be applied to `prototypes` here if it exists.
-            
-            # The `LitBongard` module will handle the `prototype_projection` before calling `PerceptionModule.forward`
-            # or before calculating the prototypical loss.
-            # For `PerceptionModule.forward`, we will just return `batched_global_graph_embeddings`
-            # and let `LitBongard` handle the prototypical loss calculation.
-            
-            # The prompt's "Snippet to Add" implies the `proto_adapter` is used on `proto_logits`.
-            # This means `proto_logits` should be (B, n_way).
-            # So, `cdist` should be between `global_graph_embeddings` and `prototypes` (after projection).
-            
-            # Let's align with the prompt's implied flow:
-            # 1. Get `global_graph_embeddings` (B, GNN_hidden_dim)
-            # 2. Get `prototypes` (B, n_way, Attribute_feature_dim)
-            # 3. Project `prototypes` to `GNN_hidden_dim` if `self.prototype_projection` exists in LitBongard.
-            #    (This step happens in LitBongard, not here, as `prototype_projection` is in LitBongard).
-            # 4. Compute `dists = torch.cdist(global_graph_embeddings.unsqueeze(1), projected_prototypes).squeeze(1)`
-            # 5. `proto_logits = -dists` (B, n_way)
-            # 6. Apply `self.proto_adapter` (in PerceptionModule) to `proto_logits` if it exists.
-            #    `final_bongard_head_input = self.proto_adapter(proto_logits)`
-            
-            # This means `PerceptionModule.forward` needs to return `proto_logits` if few-shot is enabled,
-            # and `bongard_head` will take `proto_logits` (after adapter) or `global_graph_embeddings`.
-            
-            # Let's modify the return to include `proto_logits` if few-shot is enabled.
-            # And `final_bongard_head_input` will be determined based on `self.proto_adapter`.
-            
-            # Compute distances:
-            # `batched_global_graph_embeddings` is (B, D_GNN)
-            # `batched_prototypes` is (B, n_way, D_Attr)
-            
-            # We need to project `batched_prototypes` to `D_GNN` if `self.prototype_projection` exists in LitBongard.
-            # Since `self.prototype_projection` is in LitBongard, this projection should happen there.
-            # For now, `PerceptionModule` will return `batched_global_graph_embeddings` and `batched_prototypes`.
-            # LitBongard will then compute `proto_logits` and pass them to `PerceptionModule`'s `bongard_head`.
-            
-            # This means the `bongard_head` should *not* be called directly in `PerceptionModule.forward`
-            # if few-shot is enabled and the `proto_adapter` is used.
-            # Instead, `PerceptionModule.forward` should return the necessary components for LitBongard
-            # to compute the final Bongard logits.
-            
-            # Re-reading the prompt: "query_combined = proto_adapter(proto_logits)".
-            # This implies the `proto_adapter` is part of the final path to `bongard_logits`.
-            # So, `PerceptionModule` *should* handle this internally.
-            
-            # To make it work, `self.proto_adapter` in `PerceptionModule` should take `n_way` as input.
-            # And `proto_logits` should be (B, n_way).
-            # This means `cdist` should happen here.
-            
-            # Ensure dimensions match for cdist.
             query_dim = batched_global_graph_embeddings.shape[-1]
             proto_dim = batched_prototypes.shape[-1]
-            
-            # If dimensions mismatch, we need to project one to match the other.
-            # It's more common to project prototypes to the query embedding space.
-            # Since `self.prototype_projection` is in LitBongard, we will assume
-            # `batched_prototypes` are already projected by LitBongard before being passed here,
-            # or that `query_dim == proto_dim`.
-            
-            # For the sake of this `PerceptionModule.forward` implementation,
-            # if `query_dim != proto_dim`, we will use a temporary projection for `prototypes`.
-            # This is a fallback and ideally should be handled by `LitBongard`.
             
             projected_prototypes_for_cdist = batched_prototypes
             if query_dim != proto_dim:
@@ -873,21 +853,20 @@ class PerceptionModule(nn.Module):
                 projected_prototypes_for_cdist = temp_proj(batched_prototypes)
                 
             dists = torch.cdist(batched_global_graph_embeddings.unsqueeze(1), projected_prototypes_for_cdist).squeeze(1)  # [B, n_way]
-            proto_logits = -dists # Negative Euclidean distance as logits
+            proto_logits = -dists # Negative Euclidean distance
             
-            # Combine into final BongardHead via an adapter MLP or directly
             if self.proto_adapter:
                 final_bongard_head_input = self.proto_adapter(proto_logits) # (B, bongard_head.hidden_dim)
             else:
-                # If no adapter, and few-shot is enabled, this means n_way must equal bongard_head.hidden_dim
-                # or some other direct mapping is assumed.
                 if proto_logits.shape[1] == self.bongard_head.hidden_dim:
                     final_bongard_head_input = proto_logits
                 else:
                     logger.error(f"Few-shot enabled, but proto_logits dim ({proto_logits.shape[1]}) does not match BongardHead input dim ({self.bongard_head.hidden_dim}) and no adapter is defined. This will likely cause an error. Falling back to global graph embeddings.")
                     final_bongard_head_input = batched_global_graph_embeddings # Fallback
+        
         # 6. Final Bongard Classification
         bongard_logits = self.bongard_head(final_bongard_head_input)
+        
         return {
             'bongard_logits': bongard_logits,
             'attribute_logits': batched_attribute_logits,
@@ -897,6 +876,7 @@ class PerceptionModule(nn.Module):
             'scene_graphs': all_inferred_scene_graphs, # List of dicts
             'simclr_features': None # Only populated in SimCLR pretraining mode
         }
+
 # --- PyTorch Lightning Modules ---
 class LitBongard(pl.LightningModule):
     """
@@ -940,6 +920,7 @@ class LitBongard(pl.LightningModule):
                 logger.warning(f"SymbolicEngine or ALL_BONGARD_RULES not found ({e}). Symbolic consistency loss disabled.")
             except Exception as e:
                 logger.error(f"Error initializing SymbolicConsistencyLoss: {e}. Symbolic consistency loss disabled.")
+        
         # Knowledge Distillation Loss
         self.distillation_criterion = None
         self.teacher_models = nn.ModuleList() # Will be populated externally by training.py
@@ -959,6 +940,7 @@ class LitBongard(pl.LightningModule):
             for param in self.ema_model.parameters():
                 param.requires_grad = False
             logger.info("Mean Teacher enabled.")
+        
         # Prototypical Network projection (if needed)
         # This projection is from the attribute_model's feature_dim to the GNN's hidden_dim
         # so that prototypes can be compared with global_graph_embeddings.
@@ -968,11 +950,14 @@ class LitBongard(pl.LightningModule):
             logger.info(f"Prototypical Network: Added projection from {self.perception_module.attribute_model.feature_dim} to {self.perception_module.relation_gnn.hidden_dim} for prototypes.")
         elif cfg['few_shot']['enable'] and self.perception_module.attribute_model.feature_dim == self.perception_module.relation_gnn.hidden_dim:
             logger.info("Prototypical Network: Feature dim matches GNN hidden dim. No prototype projection needed.")
+        
         self.save_hyperparameters(cfg)
         logger.info("LitBongard initialized.")
+
     def forward(self, images: torch.Tensor, ground_truth_json_strings: List[bytes], support_images: torch.Tensor = None, support_labels_flat: torch.Tensor = None, is_simclr_pretraining: bool = False) -> Dict[str, Any]:
         # This forward pass in LitBongard simply calls the PerceptionModule's forward.
         return self.perception_module(images, ground_truth_json_strings, support_images, support_labels_flat, is_simclr_pretraining)
+
     def training_step(self, batch: Tuple[Any, ...], batch_idx: int) -> torch.Tensor:
         # Unpack batch data (from custom_collate_fn in data.py)
         (raw_query_images_view1_np, raw_query_images_view2_np, query_labels,
@@ -983,6 +968,7 @@ class LitBongard(pl.LightningModule):
         # Move labels to device immediately
         query_labels = query_labels.to(self.device).long() # Ensure long for CrossEntropyLoss
         support_labels_flat = support_labels_flat.to(self.device).long() # Move support labels to device
+        
         # DALI Image Processor is usually passed to the DataLoader or accessible via trainer.datamodule
         dali_processor = getattr(self.trainer.datamodule, 'dali_image_processor', None)
         if dali_processor is None:
@@ -1015,8 +1001,9 @@ class LitBongard(pl.LightningModule):
         
         # Reshape flattened support labels back to (B, N_support)
         support_labels_reshaped = support_labels_flat.view(batch_size_actual, max_support_imgs)
+        
         # Apply Mixup/CutMix if enabled (only to query images for now)
-        if self.cfg['training'].get('use_mixup_cutmix', False) and HAS_TRAINING_UTILS:
+        if self.cfg['training'].get('use_mixup_cutmix', False) and HAS_TORCHVISION_V2: # Check HAS_TORCHVISION_V2
             num_bongard_classes = self.cfg['model']['bongard_head_config']['num_classes']
             mixup_cutmix_augmenter = MixupCutmixAugmenter(self.cfg['training'], num_bongard_classes)
             images_view1_aug, labels_mixed = mixup_cutmix_augmenter(processed_query_images_view1, query_labels)
@@ -1025,6 +1012,7 @@ class LitBongard(pl.LightningModule):
             images_view1_aug = processed_query_images_view1
             images_view2_aug = processed_query_images_view2
             labels_mixed = F.one_hot(query_labels, num_classes=self.cfg['model']['bongard_head_config']['num_classes']).float() # For consistency loss if no mixup
+        
         # Forward pass for student model (view 1)
         # Pass support_labels_reshaped to PerceptionModule.forward
         outputs1 = self.perception_module(images_view1_aug, ground_truth_json_strings=query_gts_json_view1, 
@@ -1036,6 +1024,7 @@ class LitBongard(pl.LightningModule):
         attribute_features1 = outputs1['attribute_features']
         global_graph_embeddings1 = outputs1['global_graph_embeddings']
         scene_graphs1 = outputs1['scene_graphs']
+        
         # Forward pass for student model (view 2 for consistency losses)
         # Pass support_labels_reshaped to PerceptionModule.forward
         outputs2 = self.perception_module(images_view2_aug, ground_truth_json_strings=query_gts_json_view2, 
@@ -1044,10 +1033,12 @@ class LitBongard(pl.LightningModule):
         bongard_logits2 = outputs2['bongard_logits']
         attribute_features2 = outputs2['attribute_features']
         scene_graphs2 = outputs2['scene_graphs']
+        
         # --- Calculate Losses ---
         total_loss = 0.0
+        
         # 1. Bongard Classification Loss
-        if self.cfg['training'].get('use_mixup_cutmix', False) and HAS_TRAINING_UTILS:
+        if self.cfg['training'].get('use_mixup_cutmix', False) and HAS_TORCHVISION_V2:
             # KLDivLoss expects log-probabilities for input and probabilities for target
             per_sample_bongard_losses = F.kl_div(F.log_softmax(bongard_logits1, dim=-1), labels_mixed, reduction='none').sum(dim=1)
         else:
@@ -1061,6 +1052,7 @@ class LitBongard(pl.LightningModule):
         
         total_loss += loss_bongard
         self.log("train/bongard_loss", loss_bongard, on_step=True, prog_bar=True, logger=True)
+        
         # 2. Attribute Classification Loss
         loss_attribute = torch.tensor(0.0, device=self.device)
         num_attribute_losses = 0
@@ -1098,6 +1090,7 @@ class LitBongard(pl.LightningModule):
             loss_attribute /= num_attribute_losses
             total_loss += loss_attribute
         self.log("train/attribute_loss", loss_attribute, on_step=True, prog_bar=True, logger=True)
+        
         # 3. Relation Classification Loss
         loss_relation = torch.tensor(0.0, device=self.device)
         if relation_logits1.numel() > 0:
@@ -1129,6 +1122,7 @@ class LitBongard(pl.LightningModule):
                     all_gt_edge_labels_flat.append(temp_gt_labels)
                     total_predicted_edges += len(edge_map_for_img)
                 # If num_gt_objects <= 1, no relations for this image, so no labels to add.
+            
             if all_gt_edge_labels_flat:
                 labels_flat = torch.cat(all_gt_edge_labels_flat, dim=0)
                 # Ensure relation_logits matches the size of labels_flat
@@ -1138,6 +1132,7 @@ class LitBongard(pl.LightningModule):
             else:
                 logger.debug("No relations in ground truth for this batch. Skipping relation loss.")
         self.log("train/relation_loss", loss_relation, on_step=True, prog_bar=True, logger=True)
+        
         # 4. Consistency Losses (Feature and Symbolic)
         loss_consistency = torch.tensor(0.0, device=self.device)
         if self.cfg['training']['consistency_loss_weight'] > 0:
@@ -1161,9 +1156,10 @@ class LitBongard(pl.LightningModule):
         
         total_loss += self.cfg['training']['consistency_loss_weight'] * loss_consistency
         self.log("train/consistency_loss", loss_consistency, on_step=True, prog_bar=True, logger=True)
+        
         # 5. Knowledge Distillation Loss (if enabled)
         loss_distillation = torch.tensor(0.0, device=self.device)
-        if self.distillation_criterion and self.cfg['training']['use_knowledge_distillation'] and self.teacher_models and HAS_TRAINING_UTILS:
+        if self.distillation_criterion and self.cfg['training']['use_knowledge_distillation'] and self.teacher_models:
             # Get teacher logits from the ensemble
             # Pass raw numpy arrays for DALI processing in helper
             teacher_logits_batch, distillation_mask = _get_ensemble_teacher_logits(
@@ -1194,6 +1190,7 @@ class LitBongard(pl.LightningModule):
             else:
                 logger.warning("No teacher logits generated for distillation in this batch.")
         self.log("train/distillation_loss", loss_distillation, on_step=True, prog_bar=True, logger=True)
+        
         # 6. Prototypical Network Loss (Few-Shot)
         # This logic remains in training_step as it needs `support_labels_flat`
         # and the `prototype_projection` is part of LitBongard.
@@ -1255,6 +1252,7 @@ class LitBongard(pl.LightningModule):
             self.log("train/proto_loss", loss_proto, on_step=True, prog_bar=True, logger=True)
         else:
             logger.debug("Skipping prototypical loss: few-shot not enabled or no support images.")
+        
         # Log total loss
         self.log("train/total_loss", total_loss, on_step=True, prog_bar=True, logger=True)
         
@@ -1272,14 +1270,16 @@ class LitBongard(pl.LightningModule):
             if hasattr(self.trainer.datamodule, 'train_dataset') and hasattr(self.trainer.datamodule.train_dataset, 'replay_buffer'):
                 replay_buffer_instance = self.trainer.datamodule.train_dataset.replay_buffer
                 # Ensure tree_indices_np and losses_np are lists for async_update_priorities
-                from utils import async_update_priorities # Import async_update_priorities
                 async_update_priorities(replay_buffer_instance, tree_indices_np.tolist(), losses_np.tolist())
             else:
                 logger.warning("Replay buffer not found in datamodule. Skipping async priority update.")
+        
         # Apply gradient clipping
         if self.cfg['training'].get('max_grad_norm', 0.0) > 0:
             torch.nn.utils.clip_grad_norm_(self.parameters(), self.cfg['training']['max_grad_norm'])
+        
         return total_loss
+
     def on_train_batch_end(self, outputs, batch: Any, batch_idx: int) -> None:
         """
         Hook called after the training batch ends. Used for Mean Teacher EMA update.
@@ -1291,6 +1291,7 @@ class LitBongard(pl.LightningModule):
             for student_param, ema_param in zip(self.perception_module.parameters(), self.ema_model.parameters()):
                 ema_param.data.mul_(ema_decay).add_(student_param.data * (1 - ema_decay))
             logger.debug(f"Mean Teacher EMA update at batch {batch_idx}.")
+        
         # OneCycleLR stepping (if used)
         # OneCycleLR is typically stepped every batch.
         # Lightning's `configure_optimizers` handles this if `interval: 'step'` is set for the scheduler.
@@ -1302,6 +1303,7 @@ class LitBongard(pl.LightningModule):
         # in `configure_optimizers`. No manual call needed here.
         
         pass # No explicit manual steps needed here for auto-optimization
+
     def validation_step(self, batch: Tuple[Any, ...], batch_idx: int) -> torch.Tensor:
         # Unpack batch data (from custom_collate_fn in data.py)
         (raw_query_images_view1_np, raw_query_images_view2_np, query_labels,
@@ -1311,6 +1313,7 @@ class LitBongard(pl.LightningModule):
         
         query_labels = query_labels.to(self.device).long()
         support_labels_flat = support_labels_flat.to(self.device).long() # Move support labels to device
+        
         # DALI Image Processor
         dali_processor = getattr(self.trainer.datamodule, 'dali_image_processor', None)
         if dali_processor is None:
@@ -1331,6 +1334,7 @@ class LitBongard(pl.LightningModule):
                 raw_query_images_view2_np, # Pass view2 for DALI input, even if not used by model
                 raw_support_images_flat_np
             )
+        
         # Reshape flattened support images back to (B, N_support, C, H, W)
         max_support_imgs = self.cfg['data']['synthetic_data_config']['max_support_images_per_problem']
         batch_size_actual = processed_query_images_view1.shape[0]
@@ -1341,6 +1345,7 @@ class LitBongard(pl.LightningModule):
         
         # Reshape flattened support labels back to (B, N_support)
         support_labels_reshaped = support_labels_flat.view(batch_size_actual, max_support_imgs)
+        
         outputs = self.forward(processed_query_images_view1, ground_truth_json_strings=query_gts_json_view1,
                                          support_images=processed_support_images_reshaped,
                                          support_labels_flat=support_labels_reshaped) # Pass support labels
@@ -1348,12 +1353,15 @@ class LitBongard(pl.LightningModule):
         attribute_logits = outputs['attribute_logits']
         relation_logits = outputs['relation_logits']
         scene_graphs = outputs['scene_graphs']
+        
         # --- Calculate Losses ---
         total_val_loss = 0.0
+        
         # Bongard Classification Loss
         loss_bongard = F.cross_entropy(bongard_logits, query_labels)
         total_val_loss += loss_bongard
         self.log("val/bongard_loss", loss_bongard, on_epoch=True, prog_bar=True, logger=True)
+        
         # Attribute Classification Loss
         loss_attribute = torch.tensor(0.0, device=self.device)
         num_attribute_losses = 0
@@ -1385,17 +1393,10 @@ class LitBongard(pl.LightningModule):
             loss_attribute /= num_attribute_losses
             total_val_loss += loss_attribute
         self.log("val/attribute_loss", loss_attribute, on_epoch=True, prog_bar=True, logger=True)
+        
         # Relation Classification Loss
         loss_relation = torch.tensor(0.0, device=self.device)
         if relation_logits.numel() > 0:
-            # Note: E_max is not directly used here, but the logic should handle variable number of edges
-            # from the concatenated relation_logits.
-            # The relation_logits from PerceptionModule.forward is already concatenated across batch.
-            # So, we need to reconstruct ground truth labels for the flattened batch.
-            
-            # This part needs to be robust to variable number of objects/relations per image.
-            # The ground_truth_json_strings list has one entry per image in the batch.
-            
             all_gt_edge_labels_flat = []
             total_predicted_edges = 0
             
@@ -1419,6 +1420,7 @@ class LitBongard(pl.LightningModule):
                     all_gt_edge_labels_flat.append(temp_gt_labels)
                     total_predicted_edges += len(edge_map_for_img)
                 # If num_gt_objects <= 1, no relations for this image, so no labels to add.
+            
             if all_gt_edge_labels_flat:
                 labels_flat = torch.cat(all_gt_edge_labels_flat, dim=0)
                 # Ensure relation_logits matches the size of labels_flat
@@ -1428,6 +1430,7 @@ class LitBongard(pl.LightningModule):
             else:
                 logger.debug("No relations in ground truth for this batch. Skipping relation loss.")
         self.log("val/relation_loss", loss_relation, on_epoch=True, prog_bar=True, logger=True)
+        
         # Accuracy
         predictions = torch.argmax(bongard_logits, dim=1)
         correct_predictions = (predictions == query_labels).sum().item()
@@ -1436,13 +1439,15 @@ class LitBongard(pl.LightningModule):
         self.log("val/accuracy", correct_predictions / total_samples, on_epoch=True, prog_bar=True, logger=True)
         self.log("val/total_loss", total_val_loss, on_epoch=True, prog_bar=True, logger=True)
         return total_val_loss
+
     def configure_optimizers(self) -> Tuple[List[Any], List[Any]]:
         lr = self.hparams.cfg['training']['learning_rate']
         epochs = self.hparams.cfg['training']['epochs']
-        use_sam = self.hparams.cfg['training'].get('optimizer', 'AdamW') == 'sam'
+        use_sam_optimizer = self.hparams.cfg['training'].get('optimizer', 'AdamW') == 'sam'
         sam_rho = self.hparams.cfg['training'].get('sam_rho', 0.05)
         weight_decay = self.hparams.cfg['training'].get('weight_decay', 0.0)
         optimizer_name = self.hparams.cfg['training'].get('optimizer', 'AdamW')
+        
         # Advanced Optimizers
         if optimizer_name == 'ranger' and HAS_RANGER:
             optimizer = RangerAdaBelief(self.parameters(), lr=lr, weight_decay=weight_decay)
@@ -1450,12 +1455,12 @@ class LitBongard(pl.LightningModule):
         elif optimizer_name == 'lion' and HAS_LION:
             optimizer = Lion(self.parameters(), lr=lr, weight_decay=weight_decay)
             logger.info(f"Using Lion optimizer with lr={lr}")
-        elif use_sam and HAS_SAM_OPTIMIZER:
+        elif use_sam_optimizer and HAS_SAM_OPTIMIZER:
             logger.info(f"Using SAM optimizer with rho={sam_rho}")
             base_optimizer = torch.optim.AdamW(self.parameters(), lr=lr, weight_decay=weight_decay)
             optimizer = SAM(base_optimizer, rho=sam_rho)
         else:
-            if use_sam and not HAS_SAM_OPTIMIZER:
+            if use_sam_optimizer and not HAS_SAM_OPTIMIZER:
                 logger.warning("SAM optimizer requested but 'torch_optimizer' not found. Falling back to AdamW.")
             if optimizer_name not in ['AdamW', 'ranger', 'lion', 'sam']:
                 logger.warning(f"Optimizer '{optimizer_name}' not recognized or its library not found. Falling back to AdamW.")
@@ -1467,7 +1472,7 @@ class LitBongard(pl.LightningModule):
         scheduler = None
         if scheduler_name == 'CosineAnnealingLR':
             scheduler = CosineAnnealingLR(
-                optimizer.base_optimizer if (use_sam and HAS_SAM_OPTIMIZER) else optimizer, # Access base_optimizer if SAM
+                optimizer.base_optimizer if (use_sam_optimizer and HAS_SAM_OPTIMIZER) else optimizer, # Access base_optimizer if SAM
                 T_max=epochs,
                 eta_min=self.hparams.cfg['training']['scheduler_config']['CosineAnnealingLR'].get('eta_min', 1e-6)
             )
@@ -1479,7 +1484,7 @@ class LitBongard(pl.LightningModule):
             # For now, we rely on the config value.
             steps_per_epoch = self.hparams.cfg['training']['scheduler_config']['OneCycleLR'].get('steps_per_epoch', 1000)
             scheduler = OneCycleLR(
-                optimizer.base_optimizer if (use_sam and HAS_SAM_OPTIMIZER) else optimizer,
+                optimizer.base_optimizer if (use_sam_optimizer and HAS_SAM_OPTIMIZER) else optimizer,
                 max_lr=self.hparams.cfg['training']['scheduler_config']['OneCycleLR'].get('max_lr', 1e-3),
                 steps_per_epoch=steps_per_epoch,
                 epochs=epochs,
@@ -1490,7 +1495,7 @@ class LitBongard(pl.LightningModule):
             logger.info("Using OneCycleLR scheduler.")
         elif scheduler_name == 'ReduceLROnPlateau':
             scheduler = ReduceLROnPlateau(
-                optimizer.base_optimizer if (use_sam and HAS_SAM_OPTIMIZER) else optimizer,
+                optimizer.base_optimizer if (use_sam_optimizer and HAS_SAM_OPTIMIZER) else optimizer,
                 mode=self.hparams.cfg['training']['scheduler_config']['ReduceLROnPlateau'].get('mode', 'min'),
                 factor=self.hparams.cfg['training']['scheduler_config']['ReduceLROnPlateau'].get('factor', 0.1),
                 patience=self.hparams.cfg['training']['scheduler_config']['ReduceLROnPlateau'].get('patience', 5)
@@ -1498,6 +1503,7 @@ class LitBongard(pl.LightningModule):
             logger.info("Using ReduceLROnPlateau scheduler.")
         
         return [optimizer], ([{'scheduler': scheduler, 'interval': 'step' if scheduler_name == 'OneCycleLR' else 'epoch', 'monitor': 'val/loss' if scheduler_name == 'ReduceLROnPlateau' else None}] if scheduler else [])
+
 class LitSimCLR(pl.LightningModule):
     """
     PyTorch Lightning module for SimCLR pretraining.
@@ -1512,6 +1518,7 @@ class LitSimCLR(pl.LightningModule):
         self.temperature = simclr_cfg['temperature']
         self.projection_dim = simclr_cfg['projection_dim']
         self.mlp_hidden_size = simclr_cfg['mlp_hidden_size']
+        
         # Projection head (g)
         self.projection_head = nn.Sequential(
             nn.Linear(self.feature_extractor.feature_dim, self.mlp_hidden_size),
@@ -1521,6 +1528,7 @@ class LitSimCLR(pl.LightningModule):
         self.criterion = NTXentLoss(temperature=self.temperature)
         self.save_hyperparameters(cfg)
         logger.info("LitSimCLR initialized.")
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x is expected to be a batch of images (B, C, H, W)
         # For SimCLR, the DataLoader should provide two augmented views.
@@ -1532,6 +1540,7 @@ class LitSimCLR(pl.LightningModule):
         features, _ = self.feature_extractor(x)
         z = self.projection_head(features)
         return z
+
     def training_step(self, batch: Tuple[Any, ...], batch_idx: int) -> torch.Tensor:
         # In SimCLR, the batch from DataLoader typically contains two augmented views
         # and possibly dummy labels.
@@ -1541,6 +1550,7 @@ class LitSimCLR(pl.LightningModule):
         (raw_query_images_view1_np, raw_query_images_view2_np, _, # query_labels are not used in SimCLR loss
          _, _, _, _, _, _, # other unused fields
          _, _, _, _, _) = batch # support images, labels, etc. not used
+        
         # DALI Image Processor
         dali_processor = getattr(self.trainer.datamodule, 'dali_image_processor', None)
         if dali_processor is None:
@@ -1560,13 +1570,16 @@ class LitSimCLR(pl.LightningModule):
                 raw_query_images_view2_np,
                 [np.zeros((1,1,3), dtype=np.uint8)] * len(raw_query_images_view1_np) # Dummy support for DALI
             )
+        
         # Get embeddings for both views
         z_i = self.forward(processed_query_images_view1) # (B, projection_dim)
         z_j = self.forward(processed_query_images_view2) # (B, projection_dim)
+        
         # Calculate NT-Xent loss
         loss = self.criterion(z_i, z_j)
         self.log("simclr_train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         return loss
+
     def configure_optimizers(self) -> Tuple[List[Any], List[Any]]:
         lr = self.cfg['training']['learning_rate']
         epochs = self.cfg['model']['simclr_config']['pretrain_epochs']

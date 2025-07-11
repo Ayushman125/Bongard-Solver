@@ -2,6 +2,8 @@
 # File: hpo.py
 import logging
 import os
+import argparse # Import argparse for command-line arguments
+import json # For saving best config
 from typing import Dict, Any, Tuple
 # Conditional import for Ray Tune
 try:
@@ -24,6 +26,7 @@ except ImportError:
     run_training_once = None
     load_config = None
 logger = logging.getLogger(__name__)
+
 def hpo_train_fn(config_update: Dict[str, Any], initial_cfg: Dict[str, Any]):
     """
     Wrapper function for Ray Tune.
@@ -58,6 +61,7 @@ def hpo_train_fn(config_update: Dict[str, Any], initial_cfg: Dict[str, Any]):
     
     # Report the metric to Ray Tune
     tune.report(val_accuracy=val_accuracy)
+
 def run_hyperparameter_optimization(cfg: Dict[str, Any]):
     """
     Main function to orchestrate hyperparameter optimization using Ray Tune.
@@ -137,13 +141,18 @@ def run_hyperparameter_optimization(cfg: Dict[str, Any]):
         json.dump(best_trial.config, f, indent=4)
     logger.info(f"Best HPO configuration saved to: {best_config_path}")
     return best_trial.config
+
+def main():
+    """
+    Main entrypoint for running hyperparameter optimization from command line.
+    """
+    parser = argparse.ArgumentParser(description="Run Hyperparameter Optimization for Bongard Solver.")
+    parser.add_argument("--config", type=str, default="config.yaml",
+                        help="Path to the main configuration YAML file.")
+    args = parser.parse_args()
+    
+    cfg = load_config(args.config)
+    run_hyperparameter_optimization(cfg)
+
 if __name__ == "__main__":
-    # Load the base configuration
-    cfg = load_config("config.yaml")
-    
-    # Ensure Ray Tune directory exists
-    os.makedirs(cfg['debug']['ray_tune_dir'], exist_ok=True)
-    
-    # Run HPO
-    best_hparams = run_hyperparameter_optimization(cfg)
-    logger.info(f"Optimal hyperparameters found: {best_hparams}")
+    main()

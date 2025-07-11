@@ -34,8 +34,10 @@ try:
     HAS_AUTOAUGMENT = True
     logger.info("AutoAugment found and enabled.")
 except ImportError:
-    HAS_AUTOAUGMENT = False
+    logger = logging.getLogger(__name__)
     logger.warning("AutoAugment not found. AutoAugment policies will be skipped.")
+    HAS_AUTOAUGMENT = False # Ensure this is explicitly False if import fails
+
 from torchvision.transforms import RandomErasing
 from torchvision import transforms as T
 # Import from config
@@ -56,6 +58,7 @@ except ImportError:
                 'object_size_range': (20, 80), 'padding': 10, 'font_path': None,
                 'scene_layout_types': ['random'],
                 'min_support_images_per_problem': 2, 'max_support_images_per_problem': 5,
+                'num_val_problems': 100 # Added for dummy config in prune_quantize.py
             },
             'dali_augmentations': { # Dummy DALI aug config
                 'jpeg_p': 0.0, 'jpeg_q': (50, 100),
@@ -81,12 +84,22 @@ except ImportError:
                 'use_randaugment': False, 'randaugment_num_ops': 2, 'randaugment_magnitude': 9,
                 'use_augmix': False
             },
+            'use_hard_example_sampler': False, # NEW: Dummy for HardExampleSampler
             'seed': 42 # Dummy seed
         },
         'few_shot': {  # Added for dummy config
             'enable': False,
             'n_way': 2, 'k_shot': 1, 'q_query': 1, 'episodes': 10
-        }
+        },
+        'model': { # Dummy model config for AttributeClassifier init
+            'backbone': 'resnet18',
+            'pretrained': False,
+            'attribute_classifier_config': {'shape': 4, 'color': 6}, # Dummy attribute classes
+            'relation_gnn_config': {'hidden_dim': 256, 'num_relations': 10}, # Dummy GNN config
+            'bongard_head_config': {'hidden_dim': 256, 'num_classes': 2} # Dummy BongardHead config
+        },
+        'object_detector': {'use_yolo': False}, # Dummy for ObjectDetector
+        'segmentation': {'use_sam': False} # Dummy for SegmentationModel
     }
     IMAGENET_MEAN = [0.485, 0.456, 0.406]
     IMAGENET_STD = [0.229, 0.224, 0.225]
@@ -296,6 +309,42 @@ def load_bongard_data(data_root_path: str, dataset_name: str, train_split_ratio:
     val_data = all_problems[split_idx:]
     logger.info(f"Loaded {len(train_data)} training problems and {len(val_data)} validation problems from {dataset_path}.")
     return train_data, val_data
+
+# --- NEW HardExampleSampler Class ---
+class HardExampleSampler(Sampler):
+    """
+    A sampler that samples examples based on their assigned probabilities,
+    typically updated by training losses (hard example mining).
+    """
+    def __init__(self, dataset: Dataset, initial_probs: Optional[torch.Tensor] = None):
+        self.dataset = dataset
+        self.num_samples = len(dataset)
+        self.probs = initial_probs if initial_probs is not None else torch.ones(self.num_samples)
+        # Ensure probabilities sum to 1, although torch.multinomial handles unnormalized
+        self.probs = self.probs / self.probs.sum()
+        logger.info(f"HardExampleSampler initialized with {self.num_samples} samples.")
+
+    def __iter__(self) -> Iterator[Tuple[int, None, None]]:
+        # Sample with replacement based on probabilities
+        indices = torch.multinomial(self.probs, self.num_samples, replacement=True)
+        # Yield (original_index, None, None) to match custom_collate_fn expectation
+        for idx in indices.tolist():
+            yield (idx, None, None) # tree_index and is_weight are None for this sampler
+
+    def __len__(self) -> int:
+        return self.num_samples
+
+    def update(self, losses: np.ndarray):
+        """
+        Updates the sampling probabilities based on a numpy array of per-sample losses.
+        Higher losses lead to higher sampling probabilities.
+        """
+        # Add a small epsilon to avoid zero or negative losses, then convert to float tensor
+        self.probs = torch.from_numpy(losses + 1e-6).float()
+        # Normalize probabilities to sum to 1
+        self.probs = self.probs / self.probs.sum()
+        logger.info(f"HardExampleSampler: Probabilities updated. Min prob: {self.probs.min():.4f}, Max prob: {self.probs.max():.4f}")
+
 # --- Curriculum Sampler (remains largely the same, interacts with PyTorch DataLoader) ---
 class CurriculumSampler(torch.utils.data.Sampler):
     """
@@ -1082,67 +1131,67 @@ def custom_collate_fn(batch: List[Tuple[Any, ...]]) -> Tuple[Any, ...]:
             affine_matrix_view1, affine_matrix_view2, original_indices,
             padded_support_imgs_np_list, torch.tensor(padded_support_labels_list, dtype=torch.long), padded_support_sgs_bytes_list,
             num_support_per_problem, tree_indices, is_weights)
+
 def get_dataloader(cfg: Dict[str, Any], dataset: Dataset, is_train: bool, rank: int = 0, world_size: int = 1, simclr_mode: bool = False):
     """
-    Provides a DataLoader (either PyTorch's or DALI's DALIGenericIterator)
-    based on the configuration.
+    Provides a DataLoader based on the configuration, adjusting transforms and samplers.
     """
-    # Determine image processor (DALI or torchvision transforms)
-    image_transforms = None
+    logger.info(f"Configuring DataLoader for {'training' if is_train else 'validation'} (DALI enabled: {cfg['training']['use_dali']}).")
     
-    # DALI is now handled by the LightningDataModule in training.py.
-    # This `get_dataloader` function will primarily configure the PyTorch DataLoader
-    # and its transforms.
-    
-    logger.info(f"Using PyTorch DataLoader with torchvision transforms for {'training' if is_train else 'validation'}.")
     transform_list = [
         T.ToPILImage(), # Convert NumPy array to PIL Image for torchvision transforms
         T.Resize((cfg['data']['image_size'], cfg['data']['image_size'])),
     ]
-    if is_train:
+    
+    # Apply advanced augmentations only if not using DALI for augmentations
+    if is_train and not cfg['training']['use_dali']:
         aug_cfg = cfg['training']['augmentation_config']
         
-        # AutoAugment / RandAugment / Erasing transforms (as per prompt)
+        # AutoAugment
         if aug_cfg.get('use_autoaugment', False) and HAS_AUTOAUGMENT:
             policy_type = aug_cfg.get('autoaugment_policy', 'imagenet').lower()
             if policy_type == 'imagenet':
                 transform_list.append(ImageNetPolicy())
-                logger.info("AutoAugment (ImageNetPolicy) enabled.")
+                logger.info("AutoAugment (ImageNetPolicy) enabled for PyTorch DataLoader.")
             elif policy_type == 'cifar10':
                 transform_list.append(CIFAR10Policy())
-                logger.info("AutoAugment (CIFAR10Policy) enabled.")
+                logger.info("AutoAugment (CIFAR10Policy) enabled for PyTorch DataLoader.")
             else:
                 logger.warning(f"Unknown AutoAugment policy: {policy_type}. Skipping AutoAugment.")
         
+        # RandAugment
         if aug_cfg.get('use_randaugment', False):
             transform_list.append(T.RandAugment(
                 num_ops=aug_cfg.get('randaugment_num_ops', 2),
                 magnitude=aug_cfg.get('randaugment_magnitude', 9)
             ))
-            logger.info("RandAugment enabled.")
+            logger.info("RandAugment enabled for PyTorch DataLoader.")
         
-        # AugMix would require a custom transform or external library integration
+        # AugMix (placeholder, requires custom implementation)
         if aug_cfg.get('use_augmix', False):
-            logger.warning("AugMix requested but not implemented. Skipping AugMix.")
+            logger.warning("AugMix requested but not implemented for PyTorch DataLoader. Skipping AugMix.")
         
-        transform_list.append(T.ToTensor()) # Convert back to tensor
-        
-        if aug_cfg.get('use_random_erasing', False):
-            transform_list.append(RandomErasing(p=aug_cfg.get('random_erasing_p', 0.5)))
-            logger.info("Random Erasing enabled.")
-    else: # Validation/Test
-        transform_list.append(T.ToTensor())
+    transform_list.append(T.ToTensor()) # Convert back to tensor
+    
+    # Random Erasing is often applied after ToTensor
+    if is_train and not cfg['training']['use_dali'] and cfg['training']['augmentation_config'].get('use_random_erasing', False):
+        transform_list.append(RandomErasing(p=cfg['training']['augmentation_config'].get('random_erasing_p', 0.5)))
+        logger.info("Random Erasing enabled for PyTorch DataLoader.")
+
     transform_list.append(T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD))
     image_transforms = T.Compose(transform_list)
+    
     # Attach transforms to dataset if it supports it
     if hasattr(dataset, 'transform'):
         dataset.transform = image_transforms
     else:
         logger.warning("Dataset does not have a 'transform' attribute. Transforms might not be applied.")
+
     # Determine sampler
     sampler = None
     batch_sampler = None
     shuffle = is_train # Default shuffle behavior
+
     if cfg['few_shot']['enable'] and is_train and not simclr_mode: # Few-shot only for training, not SimCLR
         logger.info("Few-shot learning enabled. Using PrototypicalSampler.")
         batch_sampler = PrototypicalSampler(
@@ -1152,6 +1201,10 @@ def get_dataloader(cfg: Dict[str, Any], dataset: Dataset, is_train: bool, rank: 
             q_query=cfg['few_shot']['q_query'],
             episodes=cfg['few_shot']['episodes']
         )
+        shuffle = False # Sampler handles shuffling
+    elif cfg['training'].get('use_hard_example_sampler', False) and is_train and not simclr_mode: # NEW: HardExampleSampler
+        logger.info("Hard Example Sampler enabled. Using HardExampleSampler.")
+        sampler = HardExampleSampler(dataset)
         shuffle = False # Sampler handles shuffling
     elif cfg['training']['curriculum_learning'] and cfg['training']['curriculum_config']['enabled'] and is_train and not simclr_mode:
         logger.info("Curriculum Learning enabled. Using CurriculumSampler.")
@@ -1170,15 +1223,12 @@ def get_dataloader(cfg: Dict[str, Any], dataset: Dataset, is_train: bool, rank: 
     
     # For SimCLR mode, we need a specific transform that creates two views.
     # This is often done by applying the same augmentation pipeline twice.
+    # If `BongardSyntheticDataset` already returns `query_img1_np` and `query_img2_np`,
+    # then this is already covered.
+    # The `custom_collate_fn` will then return these two views.
     if simclr_mode:
-        logger.info("Configuring DataLoader for SimCLR pretraining.")
-        # SimCLR typically uses a custom dataset or transform that returns two augmented views.
-        # For simplicity here, we'll assume the dataset or collate_fn can handle this
-        # or that the `BongardSyntheticDataset` can be adapted to return two views.
-        # If `BongardSyntheticDataset` already returns `query_img1_np` and `query_img2_np`,
-        # then this is already covered.
-        # The `custom_collate_fn` will then return these two views.
-        pass # The `custom_collate_fn` already returns two views for query.
+        logger.info("DataLoader configured for SimCLR pretraining (two views from dataset/collate_fn).")
+    
     # Final DataLoader construction
     return DataLoader(
         dataset,
