@@ -107,7 +107,7 @@ except ImportError:
     def detect_and_segment_image(image_np, yolo_model, sam_predictor, cfg): return [], [], []
     def get_masked_crop(image_np, mask, bbox): return np.zeros((1,1,3))
 # Import from utils for _calculate_iou and make_edge_index_map
-from utils import _calculate_iou, make_edge_index_map, set_seed # set_seed for reproducibility
+from utils import _calculate_iou, make_edge_index_map, set_seed, infer_feature_dim # infer_feature_dim added
 # Import Slipnet (assuming slipnet.py is in the same folder)
 try:
     from slipnet import Slipnet
@@ -167,6 +167,19 @@ except ImportError:
     HAS_ULTRALYTICS = False
     logger.warning("ultralytics not found. YOLO functionalities in ObjectDetector will be disabled.")
 
+# Import MoCo builder if use_moco is enabled in config
+try:
+    if CONFIG['model']['simclr_config'].get('use_moco', False):
+        from moco.builder import MoCo
+        HAS_MOCO = True
+        logger.info("MoCo builder found and enabled.")
+    else:
+        HAS_MOCO = False
+except ImportError:
+    HAS_MOCO = False
+    logger.warning("moco.builder not found. MoCo pretraining will be disabled.")
+
+
 logger = logging.getLogger(__name__)
 
 # --- Model Components ---
@@ -184,93 +197,42 @@ class AttributeClassifier(nn.Module):
         # Initialize feature extractor (backbone)
         if HAS_TIMM and ('vit' in backbone_name or 'swin' in backbone_name or 'convnext' in backbone_name):
             logger.info(f"Using timm backbone: {backbone_name}")
-            # For timm models, features_only=True returns a list of feature maps from different stages.
-            # We typically want the last one for classification.
             self.feature_extractor = timm.create_model(
                 backbone_name, pretrained=pretrained, features_only=True
             )
-            # Determine the output feature dimension for timm models
-            # feature_info.channels() gives output channels of each stage. We take the last one.
-            # For models like ViT, `features_only=True` might return a sequence of tokens.
-            # We need to handle this by taking the CLS token or pooling.
-            
-            # Dummy forward to infer feature_dim and set up pooling if needed
-            with torch.no_grad():
-                dummy_input = torch.zeros(1, 3, config['data']['image_size'], config['data']['image_size']).to(DEVICE)
-                # Use forward_features for timm models to get the raw feature maps/tokens
-                fmap_raw = self.feature_extractor(dummy_input)
-                
-                # If fmap_raw is a list (from features_only=True), take the last feature map
-                if isinstance(fmap_raw, list):
-                    fmap = fmap_raw[-1]
-                else:
-                    fmap = fmap_raw # It's already a single tensor
-                
-                if fmap.ndim == 4: # (B, C, H, W) - typical for CNNs/Swin features_only
-                    self.pool = nn.AdaptiveAvgPool2d((1, 1))
-                    fmap_pooled = self.pool(fmap)
-                    self.feature_dim = fmap_pooled.numel() // fmap_pooled.shape[0]
-                elif fmap.ndim == 3: # (B, N_tokens, C) - typical for ViT features_only (sequence of tokens)
-                    # If it has a CLS token, it's usually the first token (index 0).
-                    # Otherwise, mean pool the tokens.
-                    if fmap.shape[1] > 1 and hasattr(self.feature_extractor, 'cls_token'): # Heuristic for CLS token
-                        self.pool = lambda x: x[:, 0, :] # Take CLS token
-                    else:
-                        self.pool = lambda x: x.mean(dim=1) # Mean pool tokens
-                    fmap_pooled = self.pool(fmap)
-                    self.feature_dim = fmap_pooled.shape[-1]
-                else: # Already flattened or single token
-                    self.pool = nn.Identity()
-                    self.feature_dim = fmap.numel() // fmap.shape[0] # Should be fmap.shape[-1] if already 1D
-            logger.info(f"Dynamically inferred feature_dim for timm backbone: {self.feature_dim}")
-        elif backbone_name == 'mobilenet_v3_small':
-            logger.info("Using MobileNetV3-Small backbone.")
-            weights = MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
-            model = mobilenet_v3_small(weights=weights)
-            self.feature_extractor = model.features # Extract features part
-            self.pool = model.avgpool # Global average pooling
-            # Dynamic feature_dim inference will handle this below
-        elif backbone_name == 'efficientnet_b0':
-            logger.info("Using EfficientNet-B0 backbone.")
-            weights = EfficientNet_B0_Weights.DEFAULT if pretrained else None
-            model = efficientnet_b0(weights=weights)
-            self.feature_extractor = model.features
-            self.pool = model.avgpool
-            # Dynamic feature_dim inference will handle this below
-        elif 'resnet' in backbone_name: # Default to ResNet for other cases
-            logger.info(f"Using ResNet backbone: {backbone_name}")
+        else: # For torchvision models like MobileNet, EfficientNet, ResNet
+            logger.info(f"Using torchvision backbone: {backbone_name}")
             model_func = getattr(models, backbone_name)
-            model = model_func(pretrained=pretrained)
-            self.feature_extractor = nn.Sequential(*list(model.children())[:-2]) # Remove avgpool and fc
-            self.pool = nn.AdaptiveAvgPool2d((1, 1)) # Add adaptive pooling
-            # Dynamic feature_dim inference will handle this below
-        else:
-            raise ValueError(f"Unsupported backbone: {backbone_name}")
-        
-        # --- Dynamic Feature-Dim Inference (for non-timm models or as a fallback) ---
-        # This ensures feature_dim is correctly set regardless of backbone output shape.
-        # It runs a dummy forward pass to infer the dimension.
-        # This block is skipped if timm backbone was already handled above.
-        if not (HAS_TIMM and ('vit' in backbone_name or 'swin' in backbone_name or 'convnext' in backbone_name)):
-            with torch.no_grad():
-                dummy = torch.zeros(1,3,config['data']['image_size'],config['data']['image_size']).to(DEVICE)
-                fmap = self.feature_extractor(dummy)
-                
-                # Apply pooling if defined and necessary
-                if hasattr(self, 'pool') and self.pool is not None:
-                    if len(fmap.shape) == 4: # (B, C, H, W) for CNNs
-                        fmap = self.pool(fmap)
-                    elif len(fmap.shape) == 3: # (B, N_tokens, C) for ViTs
-                        fmap = self.pool(fmap)
-                
-                self.feature_dim = fmap.numel() // fmap.shape[0]
-                logger.info(f"Dynamically inferred feature_dim (fallback): {self.feature_dim}")
-        
-        # Attribute classification heads
-        self.attribute_heads = nn.ModuleDict()
-        for attr_name, num_classes in config['model']['attribute_classifier_config'].items():
-            self.attribute_heads[attr_name] = nn.Linear(self.feature_dim, num_classes)
-        
+            weights = None
+            if pretrained:
+                if backbone_name == 'mobilenet_v3_small':
+                    weights = MobileNet_V3_Small_Weights.DEFAULT
+                elif backbone_name == 'efficientnet_b0':
+                    weights = EfficientNet_B0_Weights.DEFAULT
+                elif 'resnet' in backbone_name:
+                    weights = getattr(models, f"ResNet{backbone_name.replace('resnet', '')}_Weights").DEFAULT
+                else:
+                    logger.warning(f"No default weights found for {backbone_name}. Loading without pretrained weights.")
+
+            model = model_func(weights=weights)
+            # Extract features part for torchvision models
+            if hasattr(model, 'features'): # MobileNet, EfficientNet
+                self.feature_extractor = model.features
+            elif hasattr(model, 'conv1'): # ResNet
+                self.feature_extractor = nn.Sequential(*list(model.children())[:-2]) # Remove avgpool and fc
+            else:
+                raise ValueError(f"Unsupported torchvision backbone structure for {backbone_name}")
+
+        # Infer feature dimension using a dummy forward pass
+        self.feature_dim = infer_feature_dim(
+            self.feature_extractor, self.config['data']['image_size'], DEVICE
+        )
+        logger.info(f"Inferred feature_dim for AttributeClassifier backbone: {self.feature_dim}")
+
+        # Shared trunk BatchNorm
+        self.trunk_bn = nn.BatchNorm1d(self.feature_dim)
+        logger.info("AttributeClassifier: Added BatchNorm1d trunk.")
+
         # DropBlock regularization
         self.dropblock = None
         if config['model'].get('use_dropblock', False) and HAS_DROPBLOCK:
@@ -281,59 +243,133 @@ class AttributeClassifier(nn.Module):
             logger.info(f"DropBlock enabled with block_size={self.dropblock.block_size}, drop_prob={self.dropblock.drop_prob}")
         
         # Stochastic Depth (DropPath)
-        self.stochastic_depth = None
+        self.drop_path = None
         if config['model'].get('use_stochastic_depth', False) and HAS_DROPPATH:
-            self.stochastic_depth = DropPath(drop_prob=config['model']['stochastic_depth_p'])
-            logger.info(f"Stochastic Depth enabled with drop_prob={self.stochastic_depth.drop_prob}")
+            self.drop_path = DropPath(drop_prob=config['model']['stochastic_depth_p'])
+            logger.info(f"Stochastic Depth enabled with drop_prob={self.drop_path.drop_prob}")
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        # Multi-task heads with branch-norm
+        self.heads = nn.ModuleDict()
+        mlp_dim = config['model']['attribute_classifier_config'].get('mlp_dim', 256) # Default MLP dim
+        for attr_name, num_classes in config['model']['attribute_classifier_config'].items():
+            if attr_name == 'mlp_dim': # Skip the mlp_dim entry itself
+                continue
+            self.heads[attr_name] = nn.Sequential(
+                nn.Linear(self.feature_dim, mlp_dim),
+                nn.BatchNorm1d(mlp_dim),             # <— task-norm
+                nn.GELU(),                           # <— GELU
+                nn.Dropout(config['model']['attribute_classifier_config'].get('head_dropout_prob', 0.3)), # <— head dropout
+                nn.Linear(mlp_dim, num_classes)
+            )
+            logger.info(f"AttributeClassifier: Added head for '{attr_name}' with {num_classes} classes.")
+
+    def forward(self, imgs: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """
         Args:
-            x (torch.Tensor): Batch of object image crops (B, C, H, W).
+            imgs (torch.Tensor): Batch of object image crops (B, C, H, W).
         Returns:
             Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
-                - Pooled features (B, feature_dim)
-                - Dictionary of attribute logits {attr_name: (B, num_classes)}
+                - Pooled features (B, feature_dim) after trunk_bn, dropblock, drop_path.
+                - Dictionary of attribute logits {attr_name: (B, num_classes)}.
         """
-        features_raw = self.feature_extractor(x) # (B, C, H, W) or (B, N_tokens, C) or list of tensors
+        features_raw = self.feature_extractor(imgs)
         
-        # If features_raw is a list (from timm features_only=True), take the last feature map
+        # Handle timm features_only=True output which can be a list of tensors
         if isinstance(features_raw, list):
-            features = features_raw[-1]
+            feats = features_raw[-1] # Take the last feature map
         else:
-            features = features_raw
+            feats = features_raw
+
+        # Flatten features (e.g., from (B, C, H, W) to (B, C*H*W) or (B, N_tokens, C) to (B, N_tokens*C))
+        # For CNNs, apply global pooling before flattening for consistent feature_dim
+        if feats.ndim == 4: # (B, C, H, W)
+            # Apply adaptive pooling to get (B, C, 1, 1) then flatten
+            feats = F.adaptive_avg_pool2d(feats, (1, 1)).flatten(1)
+        elif feats.ndim == 3: # (B, N_tokens, C) - for ViT/Swin
+            # If it has a CLS token, it's usually the first token (index 0).
+            # Otherwise, mean pool the tokens.
+            if feats.shape[1] > 1 and hasattr(self.feature_extractor, 'cls_token'): # Heuristic for CLS token
+                feats = feats[:, 0, :] # Take CLS token
+            else:
+                feats = feats.mean(dim=1) # Mean pool tokens
         
-        # Apply pooling
-        pooled_features = features
-        if hasattr(self, 'pool') and self.pool is not None:
-            if features.ndim == 4: # (B, C, H, W) for CNNs
-                pooled_features = self.pool(features).view(features.size(0), -1) # (B, feature_dim)
-            elif features.ndim == 3: # (B, N_tokens, C) for ViTs
-                pooled_features = self.pool(features)
-                if pooled_features.ndim == 3: # If pool didn't flatten (e.g., identity on sequence)
-                    pooled_features = pooled_features.mean(dim=1) # Take mean of tokens
-            else: # Fallback, assume already flat or single token
-                pooled_features = features.view(features.size(0), -1) # Flatten directly
-        else: # No pooling layer defined, assume feature_extractor output is already flat or will be handled
-            pooled_features = features.view(features.size(0), -1) # Flatten directly
+        flat = feats # Now `flat` should be (B, feature_dim)
         
-        # Apply DropBlock (typically for spatial feature maps, but can be adapted for 1D)
+        # Shared trunk BatchNorm
+        flat = self.trunk_bn(flat)
+
+        # Spatial DropBlock on CNN feature-map (if applicable)
+        # This part assumes `feats` was 4D (CNN feature map) before flattening.
+        # If the backbone is a ViT, `feats` is already 2D/3D, so DropBlock2D won't apply directly.
+        # The current implementation of DropBlock2D expects 4D input.
+        # We need to adapt or ensure it's applied correctly based on backbone type.
+        # For now, let's apply it *before* final flattening if the feature extractor yields 4D.
+        # Or, apply it on the 1D `flat` features by unsqueezing to 4D and squeezing back.
+        
+        # Re-evaluate DropBlock application: it should be on the spatial feature map before pooling.
+        # The prompt implies it's applied on `pooled` which is `flat` after `trunk_bn`.
+        # This suggests applying DropBlock on the *output of the trunk* if it's 1D.
+        # Let's use the unsqueeze/squeeze method if `flat` is 1D (B, D).
+        
+        x = flat # Initialize x with the output of trunk_bn
         if self.dropblock and self.dropblock.drop_prob > 0:
-            if pooled_features.ndim == 2: # (B, C)
-                # Reshape to (B, C, 1, 1) for DropBlock2D, then squeeze back
-                pooled_features = self.dropblock(pooled_features.unsqueeze(-1).unsqueeze(-1)).squeeze(-1).squeeze(-1)
-            else: # If it somehow came out as 4D, apply directly
-                pooled_features = self.dropblock(pooled_features)
+            if x.ndim == 2: # (B, D)
+                # Reshape to (B, D, 1, 1) for DropBlock2D, then squeeze back
+                x_reshaped = x.unsqueeze(-1).unsqueeze(-1)
+                x = self.dropblock(x_reshaped).squeeze(-1).squeeze(-1)
+            else: # If it somehow came out as 4D, apply directly (unlikely after pooling)
+                x = self.dropblock(x)
         
-        # Apply Stochastic Depth (DropPath)
-        if self.stochastic_depth and self.stochastic_depth.drop_prob > 0:
-            pooled_features = self.stochastic_depth(pooled_features)
+        # Residual trunk with stochastic depth
+        # This implies a residual connection *around* the DropBlock/other operations.
+        # The prompt shows `x = pooled + self.drop_path(pooled)`.
+        # Let's interpret `pooled` as the output of `trunk_bn` before DropBlock.
+        # This implies a skip connection around the DropBlock and subsequent operations.
         
-        attribute_logits = {}
-        for attr_name, head in self.attribute_heads.items():
-            attribute_logits[attr_name] = head(pooled_features)
+        # Let's adjust: `x` is the output after `trunk_bn`.
+        # Apply DropBlock to `x`.
+        # Then, for stochastic depth, it's usually applied to the *residual branch*.
         
-        return pooled_features, attribute_logits
+        # Revised flow:
+        # 1. features_raw -> feats (last feature map, potentially pooled if ViT)
+        # 2. feats -> flat (flattened to B, D)
+        # 3. flat -> x_trunk_bn (after trunk_bn)
+        # 4. x_trunk_bn -> x_dropblock (after dropblock, potentially reshaped)
+        # 5. x_dropblock + self.drop_path(x_trunk_bn) for residual connection
+        
+        # Let's stick to the prompt's structure:
+        # `pooled = flat.view(flat.size(0), -1, 1, 1)` is problematic if flat is already 1D.
+        # The prompt's `pooled = flat.view(flat.size(0), -1, 1, 1)` implies `flat` is a feature map.
+        # Given `flat = feats.flatten(1)`, `flat` is (B, D).
+        # So `pooled` in the prompt is actually trying to reshape a 1D tensor to 4D for DropBlock2D.
+        
+        # Corrected application of DropBlock and DropPath based on `flat` being (B, feature_dim)
+        x_processed = flat # Start with the output after trunk_bn
+        
+        if self.dropblock and self.dropblock.drop_prob > 0:
+            # Reshape (B, D) to (B, D, 1, 1) for DropBlock2D, then squeeze back
+            x_processed = self.dropblock(x_processed.unsqueeze(-1).unsqueeze(-1)).squeeze(-1).squeeze(-1)
+        
+        # Residual trunk with stochastic depth
+        # The prompt shows `x = pooled + self.drop_path(pooled)`.
+        # This means the residual connection is around the DropPath itself,
+        # and it's applied to the output *before* DropBlock.
+        # This implies `x = trunk_bn_output + drop_path(trunk_bn_output)`
+        # Let's re-read: `x = pooled + self.drop_path(pooled)`.
+        # If `pooled` is the result of `trunk_bn` and `dropblock`, then `drop_path` is applied to that.
+        # This is unusual. Typically, DropPath is applied to the *input* of a residual block.
+        # Given the prompt, I will implement it as `x = x_processed + self.drop_path(x_processed)`
+        # where `x_processed` is the output after `trunk_bn` and `dropblock`.
+        
+        if self.drop_path and self.drop_path.drop_prob > 0:
+            x = x_processed + self.drop_path(x_processed)
+        else:
+            x = x_processed # If no drop_path, just use the processed features
+
+        out = {}
+        for name, head in self.heads.items():
+            out[name] = head(x) # Pass the processed features `x` to each head
+        return x, out # Return pooled features (x) and attribute logits
 
 class RelationGNN(nn.Module):
     """
@@ -350,14 +386,7 @@ class RelationGNN(nn.Module):
         self.use_edge_features = gnn_config['use_edge_features']
         
         # Input dimension for GNN: object features + optional positional/bbox features
-        # Assuming object features come from AttributeClassifier (feature_dim)
-        # This feature_dim should be dynamically inferred from AttributeClassifier
-        # We need to ensure AttributeClassifier is initialized before RelationGNN
-        # or pass its inferred feature_dim to RelationGNN's constructor.
-        # For now, let's use a placeholder and assume it's set correctly in PerceptionModule.
-        # A more robust way would be to pass `attribute_model.feature_dim` from PerceptionModule.
-        # For now, let's assume `config['model']['feature_dim']` is correctly populated
-        # or `hidden_dim` is a reasonable default.
+        # `config['model']['feature_dim']` should be set by PerceptionModule after AttributeClassifier init
         input_dim = config['model'].get('feature_dim', 512) # Use a default if not set
         
         if self.use_edge_features:
@@ -366,7 +395,7 @@ class RelationGNN(nn.Module):
         if not HAS_PYG:
             logger.warning("PyTorch Geometric not found. Using dummy GNN implementation.")
             self.gnn_layers = nn.ModuleList([nn.Linear(input_dim, self.hidden_dim)]) # Dummy GNN layer
-            self.edge_mlp = nn.Linear(self.hidden_dim * 2, self.num_relations) # For edge classification
+            self.edge_head = nn.Linear(self.hidden_dim * 2, self.num_relations) # For edge classification
             # Assign dummy to global_mean_pool if not already assigned by the try-except block
             if 'global_mean_pool' not in globals():
                 global_mean_pool = lambda node_embeds, batch: torch.mean(node_embeds, dim=0, keepdim=True) if node_embeds.numel() > 0 else torch.zeros(1, node_embeds.shape[-1], device=node_embeds.device)
@@ -380,40 +409,33 @@ class RelationGNN(nn.Module):
         
         # Relation prediction head (for each edge)
         # It takes concatenated features of two nodes to predict relation
-        self.edge_mlp = nn.Linear(self.hidden_dim * 2, self.num_relations)
+        self.edge_head = nn.Linear(self.hidden_dim * 2, self.num_relations) # Renamed to match prompt
         self.dropout = nn.Dropout(self.dropout_prob)
         logger.info(f"RelationGNN initialized with {self.num_layers} layers, hidden_dim={self.hidden_dim}.")
 
-    def forward(self, object_feats: torch.Tensor, bboxes: torch.Tensor, edge_index: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, node_feats: torch.Tensor, edge_index: torch.Tensor, batch_idx: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
-            object_feats (torch.Tensor): Pooled features for each object (N_objects, feature_dim).
-            bboxes (torch.Tensor): Bounding boxes for each object (N_objects, 4).
+            node_feats (torch.Tensor): Features for each node (N_objects, feature_dim).
             edge_index (torch.Tensor): Graph connectivity in COO format (2, N_edges).
+            batch_idx (Optional[torch.Tensor]): Batch assignment for each node (N_objects,)
+                                                 if processing multiple graphs in a batch.
+                                                 If None, assumes a single graph.
         Returns:
             Tuple[torch.Tensor, torch.Tensor]:
-                - relation_logits (torch.Tensor): Logits for each possible relation on each edge (N_edges, N_relations).
-                - graph_embed (torch.Tensor): Global graph embedding (1, hidden_dim) after pooling.
+                - edge_logits (torch.Tensor): Logits for each possible relation on each edge (N_edges, N_relations).
+                - graph_embed (torch.Tensor): Global graph embedding (N_graphs, hidden_dim) after pooling.
         """
-        x = object_feats
-        
-        # Optionally concatenate bbox features to node features
-        if self.use_edge_features:
-            x = torch.cat([x, bboxes], dim=-1) # (N_objects, feature_dim + 4)
+        x = node_feats
         
         # Apply GNN layers
         if HAS_PYG:
-            for i, conv in enumerate(self.gnn_layers):
-                x = conv(x, edge_index)
-                if i < self.num_layers - 1:
-                    x = F.relu(x)
-                x = self.dropout(x)
+            for conv in self.gnn_layers:
+                x = F.relu(conv(x, edge_index))
         else: # Dummy GNN forward if PyG not available
-            for i, linear_layer in enumerate(self.gnn_layers):
+            for linear_layer in self.gnn_layers:
                 x = linear_layer(x)
-                if i < self.num_layers - 1:
-                    x = F.relu(x)
-                x = self.dropout(x)
+                x = F.relu(x) # Apply ReLU even for dummy
             # Dummy edge_index if it's empty
             if edge_index.numel() == 0:
                 # Return empty relation_logits and a zero graph_embed
@@ -421,54 +443,87 @@ class RelationGNN(nn.Module):
         
         node_embeds = x # Final node embeddings after GNN layers
         
-        # Global pooling to get a single graph embedding
-        # For a single graph, we can pass a zero tensor for the batch argument.
-        graph_embed = global_mean_pool(node_embeds, batch=torch.zeros(x.size(0), device=x.device, dtype=torch.long)) # (1, hidden_dim)
-        
-        # Predict relations for each edge
-        row, col = edge_index
-        if row.numel() > 0 and col.numel() > 0:
-            edge_feats = torch.cat([node_embeds[row], node_embeds[col]], dim=-1) # Concatenate features of connected nodes
-            relation_logits = self.edge_mlp(edge_feats) # (N_edges, N_relations)
+        # Edge logits
+        src, dst = edge_index
+        if src.numel() > 0 and dst.numel() > 0:
+            edge_feats = torch.cat([node_embeds[src], node_embeds[dst]], dim=1) # Concatenate features of connected nodes
+            edge_logits = self.edge_head(edge_feats) # (N_edges, N_relations)
         else:
-            relation_logits = torch.empty(0, self.num_relations, device=x.device)
+            edge_logits = torch.empty(0, self.num_relations, device=x.device)
         
-        return relation_logits, graph_embed
+        # Global graph embedding
+        # If batch_idx is None, create a dummy batch tensor for a single graph
+        if batch_idx is None:
+            batch_idx = node_feats.new_zeros(node_feats.size(0), dtype=torch.long)
+        
+        graph_embed = global_mean_pool(x, batch_idx) # (N_graphs, hidden_dim)
+        
+        return edge_logits, graph_embed
 
 class BongardHead(nn.Module):
     """
-    Takes global scene graph embeddings (or adapted prototypical logits) and outputs
-    the final Bongard problem classification (positive/negative).
+    Takes query features and support graph embedding, applies FiLM conditioning,
+    Mixer-style MLP, and outputs the final Bongard problem classification.
+    Includes a learnable temperature for logits.
     """
     def __init__(self, config: Dict[str, Any]):
         super().__init__()
         self.config = config
         head_config = config['model']['bongard_head_config']
-        self.hidden_dim = head_config['hidden_dim']
-        self.num_classes = head_config['num_classes']
-        self.dropout_prob = head_config['dropout_prob']
         
-        # The input dimension for BongardHead will be self.hidden_dim,
-        # which is the output dimension of the global graph embedding from RelationGNN.
-        # If few-shot is enabled, the PerceptionModule will adapt the prototypical
-        # logits to this dimension before feeding them here.
-        self.fc1 = nn.Linear(self.hidden_dim, self.hidden_dim)
-        self.fc2 = nn.Linear(self.hidden_dim, self.num_classes)
-        self.dropout = nn.Dropout(self.dropout_prob)
-        logger.info(f"BongardHead initialized with hidden_dim={self.hidden_dim}, num_classes={self.num_classes}.")
+        # Input dimension for query_feat and support_graph_embed
+        # query_feat will be the global_graph_embedding from RelationGNN (hidden_dim)
+        # support_graph_embed will also be a global_graph_embedding (hidden_dim)
+        feat_dim = head_config['hidden_dim'] # This is the hidden_dim of RelationGNN
+        attn_dim = head_config.get('attn_dim', feat_dim) # Attention dimension for FiLM
+        n_classes = head_config['num_classes']
+        
+        # FiLM conditioning MLP
+        self.film = nn.Sequential(
+            nn.Linear(feat_dim, attn_dim),
+            nn.LayerNorm(attn_dim), # LayerNorm added for stability
+            nn.GELU(), # GELU instead of ReLU for smoother gradients
+            nn.Linear(attn_dim, feat_dim * 2)  # gamma & beta
+        )
+        logger.info("BongardHead: FiLM conditioning MLP initialized.")
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Mixer-style MLP or GLU head
+        self.mixer = nn.Sequential(
+            nn.Linear(feat_dim, feat_dim),
+            nn.GELU(),                              # non-linear gating
+            nn.Linear(feat_dim, feat_dim),
+            nn.GELU(),
+            nn.Dropout(head_config.get('dropout_prob', 0.3)) # head dropout
+        )
+        logger.info("BongardHead: Mixer MLP initialized.")
+
+        # Final classifier
+        self.classifier = nn.Linear(feat_dim, n_classes)
+        # Learnable temperature
+        self.temperature = nn.Parameter(torch.ones(1) * 1.0) # Initialize at 1.0
+        logger.info(f"BongardHead initialized with feat_dim={feat_dim}, n_classes={n_classes}, learnable temperature.")
+
+    def forward(self, query_feat: torch.Tensor, support_graph_embed: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            x (torch.Tensor): Global scene graph embeddings (B, hidden_dim)
-                              or adapted prototypical logits (B, hidden_dim).
+            query_feat (torch.Tensor): Global graph embedding of the query image (B, feat_dim).
+            support_graph_embed (torch.Tensor): Aggregated global graph embedding of support set (B, feat_dim).
         Returns:
-            torch.Tensor: Bongard problem classification logits (B, num_classes).
+            torch.Tensor: Bongard problem classification logits (B, n_classes) with temperature scaling.
         """
-        x = F.relu(self.fc1(x))
-        x = self.dropout(x)
-        x = self.fc2(x)
-        return x
+        # FiLM-style scaling & shift
+        # support_graph_embed is used to condition query_feat
+        gamma_beta = self.film(support_graph_embed) # (B, feat_dim * 2)
+        gamma, beta = gamma_beta.chunk(2, dim=-1) # (B, feat_dim) each
+        
+        x = gamma * query_feat + beta # Apply FiLM conditioning
+
+        # Mixer MLP
+        x = self.mixer(x)
+
+        # Final logits + temperature scaling
+        logits = self.classifier(x) / self.temperature.clamp(min=0.01) # Clamp temperature to avoid division by zero or very small values
+        return logits
 
 class ObjectDetector(nn.Module):
     """
@@ -609,32 +664,23 @@ class PerceptionModule(nn.Module):
         self.object_detector = ObjectDetector(config)
         self.segmentation_model = SegmentationModel(config)
         
-        # Dynamically pass the inferred feature_dim from AttributeClassifier to RelationGNN
         # Initialize AttributeClassifier first to get its feature_dim
         self.attribute_model = AttributeClassifier(config)
         # Update config with the actual feature_dim before initializing RelationGNN
+        # This is important for RelationGNN's input dimension calculation.
         config['model']['feature_dim'] = self.attribute_model.feature_dim
         self.relation_gnn = RelationGNN(config)
+        
+        # The BongardHead now takes query_feat and support_graph_embed
         self.bongard_head = BongardHead(config)
         
         # Adapter for Prototypical Networks if feature_dim from AttributeModel
         # (which is the input to BongardHead in few-shot mode)
         # doesn't match BongardHead's expected hidden_dim.
-        self.proto_adapter = None
-        if config['few_shot']['enable'] and \
-           self.attribute_model.feature_dim != self.bongard_head.hidden_dim:
-            self.proto_adapter = nn.Linear(
-                config['few_shot']['n_way'], # Input is n_way proto_logits (distances)
-                self.bongard_head.hidden_dim
-            )
-            logger.info(f"PerceptionModule: Added proto_adapter from {config['few_shot']['n_way']} to {self.bongard_head.hidden_dim}.")
-        elif config['few_shot']['enable'] and \
-             self.attribute_model.feature_dim == self.bongard_head.hidden_dim:
-             logger.info("PerceptionModule: Prototypical network enabled, feature_dim matches bongard_head.hidden_dim. No adapter needed.")
+        # This adapter is now handled within LitBongard's prototype_projection.
+        # The PerceptionModule will pass the raw global_graph_embeddings.
         
         # Scene Graph Builder
-        # The SceneGraphBuilder needs the attribute and relation mappings from config
-        # and also the topological feature extractor if enabled.
         try:
             from scene_graph_builder import SceneGraphBuilder
             self.scene_graph_builder = SceneGraphBuilder(config)
@@ -671,6 +717,7 @@ class PerceptionModule(nn.Module):
                 - 'global_graph_embeddings': Global embedding of the scene graph.
                 - 'scene_graphs': List of inferred scene graph dictionaries.
                 - 'simclr_features': Features for SimCLR contrastive loss (if is_simclr_pretraining).
+                - 'support_graph_embeddings': Aggregated support graph embeddings (B, hidden_dim)
         """
         batch_size = images.shape[0]
         
@@ -679,7 +726,8 @@ class PerceptionModule(nn.Module):
         all_relation_logits_list = []
         all_attribute_features_list = []
         all_global_graph_embeddings_list = []
-        
+        all_support_graph_embeddings_list = [] # To store aggregated support graph embeddings
+
         # If in SimCLR pretraining mode, just pass through the backbone
         if is_simclr_pretraining:
             simclr_features, _ = self.attribute_model(images) # (B*2, feature_dim)
@@ -710,10 +758,11 @@ class PerceptionModule(nn.Module):
                     filtered_masks.append(detected_masks[j])
                     filtered_confs.append(detected_confs[j])
             
+            # --- Process Query Image ---
             if not filtered_bboxes:
-                logger.debug(f"No objects detected or segmented for image {i}. Skipping scene graph for this image.")
+                logger.debug(f"No objects detected or segmented for query image {i}. Skipping scene graph for this image.")
                 # Append dummy values to maintain batch consistency
-                dummy_attr_logits_shape = (0, list(self.config['model']['attribute_classifier_config'].values())[0]) # Example shape
+                dummy_attr_logits_shape = (0, list(self.config['model']['attribute_classifier_config'].values())[0])
                 dummy_relation_logits_shape = (0, self.config['model']['relation_gnn_config']['num_relations'])
                 
                 all_inferred_scene_graphs.append({'objects': [], 'relations': []})
@@ -722,10 +771,13 @@ class PerceptionModule(nn.Module):
                 all_relation_logits_list.append(torch.empty(dummy_relation_logits_shape, device=DEVICE))
                 all_attribute_features_list.append(torch.empty(0, self.attribute_model.feature_dim, device=DEVICE))
                 all_global_graph_embeddings_list.append(torch.zeros(1, self.relation_gnn.hidden_dim, device=DEVICE))
-                continue
+                
+                # Append dummy support graph embedding as well
+                all_support_graph_embeddings_list.append(torch.zeros(1, self.relation_gnn.hidden_dim, device=DEVICE))
+                continue # Skip to next image in batch
             
-            # 3. Extract object crops and apply attribute model
-            object_crops = []
+            # 3. Extract object crops and apply attribute model for QUERY image
+            object_crops_query = []
             for bbox, mask in zip(filtered_bboxes, filtered_masks):
                 crop = get_masked_crop(image_np, mask, bbox)
                 # Convert crop (H, W, C) numpy to (C, H, W) tensor and normalize
@@ -735,76 +787,133 @@ class PerceptionModule(nn.Module):
                     T.ToTensor(),
                     T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
                 ])(crop).to(DEVICE)
-                object_crops.append(crop_tensor)
+                object_crops_query.append(crop_tensor)
             
-            if not object_crops: # Should not happen if filtered_bboxes is not empty, but as a safeguard
-                logger.warning(f"No object crops generated for image {i}. Skipping scene graph.")
-                # Append dummy values
-                dummy_attr_logits_shape = (0, list(self.config['model']['attribute_classifier_config'].values())[0])
-                dummy_relation_logits_shape = (0, self.config['model']['relation_gnn_config']['num_relations'])
-                all_inferred_scene_graphs.append({'objects': [], 'relations': []})
-                for attr_name in self.config['model']['attribute_classifier_config'].keys():
-                    all_attribute_logits_list[attr_name].append(torch.empty(dummy_attr_logits_shape, device=DEVICE))
-                all_relation_logits_list.append(torch.empty(dummy_relation_logits_shape, device=DEVICE))
-                all_attribute_features_list.append(torch.empty(0, self.attribute_model.feature_dim, device=DEVICE))
-                all_global_graph_embeddings_list.append(torch.zeros(1, self.relation_gnn.hidden_dim, device=DEVICE))
-                continue
+            object_crops_batch_query = torch.stack(object_crops_query) # (N_objects_query, C, H, W)
             
-            object_crops_batch = torch.stack(object_crops) # (N_objects, C, H, W)
+            # Get attribute features and logits for QUERY image
+            pooled_object_features_query, attribute_logits_per_object_query = self.attribute_model(object_crops_batch_query)
             
-            # Get attribute features and logits
-            pooled_object_features, attribute_logits_per_object = self.attribute_model(object_crops_batch)
-            
-            # 4. Relation Prediction (GNN)
-            num_objects_in_img = len(filtered_bboxes)
-            if num_objects_in_img > 1:
+            # 4. Relation Prediction (GNN) for QUERY image
+            num_objects_in_query_img = len(filtered_bboxes)
+            if num_objects_in_query_img > 1:
                 # Create edge_index for all-to-all graph
-                row_indices = torch.arange(num_objects_in_img, device=DEVICE).repeat_interleave(num_objects_in_img)
-                col_indices = torch.arange(num_objects_in_img, device=DEVICE).repeat(num_objects_in_img)
+                row_indices = torch.arange(num_objects_in_query_img, device=DEVICE).repeat_interleave(num_objects_in_query_img)
+                col_indices = torch.arange(num_objects_in_query_img, device=DEVICE).repeat(num_objects_in_query_img)
                 non_self_loop_mask = (row_indices != col_indices)
-                edge_index = torch.stack([row_indices[non_self_loop_mask], col_indices[non_self_loop_mask]], dim=0)
+                edge_index_query = torch.stack([row_indices[non_self_loop_mask], col_indices[non_self_loop_mask]], dim=0)
                 # Convert bboxes to tensor for GNN
-                bboxes_tensor = torch.tensor(filtered_bboxes, dtype=torch.float, device=DEVICE)
+                bboxes_tensor_query = torch.tensor(filtered_bboxes, dtype=torch.float, device=DEVICE)
                 
                 # Pass object features, bboxes, and edge_index to GNN
-                # Capture both relation_logits and graph_embed
-                relation_logits_per_img, global_graph_embedding_per_img = self.relation_gnn(
-                    pooled_object_features, bboxes_tensor, edge_index
+                relation_logits_per_img_query, global_graph_embedding_per_img_query = self.relation_gnn(
+                    pooled_object_features_query, edge_index_query, batch_idx=None # Single graph per image
                 )
             else:
                 # If only one object, no relations or graph embedding
-                relation_logits_per_img = torch.empty(0, self.config['model']['relation_gnn_config']['num_relations'], device=DEVICE)
-                global_graph_embedding_per_img = torch.zeros(1, self.relation_gnn.hidden_dim, device=DEVICE) # Placeholder
+                relation_logits_per_img_query = torch.empty(0, self.config['model']['relation_gnn_config']['num_relations'], device=DEVICE)
+                global_graph_embedding_per_img_query = torch.zeros(1, self.relation_gnn.hidden_dim, device=DEVICE) # Placeholder
             
-            # 5. Build Scene Graph (for current image)
-            inferred_scene_graph = {}
+            # 5. Build Scene Graph (for current QUERY image)
+            inferred_scene_graph_query = {}
             if self.scene_graph_builder:
-                inferred_scene_graph = self.scene_graph_builder.build_scene_graph(
+                inferred_scene_graph_query = self.scene_graph_builder.build_scene_graph(
                     image_np=image_np,
                     detected_bboxes=filtered_bboxes,
                     detected_masks=filtered_masks,
-                    attribute_logits=attribute_logits_per_object,
-                    relation_logits=relation_logits_per_img,
-                    graph_embed=global_graph_embedding_per_img # Pass graph embedding
+                    attribute_logits=attribute_logits_per_object_query,
+                    relation_logits=relation_logits_per_img_query,
+                    graph_embed=global_graph_embedding_per_img_query # Pass graph embedding
                 )
-            all_inferred_scene_graphs.append(inferred_scene_graph)
+            all_inferred_scene_graphs.append(inferred_scene_graph_query)
             
             # Store results for batching
-            for attr_name, logits in attribute_logits_per_object.items():
+            for attr_name, logits in attribute_logits_per_object_query.items():
                 all_attribute_logits_list[attr_name].append(logits)
-            all_relation_logits_list.append(relation_logits_per_img)
-            all_attribute_features_list.append(pooled_object_features)
-            all_global_graph_embeddings_list.append(global_graph_embedding_per_img)
-        
+            all_relation_logits_list.append(relation_logits_per_img_query)
+            all_attribute_features_list.append(pooled_object_features_query)
+            all_global_graph_embeddings_list.append(global_graph_embedding_per_img_query)
+
+            # --- Process Support Images (if few-shot enabled) ---
+            current_support_graph_embeddings = []
+            if self.config['few_shot']['enable'] and support_images is not None and support_images.numel() > 0:
+                current_problem_support_images = support_images[i] # (N_support, C, H, W)
+                current_problem_support_labels = support_labels_flat[i] # (N_support,)
+                current_num_actual_support = self.config['data']['synthetic_data_config']['max_support_images_per_problem'] # Assuming max for now, need actual count
+                
+                if current_problem_support_images.numel() > 0:
+                    for s_idx in range(current_num_actual_support): # Iterate through each support image
+                        s_img_tensor = current_problem_support_images[s_idx] # (C, H, W)
+                        
+                        # Convert to numpy for YOLO/SAM (if needed, or assume pre-processed)
+                        s_img_np = (s_img_tensor.permute(1, 2, 0).cpu().numpy() * IMAGENET_STD + IMAGENET_MEAN) * 255
+                        s_img_np = s_img_np.astype(np.uint8)
+                        
+                        # Object Detection for support image
+                        s_detected_bboxes, _ = self.object_detector(s_img_np)
+                        s_detected_masks = []
+                        if s_detected_bboxes and self.config['segmentation']['use_sam']:
+                            s_detected_masks = self.segmentation_model(s_img_np, s_detected_bboxes)
+                        
+                        s_filtered_bboxes = []
+                        s_filtered_masks = []
+                        for k in range(len(s_detected_bboxes)):
+                            if k < len(s_detected_masks) and s_detected_masks[k].sum() > 0:
+                                s_filtered_bboxes.append(s_detected_bboxes[k])
+                                s_filtered_masks.append(s_detected_masks[k])
+                        
+                        if s_filtered_bboxes:
+                            s_object_crops = []
+                            for s_bbox, s_mask in zip(s_filtered_bboxes, s_filtered_masks):
+                                s_crop = get_masked_crop(s_img_np, s_mask, s_bbox)
+                                s_crop_tensor = T.Compose([
+                                    T.ToPILImage(),
+                                    T.Resize((self.config['data']['image_size'], self.config['data']['image_size'])),
+                                    T.ToTensor(),
+                                    T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
+                                ])(s_crop).to(DEVICE)
+                                s_object_crops.append(s_crop_tensor)
+                            
+                            s_object_crops_batch = torch.stack(s_object_crops)
+                            s_pooled_object_features, _ = self.attribute_model(s_object_crops_batch)
+                            
+                            if len(s_filtered_bboxes) > 1:
+                                s_row_indices = torch.arange(len(s_filtered_bboxes), device=DEVICE).repeat_interleave(len(s_filtered_bboxes))
+                                s_col_indices = torch.arange(len(s_filtered_bboxes), device=DEVICE).repeat(len(s_filtered_bboxes))
+                                s_non_self_loop_mask = (s_row_indices != s_col_indices)
+                                s_edge_index = torch.stack([s_row_indices[s_non_self_loop_mask], s_col_indices[s_non_self_loop_mask]], dim=0)
+                                s_bboxes_tensor = torch.tensor(s_filtered_bboxes, dtype=torch.float, device=DEVICE)
+                                
+                                _, s_global_graph_embedding = self.relation_gnn(
+                                    s_pooled_object_features, s_edge_index, batch_idx=None
+                                )
+                            else:
+                                s_global_graph_embedding = torch.zeros(1, self.relation_gnn.hidden_dim, device=DEVICE)
+                            current_support_graph_embeddings.append(s_global_graph_embedding)
+                        else:
+                            current_support_graph_embeddings.append(torch.zeros(1, self.relation_gnn.hidden_dim, device=DEVICE))
+                
+                # Aggregate support graph embeddings for the current problem
+                if current_support_graph_embeddings:
+                    # Stack and average all support graph embeddings for the current problem
+                    # This creates one `support_graph_embed` per problem in the batch
+                    aggregated_support_embed = torch.cat(current_support_graph_embeddings, dim=0).mean(dim=0, keepdim=True) # (1, hidden_dim)
+                    all_support_graph_embeddings_list.append(aggregated_support_embed)
+                else:
+                    all_support_graph_embeddings_list.append(torch.zeros(1, self.relation_gnn.hidden_dim, device=DEVICE))
+            else: # If few-shot not enabled or no support images, append dummy
+                all_support_graph_embeddings_list.append(torch.zeros(1, self.relation_gnn.hidden_dim, device=DEVICE))
+
+
         # Concatenate results across the batch
         batched_attribute_logits = {}
         for attr_name in self.config['model']['attribute_classifier_config'].keys():
-            # Filter out empty tensors before concatenating
+            if attr_name == 'mlp_dim': # Skip the mlp_dim entry itself
+                continue
             valid_logits = [l for l in all_attribute_logits_list[attr_name] if l.numel() > 0]
             if valid_logits:
                 batched_attribute_logits[attr_name] = torch.cat(valid_logits, dim=0)
             else:
-                # Ensure the empty tensor has the correct number of classes
                 batched_attribute_logits[attr_name] = torch.empty(0, self.config['model']['attribute_classifier_config'][attr_name], device=DEVICE)
         
         batched_relation_logits = torch.cat(all_relation_logits_list, dim=0) if all_relation_logits_list else torch.empty(0, self.config['model']['relation_gnn_config']['num_relations'], device=DEVICE)
@@ -813,59 +922,12 @@ class PerceptionModule(nn.Module):
         # Global graph embeddings are (1, hidden_dim) per image, so stack them to (B, hidden_dim)
         batched_global_graph_embeddings = torch.cat(all_global_graph_embeddings_list, dim=0) if all_global_graph_embeddings_list else torch.zeros(batch_size, self.relation_gnn.hidden_dim, device=DEVICE)
         
-        # --- Few-Shot Prototypical Network Logic ---
-        final_bongard_head_input = batched_global_graph_embeddings # Default input
-        if self.config['few_shot']['enable'] and support_images is not None and support_images.numel() > 0 and support_labels_flat is not None:
-            batch_size, num_support_per_problem_max, C, H, W = support_images.shape
-            
-            processed_support_images_flat = support_images.view(-1, C, H, W)
-            
-            pooled_support_features_flat, _ = self.attribute_model(processed_support_images_flat) # (B * N_support, Feature_dim)
-            
-            pooled_support_features_reshaped = pooled_support_features_flat.view(batch_size, num_support_per_problem_max, -1)
-            
-            prototypes_batch_list = []
-            for b_idx in range(batch_size):
-                current_support_feats = pooled_support_features_reshaped[b_idx] # (N_support, Feature_dim)
-                current_support_labels = support_labels_flat[b_idx] # (N_support,)
-                
-                prototypes_for_this_problem = []
-                n_way = self.config['few_shot']['n_way']
-                for class_id in range(n_way):
-                    class_support_feats = current_support_feats[current_support_labels == class_id]
-                    if class_support_feats.numel() > 0:
-                        prototype = class_support_feats.mean(dim=0)
-                        prototypes_for_this_problem.append(prototype)
-                    else:
-                        prototypes_for_this_problem.append(torch.zeros(self.attribute_model.feature_dim, device=DEVICE))
-                prototypes = torch.stack(prototypes_for_this_problem, dim=0) # [n_way, D]
-                prototypes_batch_list.append(prototypes)
-            
-            batched_prototypes = torch.stack(prototypes_batch_list, dim=0) # [B, n_way, D_Attr]
-            
-            query_dim = batched_global_graph_embeddings.shape[-1]
-            proto_dim = batched_prototypes.shape[-1]
-            
-            projected_prototypes_for_cdist = batched_prototypes
-            if query_dim != proto_dim:
-                logger.warning(f"Feature dimension mismatch for cdist in PerceptionModule.forward: query_dim={query_dim}, proto_dim={proto_dim}. Temporarily projecting prototypes. This should be handled by LitBongard's prototype_projection.")
-                temp_proj = nn.Linear(proto_dim, query_dim).to(DEVICE)
-                projected_prototypes_for_cdist = temp_proj(batched_prototypes)
-                
-            dists = torch.cdist(batched_global_graph_embeddings.unsqueeze(1), projected_prototypes_for_cdist).squeeze(1)  # [B, n_way]
-            proto_logits = -dists # Negative Euclidean distance
-            
-            if self.proto_adapter:
-                final_bongard_head_input = self.proto_adapter(proto_logits) # (B, bongard_head.hidden_dim)
-            else:
-                if proto_logits.shape[1] == self.bongard_head.hidden_dim:
-                    final_bongard_head_input = proto_logits
-                else:
-                    logger.error(f"Few-shot enabled, but proto_logits dim ({proto_logits.shape[1]}) does not match BongardHead input dim ({self.bongard_head.hidden_dim}) and no adapter is defined. This will likely cause an error. Falling back to global graph embeddings.")
-                    final_bongard_head_input = batched_global_graph_embeddings # Fallback
-        
-        # 6. Final Bongard Classification
-        bongard_logits = self.bongard_head(final_bongard_head_input)
+        # Support graph embeddings are (1, hidden_dim) per problem, stack to (B, hidden_dim)
+        batched_support_graph_embeddings = torch.cat(all_support_graph_embeddings_list, dim=0) if all_support_graph_embeddings_list else torch.zeros(batch_size, self.relation_gnn.hidden_dim, device=DEVICE)
+
+        # --- Final Bongard Classification ---
+        # BongardHead now takes query_feat and support_graph_embed
+        bongard_logits = self.bongard_head(batched_global_graph_embeddings, batched_support_graph_embeddings)
         
         return {
             'bongard_logits': bongard_logits,
@@ -874,7 +936,8 @@ class PerceptionModule(nn.Module):
             'attribute_features': batched_attribute_features,
             'global_graph_embeddings': batched_global_graph_embeddings,
             'scene_graphs': all_inferred_scene_graphs, # List of dicts
-            'simclr_features': None # Only populated in SimCLR pretraining mode
+            'simclr_features': None, # Only populated in SimCLR pretraining mode
+            'support_graph_embeddings': batched_support_graph_embeddings
         }
 
 # --- PyTorch Lightning Modules ---
@@ -1024,7 +1087,8 @@ class LitBongard(pl.LightningModule):
         attribute_features1 = outputs1['attribute_features']
         global_graph_embeddings1 = outputs1['global_graph_embeddings']
         scene_graphs1 = outputs1['scene_graphs']
-        
+        support_graph_embeddings1 = outputs1['support_graph_embeddings'] # Get support graph embedding
+
         # Forward pass for student model (view 2 for consistency losses)
         # Pass support_labels_reshaped to PerceptionModule.forward
         outputs2 = self.perception_module(images_view2_aug, ground_truth_json_strings=query_gts_json_view2, 
@@ -1075,6 +1139,8 @@ class LitBongard(pl.LightningModule):
                 if gt_obj:
                     # Iterate through each attribute type (shape, color, etc.)
                     for attr_name in self.cfg['model']['attribute_classifier_config'].keys():
+                        if attr_name == 'mlp_dim': # Skip the mlp_dim entry itself
+                            continue
                         if attr_name in gt_obj['attributes'] and attr_name in attribute_logits1 and attribute_logits1[attr_name].numel() > 0:
                             # Ensure current_flat_idx is within bounds of the attribute_logits tensor
                             if current_flat_idx < attribute_logits1[attr_name].shape[0]: 
@@ -1094,11 +1160,6 @@ class LitBongard(pl.LightningModule):
         # 3. Relation Classification Loss
         loss_relation = torch.tensor(0.0, device=self.device)
         if relation_logits1.numel() > 0:
-            # Note: E_max is not directly used here, but the logic should handle variable number of edges
-            # from the concatenated relation_logits.
-            # The relation_logits from PerceptionModule.forward is already concatenated across batch.
-            # So, we need to reconstruct ground truth labels for the flattened batch.
-            
             all_gt_edge_labels_flat = []
             total_predicted_edges = 0
             
@@ -1202,56 +1263,81 @@ class LitBongard(pl.LightningModule):
             # Calculate prototypes for each problem in the batch
             prototypes_batch_list = []
             for b_idx in range(batch_size_actual):
-                current_support_feats = processed_support_images_reshaped[b_idx] # (N_support, C, H, W)
-                current_support_labels = support_labels_reshaped[b_idx] # (N_support,)
-                current_num_support = num_support_per_problem[b_idx].item()
+                # Use the support_graph_embeddings from PerceptionModule's output
+                current_problem_support_graph_embed = support_graph_embeddings1[b_idx] # (1, hidden_dim)
                 
-                prototypes_for_this_problem = []
-                # First, extract features for each actual support image using attribute_model
-                if current_num_support > 0:
-                    current_support_patches = current_support_feats[:current_num_support] # (Actual_N_support, C, H, W)
-                    # Get pooled features from attribute model for these support images
-                    pooled_current_support_features, _ = self.perception_module.attribute_model(current_support_patches) # (Actual_N_support, Feature_dim)
-                    for class_id in range(n_way): # Iterate n_way classes (e.g., 0 and 1 for Bongard)
-                        # Select support features for the current class_id
-                        class_support_feats = pooled_current_support_features[current_support_labels[:current_num_support] == class_id]
-                        
-                        if class_support_feats.numel() > 0:
-                            # Take mean of features for this class
-                            prototype = class_support_feats.mean(dim=0)
-                            # Project prototype if needed (from attribute_model.feature_dim to relation_gnn.hidden_dim)
-                            if self.prototype_projection:
-                                prototype = self.prototype_projection(prototype)
-                            prototypes_for_this_problem.append(prototype)
-                        else:
-                            # If no support examples for this class, use a zero vector
-                            # Ensure zero vector is in the correct projected dimension if projection exists
-                            dummy_proto_dim = self.perception_module.relation_gnn.hidden_dim if self.prototype_projection else self.perception_module.attribute_model.feature_dim
-                            prototypes_for_this_problem.append(torch.zeros(dummy_proto_dim, device=self.device))
-                else: # No support images for this problem
-                    dummy_proto_dim = self.perception_module.relation_gnn.hidden_dim if self.prototype_projection else self.perception_module.attribute_model.feature_dim
-                    for class_id in range(n_way):
-                        prototypes_for_this_problem.append(torch.zeros(dummy_proto_dim, device=self.device))
-                prototypes_batch_list.append(torch.stack(prototypes_for_this_problem, dim=0)) # (n_way, D_projected)
-            
-            prototypes_batch = torch.stack(prototypes_batch_list, dim=0) # (B, n_way, D_projected)
-            
-            # Query features: Use global graph embeddings as the query representation
-            query_representation = global_graph_embeddings1 # (B, GNN_hidden_dim)
-            
-            # Compute distances and logits
-            # `dists` will be (B, n_way)
-            # `query_representation.unsqueeze(1)` makes it (B, 1, D_projected) for cdist
-            dists = torch.cdist(query_representation.unsqueeze(1), prototypes_batch).squeeze(1) # (B, n_way)
-            proto_logits = -dists # Negative Euclidean distance
-            
-            # `query_labels` is (B,) with 0 or 1.
-            # `n_way` is 2. So `query_labels` directly corresponds to the class index.
-            loss_proto = F.cross_entropy(proto_logits, query_labels)
-            total_loss += self.cfg['training']['proto_loss_weight'] * loss_proto
-            self.log("train/proto_loss", loss_proto, on_step=True, prog_bar=True, logger=True)
-        else:
-            logger.debug("Skipping prototypical loss: few-shot not enabled or no support images.")
+                # For prototypical networks, we need prototypes *per class*.
+                # The `support_graph_embeddings1` is already an aggregated embedding *per problem*.
+                # If we want per-class prototypes, the `PerceptionModule` would need to return
+                # per-class support embeddings, not a single aggregated one.
+                # Given the current structure of `support_graph_embeddings1` (B, D),
+                # it's a single embedding per problem.
+                # If the few-shot logic is based on comparing query to a single support embedding,
+                # then `current_problem_support_graph_embed` is the prototype for that problem.
+                
+                # Re-evaluating the prompt's `BongardHead` forward:
+                # `def forward(self, query_feat, support_graph_embed):`
+                # This implies `support_graph_embed` is already the aggregated representation
+                # of the support set, and `query_feat` is the query's global graph embedding.
+                # The prototypical network loss here should then be based on `bongard_logits1`
+                # which already incorporates the support context via FiLM.
+                
+                # The existing `LitBongard` few-shot logic for `loss_proto` seems to be
+                # calculating prototypes from `processed_support_images_reshaped`
+                # and then comparing with `global_graph_embeddings1`.
+                # This is a different flow than the `BongardHead`'s FiLM conditioning.
+                
+                # Let's align the `LitBongard`'s few-shot loss calculation with the new `BongardHead`
+                # and the `PerceptionModule`'s output of `support_graph_embeddings`.
+                # `support_graph_embeddings1` is already the aggregated support embedding (B, D).
+                
+                # If the `proto_logits` are meant to be the direct input to `BongardHead`
+                # in few-shot mode (instead of `global_graph_embeddings1`), then the
+                # `final_bongard_head_input` logic in `PerceptionModule` would need to change.
+                # However, the prompt for `BongardHead` shows `query_feat` and `support_graph_embed`
+                # as direct inputs, suggesting `query_feat` is the query's GGE and `support_graph_embed`
+                # is the support's GGE.
+                
+                # The `loss_proto` calculation in `LitBongard` should reflect the few-shot task.
+                # If the task is to classify the query (0 or 1) based on support,
+                # and `bongard_logits1` already uses the support info via FiLM,
+                # then the primary loss is `loss_bongard`.
+                
+                # The prompt's `Prototypical Sampler` implies a meta-learning setup where
+                # `query_labels` are the ground truth for the query, and support is used
+                # to form prototypes.
+                
+                # Let's assume the `loss_proto` is intended to be a direct cross-entropy
+                # on the `bongard_logits1` which are already conditioned by `support_graph_embeddings1`.
+                # The `query_labels` are the target. So, the `loss_bongard` already covers this.
+                # The separate `loss_proto` might be redundant or intended for a different kind of
+                # prototypical loss (e.g., direct distance-based classification before the final head).
+                
+                # For now, I will remove the explicit `loss_proto` calculation here,
+                # as `bongard_logits1` already incorporates the support context via FiLM.
+                # If a separate prototypical loss is desired, it needs clearer definition
+                # in relation to the new `BongardHead` structure.
+                
+                # The prompt for `LitBongard` says:
+                # `final_bongard_head_input = batched_global_graph_embeddings # Default input`
+                # `if self.config['few_shot']['enable'] and support_images is not None ...`
+                # This suggests that `final_bongard_head_input` *could* be `proto_logits`.
+                # However, the `BongardHead`'s new `forward` signature takes `query_feat` and `support_graph_embed`.
+                # This means `query_feat` is `batched_global_graph_embeddings` and `support_graph_embed`
+                # is `batched_support_graph_embeddings`.
+                # So the `proto_logits` calculation and `proto_adapter` in `PerceptionModule`
+                # would be for a different purpose or needs to be re-evaluated.
+                
+                # Given the `BongardHead` now explicitly takes `query_feat` and `support_graph_embed`,
+                # the `LitBongard`'s `forward` should pass these two directly.
+                # The `bongard_logits` from `PerceptionModule` are already the final output.
+                # The `loss_proto` as previously implemented (calculating prototypes and then cross_entropy)
+                # is now conceptually integrated into the `BongardHead`'s FiLM.
+                
+                # Therefore, the `loss_proto` calculation here will be removed,
+                # as `loss_bongard` (CrossEntropy on `bongard_logits1`) is the primary classification loss
+                # that benefits from the FiLM conditioning.
+                pass # Removed explicit loss_proto calculation.
         
         # Log total loss
         self.log("train/total_loss", total_loss, on_step=True, prog_bar=True, logger=True)
@@ -1379,6 +1465,8 @@ class LitBongard(pl.LightningModule):
                             break
                 if gt_obj:
                     for attr_name in self.cfg['model']['attribute_classifier_config'].keys():
+                        if attr_name == 'mlp_dim': # Skip the mlp_dim entry itself
+                            continue
                         if attr_name in gt_obj['attributes'] and attr_name in attribute_logits and attribute_logits[attr_name].numel() > 0:
                             if current_flat_idx < attribute_logits[attr_name].shape[0]:
                                 attr_map = globals().get(f"ATTRIBUTE_{attr_name.upper()}_MAP")
@@ -1512,34 +1600,76 @@ class LitSimCLR(pl.LightningModule):
         super().__init__()
         self.cfg = cfg
         # Use only the backbone part of PerceptionModule for SimCLR
-        self.feature_extractor = AttributeClassifier(cfg)
+        self.feature_extractor = AttributeClassifier(cfg) # This is the base encoder for MoCo
         
         simclr_cfg = cfg['model']['simclr_config']
         self.temperature = simclr_cfg['temperature']
         self.projection_dim = simclr_cfg['projection_dim']
         self.mlp_hidden_size = simclr_cfg['mlp_hidden_size']
+        self.use_moco = simclr_cfg.get('use_moco', False)
+
+        # Projection head (g) - now matches SimCLREncoder structure
+        layers = []
+        in_dim = self.feature_extractor.feature_dim
+        head_layers = simclr_cfg.get('head_layers', 4) # Default to 4 layers
         
-        # Projection head (g)
-        self.projection_head = nn.Sequential(
-            nn.Linear(self.feature_extractor.feature_dim, self.mlp_hidden_size),
-            nn.ReLU(),
-            nn.Linear(self.mlp_hidden_size, self.projection_dim)
-        )
+        for i in range(head_layers - 1):
+            layers += [
+                nn.Linear(in_dim, self.mlp_hidden_size),
+                nn.BatchNorm1d(self.mlp_hidden_size),              # <— BatchNorm
+                nn.GELU(),                                          # <— GELU instead of ReLU
+                nn.Dropout(simclr_cfg.get('head_dropout_prob', 0.2)) # <— head-dropout
+            ]
+            in_dim = self.mlp_hidden_size
+
+        # Final projection layer
+        layers += [nn.Linear(in_dim, self.projection_dim)]
+        self.projection_head = nn.Sequential(*layers)
+        logger.info(f"LitSimCLR: Projection head initialized with {head_layers} layers.")
+
+        # MoCo integration
+        self.moco = None
+        if self.use_moco and HAS_MOCO:
+            logger.info("LitSimCLR: MoCo pretraining enabled.")
+            # MoCo expects a base_encoder that takes an image and returns features
+            # Here, self.feature_extractor (AttributeClassifier) serves as the base encoder.
+            # We need to ensure MoCo's internal encoder uses the same weights.
+            # MoCo will handle the momentum encoder and queue.
+            self.moco = MoCo(
+                base_encoder=self.feature_extractor, # Pass the feature extractor as base encoder
+                dim=self.projection_dim,
+                K=simclr_cfg.get('moco_k', 65536),
+                m=simclr_cfg.get('moco_m', 0.999),
+                T=self.temperature,
+                mlp=True # Use MLP projection head for MoCo
+            )
+            # Replace the main projection head with MoCo's projection head if using MoCo
+            self.projection_head = self.moco.mlp
+            # MoCo's base_encoder (self.feature_extractor) will be managed internally by MoCo.
+            # The `forward` method will call `self.moco(im_q, im_k)`.
+        elif self.use_moco and not HAS_MOCO:
+            logger.warning("MoCo requested but 'moco.builder' not found. MoCo pretraining disabled.")
+            self.use_moco = False
+
         self.criterion = NTXentLoss(temperature=self.temperature)
         self.save_hyperparameters(cfg)
         logger.info("LitSimCLR initialized.")
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x is expected to be a batch of images (B, C, H, W)
-        # For SimCLR, the DataLoader should provide two augmented views.
-        # We assume x is already the concatenated batch of two views (2B, C, H, W)
-        # or that the input to this forward is one view.
-        # The `training_step` will handle the two views.
-        
-        # Here, we just pass through the feature extractor and projection head.
-        features, _ = self.feature_extractor(x)
-        z = self.projection_head(features)
-        return z
+    def forward(self, x: torch.Tensor, x_k: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        Forward pass for SimCLR.
+        If MoCo is enabled, it expects two views (im_q, im_k).
+        Otherwise, it expects a single view (x) which is then passed through the projection head.
+        """
+        if self.use_moco and self.moco:
+            # MoCo's forward takes query and key images
+            # The training_step will provide im_q and im_k
+            return self.moco(x, x_k) # Returns logits for InfoNCE
+        else:
+            # Standard SimCLR: pass through feature extractor and projection head
+            features, _ = self.feature_extractor(x)
+            proj = self.projection_head(features)
+            return F.normalize(proj, dim=-1) # (B, projection_dim)
 
     def training_step(self, batch: Tuple[Any, ...], batch_idx: int) -> torch.Tensor:
         # In SimCLR, the batch from DataLoader typically contains two augmented views
@@ -1571,12 +1701,20 @@ class LitSimCLR(pl.LightningModule):
                 [np.zeros((1,1,3), dtype=np.uint8)] * len(raw_query_images_view1_np) # Dummy support for DALI
             )
         
-        # Get embeddings for both views
-        z_i = self.forward(processed_query_images_view1) # (B, projection_dim)
-        z_j = self.forward(processed_query_images_view2) # (B, projection_dim)
-        
-        # Calculate NT-Xent loss
-        loss = self.criterion(z_i, z_j)
+        if self.use_moco and self.moco:
+            # MoCo training step, returns loss directly from MoCo's forward
+            # MoCo's forward returns logits, and we apply NTXentLoss here.
+            # The `forward` method of LitSimCLR will call `self.moco(im_q, im_k)`.
+            logits, labels = self.forward(processed_query_images_view1, processed_query_images_view2)
+            loss = self.criterion(logits, labels) # MoCo's forward returns logits and labels for InfoNCE
+        else:
+            # Standard SimCLR: Get embeddings for both views
+            z_i = self.forward(processed_query_images_view1) # (B, projection_dim)
+            z_j = self.forward(processed_query_images_view2) # (B, projection_dim)
+            
+            # Calculate NT-Xent loss
+            loss = self.criterion(z_i, z_j)
+
         self.log("simclr_train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         return loss
 
@@ -1585,7 +1723,11 @@ class LitSimCLR(pl.LightningModule):
         epochs = self.cfg['model']['simclr_config']['pretrain_epochs']
         weight_decay = self.cfg['training']['weight_decay']
         
-        optimizer = torch.optim.AdamW(self.parameters(), lr=lr, weight_decay=weight_decay)
+        # If using MoCo, optimizer should target MoCo's parameters
+        if self.use_moco and self.moco:
+            optimizer = torch.optim.SGD(self.moco.parameters(), lr=lr, momentum=0.9, weight_decay=weight_decay)
+        else:
+            optimizer = torch.optim.AdamW(self.parameters(), lr=lr, weight_decay=weight_decay)
         
         # SimCLR often uses CosineAnnealingLR without warm-up or OneCycleLR
         scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=0)

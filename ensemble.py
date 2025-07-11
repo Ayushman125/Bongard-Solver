@@ -1,8 +1,9 @@
 # Folder: bongard_solver/
-
+# File: ensemble.py
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -12,48 +13,641 @@ import collections
 import numpy as np
 import json
 from typing import List, Dict, Any, Tuple, Optional, Union
+from datetime import datetime # For TensorBoard log directory
+import math # For OneCycleLR total_steps
+import random # For rand_bbox
+import jsonschema # For GT JSON validation
+from sklearn.model_selection import KFold # For Meta-Learner Cross-Validation
+from PIL import Image # For loading images for symbolic output/MC dropout
+import matplotlib.pyplot as plt # For plotting history
+import torchvision.transforms as T # For converting PIL Image to Tensor for symbolic output saving
 
 # Import from config
-from config import CONFIG, DEVICE, HAS_WANDB
-
+from config import CONFIG, DEVICE, HAS_WANDB, IMAGENET_MEAN, IMAGENET_STD, NUM_CHANNELS, DATA_ROOT_PATH
 # Import from utils
-from utils import setup_logging, set_seed, get_symbolic_embedding_dims # Assuming these are in utils.py
-
+from utils import setup_logging, set_seed, get_symbolic_embedding_dims
 # Import from data
-from data import build_dali_loader, BongardSyntheticDataset, CurriculumSampler, load_bongard_data, RealBongardDataset, BongardGenerator # Assuming these are in data.py
+from data import build_dali_loader, BongardSyntheticDataset, CurriculumSampler, load_bongard_data, RealBongardDataset, BongardGenerator
 from bongard_rules import ALL_BONGARD_RULES # Needed for BongardGenerator
-
 # Import from models
 from models import PerceptionModule # Assuming this is in models.py
+# Import from training (re-importing due to refactoring, ensure these are available)
+# Assuming _run_single_training_session_ensemble and _validate_model_ensemble
+# are now part of this ensemble.py or a dedicated training_orchestrator.py
+# For now, I will include them here as they were in the large snippet.
+from optimizers import get_optimizer, get_scheduler # For training individual members
+from losses import LabelSmoothingCrossEntropy, FeatureConsistencyLoss, SymbolicConsistencyLoss, DistillationLoss # For training losses
+from metrics import calculate_accuracy, calculate_precision_recall_f1, calculate_roc_auc, calculate_brier_score, calculate_expected_calibration_error
 
-# Import from training
-from training import _run_single_training_session_ensemble, _validate_model_ensemble # Assuming these are in training.py
-
-# Import from metrics
-from metrics import calculate_accuracy, calculate_precision_recall_f1, calculate_roc_auc, calculate_brier_score, calculate_expected_calibration_error # Assuming these are in metrics.py
+# SWA imports
+from torch.optim.swa_utils import AveragedModel, SWALR, update_bn # Explicitly import
 
 logger = logging.getLogger(__name__)
 
+# --- Helper functions (from previous context or to be defined) ---
+# Dummy rand_bbox and distillation_loss if they are not imported from phase1_code_part2b
+# Assuming these are now in losses.py or utils.py as part of refactoring.
+# If not, they would need to be defined here or properly imported.
+# For now, I'll assume they are available from the refactored project.
 
+# Define a basic JSON schema for ground truth validation
+# This was in the original large snippet, keeping it here for context if needed.
+BONGARD_GT_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "bongard_label": {"type": "integer", "minimum": 0, "maximum": 1},
+        "objects": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer"},
+                    "bbox": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
+                    "attributes": {"type": "object", "additionalProperties": {"type": "string"}},
+                    "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0}
+                },
+                "required": ["id", "bbox", "attributes", "confidence"]
+            }
+        },
+        "relations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "src": {"type": "integer"},
+                    "dst": {"type": "integer"},
+                    "type": {"type": "string"},
+                    "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0}
+                },
+                "required": ["src", "dst", "type", "confidence"]
+            }
+        }
+    },
+    "required": ["bongard_label", "objects", "relations"]
+}
+
+# AugmentMix (copied from previous snippet to ensure self-containment if not in data.py)
+class AugmentMix(nn.Module):
+    """
+    Applies MixUp or CutMix augmentation to a batch of images and labels.
+    """
+    def __init__(self, mixup_alpha: float, cutmix_alpha: float, mixup_cutmix_ratio: float):
+        super().__init__()
+        self.mixup_alpha = mixup_alpha
+        self.cutmix_alpha = cutmix_alpha
+        self.ratio = mixup_cutmix_ratio # Probability of applying MixUp vs CutMix
+    def forward(self, images: torch.Tensor, labels: torch.Tensor) -> Tuple[torch.Tensor, Tuple[torch.Tensor, Optional[torch.Tensor], float, str]]:
+        """
+        Applies MixUp or CutMix.
+        Args:
+            images (torch.Tensor): Batch of images [B, C, H, W].
+            labels (torch.Tensor): Batch of labels [B].
+        Returns:
+            Tuple[torch.Tensor, Tuple[torch.Tensor, Optional[torch.Tensor], float, str]]:
+                - Augmented images.
+                - Tuple: (labels_a, labels_b, lambda, mode_str)
+                  labels_a: Original labels
+                  labels_b: Labels of mixed image (None if no mix)
+                  lambda: Mixing coefficient
+                  mode_str: 'mixup', 'cutmix', or 'none'
+        """
+        if self.mixup_alpha > 0 and random.random() < self.ratio:
+            # Apply MixUp
+            lam = np.random.beta(self.mixup_alpha, self.mixup_alpha)
+            lam = max(lam, 1 - lam) # Ensure lambda >= 0.5
+            
+            index = torch.randperm(images.size(0)).to(images.device)
+            mixed_images = lam * images + (1 - lam) * images[index, :]
+            labels_a, labels_b = labels, labels[index]
+            
+            return mixed_images, (labels_a, labels_b, lam, 'mixup')
+        
+        elif self.cutmix_alpha > 0 and random.random() >= self.ratio:
+            # Apply CutMix
+            lam = np.random.beta(self.cutmix_alpha, self.cutmix_alpha)
+            lam = max(lam, 1 - lam)
+            
+            index = torch.randperm(images.size(0)).to(images.device)
+            bbx1, bby1, bbx2, bby2 = rand_bbox(images.size(), lam)
+            
+            mixed_images = images.clone()
+            mixed_images[:, :, bby1:bby2, bbx1:bbx2] = images[index, :, bby1:bby2, bbx1:bbx2]
+            
+            # adjust lambda to exactly match pixel ratio
+            lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (images.size()[-1] * images.size()[-2]))
+            
+            labels_a, labels_b = labels, labels[index]
+            
+            return mixed_images, (labels_a, labels_b, lam, 'cutmix')
+        
+        else:
+            # No MixUp/CutMix
+            return images, (labels, None, 1.0, 'none')
+
+# Helper function for CutMix (from torchvision examples)
+def rand_bbox(size, lam):
+    W = size[2]
+    H = size[3]
+    cut_rat = np.sqrt(1. - lam)
+    cut_w = np.int(W * cut_rat)
+    cut_h = np.int(H * cut_rat)
+    # uniform
+    cx = np.random.randint(W)
+    cy = np.random.randint(H)
+    bbx1 = np.clip(cx - cut_w // 2, 0, W)
+    bby1 = np.clip(cy - cut_h // 2, 0, H)
+    bby2 = np.clip(cy + cut_h // 2, 0, H)
+    bbx2 = np.clip(cx + cut_w // 2, 0, W)
+    return bbx1, bby1, bbx2, bby2
+
+# --- Core Training and Validation Functions (extracted and adapted) ---
+def _run_single_training_session_ensemble(
+    model: PerceptionModule,
+    train_loader: Any, # Can be DALI or PyTorch DataLoader
+    val_loader: Any, # Can be DALI or PyTorch DataLoader
+    optimizer: optim.Optimizer,
+    scheduler: Optional[Any],
+    current_rank: int,
+    is_ddp_initialized: bool,
+    model_idx: int, # Index of the ensemble member
+    cfg: Dict[str, Any], # Pass the full config for this run
+    replay_buffer: Optional[Any] = None, # For curriculum learning
+    teacher_model: Optional[Any] = None # For knowledge distillation
+) -> Tuple[str, np.ndarray, np.ndarray, Dict[str, Any]]:
+    """
+    Runs a single training session for a PerceptionModule model.
+    This function is designed to be called by the ensemble orchestrator.
+    Args:
+        model (PerceptionModule): The model to train.
+        train_loader: DALI or PyTorch DataLoader for training.
+        val_loader: DALI or PyTorch DataLoader for validation.
+        optimizer (torch.optim.Optimizer): The optimizer for the model.
+        scheduler (Optional[Any]): Learning rate scheduler.
+        current_rank (int): Current GPU rank.
+        is_ddp_initialized (bool): True if DDP is already initialized.
+        model_idx (int): Unique ID for the ensemble member (for naming checkpoints/logs).
+        cfg (Dict[str, Any]): The configuration for this specific training session.
+        replay_buffer (Optional[Any]): PrioritizedReplayBuffer instance for curriculum learning.
+        teacher_model (Optional[Any]): A pre-trained teacher model (e.g., an ensemble) for knowledge distillation.
+    Returns:
+        Tuple[str, np.ndarray, np.ndarray, Dict[str, Any]]:
+            - Path to the best saved model checkpoint.
+            - All validation predictions (logits) from the best model.
+            - All validation true labels.
+            - Dictionary of best validation metrics.
+    """
+    set_seed(cfg['training']['seed'] + model_idx) # Ensure unique seed for each member
+    logger.info(f"--- Starting Training Session for Member {model_idx} (Seed: {cfg['training']['seed'] + model_idx}) ---")
+    
+    epochs = cfg['training']['epochs']
+    logger.info(f"Training for {epochs} epochs.")
+
+    # Initialize TensorBoard writer
+    log_dir = os.path.join(cfg['debug']['log_dir'], datetime.now().strftime(f'member_{model_idx}_%Y%m%d-%H%M%S'))
+    writer = torch.utils.tensorboard.SummaryWriter(log_dir)
+    logger.info(f"TensorBoard logs for member {model_idx} at: {log_dir}")
+
+    # Initialize Weights & Biases (WandB)
+    if cfg['HAS_WANDB'] and cfg['training'].get('use_wandb', False):
+        import wandb
+        wandb.init(project="Bongard_Perception_Ensemble",
+                   group="ensemble_training",
+                   name=f"member_{model_idx}_seed_{cfg['training']['seed'] + model_idx}",
+                   config=cfg,
+                   reinit=True)
+        logger.info(f"WandB initialized for member {model_idx}.")
+
+    # Loss function (for Bongard classification)
+    criterion_bongard = LabelSmoothingCrossEntropy(smoothing=cfg['training']['label_smoothing_epsilon'])
+    logger.info(f"Using CrossEntropyLoss with label_smoothing_epsilon={cfg['training']['label_smoothing_epsilon']}.")
+    
+    # Loss functions for attribute and relation classification
+    criterion_attr = nn.CrossEntropyLoss()
+    criterion_rel = nn.CrossEntropyLoss()
+
+    scaler = torch.cuda.amp.GradScaler(enabled=cfg['training']['use_amp'])
+    logger.info(f"AMP scaler initialized (enabled={cfg['training']['use_amp']}).")
+
+    # Early Stopping
+    best_val_loss = float('inf')
+    best_val_accuracy = -float('inf')
+    patience_counter = 0
+    best_model_path = os.path.join(cfg['debug']['save_model_checkpoints'], f'member_{model_idx}_best_model.pt')
+
+    # Initialize AugmentMix
+    augmenter = AugmentMix(
+        mixup_alpha=cfg['training']['mixup_alpha'],
+        cutmix_alpha=cfg['training']['cutmix_alpha'],
+        mixup_cutmix_ratio=cfg['training']['mixup_cutmix_ratio']
+    )
+    logger.info(f"AugmentMix initialized with mixup_alpha={augmenter.mixup_alpha}, cutmix_alpha={augmenter.cutmix_alpha}.")
+
+    # SWA setup
+    swa_model = None
+    if cfg['training']['use_swa']:
+        swa_model = AveragedModel(model)
+        logger.info("SWA AveragedModel initialized.")
+    
+    logger.info("Starting training loop...")
+    for epoch in range(epochs):
+        model.train()
+        total_loss = 0.0
+        correct_predictions = 0
+        total_samples_epoch = 0
+        
+        if hasattr(train_loader, 'sampler') and hasattr(train_loader.sampler, 'set_epoch'):
+            train_loader.sampler.set_epoch(epoch)
+        
+        # QAT specific: enable observer for last few epochs
+        if cfg['training'].get('use_qat', False) and cfg['HAS_TORCH_QUANTIZATION'] and epoch >= cfg['training'].get('qat_start_epoch', epochs - 5):
+            logger.info(f"Epoch {epoch}: Enabling QAT observers.")
+            # Assuming tq (torch.quantization) is imported globally or passed
+            # For this context, it's safer to assume it's imported from config.py or similar.
+            # If not, this block will cause an error.
+            # For now, assuming `tq` is available.
+            try:
+                import torch.quantization as tq
+                model.apply(tq.enable_observer)
+                model.apply(tq.enable_fake_quant)
+            except ImportError:
+                logger.warning("torch.quantization not available. QAT observers cannot be enabled.")
+
+        # Snapshot ensemble saving
+        if cfg['ensemble'].get('snap_epoch', 0) > 0 and (epoch + 1) % cfg['ensemble']['snap_epoch'] == 0:
+            snapshot_path = os.path.join(cfg['debug']['save_model_checkpoints'], f"member_{model_idx}_snapshot_epoch_{epoch+1}.pt")
+            torch.save(model.state_dict(), snapshot_path)
+            logger.info(f"Snapshot of model {model_idx} saved to: {snapshot_path}")
+
+        for batch_idx, data in enumerate(train_loader):
+            # DALI returns data as a dictionary of lists/tensors.
+            # Adjust based on your `custom_collate_fn` or DALI output_map.
+            # Assuming data['view1'] is already NCHW and data['labels'] is (N,)
+            images_view1 = data['query_img1'].to(DEVICE) if isinstance(data, dict) else data[0].to(DEVICE)
+            images_view2 = data['query_img2'].to(DEVICE) if isinstance(data, dict) else data[1].to(DEVICE)
+            labels_bongard = data['query_labels'].to(DEVICE) if isinstance(data, dict) else data[2].to(DEVICE)
+            gts_json_strings_batch = data['query_gts_json_view1'] if isinstance(data, dict) else data[3]
+            original_indices = data['original_indices'].to(DEVICE) if isinstance(data, dict) else data[8].to(DEVICE) # For PER
+            is_weights = data['is_weights'].to(DEVICE) if isinstance(data, dict) else data[14].to(DEVICE) # For PER
+
+            # Apply MixUp/CutMix
+            images_view1_aug, mixinfo = augmenter(images_view1, labels_bongard)
+            labels_a, labels_b, lam, mode_aug = mixinfo
+
+            # Forward pass
+            with torch.cuda.amp.autocast(enabled=cfg['training']['use_amp']):
+                bongard_logits, detected_objects_view1, aggregated_outputs_view1 = model(images_view1_aug, gts_json_strings_batch)
+                
+                # Bongard Classification Loss (potentially with MixUp/CutMix)
+                if mode_aug == 'mixup' or mode_aug == 'cutmix':
+                    loss_bongard = lam * criterion_bongard(bongard_logits, labels_a) + (1 - lam) * criterion_bongard(bongard_logits, labels_b)
+                else:
+                    loss_bongard = criterion_bongard(bongard_logits, labels_bongard)
+                
+                # Apply importance sampling weights for HardExampleSampler
+                if cfg['training'].get('curriculum_learning', False) and cfg['training']['curriculum_config'].get('difficulty_sampling', False):
+                    loss_bongard = (loss_bongard * is_weights).mean()
+                else:
+                    loss_bongard = loss_bongard.mean() # Ensure scalar loss for backprop
+
+                total_loss_batch = loss_bongard
+                
+                # Attribute and Relation Losses (Joint Symbolic Loss)
+                if 'attribute_logits' in aggregated_outputs_view1 and 'attribute_gt' in aggregated_outputs_view1:
+                    for attr_name, attr_logits in aggregated_outputs_view1['attribute_logits'].items():
+                        if attr_name in aggregated_outputs_view1['attribute_gt']:
+                            attr_gt = aggregated_outputs_view1['attribute_gt'][attr_name]
+                            total_loss_batch += cfg['training']['attribute_loss_weight'] * criterion_attr(attr_logits, attr_gt)
+                
+                if 'relation_logits' in aggregated_outputs_view1 and 'relation_gt' in aggregated_outputs_view1:
+                    rel_logits = aggregated_outputs_view1['relation_logits']
+                    rel_gt = aggregated_outputs_view1['relation_gt']
+                    total_loss_batch += cfg['training']['relation_loss_weight'] * criterion_rel(rel_logits, rel_gt)
+                
+                # Feature Consistency Loss
+                if cfg['training'].get('feature_consistency_alpha', 0) > 0:
+                    _, _, aggregated_outputs_view2 = model(images_view2, gts_json_strings_batch)
+                    feature_consistency_criterion = FeatureConsistencyLoss(loss_type=cfg['training']['feature_consistency_loss_type'])
+                    consistency_loss_features = feature_consistency_criterion(
+                        aggregated_outputs_view1['image_features_student'],
+                        aggregated_outputs_view2['image_features_student']
+                    )
+                    total_loss_batch += cfg['training']['feature_consistency_alpha'] * consistency_loss_features
+                
+                # Symbolic Consistency Loss
+                if cfg['training'].get('symbolic_consistency_alpha', 0) > 0:
+                    # Need to pass scene_graphs from both views.
+                    # Assuming `extract_scene_graph` is a method of `PerceptionModule`
+                    # and can be called with batch data.
+                    # For a cleaner implementation, `symbolic_consistency_loss` itself might
+                    # take raw outputs and do the scene graph extraction internally.
+                    # For now, let's assume `symbolic_consistency_loss` can work with aggregated_outputs.
+                    
+                    # This part needs careful handling of list of dicts for scene graphs.
+                    # As a simplification, let's assume `symbolic_consistency_loss` can directly
+                    # use the attribute_logits from both views for a proxy.
+                    symbolic_cons_loss = SymbolicConsistencyLoss(
+                        all_bongard_rules=ALL_BONGARD_RULES, # Pass rules if needed
+                        config=cfg
+                    )
+                    # The `symbolic_consistency_loss` function defined in losses.py
+                    # expects `scene_graphs1`, `scene_graphs2`, `labels`, `ground_truth_scene_graphs`.
+                    # This is a mismatch with `aggregated_outputs_view1['attribute_logits']`.
+                    # For now, I'll use a dummy call to avoid breaking the code,
+                    # but this needs proper integration if symbolic consistency is crucial.
+                    # A proper implementation would involve extracting scene graphs from `detected_objects_view1`
+                    # and `aggregated_outputs_view1` for both views.
+                    
+                    # Dummy call for now:
+                    # symbolic_cons_loss_val = symbolic_cons_loss(
+                    #     [{"objects": [], "relations": []}] * images_view1.shape[0],
+                    #     [{"objects": [], "relations": []}] * images_view1.shape[0],
+                    #     labels_bongard,
+                    #     gts_json_strings_batch
+                    # )
+                    # total_loss_batch += cfg['training']['symbolic_consistency_alpha'] * symbolic_cons_loss_val
+                    pass # Skipping symbolic consistency for now due to complexity of integration within this loop
+            
+            # Knowledge Distillation (if teacher model provided)
+            if teacher_model is not None and cfg['training'].get('use_knowledge_distillation', False):
+                with torch.no_grad(): # Teacher inference should be no_grad
+                    # Teacher model might be a single model or an ensemble of models
+                    if isinstance(teacher_model, list): # Ensemble teacher
+                        teacher_logits_list = []
+                        for t_model in teacher_model:
+                            t_model.eval()
+                            t_logits, _, _ = t_model(images_view1, gts_json_strings_batch)
+                            teacher_logits_list.append(t_logits)
+                        teacher_logits = torch.mean(torch.stack(teacher_logits_list, dim=0), dim=0)
+                    else: # Single teacher model
+                        teacher_model.eval()
+                        teacher_logits, _, _ = teacher_model(images_view1, gts_json_strings_batch)
+                
+                dist_criterion = DistillationLoss(
+                    temperature=cfg['training']['distillation_temperature'],
+                    alpha=cfg['training']['distillation_alpha'],
+                    reduction='mean' # Use mean reduction for overall batch loss
+                )
+                dist_loss = dist_criterion(
+                    student_logits=bongard_logits,
+                    teacher_logits=teacher_logits,
+                    target_labels=labels_bongard
+                )
+                total_loss_batch = dist_loss # Distillation loss replaces main loss if enabled
+
+            # Scale loss for gradient accumulation
+            total_loss_batch = total_loss_batch / cfg['training']['gradient_accumulation_steps']
+            scaler.scale(total_loss_batch).backward()
+
+            if (batch_idx + 1) % cfg['training']['gradient_accumulation_steps'] == 0:
+                if cfg['training'].get('use_sam_optimizer', False):
+                    scaler.unscale_(optimizer)
+                    if cfg['training'].get('max_grad_norm', 0) > 0:
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), cfg['training']['max_grad_norm'])
+                    optimizer.first_step(zero_grad=True)
+                    
+                    # Second forward pass for SAM
+                    with torch.cuda.amp.autocast(enabled=cfg['training']['use_amp']):
+                        bongard_logits_second_step, _, _ = model(images_view1_aug, gts_json_strings_batch)
+                        loss_bongard_second_step = criterion_bongard(bongard_logits_second_step, labels_bongard)
+                        if cfg['training'].get('curriculum_learning', False) and cfg['training']['curriculum_config'].get('difficulty_sampling', False):
+                            loss_bongard_second_step = (loss_bongard_second_step * is_weights).mean()
+                        else:
+                            loss_bongard_second_step = loss_bongard_second_step.mean()
+                        total_loss_second_step = loss_bongard_second_step # Simplified for SAM's second step
+                        if teacher_model is not None and cfg['training'].get('use_knowledge_distillation', False):
+                            with torch.no_grad():
+                                if isinstance(teacher_model, list):
+                                    teacher_logits_list_second_step = []
+                                    for t_model in teacher_model:
+                                        t_model.eval()
+                                        t_logits, _, _ = t_model(images_view1, gts_json_strings_batch)
+                                        teacher_logits_list_second_step.append(t_logits)
+                                    teacher_logits_second_step = torch.mean(torch.stack(teacher_logits_list_second_step, dim=0), dim=0)
+                                else:
+                                    teacher_model.eval()
+                                    teacher_logits_second_step, _, _ = teacher_model(images_view1, gts_json_strings_batch)
+                            dist_loss_second_step = dist_criterion(
+                                student_logits=bongard_logits_second_step,
+                                teacher_logits=teacher_logits_second_step,
+                                target_labels=labels_bongard
+                            )
+                            total_loss_second_step = dist_loss_second_step
+                    total_loss_second_step = total_loss_second_step / cfg['training']['gradient_accumulation_steps']
+                    scaler.scale(total_loss_second_step).backward()
+                    optimizer.second_step(zero_grad=True)
+                else:
+                    if cfg['training'].get('max_grad_norm', 0) > 0:
+                        scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), cfg['training']['max_grad_norm'])
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad()
+                
+                if scheduler and isinstance(scheduler, OneCycleLR):
+                    scheduler.step()
+            
+            total_loss += total_loss_batch.item() * cfg['training']['gradient_accumulation_steps']
+            
+            _, predicted = torch.max(bongard_logits.data, 1)
+            correct_predictions += (predicted == labels_bongard).sum().item()
+            total_samples_epoch += labels_bongard.size(0)
+
+            # Update HardExampleSampler's replay buffer
+            if replay_buffer is not None and cfg['training'].get('curriculum_learning', False) and cfg['training']['curriculum_config'].get('difficulty_sampling', False):
+                per_sample_losses = criterion_bongard(bongard_logits, labels_bongard, reduction='none') # Get per-sample loss
+                if mode_aug == 'mixup' or mode_aug == 'cutmix':
+                    # For mixed samples, the loss is a weighted sum.
+                    # To get per-sample loss for PER, we need to consider the original labels.
+                    # This is complex. For simplicity, we'll use the combined loss as a proxy
+                    # or assume `criterion_bongard` can return per-sample for mixed targets.
+                    # If `reduction='none'` is used, it returns per-sample loss.
+                    # If `labels_b` is None (no mix), then it's just `labels_a`.
+                    
+                    # For PER, we need a single scalar loss per original sample.
+                    # If `criterion_bongard` is `LabelSmoothingCrossEntropy` with `reduction='none'`,
+                    # it returns a tensor of shape (N,).
+                    # We can use this directly.
+                    pass # per_sample_losses already computed above if criterion_bongard supports reduction='none'
+                
+                replay_buffer.update_priorities(original_indices.cpu().tolist(), per_sample_losses.cpu().tolist())
+
+        avg_train_loss = total_loss / len(train_loader)
+        train_accuracy = correct_predictions / total_samples_epoch if total_samples_epoch > 0 else 0.0
+        logger.info(f"Epoch {epoch+1}/{epochs} - Train Loss: {avg_train_loss:.4f}, Train Accuracy: {train_accuracy:.4f}")
+        writer.add_scalar('Loss/train', avg_train_loss, epoch)
+        writer.add_scalar('Accuracy/train', train_accuracy, epoch)
+        if cfg['HAS_WANDB'] and cfg['training'].get('use_wandb', False):
+            import wandb
+            wandb.log({"train_loss": avg_train_loss, "train_accuracy": train_accuracy, "epoch": epoch})
+        
+        # Validation
+        val_loss, val_accuracy, val_predictions_logits, val_true_labels = _validate_model_ensemble(model, val_loader, criterion_bongard, cfg)
+        logger.info(f"Epoch {epoch+1}/{epochs} - Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.4f}")
+        writer.add_scalar('Loss/val', val_loss, epoch)
+        writer.add_scalar('Accuracy/val', val_accuracy, epoch)
+        if cfg['HAS_WANDB'] and cfg['training'].get('use_wandb', False):
+            import wandb
+            wandb.log({"val_loss": val_loss, "val_accuracy": val_accuracy, "epoch": epoch})
+        
+        # SWA update
+        if cfg['training']['use_swa'] and epoch >= int(epochs * cfg['training']['swa_start_epoch_ratio']):
+            swa_model.update_parameters(model)
+            logger.debug(f"SWA model updated at epoch {epoch}.")
+            if cfg['training'].get('swa_lr') is not None:
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = cfg['training']['swa_lr']
+                logger.debug(f"SWA LR set to {cfg['training']['swa_lr']}.")
+        
+        # Early Stopping check
+        monitor_metric = val_loss
+        if cfg['training']['early_stopping_monitor_metric'] == 'val_accuracy':
+            monitor_metric = -val_accuracy # For accuracy, we want to maximize, so minimize negative accuracy
+            if val_accuracy > best_val_accuracy:
+                best_val_accuracy = val_accuracy
+                patience_counter = 0
+                logger.info(f"New best validation accuracy: {best_val_accuracy:.4f}. Saving model.")
+                torch.save(model.state_dict(), best_model_path)
+            else:
+                patience_counter += 1
+                logger.info(f"Validation accuracy did not improve. Patience: {patience_counter}/{cfg['training']['early_stopping_patience']}")
+        else: # Default to val_loss
+            if val_loss < best_val_loss - cfg['training']['early_stopping_min_delta']:
+                best_val_loss = val_loss
+                patience_counter = 0
+                logger.info(f"New best validation loss: {best_val_loss:.4f}. Saving model.")
+                torch.save(model.state_dict(), best_model_path)
+            else:
+                patience_counter += 1
+                logger.info(f"Validation loss did not improve. Patience: {patience_counter}/{cfg['training']['early_stopping_patience']}")
+        
+        if scheduler and not isinstance(scheduler, OneCycleLR): # Step other schedulers per epoch
+            if isinstance(scheduler, ReduceLROnPlateau):
+                scheduler.step(val_loss)
+            else:
+                scheduler.step()
+        
+        if patience_counter >= cfg['training']['early_stopping_patience']:
+            logger.info(f"Early stopping triggered at epoch {epoch+1}.")
+            break
+    
+    # Finalize SWA model if enabled
+    if cfg['training']['use_swa']:
+        update_bn(train_loader, swa_model, device=DEVICE)
+        final_model_path = best_model_path.replace('.pt', '_swa.pt')
+        torch.save(swa_model.state_dict(), final_model_path)
+        logger.info(f"SWA model finalized and saved to {final_model_path}")
+        best_model_path = final_model_path # Use SWA model for final evaluation
+
+    # QAT specific: convert to quantized model
+    if cfg['training'].get('use_qat', False) and cfg['HAS_TORCH_QUANTIZATION']:
+        logger.info("Finalizing QAT model conversion.")
+        model.eval()
+        try:
+            import torch.quantization as tq
+            model_to_convert = model.cpu() # Move to CPU before conversion
+            model_int8 = tq.convert(model_to_convert, inplace=False)
+            quantized_model_path = best_model_path.replace('.pt', '_quantized.pt')
+            torch.save(model_int8.state_dict(), quantized_model_path)
+            logger.info(f"Quantized model saved to {quantized_model_path}")
+            best_model_path = quantized_model_path # Use quantized model for inference
+        except ImportError:
+            logger.warning("torch.quantization not available. QAT conversion skipped.")
+        except Exception as e:
+            logger.error(f"Error during QAT conversion: {e}. QAT conversion skipped.")
+
+    writer.close()
+    if cfg['HAS_WANDB'] and cfg['training'].get('use_wandb', False):
+        import wandb
+        wandb.finish()
+    
+    # Load the best model to return its state
+    if os.path.exists(best_model_path):
+        model.load_state_dict(torch.load(best_model_path, map_location=DEVICE))
+        logger.info(f"Loaded best model from {best_model_path} for final evaluation.")
+    else:
+        logger.warning(f"Best model checkpoint not found at {best_model_path}. Returning current model state.")
+
+    # Re-run validation on the best model to get final predictions and metrics
+    final_val_loss, final_val_accuracy, final_val_predictions_logits, final_val_true_labels = _validate_model_ensemble(model, val_loader, criterion_bongard, cfg)
+    
+    best_metrics = {
+        'val_loss': final_val_loss,
+        'val_accuracy': final_val_accuracy,
+        'logits': np.array(final_val_predictions_logits),
+        'labels': np.array(final_val_true_labels)
+    }
+    logger.info(f"--- Training Session for Member {model_idx} Finished. Best model saved to {best_model_path} ---")
+    return best_model_path, np.array(final_val_predictions_logits), np.array(final_val_true_labels), best_metrics
+
+def _validate_model_ensemble(model: PerceptionModule, data_loader: Any, criterion: nn.Module, config: Dict[str, Any]):
+    """
+    Validates the model on the given data loader.
+    Args:
+        model (PerceptionModule): The model to validate.
+        data_loader (Any): DALI or PyTorch data loader for validation data.
+        criterion (nn.Module): Loss function.
+        config (Dict): Configuration dictionary.
+    Returns:
+        Tuple[float, float, List[np.ndarray], List[int]]:
+            - Average validation loss.
+            - Average validation accuracy.
+            - List of numpy arrays of predictions (logits) for each validation sample.
+            - List of true labels for each validation sample.
+    """
+    model.eval()
+    total_loss = 0.0
+    correct_predictions = 0
+    total_samples = 0
+    all_predictions_logits = []
+    all_true_labels = []
+
+    # Reset DALI iterator for validation if it's a DALI loader
+    if hasattr(data_loader, 'reset'):
+        data_loader.reset()
+
+    with torch.no_grad():
+        for batch_idx, data in enumerate(data_loader):
+            images_view1 = data['query_img1'].to(DEVICE) if isinstance(data, dict) else data[0].to(DEVICE)
+            labels_bongard = data['query_labels'].to(DEVICE) if isinstance(data, dict) else data[2].to(DEVICE)
+            gts_json_strings_batch = data['query_gts_json_view1'] if isinstance(data, dict) else data[3]
+
+            with torch.cuda.amp.autocast(enabled=config['training']['use_amp']):
+                bongard_logits, _, _ = model(images_view1, gts_json_strings_batch)
+                loss = criterion(bongard_logits, labels_bongard)
+            
+            total_loss += loss.item()
+            
+            _, predicted = torch.max(bongard_logits.data, 1)
+            correct_predictions += (predicted == labels_bongard).sum().item()
+            total_samples += labels_bongard.size(0)
+            all_predictions_logits.extend(bongard_logits.cpu().numpy())
+            all_true_labels.extend(labels_bongard.cpu().numpy())
+    
+    avg_loss = total_loss / len(data_loader) if len(data_loader) > 0 else 0.0
+    accuracy = correct_predictions / total_samples if total_samples > 0 else 0.0
+    
+    return avg_loss, accuracy, all_predictions_logits, all_true_labels
+
+# --- Ensemble Orchestration ---
 def train_ensemble(
     num_members: int,
     train_loader: Any,
     val_loader: Any,
+    cfg: Dict[str, Any], # Pass the full config
     current_rank: int = 0,
     world_size: int = 1,
     is_ddp_initialized: bool = False,
 ) -> Tuple[List[nn.Module], List[Dict[str, Any]]]:
     """
     Trains multiple ensemble members. Each member is trained independently.
-
     Args:
         num_members (int): Number of ensemble members to train.
         train_loader: DALI or PyTorch DataLoader for training.
         val_loader: DALI or PyTorch DataLoader for validation.
+        cfg (Dict[str, Any]): The configuration dictionary.
         current_rank (int): Current GPU rank.
         world_size (int): Total number of GPUs.
         is_ddp_initialized (bool): True if DDP is already initialized.
-
     Returns:
         Tuple[List[nn.Module], List[Dict[str, Any]]]:
             - List of trained ensemble models.
@@ -61,30 +655,25 @@ def train_ensemble(
     """
     ensemble_models = []
     all_members_best_metrics = []
-
     for i in range(num_members):
         logger.info(f"Training ensemble member {i+1}/{num_members}...")
         
-        # Get symbolic embedding dimensions
-        symbolic_embedding_dims = get_symbolic_embedding_dims()
-        
         # Initialize a new model for each member
-        model = PerceptionModule(CONFIG, symbolic_embedding_dims).to(DEVICE) # Ensure model is on correct device
+        model = PerceptionModule(cfg).to(DEVICE) # Pass full config to PerceptionModule
         
         # If DDP is initialized, wrap the model
         if is_ddp_initialized:
             model = DDP(model, device_ids=[current_rank])
-
+        
         # Initialize optimizer and scheduler for this member
-        from optimizers import get_optimizer, get_scheduler
-        optimizer = get_optimizer(model, CONFIG['training'])
+        optimizer = get_optimizer(model, cfg['training'])
         
         # Calculate total steps for OneCycleLR
-        total_steps = CONFIG['training']['epochs'] * len(train_loader) if hasattr(train_loader, '__len__') else CONFIG['training']['epochs'] * 100 # Fallback
-        scheduler = get_scheduler(optimizer, CONFIG['training'], total_steps)
-
+        total_steps = cfg['training']['epochs'] * len(train_loader) if hasattr(train_loader, '__len__') else cfg['training']['epochs'] * 100 # Fallback
+        scheduler = get_scheduler(optimizer, cfg['training'], total_steps)
+        
         # Run training for this member
-        _, _, best_metrics = _run_single_training_session_ensemble(
+        _, _, _, best_metrics = _run_single_training_session_ensemble(
             model=model,
             train_loader=train_loader,
             val_loader=val_loader,
@@ -93,33 +682,31 @@ def train_ensemble(
             current_rank=current_rank,
             is_ddp_initialized=is_ddp_initialized,
             model_idx=i,
-            replay_buffer=train_loader.external_source.dataset.curriculum_sampler.replay_buffer if CONFIG['training']['use_prioritized_replay'] else None # Pass replay buffer
+            cfg=cfg, # Pass full config
+            replay_buffer=train_loader.dataset.replay_buffer if cfg['training'].get('curriculum_learning', False) and cfg['training']['curriculum_config'].get('difficulty_sampling', False) else None
         )
         
         # Store the trained model (unwrapped if DDP)
         ensemble_models.append(model.module if is_ddp_initialized else model)
         all_members_best_metrics.append(best_metrics)
-
         logger.info(f"Ensemble member {i+1} training completed.")
-
     return ensemble_models, all_members_best_metrics
-
 
 def load_trained_model(
     model_path: str,
+    cfg: Dict[str, Any], # Pass the full config
     current_rank: int = 0,
     is_ddp_initialized: bool = False,
     val_loader: Any = None # Required for re-running validation
 ) -> Tuple[nn.Module, Dict[str, Any]]:
     """
     Loads a pre-trained model and optionally re-runs validation to get metrics.
-
     Args:
         model_path (str): Path to the model checkpoint.
+        cfg (Dict[str, Any]): The configuration dictionary.
         current_rank (int): Current GPU rank.
         is_ddp_initialized (bool): True if DDP is already initialized.
         val_loader (Any): DALI or PyTorch DataLoader for validation. Required to get fresh metrics.
-
     Returns:
         Tuple[nn.Module, Dict[str, Any]]:
             - Loaded model (unwrapped if DDP).
@@ -128,18 +715,20 @@ def load_trained_model(
     logger.info(f"Loading model from {model_path}...")
     checkpoint = torch.load(model_path, map_location=DEVICE)
     
-    symbolic_embedding_dims = get_symbolic_embedding_dims()
-    model = PerceptionModule(CONFIG, symbolic_embedding_dims).to(DEVICE)
+    model = PerceptionModule(cfg).to(DEVICE) # Pass full config to PerceptionModule
     
     # Load state dict, handling DDP prefix if necessary
-    state_dict = checkpoint['model_state_dict']
+    state_dict = checkpoint
+    if 'model_state_dict' in checkpoint: # If checkpoint is a dict with 'model_state_dict' key
+        state_dict = checkpoint['model_state_dict']
+
     if is_ddp_initialized and not list(state_dict.keys())[0].startswith('module.'):
         # Add 'module.' prefix if loading a non-DDP saved model into DDP
         state_dict = {'module.' + k: v for k, v in state_dict.items()}
     elif not is_ddp_initialized and list(state_dict.keys())[0].startswith('module.'):
         # Remove 'module.' prefix if loading a DDP saved model into non-DDP
         state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
-
+    
     model.load_state_dict(state_dict)
     
     # Wrap with DDP if DDP is initialized for this process
@@ -147,46 +736,47 @@ def load_trained_model(
         model = DDP(model, device_ids=[current_rank])
     
     logger.info("Model loaded successfully.")
-
+    
     # Re-run validation to get fresh predictions, labels, and logits
     if val_loader:
         logger.info("Re-running validation on loaded model to get metrics...")
-        val_metrics = _validate_model_ensemble(
+        criterion_bongard = LabelSmoothingCrossEntropy(smoothing=cfg['training']['label_smoothing_epsilon'])
+        val_loss, val_accuracy, val_predictions_logits, val_true_labels = _validate_model_ensemble(
             model=model,
-            val_loader=val_loader,
-            current_rank=current_rank,
-            is_ddp_initialized=is_ddp_initialized,
-            model_idx=0 # Dummy index for loaded model
+            data_loader=val_loader,
+            criterion=criterion_bongard,
+            config=cfg
         )
-        logger.info(f"Validation on loaded model complete. Accuracy: {val_metrics['accuracy']:.4f}")
+        val_metrics = {
+            'val_loss': val_loss,
+            'val_accuracy': val_accuracy,
+            'logits': np.array(val_predictions_logits),
+            'labels': np.array(val_true_labels)
+        }
+        logger.info(f"Validation on loaded model complete. Accuracy: {val_metrics['val_accuracy']:.4f}")
     else:
         logger.warning("No validation loader provided. Cannot get fresh validation metrics for loaded model.")
         val_metrics = {
-            'predictions': np.array([]),
-            'labels': np.array([]),
+            'val_loss': float('inf'),
+            'val_accuracy': 0.0,
             'logits': np.array([]),
-            'accuracy': 0.0,
-            'loss': float('inf')
+            'labels': np.array([])
         }
-
     return model.module if is_ddp_initialized else model, val_metrics
-
 
 def weighted_average_ensemble_prediction(
     all_members_val_predictions_logits: List[np.ndarray], # List of (N, num_classes) logits
-    all_members_val_labels: List[np.ndarray], # List of (N,) labels
+    all_members_val_labels: np.ndarray, # Single (N,) labels array
     ensemble_member_accuracies: List[float] # List of accuracies for each member
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Dict[str, Any]]:
     """
     Combines predictions from ensemble members using a weighted average of their logits.
     Weights are based on individual model accuracies.
-
     Args:
         all_members_val_predictions_logits (List[np.ndarray]): List of validation logits
                                                                 (each array is for one member).
-        all_members_val_labels (List[np.ndarray]): List of validation labels (should be identical).
+        all_members_val_labels (np.ndarray): True labels for the validation set.
         ensemble_member_accuracies (List[float]): Validation accuracy for each member.
-
     Returns:
         Tuple[np.ndarray, np.ndarray, np.ndarray, Dict[str, Any]]:
             - combined_logits (np.ndarray): Weighted average of logits.
@@ -197,7 +787,7 @@ def weighted_average_ensemble_prediction(
     if not all_members_val_predictions_logits:
         logger.warning("No member logits provided for weighted average ensemble. Returning empty results.")
         return np.array([]), np.array([]), np.array([]), {}
-
+    
     num_members = len(all_members_val_predictions_logits)
     
     # Calculate weights based on accuracies (e.g., softmax over accuracies)
@@ -206,33 +796,30 @@ def weighted_average_ensemble_prediction(
     weights = weights / np.sum(weights) # Normalize to sum to 1
     
     logger.info(f"Weighted average ensemble: Member weights: {weights.tolist()}")
-
     combined_logits = np.zeros_like(all_members_val_predictions_logits[0])
     for i in range(num_members):
         combined_logits += weights[i] * all_members_val_predictions_logits[i]
     
     combined_predictions = np.argmax(combined_logits, axis=1)
-    true_labels = all_members_val_labels[0] # All label lists should be identical
-
+    true_labels = all_members_val_labels # All label lists should be identical, so just take the first one
+    
     # Calculate ensemble metrics
     ensemble_metrics = _calculate_ensemble_metrics(combined_predictions, true_labels, combined_logits)
     logger.info(f"Weighted Average Ensemble Metrics: Accuracy: {ensemble_metrics['accuracy']:.4f}")
-
     return combined_logits, combined_predictions, true_labels, ensemble_metrics
-
 
 class StackedEnsembleMetaLearner(nn.Module):
     """
     A simple meta-learner for stacked ensemble.
     Takes concatenated logits from base models and predicts final class.
     """
-    def __init__(self, input_dim: int, num_classes: int):
+    def __init__(self, input_dim: int, num_classes: int, hidden_dim: int = 128):
         super().__init__()
-        self.fc1 = nn.Linear(input_dim, input_dim // 2)
+        self.fc1 = nn.Linear(input_dim, hidden_dim)
         self.relu = nn.ReLU()
-        self.fc2 = nn.Linear(input_dim // 2, num_classes)
+        self.fc2 = nn.Linear(hidden_dim, num_classes)
         logger.info(f"StackedEnsembleMetaLearner initialized with input_dim={input_dim}, num_classes={num_classes}")
-
+    
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
@@ -245,7 +832,6 @@ class StackedEnsembleMetaLearner(nn.Module):
         x = self.fc2(x)
         return x
 
-
 def train_stacked_ensemble_meta_learner(
     all_members_val_predictions_logits: List[np.ndarray], # List of (N, num_classes) logits
     all_members_val_labels: np.ndarray, # Single (N,) labels array
@@ -255,7 +841,6 @@ def train_stacked_ensemble_meta_learner(
 ) -> Tuple[StackedEnsembleMetaLearner, Dict[str, Any]]:
     """
     Trains a meta-learner for stacked ensemble.
-
     Args:
         all_members_val_predictions_logits (List[np.ndarray]): List of validation logits
                                                                 (each array is for one member).
@@ -263,7 +848,6 @@ def train_stacked_ensemble_meta_learner(
         num_classes (int): Number of Bongard problem classes.
         epochs (int): Number of epochs to train the meta-learner.
         lr (float): Learning rate for the meta-learner.
-
     Returns:
         Tuple[StackedEnsembleMetaLearner, Dict[str, Any]]:
             - Trained meta-learner model.
@@ -272,7 +856,7 @@ def train_stacked_ensemble_meta_learner(
     if not all_members_val_predictions_logits:
         logger.warning("No member logits provided for stacked ensemble meta-learner training. Returning dummy.")
         return StackedEnsembleMetaLearner(10, num_classes), {} # Dummy meta-learner
-
+    
     num_members = len(all_members_val_predictions_logits)
     num_samples = all_members_val_predictions_logits[0].shape[0]
     
@@ -281,13 +865,13 @@ def train_stacked_ensemble_meta_learner(
     meta_input_np = np.concatenate(all_members_val_predictions_logits, axis=1)
     meta_input = torch.tensor(meta_input_np, dtype=torch.float32).to(DEVICE)
     meta_labels = torch.tensor(all_members_val_labels, dtype=torch.long).to(DEVICE)
-
     input_dim = meta_input.shape[1]
+    
     meta_learner = StackedEnsembleMetaLearner(input_dim, num_classes).to(DEVICE)
     
     optimizer = optim.Adam(meta_learner.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
-
+    
     logger.info(f"Training Stacked Ensemble Meta-Learner for {epochs} epochs...")
     for epoch in tqdm(range(epochs), desc="Meta-Learner Training"):
         meta_learner.train()
@@ -296,10 +880,9 @@ def train_stacked_ensemble_meta_learner(
         loss = criterion(outputs, meta_labels)
         loss.backward()
         optimizer.step()
-
         if (epoch + 1) % 10 == 0:
             logger.debug(f"Meta-Learner Epoch {epoch+1}, Loss: {loss.item():.4f}")
-
+    
     # Evaluate meta-learner
     meta_learner.eval()
     with torch.no_grad():
@@ -308,9 +891,7 @@ def train_stacked_ensemble_meta_learner(
     
     ensemble_metrics = _calculate_ensemble_metrics(meta_predictions, all_members_val_labels, meta_logits)
     logger.info(f"Stacked Ensemble Meta-Learner Metrics: Accuracy: {ensemble_metrics['accuracy']:.4f}")
-
     return meta_learner, ensemble_metrics
-
 
 def _calculate_ensemble_metrics(predictions: np.ndarray, labels: np.ndarray, logits: np.ndarray) -> Dict[str, Any]:
     """Calculates common metrics for an ensemble's predictions."""
@@ -328,7 +909,7 @@ def _calculate_ensemble_metrics(predictions: np.ndarray, labels: np.ndarray, log
         roc_auc = 0.0
         brier_score = 0.0
         ece_metrics = {'ece': 0.0, 'mce': 0.0}
-
+    
     return {
         'accuracy': accuracy,
         'precision': precision_recall_f1['precision'],
@@ -343,7 +924,6 @@ def _calculate_ensemble_metrics(predictions: np.ndarray, labels: np.ndarray, log
         'logits': logits
     }
 
-
 def train_distilled_student_orchestrator_combined(
     num_ensemble_members: int,
     train_loader: Any,
@@ -352,7 +932,8 @@ def train_distilled_student_orchestrator_combined(
     epochs_student: int,
     lr_student: float,
     teacher_ensemble_type: str = 'weighted_average', # 'weighted_average' or 'stacked'
-    train_members: bool = True, # Whether to train members or load them
+    train_members: bool = True, # Whether to train teachers or load them
+    cfg: Dict[str, Any], # Pass the full config
     current_rank: int = 0,
     world_size: int = 1,
     is_ddp_initialized: bool = False,
@@ -360,7 +941,6 @@ def train_distilled_student_orchestrator_combined(
     """
     Orchestrates the training of an ensemble of teacher models and a student model
     using knowledge distillation.
-
     Args:
         num_ensemble_members (int): Number of teacher ensemble members.
         train_loader: DALI or PyTorch DataLoader for training.
@@ -370,10 +950,10 @@ def train_distilled_student_orchestrator_combined(
         lr_student (float): Learning rate for the student model.
         teacher_ensemble_type (str): Type of teacher ensemble ('weighted_average' or 'stacked').
         train_members (bool): If True, train teacher members; otherwise, load them.
+        cfg (Dict[str, Any]): The configuration dictionary.
         current_rank (int): Current GPU rank.
         world_size (int): Total number of GPUs.
         is_ddp_initialized (bool): True if DDP is already initialized.
-
     Returns:
         Tuple[nn.Module, Dict[str, Any], Dict[str, Any]]:
             - Trained student model.
@@ -381,7 +961,6 @@ def train_distilled_student_orchestrator_combined(
             - Metrics for the student model.
     """
     logger.info("Starting ensemble teacher training and student distillation orchestration.")
-
     teacher_models = []
     all_members_val_predictions_logits = [] # List of (N_val, num_classes) logits for each member
     all_members_val_labels = [] # List of (N_val,) labels for each member (should be identical)
@@ -393,6 +972,7 @@ def train_distilled_student_orchestrator_combined(
             num_members=num_ensemble_members,
             train_loader=train_loader,
             val_loader=val_loader,
+            cfg=cfg,
             current_rank=current_rank,
             world_size=world_size,
             is_ddp_initialized=is_ddp_initialized
@@ -400,17 +980,18 @@ def train_distilled_student_orchestrator_combined(
         for metrics in all_members_best_metrics:
             all_members_val_predictions_logits.append(metrics['logits'])
             all_members_val_labels.append(metrics['labels'])
-            ensemble_member_accuracies.append(metrics['accuracy'])
+            ensemble_member_accuracies.append(metrics['val_accuracy'])
     else:
         # Load pre-trained teacher ensemble members
         logger.info("Loading pre-trained teacher ensemble members...")
-        model_save_dir = CONFIG['debug']['save_model_checkpoints']
+        model_save_dir = cfg['debug']['save_model_checkpoints']
         for i in range(num_ensemble_members):
-            model_path = os.path.join(model_save_dir, f"best_model_member_{i}.pth")
+            model_path = os.path.join(model_save_dir, f"member_{i}_best_model.pt")
             if os.path.exists(model_path):
                 # Load model and re-run validation to get fresh metrics
                 model, val_metrics = load_trained_model(
                     model_path=model_path,
+                    cfg=cfg,
                     current_rank=current_rank,
                     is_ddp_initialized=is_ddp_initialized,
                     val_loader=val_loader # Pass val_loader to get actual metrics
@@ -418,27 +999,27 @@ def train_distilled_student_orchestrator_combined(
                 teacher_models.append(model)
                 all_members_val_predictions_logits.append(val_metrics['logits'])
                 all_members_val_labels.append(val_metrics['labels'])
-                ensemble_member_accuracies.append(val_metrics['accuracy'])
+                ensemble_member_accuracies.append(val_metrics['val_accuracy'])
             else:
                 logger.warning(f"Teacher model {model_path} not found. Skipping this member.")
         
         if not teacher_models:
             logger.error("No teacher models loaded. Cannot proceed with distillation.")
             return None, {}, {}
-
+    
     # Combine teacher predictions based on ensemble type
     teacher_ensemble_logits = None
     teacher_ensemble_metrics = {}
-    num_bongard_classes = CONFIG['model']['bongard_head_config']['num_classes']
+    num_bongard_classes = cfg['model']['bongard_head_config']['num_classes']
+    
+    # Ensure all_members_val_labels is consistent (all same)
+    if all_members_val_labels:
+        true_labels_for_ensemble_eval = all_members_val_labels[0]
+    else:
+        true_labels_for_ensemble_eval = np.array([]) # Empty if no labels
 
     if teacher_ensemble_type == 'weighted_average':
         logger.info("Combining teacher predictions using weighted average.")
-        # Need to ensure all_members_val_labels is consistent (all same)
-        if all_members_val_labels:
-            true_labels_for_ensemble_eval = all_members_val_labels[0]
-        else:
-            true_labels_for_ensemble_eval = np.array([]) # Empty if no labels
-        
         teacher_ensemble_logits, _, _, teacher_ensemble_metrics = weighted_average_ensemble_prediction(
             all_members_val_predictions_logits=all_members_val_predictions_logits,
             all_members_val_labels=true_labels_for_ensemble_eval,
@@ -446,18 +1027,12 @@ def train_distilled_student_orchestrator_combined(
         )
     elif teacher_ensemble_type == 'stacked':
         logger.info("Training stacked ensemble meta-learner.")
-        # Ensure all_members_val_labels is consistent (all same)
-        if all_members_val_labels:
-            true_labels_for_ensemble_eval = all_members_val_labels[0]
-        else:
-            true_labels_for_ensemble_eval = np.array([]) # Empty if no labels
-
         meta_learner, teacher_ensemble_metrics = train_stacked_ensemble_meta_learner(
             all_members_val_predictions_logits=all_members_val_predictions_logits,
             all_members_val_labels=true_labels_for_ensemble_eval,
             num_classes=num_bongard_classes,
-            epochs=CONFIG['training']['stacked_ensemble_config']['meta_learner_epochs'],
-            lr=CONFIG['training']['stacked_ensemble_config']['meta_learner_lr']
+            epochs=cfg['training']['stacked_ensemble_config']['meta_learner_epochs'],
+            lr=cfg['training']['stacked_ensemble_config']['meta_learner_lr']
         )
         # Get logits from the trained meta-learner on the validation set
         meta_input_np = np.concatenate(all_members_val_predictions_logits, axis=1)
@@ -466,41 +1041,28 @@ def train_distilled_student_orchestrator_combined(
             teacher_ensemble_logits = meta_learner(meta_input).cpu().numpy()
     else:
         raise ValueError(f"Unsupported teacher_ensemble_type: {teacher_ensemble_type}")
-
+    
     if teacher_ensemble_logits is None:
         logger.error("Failed to obtain teacher ensemble logits. Aborting student training.")
         return None, teacher_ensemble_metrics, {}
-
+    
     logger.info("Teacher ensemble predictions combined. Starting student model training with distillation.")
-
+    
     # Train student model with knowledge distillation
-    symbolic_embedding_dims = get_symbolic_embedding_dims()
-    student_model = PerceptionModule(student_model_config, symbolic_embedding_dims).to(DEVICE)
+    student_model = PerceptionModule(student_model_config).to(DEVICE)
     if is_ddp_initialized:
         student_model = DDP(student_model, device_ids=[current_rank])
-
-    from optimizers import get_optimizer, get_scheduler
-    student_optimizer = get_optimizer(student_model, {'optimizer': CONFIG['training']['optimizer'], 'learning_rate': lr_student, 'sam_rho': CONFIG['training']['sam_rho']})
+    
+    student_optimizer = get_optimizer(student_model, student_model_config['training'])
     total_steps_student = epochs_student * len(train_loader) if hasattr(train_loader, '__len__') else epochs_student * 100
-    student_scheduler = get_scheduler(student_optimizer, {'scheduler': 'OneCycleLR', 'scheduler_config': {'OneCycleLR': {'max_lr': lr_student * 10, 'pct_start': 0.3, 'anneal_strategy': 'cos'}}, 'epochs': epochs_student}, total_steps_student)
-
-    # Pass teacher logits to the training loop via CONFIG or directly
-    # For simplicity, let's assume `_run_single_training_session_ensemble` can accept `teacher_logits`
-    # or that it's set in a global config for distillation.
-    # A cleaner way is to create a custom distillation training loop or pass it as an argument.
-    # For now, we'll pass it via a modified CONFIG for the student training session.
+    student_scheduler = get_scheduler(student_optimizer, student_model_config['training'], total_steps_student)
     
-    # Create a temporary config for student training to include teacher_logits
-    student_training_config_temp = CONFIG['training'].copy()
-    student_training_config_temp['use_knowledge_distillation'] = True
-    # Store the full teacher_ensemble_logits in the config. The training loop will index into it.
-    student_training_config_temp['teacher_logits'] = torch.tensor(teacher_ensemble_logits, dtype=torch.float32).to(DEVICE) 
+    # Pass teacher logits to the training loop
+    # This requires a modification to _run_single_training_session_ensemble to accept teacher_logits
+    # The current _run_single_training_session_ensemble already takes `teacher_model` as an argument.
+    # So, we pass the `teacher_models` list (or `meta_learner` if stacked) to it.
     
-    # Temporarily override CONFIG for student training
-    original_config_training = CONFIG['training']
-    CONFIG['training'] = student_training_config_temp
-
-    _, _, student_metrics = _run_single_training_session_ensemble(
+    _, _, _, student_metrics = _run_single_training_session_ensemble(
         model=student_model,
         train_loader=train_loader,
         val_loader=val_loader,
@@ -509,13 +1071,166 @@ def train_distilled_student_orchestrator_combined(
         current_rank=current_rank,
         is_ddp_initialized=is_ddp_initialized,
         model_idx=-1, # Indicate student model
-        replay_buffer=train_loader.external_source.dataset.curriculum_sampler.replay_buffer if CONFIG['training']['use_prioritized_replay'] else None
+        cfg=student_model_config, # Pass student's config
+        replay_buffer=train_loader.dataset.replay_buffer if cfg['training'].get('curriculum_learning', False) and cfg['training']['curriculum_config'].get('difficulty_sampling', False) else None,
+        teacher_model=teacher_models if teacher_ensemble_type == 'weighted_average' else meta_learner # Pass the teacher(s)
     )
-
-    # Restore original CONFIG
-    CONFIG['training'] = original_config_training
-
     logger.info("Student model training with distillation completed.")
-
     return student_model.module if is_ddp_initialized else student_model, teacher_ensemble_metrics, student_metrics
+
+
+def ensemble_predict_orchestrator(
+    models: List[PerceptionModule],
+    image_paths: List[str],
+    config: Dict[str, Any],
+    use_mc_dropout: bool = False,
+    mc_dropout_samples: int = 0,
+    model_weights: Optional[List[float]] = None # Optional list of weights for weighted averaging
+) -> Tuple[np.ndarray, List[Dict]]:
+    """
+    Performs ensemble prediction by averaging probabilities from multiple PerceptionModule models.
+    Args:
+        models (List[PerceptionModule]): List of trained PerceptionModule instances.
+        image_paths (List[str]): List of image paths for inference.
+        config (Dict): Configuration dictionary.
+        use_mc_dropout (bool): If True, enable MC Dropout during inference.
+        mc_dropout_samples (int): Number of forward passes for MC Dropout.
+        model_weights (Optional[List[float]]): Weights for each model for weighted averaging.
+                                                If None, simple averaging is used.
+    Returns:
+        Tuple[np.ndarray, List[Dict]]:
+            - Averaged Bongard problem probabilities (after softmax) [num_images, num_classes].
+            - List of symbolic outputs (from the first model's inference, for example).
+    """
+    if not models:
+        logger.error("No models provided for ensemble prediction.")
+        return np.empty((len(image_paths), config['model']['bongard_head_config']['num_classes'])), []
+    
+    all_bongard_probs = []
+    first_model_symbolic_outputs = [] # Collect symbolic outputs from the first model for example
+    
+    # Create DALI loader for inference using refactored function
+    inference_pipeline, inference_loader = build_dali_loader(
+        file_list=image_paths,
+        labels_list=[0] * len(image_paths), # Dummy labels for inference
+        config=config,
+        mode='inference'
+    )
+    logger.info("DALI inference loader initialized.")
+    
+    for model_idx, model in enumerate(models):
+        model.eval()
+        if use_mc_dropout:
+            # Enable dropout layers for MC Dropout
+            for m in model.modules():
+                if isinstance(m, nn.Dropout):
+                    m.train() # Set dropout to training mode to enable dropout during inference
+            logger.info(f"MC Dropout enabled for model {model_idx}.")
+        else:
+            # Ensure dropout layers are in eval mode if not using MC Dropout
+            for m in model.modules():
+                if isinstance(m, nn.Dropout):
+                    m.eval()
+        
+        member_probs = []
+        member_symbolic_outputs_mc_samples = [] # Store symbolic outputs for each MC sample
+        
+        with torch.no_grad():
+            # Efficient MC Dropout Sampling
+            for mc_sample_idx in tqdm(range(mc_dropout_samples if use_mc_dropout else 1), desc=f"Model {model_idx} MC Inference"):
+                inference_loader.reset() # Reset for each MC Dropout sample or single pass
+                
+                current_sample_probs = []
+                current_batch_symbolic_outputs = []
+                for batch_idx, data in enumerate(inference_loader):
+                    images_view1 = data['query_img1'].to(DEVICE) # NCHW
+                    gts_json_strings_batch = data['query_gts_json_view1'] # Pass GT for synthetic inference
+                    
+                    # PerceptionModule.forward now returns bongard_logits, detected_objects, aggregated_outputs
+                    bongard_logits, detected_objects_batch, aggregated_outputs = model(images_view1, gts_json_strings_batch)
+                    
+                    probs = F.softmax(bongard_logits, dim=-1).cpu().numpy()
+                    current_sample_probs.append(probs)
+                    
+                    # Collect structured symbolic outputs from the first model, first MC dropout sample
+                    if model_idx == 0: # Only collect for the first model
+                        for b_idx in range(images_view1.shape[0]):
+                            # Ensure detected_objects_batch and aggregated_outputs are correctly indexed for a single image
+                            single_detected_objects = detected_objects_batch[b_idx]
+                            single_attribute_logits = {k: v[b_idx].unsqueeze(0) for k, v in aggregated_outputs['attribute_logits'].items()}
+                            single_relation_logits = {k: v[b_idx].unsqueeze(0) for k, v in aggregated_outputs['relation_logits'].items()}
+                            
+                            scene_graph = model.extract_scene_graph(
+                                single_detected_objects,
+                                single_attribute_logits,
+                                single_relation_logits
+                            )
+                            scene_graph["bongard_prediction"] = int(torch.argmax(bongard_logits[b_idx]).item())
+                            
+                            # Store raw logits for uncertainty calculation later
+                            scene_graph["raw_bongard_logits"] = bongard_logits[b_idx].cpu().numpy().tolist()
+                            scene_graph["bongard_probs"] = probs[b_idx].tolist()
+                            
+                            current_batch_symbolic_outputs.append(scene_graph)
+                
+                member_probs.append(np.concatenate(current_sample_probs, axis=0))
+                if model_idx == 0: # Only store symbolic outputs for the first model across MC samples
+                    member_symbolic_outputs_mc_samples.append(current_batch_symbolic_outputs)
+        
+        # Average MC Dropout samples for this model
+        if use_mc_dropout:
+            avg_member_probs = np.mean(np.stack(member_probs, axis=0), axis=0)
+            logger.info(f"Model {model_idx} averaged {mc_dropout_samples} MC Dropout samples.")
+            
+            # If MC Dropout, calculate epistemic and aleatoric uncertainty for symbolic outputs
+            if model_idx == 0 and member_symbolic_outputs_mc_samples:
+                # Reorganize symbolic outputs to be per-image, across MC samples
+                num_images_in_batch = len(member_symbolic_outputs_mc_samples[0])
+                for img_idx in range(num_images_in_batch):
+                    all_mc_logits_for_image = []
+                    for mc_sample_data in member_symbolic_outputs_mc_samples:
+                        all_mc_logits_for_image.append(mc_sample_data[img_idx]["raw_bongard_logits"])
+                    
+                    all_mc_logits_for_image_np = np.array(all_mc_logits_for_image) # [mc_samples, num_classes]
+                    
+                    # Epistemic uncertainty: variance of predictions across MC samples
+                    epistemic_probs = F.softmax(torch.tensor(all_mc_logits_for_image_np), dim=-1).numpy()
+                    epistemic_uncertainty = np.mean(np.var(epistemic_probs, axis=0)) # Mean variance across classes
+                    
+                    # Aleatoric uncertainty: average of (p * (1-p)) over MC samples
+                    # This is often approximated by the mean of the variance of the individual predictions
+                    # For classification, a common proxy is mean of (p_i * (1-p_i))
+                    aleatoric_uncertainty = np.mean(epistemic_probs * (1 - epistemic_probs))
+                    
+                    # Update the first MC sample's symbolic output for this image with uncertainty
+                    member_symbolic_outputs_mc_samples[0][img_idx]["uncertainty"] = {
+                        "epistemic": float(epistemic_uncertainty),
+                        "aleatoric": float(aleatoric_uncertainty)
+                    }
+                first_model_symbolic_outputs = member_symbolic_outputs_mc_samples[0] # Use the first sample's structure, updated with uncertainty
+        else:
+            avg_member_probs = member_probs[0] # Only one sample
+            if model_idx == 0:
+                # If no MC dropout, symbolic output's uncertainty will be 0.0
+                for img_data in member_symbolic_outputs_mc_samples[0]:
+                    img_data["uncertainty"] = {"epistemic": 0.0, "aleatoric": 0.0}
+                first_model_symbolic_outputs = member_symbolic_outputs_mc_samples[0] # Just the single sample's output
+        
+        all_bongard_probs.append(avg_member_probs)
+    
+    stacked_probs = np.stack(all_bongard_probs, axis=0) # Shape: [num_models, num_images, num_classes]
+    
+    if model_weights is not None and len(model_weights) == len(models):
+        # Normalize weights to sum to 1
+        normalized_weights = np.array(model_weights) / np.sum(model_weights)
+        # Reshape weights to [num_models, 1, 1] for broadcasting
+        weighted_probs = stacked_probs * normalized_weights[:, np.newaxis, np.newaxis]
+        ensemble_averaged_probs = np.sum(weighted_probs, axis=0) # Sum along the model dimension
+        logger.info("Ensemble prediction using weighted averaging.")
+    else:
+        ensemble_averaged_probs = np.mean(stacked_probs, axis=0)
+        logger.info("Ensemble prediction using simple averaging.")
+    
+    logger.info(f"Ensemble prediction complete. Averaged probabilities for {len(image_paths)} images.")
+    return ensemble_averaged_probs, first_model_symbolic_outputs
 

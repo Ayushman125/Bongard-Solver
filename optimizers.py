@@ -1,15 +1,15 @@
 # Folder: bongard_solver/
-
+# File: optimizers.py
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import _LRScheduler, OneCycleLR, ReduceLROnPlateau, CosineAnnealingLR
 import logging
-import math # Import math for SophiaG placeholder
+import math  # Import math for SophiaG placeholder
 from typing import Dict, Any, Optional, Union
 
 # Import from config (for conditional imports)
-from config import HAS_TIMM_OPTIM
+from config import HAS_TIMM_OPTIM # Assuming this exists in config.py
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ if HAS_TIMM_OPTIM:
         logger.info("Using Lion/MADGRAD from timm.optim.")
     except ImportError:
         logger.warning("timm.optim not found. Lion/MADGRAD from timm will be disabled. Checking torch_optimizer as fallback.")
-        HAS_TIMM_OPTIM = False # Disable timm.optim if import fails
+        HAS_TIMM_OPTIM = False  # Disable timm.optim if import fails
         try:
             from torch_optimizer import Lion as TorchOptimizerLion, MADGRAD as TorchOptimizerMADGRAD
             Lion = TorchOptimizerLion
@@ -45,7 +45,6 @@ else:
         Lion = None
         MADGRAD = None
 
-
 # --- Import Local SAM and SophiaG Implementations ---
 # Assuming your actual sam.py and sophia.py files are in the same project directory.
 try:
@@ -61,9 +60,8 @@ except ImportError:
             logger.warning("Using dummy SAM optimizer due to import failure.")
         def first_step(self, zero_grad=False): pass
         def second_step(self, zero_grad=False): pass
-        def _grad_norm(self): return torch.tensor(1.0) # Dummy norm
+        def _grad_norm(self): return torch.tensor(1.0)  # Dummy norm
         def load_state_dict(self, state_dict): pass
-
 
 try:
     from sophia import SophiaG
@@ -79,15 +77,35 @@ except ImportError:
             logger.warning("Using dummy SophiaG optimizer due to import failure.")
         def step(self, closure=None): return None
 
+# --- Conditional imports for Performer and Nystromformer Attention ---
+try:
+    from performer_pytorch import SelfAttention as PerformerSelfAttention
+    HAS_PERFORMER = True
+    logger = logging.getLogger(__name__)
+    logger.info("PerformerSelfAttention found and enabled.")
+except ImportError:
+    HAS_PERFORMER = False
+    logger = logging.getLogger(__name__)
+    logger.warning("performer_pytorch not found. Performer attention will be disabled.")
 
+try:
+    from nystrom_attention import NystromAttention
+    HAS_NYSTROM = True
+    logger = logging.getLogger(__name__)
+    logger.info("NystromAttention found and enabled.")
+except ImportError:
+    HAS_NYSTROM = False
+    logger = logging.getLogger(__name__)
+    logger.warning("nystrom_attention not found. Nystrom attention will be disabled.")
+
+
+# --- Optimizer Functions ---
 def get_optimizer(model: nn.Module, config: Dict[str, Any]) -> optim.Optimizer:
     """
     Initializes and returns the specified optimizer.
-
     Args:
         model (nn.Module): The model whose parameters are to be optimized.
         config (Dict[str, Any]): The training configuration dictionary.
-
     Returns:
         torch.optim.Optimizer: The initialized optimizer.
     """
@@ -98,7 +116,7 @@ def get_optimizer(model: nn.Module, config: Dict[str, Any]) -> optim.Optimizer:
         optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
     elif optimizer_name == 'SGD':
         optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9)
-    elif optimizer_name == 'SophiaG': # Now directly refers to the local class
+    elif optimizer_name == 'SophiaG':  # Now directly refers to the local class
         if SophiaG is not None:
             optimizer = SophiaG(model.parameters(), lr=learning_rate)
         else:
@@ -116,9 +134,9 @@ def get_optimizer(model: nn.Module, config: Dict[str, Any]) -> optim.Optimizer:
         else:
             logger.warning("MADGRAD optimizer is not available. Falling back to AdamW.")
             optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
-    elif optimizer_name == 'SAM': # Now directly refers to the local class
+    elif optimizer_name == 'SAM':  # Now directly refers to the local class
         if SAM is not None:
-            base_optimizer = optim.AdamW(model.parameters(), lr=learning_rate) # SAM wraps a base optimizer
+            base_optimizer = optim.AdamW(model.parameters(), lr=learning_rate)  # SAM wraps a base optimizer
             optimizer = SAM(model.parameters(), base_optimizer, rho=config['sam_rho'])
         else:
             logger.warning("SAM optimizer is not available. Falling back to AdamW.")
@@ -130,17 +148,15 @@ def get_optimizer(model: nn.Module, config: Dict[str, Any]) -> optim.Optimizer:
     logger.info(f"Initialized optimizer: {optimizer_name}")
     return optimizer
 
-
+# --- Scheduler Functions ---
 def get_scheduler(optimizer: optim.Optimizer, config: Dict[str, Any], total_steps: int) -> Optional[_LRScheduler]:
     """
     Initializes and returns the specified learning rate scheduler.
-
     Args:
         optimizer (torch.optim.Optimizer): The optimizer to schedule.
         config (Dict[str, Any]): The training configuration dictionary.
         total_steps (int): Total number of training steps (epochs * batches_per_epoch),
                            required for OneCycleLR.
-
     Returns:
         Optional[torch.optim.lr_scheduler._LRScheduler]: The initialized scheduler, or None if no scheduler.
     """
@@ -168,4 +184,56 @@ def get_scheduler(optimizer: optim.Optimizer, config: Dict[str, Any], total_step
     else:
         logger.info("No learning rate scheduler will be used.")
     return scheduler
+
+# --- Attention Layer Functions ---
+def get_attention_layer(cfg: Dict[str, Any]) -> nn.Module:
+    """
+    Returns an attention layer based on the configuration.
+    Supports standard MultiheadAttention, PerformerSelfAttention, and NystromAttention.
+
+    Args:
+        cfg (Dict[str, Any]): The configuration dictionary, specifically for 'attn' and 'model' settings.
+
+    Returns:
+        nn.Module: An initialized attention layer.
+
+    Raises:
+        ValueError: If an unsupported attention type is specified.
+    """
+    attn_type = cfg['attn'].get('type', 'multihead')
+    feat_dim = cfg['model']['feat_dim'] # Feature dimension for attention input
+    heads = cfg['attn'].get('heads', 8)
+
+    if attn_type == 'performer':
+        if HAS_PERFORMER:
+            logger.info(f"Using PerformerSelfAttention with dim={feat_dim}, heads={heads}.")
+            return PerformerSelfAttention(
+                dim=feat_dim,
+                heads=heads,
+                causal=cfg['attn'].get('causal', False) # Causal attention (e.g., for sequences)
+            )
+        else:
+            logger.warning("Performer attention requested but library not found. Falling back to MultiheadAttention.")
+            return nn.MultiheadAttention(feat_dim, heads, batch_first=True) # batch_first=True for consistency
+    elif attn_type == 'nystrom':
+        if HAS_NYSTROM:
+            num_landmarks = cfg['attn'].get('landmarks', 64)
+            logger.info(f"Using NystromAttention with dim={feat_dim}, num_landmarks={num_landmarks}.")
+            return NystromAttention(
+                dim=feat_dim,
+                num_landmarks=num_landmarks,
+                heads=heads # NystromAttention also takes heads
+            )
+        else:
+            logger.warning("Nystrom attention requested but library not found. Falling back to MultiheadAttention.")
+            return nn.MultiheadAttention(feat_dim, heads, batch_first=True) # batch_first=True for consistency
+    elif attn_type == 'multihead':
+        logger.info(f"Using standard MultiheadAttention with embed_dim={feat_dim}, num_heads={heads}.")
+        return nn.MultiheadAttention(
+            embed_dim=feat_dim,
+            num_heads=heads,
+            batch_first=True # Use batch_first for easier integration with (B, S, D) tensors
+        )
+    else:
+        raise ValueError(f"Unsupported attention type: {attn_type}")
 

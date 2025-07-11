@@ -11,6 +11,20 @@ from typing import List, Dict, Any, Tuple, Optional
 from numba import njit  # For JIT compilation of Python functions
 from functools import lru_cache  # For caching
 
+# Conditional import for torch_geometric.nn.global_mean_pool
+try:
+    from torch_geometric.nn import global_mean_pool
+    HAS_PYG_POOL = True
+    logger = logging.getLogger(__name__)
+    logger.info("torch_geometric.nn.global_mean_pool found and enabled.")
+except ImportError:
+    HAS_PYG_POOL = False
+    logger = logging.getLogger(__name__)
+    logger.warning("torch_geometric not found. global_mean_pool will be a dummy function.")
+    # Dummy global_mean_pool if PyG is not available
+    global_mean_pool = lambda node_embeds, batch: torch.mean(node_embeds, dim=0, keepdim=True) if node_embeds.numel() > 0 else torch.zeros(1, node_embeds.shape[-1], device=node_embeds.device)
+
+
 logger = logging.getLogger(__name__)
 
 # --- Logging Setup ---
@@ -110,8 +124,8 @@ def get_symbolic_embedding_dims(config: Dict[str, Any]) -> Dict[str, int]:
     """
     # Import config attributes locally to avoid circular imports if config.py imports utils
     from config import ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_FILL_MAP, \
-                       ATTRIBUTE_SIZE_MAP, ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_TEXTURE_MAP, \
-                       RELATION_MAP
+                     ATTRIBUTE_SIZE_MAP, ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_TEXTURE_MAP, \
+                     RELATION_MAP
     
     dims = {
         'shape_dim': len(ATTRIBUTE_SHAPE_MAP),
@@ -155,7 +169,7 @@ def get_predicted_relation(
     spatial_tolerance_ratio: float = 0.1    # For 'above', 'below', 'left_of', 'right_of'
 ) -> List[Dict[str, Any]]:
     """
-    Inf`ers relations between objects based on their attributes and spatial positions.
+    Infers relations between objects based on their attributes and spatial positions.
     This is a conceptual function and needs robust implementation based on your
     definition of relations and how they are derived from object properties.
     Args:
@@ -224,10 +238,10 @@ def get_predicted_relation(
                 inferred_relations.append({'type': 'touching', 'subject_id': obj1['id'], 'object_id': obj2['id']})
                 inferred_relations.append({'type': 'touching', 'subject_id': obj2['id'], 'object_id': obj1['id']})
             elif iou == 0 and (
-                abs(bbox1[2] - bbox2[0]) < spatial_tolerance_ratio * image_width or    # right edge of 1 near left edge of 2
-                abs(bbox2[2] - bbox1[0]) < spatial_tolerance_ratio * image_width or    # right edge of 2 near left edge of 1
-                abs(bbox1[3] - bbox2[1]) < spatial_tolerance_ratio * image_height or    # bottom edge of 1 near top edge of 2
-                abs(bbox2[3] - bbox1[1]) < spatial_tolerance_ratio * image_height      # bottom edge of 2 near top edge of 1
+                abs(bbox1[2] - bbox2[0]) < spatial_tolerance_ratio * image_width or     # right edge of 1 near left edge of 2
+                abs(bbox2[2] - bbox1[0]) < spatial_tolerance_ratio * image_width or     # right edge of 2 near left edge of 1
+                abs(bbox1[3] - bbox2[1]) < spatial_tolerance_ratio * image_height or     # bottom edge of 1 near top edge of 2
+                abs(bbox2[3] - bbox1[1]) < spatial_tolerance_ratio * image_height       # bottom edge of 2 near top edge of 1
             ):
                 # Check if bounding boxes are very close but not overlapping
                 inferred_relations.append({'type': 'touching', 'subject_id': obj1['id'], 'object_id': obj2['id']})
@@ -268,7 +282,6 @@ def get_predicted_relation(
 def cross_attend(query: torch.Tensor, context: torch.Tensor, embed_dim: int, num_heads: int = 1) -> torch.Tensor:
     """
     Performs cross-attention between a query and a context.
-
     Args:
         query (torch.Tensor): The query tensor (Batch_size, Query_dim).
                               This will be unsqueezed to (Batch_size, 1, Query_dim) for attention.
@@ -277,20 +290,17 @@ def cross_attend(query: torch.Tensor, context: torch.Tensor, embed_dim: int, num
         embed_dim (int): The embedding dimension for the attention mechanism.
                          This should typically match the `Query_dim` of the query.
         num_heads (int): Number of attention heads.
-
     Returns:
         torch.Tensor: The output of the cross-attention (Batch_size, Query_dim).
     """
-    if query.dim() == 1: # Handle single query
+    if query.dim() == 1:  # Handle single query
         query = query.unsqueeze(0)
-    if context.dim() == 1: # Handle single context
+    if context.dim() == 1:  # Handle single context
         context = context.unsqueeze(0)
-
     # Ensure query and context have a sequence length dimension (L, N, E) for MultiheadAttention
     # Here, L=1 for both query and context as we're treating them as single vectors per batch item.
-    query_seq = query.unsqueeze(1)    # (B, 1, Query_dim)
-    context_seq = context.unsqueeze(1) # (B, 1, Context_dim)
-
+    query_seq = query.unsqueeze(1)      # (B, 1, Query_dim)
+    context_seq = context.unsqueeze(1)  # (B, 1, Context_dim)
     # MultiheadAttention expects embed_dim to be the dimension of the query, key, and value.
     # If query_dim != embed_dim, we might need a projection layer before attention.
     # For simplicity, we assume query_dim == embed_dim here.
@@ -300,13 +310,12 @@ def cross_attend(query: torch.Tensor, context: torch.Tensor, embed_dim: int, num
     # and specify kdim/vdim for the context.
     
     attn = nn.MultiheadAttention(
-        embed_dim=query.shape[-1], # Query_dim
+        embed_dim=query.shape[-1],  # Query_dim
         num_heads=num_heads,
-        kdim=context.shape[-1],    # Context_dim
-        vdim=context.shape[-1],    # Context_dim
-        batch_first=True           # Input/output tensors are (batch, seq_len, feature)
-    ).to(query.device) # Ensure attention module is on the same device as inputs
-
+        kdim=context.shape[-1],     # Context_dim
+        vdim=context.shape[-1],     # Context_dim
+        batch_first=True            # Input/output tensors are (batch, seq_len, feature)
+    ).to(query.device)  # Ensure attention module is on the same device as inputs
     # attn_output: (B, 1, Query_dim)
     attn_output, _ = attn(
         query=query_seq,
@@ -314,9 +323,84 @@ def cross_attend(query: torch.Tensor, context: torch.Tensor, embed_dim: int, num
         value=context_seq
     )
     
-    return attn_output.squeeze(1) # Remove sequence length dimension: (B, Query_dim)
+    return attn_output.squeeze(1)  # Remove sequence length dimension: (B, Query_dim)
 
+# --- Dummy Forward Feature-Dim Inference ---
+def infer_feature_dim(model: nn.Module, img_size: int, device: torch.device) -> int:
+    """
+    Infers the output feature dimension of a model by performing a dummy forward pass.
+    This is useful for dynamically setting input dimensions for subsequent layers.
 
+    Args:
+        model (nn.Module): The model whose feature dimension needs to be inferred.
+        img_size (int): The expected input image size (height and width).
+        device (torch.device): The device to perform the dummy forward pass on.
+
+    Returns:
+        int: The flattened output feature dimension of the model.
+    """
+    # Create a dummy input tensor (Batch_size=1, Channels=3, Height=img_size, Width=img_size)
+    x = torch.zeros(1, 3, img_size, img_size, device=device)
+    
+    with torch.no_grad():
+        # Perform a forward pass. Some feature extractors (e.g., timm with features_only=True)
+        # might return a list of feature maps. We take the last one.
+        fmap_or_list = model(x)
+        
+        if isinstance(fmap_or_list, list):
+            fmap = fmap_or_list[-1] # Take the last feature map
+        else:
+            fmap = fmap_or_list
+        
+        # Flatten the feature map to get the dimension
+        # If fmap is (B, C, H, W), flatten to (B, C*H*W)
+        # If fmap is (B, N_tokens, D), flatten to (B, N_tokens*D) or take CLS token
+        
+        # If it's a 4D tensor (CNN output):
+        if fmap.ndim == 4:
+            return fmap.view(fmap.size(0), -1).size(1)
+        # If it's a 3D tensor (e.g., ViT tokens):
+        elif fmap.ndim == 3:
+            # If it has a CLS token (often the first token), use its dimension
+            # Otherwise, flatten all tokens or take mean.
+            # For inferring feature_dim, flattening all tokens is safer.
+            return fmap.view(fmap.size(0), -1).size(1)
+        # If it's already a 2D tensor (B, D):
+        elif fmap.ndim == 2:
+            return fmap.size(1)
+        else:
+            raise ValueError(f"Unsupported feature map dimension for inference: {fmap.ndim}")
+
+# --- Graph Pooling Helper ---
+def graph_pool(node_embeds: torch.Tensor, batch_idx: torch.Tensor) -> torch.Tensor:
+    """
+    Wraps torch_geometric.nn.global_mean_pool for consistent graph pooling.
+
+    Args:
+        node_embeds (torch.Tensor): Node embeddings (N_nodes, D_features).
+        batch_idx (torch.Tensor): Batch assignment for each node (N_nodes,).
+                                  Indicates which graph each node belongs to.
+
+    Returns:
+        torch.Tensor: Global graph embeddings (N_graphs, D_features).
+    """
+    if not HAS_PYG_POOL:
+        logger.warning("PyTorch Geometric global_mean_pool not available. Using dummy mean pooling.")
+        # Dummy behavior for global_mean_pool if PyG is not installed
+        # This assumes `batch_idx` correctly groups nodes for averaging.
+        # This is a very basic mean pooling per graph.
+        unique_batches = torch.unique(batch_idx)
+        pooled_embeddings = []
+        for b_id in unique_batches:
+            mask = (batch_idx == b_id)
+            if node_embeds[mask].numel() > 0:
+                pooled_embeddings.append(torch.mean(node_embeds[mask], dim=0, keepdim=True))
+            else:
+                # Handle empty graphs if necessary, e.g., return zeros
+                pooled_embeddings.append(torch.zeros(1, node_embeds.shape[-1], device=node_embeds.device))
+        return torch.cat(pooled_embeddings, dim=0) if pooled_embeddings else torch.empty(0, node_embeds.shape[-1], device=node_embeds.device)
+    
+    return global_mean_pool(node_embeds, batch_idx)
 
 # --- Caching Notes ---
 # Memory-Mapped Index Cache:
