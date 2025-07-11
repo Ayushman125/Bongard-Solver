@@ -13,30 +13,52 @@ import json
 import collections
 import numpy as np
 import random   # For dummy GNN
+import copy # For deepcopy for Mean Teacher
+from training import _get_ensemble_teacher_logits # For Knowledge Distillation
 
 # Import torchvision.ops for ROI Align
 from torchvision.ops import roi_align
+
+# Conditional import for timm (for Vision Transformers and DropPath)
+try:
+    import timm
+    from timm.layers import DropPath # For Stochastic Depth
+    HAS_TIMM = True
+    logger = logging.getLogger(__name__)
+    logger.info("timm found and enabled for Vision Transformers and DropPath.")
+except ImportError:
+    HAS_TIMM = False
+    logger = logging.getLogger(__name__)
+    logger.warning("timm not found. Vision Transformers and DropPath will be disabled.")
+
 # Conditional import for torch_geometric
 try:
     import torch_geometric.nn as pyg_nn
     import torch_geometric.data as pyg_data
     import torch_geometric.nn.pool as pyg_pool # For global pooling
     HAS_PYG = True
-    logger = logging.getLogger(__name__)
-    logger.info("PyTorch Geometric found and enabled.")
+    logger.getLogger(__name__).info("PyTorch Geometric found and enabled.")
 except ImportError:
-    logger = logging.getLogger(__name__)
-    logger.warning("PyTorch Geometric not found. RelationGNN and related functionalities will be disabled.")
     HAS_PYG = False
+    logger.getLogger(__name__).warning("PyTorch Geometric not found. RelationGNN and related functionalities will be disabled.")
+
+# Conditional import for DropBlock
+try:
+    from dropblock import DropBlock2D
+    HAS_DROPBLOCK = True
+    logger.getLogger(__name__).info("DropBlock found and enabled.")
+except ImportError:
+    HAS_DROPBLOCK = False
+    logger.getLogger(__name__).warning("DropBlock not found. DropBlock regularization will be disabled.")
 
 # Import SAM optimizer
 try:
     from torch_optimizer import SAM
     HAS_SAM_OPTIMIZER = True
-    logger.info("torch_optimizer.SAM found and enabled.")
+    logger.getLogger(__name__).info("torch_optimizer.SAM found and enabled.")
 except ImportError:
     HAS_SAM_OPTIMIZER = False
-    logger.warning("torch_optimizer.SAM not found. Falling back to Adam for SAM optimization if requested.")
+    logger.getLogger(__name__).warning("torch_optimizer.SAM not found. Falling back to Adam for SAM optimization if requested.")
 
 # Import CONFIG for model architecture parameters
 try:
@@ -52,6 +74,9 @@ except ImportError:
             'n_attributes': 5, # Dummy value
             'total_attribute_classes': 10, # Dummy value
             'attribute_classifier_config': { # This will be used for AttributeModel's heads
+                'backbone': 'resnet50', # Default backbone
+                'pretrained': True,
+                'freeze_backbone': False,
                 'shape': 3, 'color': 3, 'fill': 2, 'size': 3, 'orientation': 2, 'texture': 2
             },
             'object_detector': { # Dummy for YOLO integration
@@ -71,6 +96,7 @@ except ImportError:
             'support_set_encoder_config': {'enabled': False, 'encoder_type': 'deep_sets', 'input_dim': 256, 'hidden_dim': 256, 'output_dim': 128, 'num_heads': 4, 'num_blocks': 2},
             'use_cross_attention': False, # Renamed from use_cross_attention_for_bongard_head
             'ph_feature_dim': 64,
+            'dropblock_config': {'enabled': False, 'block_size': 7, 'drop_prob': 0.1} # Dummy dropblock config
         },
         'training': {'epochs': 10, 'learning_rate': 1e-4, 'use_sam': False, 'sam_rho': 0.05,
                      'scheduler_config': {'CosineAnnealingLR': {'eta_min': 1e-6}}},
@@ -124,10 +150,10 @@ except ImportError:
 try:
     from topo_features import TopologicalFeatureExtractor
     HAS_TOPO_FEATURES = True
-    logger.info("topo_features.py found and enabled.")
+    logger.getLogger(__name__).info("topo_features.py found and enabled.")
 except ImportError:
     HAS_TOPO_FEATURES = False
-    logger.warning("topo_features.py not found. Topological features will be disabled.")
+    logger.getLogger(__name__).warning("topo_features.py not found. Topological features will be disabled.")
     class TopologicalFeatureExtractor: # Dummy class
         def __init__(self, *args, **kwargs): pass
         def extract(self, mask): return np.zeros((CONFIG['model']['ph_feature_dim'],))
@@ -136,13 +162,25 @@ except ImportError:
 try:
     from attention_utils import cross_attend
     HAS_ATTENTION_UTILS = True
-    logger.info("attention_utils.py found and enabled.")
+    logger.getLogger(__name__).info("attention_utils.py found and enabled.")
 except ImportError:
     HAS_ATTENTION_UTILS = False
-    logger.warning("attention_utils.py not found. Cross-attention will be disabled.")
+    logger.getLogger(__name__).warning("attention_utils.py not found. Cross-attention will be disabled.")
     def cross_attend(*args, **kwargs):
         logger.warning("Dummy cross_attend called. Returning query as is.")
         return args[0] # Return query as is if cross-attention is disabled
+
+# Import yolo_trainer (for ObjectDetector)
+try:
+    from yolo_trainer import fine_tune_yolo
+    HAS_YOLO_TRAINER = True
+    logger.getLogger(__name__).info("yolo_trainer.py found.")
+except ImportError:
+    HAS_YOLO_TRAINER = False
+    logger.getLogger(__name__).warning("yolo_trainer.py not found. YOLO fine-tuning will be skipped.")
+    def fine_tune_yolo(cfg):
+        logger.warning("Dummy fine_tune_yolo called. Returning None.")
+        return None
 
 
 # Set up logging for this module
@@ -161,22 +199,34 @@ class ObjectDetector(nn.Module):
         self.yolo_model = None
         self.sam_predictor = None
 
-        if self.config['fine_tune'] and self.config.get('fine_tuned_weights'):
-            # If fine-tuned weights are available, load them
-            try:
-                from ultralytics import YOLO
-                self.yolo_model = YOLO(self.config['fine_tuned_weights'])
-                logger.info(f"ObjectDetector: Loaded fine-tuned YOLO model from {self.config['fine_tuned_weights']}")
-            except ImportError:
-                logger.error("ultralytics not found. Cannot load YOLO model.")
-                self.yolo_model = None
-            except Exception as e:
-                logger.error(f"Failed to load fine-tuned YOLO weights: {e}")
-                self.yolo_model = None
-        elif HAS_YOLO and HAS_SAM:
-            # Load default pretrained YOLO and SAM if not fine-tuning or weights not provided
-            self.yolo_model, self.sam_predictor = load_yolo_and_sam_models(self.config)
-            logger.info("ObjectDetector initialized with default YOLO and SAM models.")
+        # Load YOLO model (potentially fine-tuned)
+        yolo_weights_path = self.config['yolo_pretrained']
+        if self.config['fine_tune'] and HAS_YOLO_TRAINER:
+            # Attempt to load fine-tuned weights, or fine-tune if not found
+            if os.path.exists(self.config['fine_tuned_weights']):
+                yolo_weights_path = self.config['fine_tuned_weights']
+                logger.info(f"ObjectDetector: Loading fine-tuned YOLO model from {yolo_weights_path}")
+            else:
+                logger.info("ObjectDetector: Fine-tuned weights not found. Initiating YOLO fine-tuning.")
+                try:
+                    # fine_tune_yolo returns path to best.pt
+                    best_weights_path = fine_tune_yolo(self.config)
+                    if best_weights_path:
+                        yolo_weights_path = best_weights_path
+                        logger.info(f"ObjectDetector: YOLO fine-tuning complete. Using weights from {yolo_weights_path}")
+                    else:
+                        logger.warning("ObjectDetector: YOLO fine-tuning failed or returned no weights. Using default pretrained.")
+                except Exception as e:
+                    logger.error(f"ObjectDetector: Error during YOLO fine-tuning: {e}. Using default pretrained.")
+        
+        if HAS_YOLO and HAS_SAM:
+            self.yolo_model, self.sam_predictor = load_yolo_and_sam_models(
+                yolo_model_path=yolo_weights_path,
+                sam_model_type=self.config['sam_model_type'],
+                sam_checkpoint_path=self.config['sam_checkpoint_path'],
+                device=DEVICE
+            )
+            logger.info("ObjectDetector initialized with YOLO and SAM models.")
         else:
             logger.warning("YOLO or SAM not available. ObjectDetector will return dummy detections.")
 
@@ -245,36 +295,99 @@ class AttributeModel(nn.Module):
         
         logger.info(f"Initializing AttributeModel with backbone={backbone_name}, pretrained={backbone_pretrained}")
 
-        # Backbone factory based on config
+        # --- Backbone factory based on config ---
         if backbone_name == 'resnet50':
             weights = ResNet50_Weights.IMAGENET1K_V1 if backbone_pretrained else None
             base = resnet50(weights=weights)
             # ResNet-50's last layer is `fc`, before that is `avgpool`.
             # We want features before the final classification head.
-            self.encoder = nn.Sequential(*(list(base.children())[:-2]))
-            self.feat_dim = base.fc.in_features # 2048 for ResNet50
+            self.feature_extractor = nn.Sequential(*(list(base.children())[:-2]))
         elif backbone_name == 'mobilenet_v3_small':
             weights = MobileNet_V3_Small_Weights.IMAGENET1K_V1 if backbone_pretrained else None
             base = mobilenet_v3_small(weights=weights)
-            self.encoder = base.features
-            self.feat_dim = 576 # Output channels of MobileNetV3_Small features
+            self.feature_extractor = base.features
         elif backbone_name == 'efficientnet_b0':
             weights = EfficientNet_B0_Weights.IMAGENET1K_V1 if backbone_pretrained else None
             base = efficientnet_b0(weights=weights)
-            self.encoder = base.features
-            self.feat_dim = 1280 # Output channels of EfficientNet_B0 features
+            self.feature_extractor = base.features
+        elif HAS_TIMM and (backbone_name.startswith('vit') or backbone_name.startswith('swin')):
+            # Vision Transformers and Swin Transformers from timm
+            self.feature_extractor = timm.create_model(
+                backbone_name, pretrained=backbone_pretrained, features_only=True
+            )
+            # features_only returns a list of stage outputs; take the last one.
+            # The feature_info.channels()[-1] gives the channel dimension of the last feature map.
+            # For Vision Transformers, the output is typically (B, N_patches, D_embed) or (B, D_embed) for global features.
+            # We need to handle this carefully. If features_only=True, it usually returns a list of tensors.
+            # The last tensor's last dimension is the feature dimension.
+            # If the model is not designed for features_only, this might fail.
+            # For standard ViT/Swin, the output of `features_only=True` is a list of tensors,
+            # where the last one is the final feature map before the head.
+            # We'll take the last element's channel dimension.
+            # For ViT, it might be (B, C, H, W) or (B, N_tokens, C)
+            
+            # Dummy forward to infer the shape after feature extraction for timm models
+            # This is crucial because timm models can have varying output shapes.
+            with torch.no_grad():
+                dummy_input = torch.zeros(1, 3, CONFIG['data']['image_size'], CONFIG['data']['image_size']).to(DEVICE)
+                # The output of features_only=True is a list of tensors. We want the last one.
+                dummy_output_features = self.feature_extractor(dummy_input)[-1]
+                # If the output is (B, C, H, W), we need C. If (B, N_tokens, C), we need C.
+                # The last dimension is usually the feature dimension.
+                self.feature_dim = dummy_output_features.shape[-1]
+                logger.info(f"Inferred feature dimension for {backbone_name}: {self.feature_dim}")
+
         else:
-            raise ValueError(f"Unsupported backbone: {backbone_name}")
+            raise ValueError(f"Unsupported backbone: {backbone_name} or timm not installed for ViT/Swin.")
+        
+        # --- Dynamic Feature Dimension Inference ---
+        # For non-timm backbones, we still need to infer the feature_dim dynamically
+        # after `self.feature_extractor` is set up, unless it's explicitly known.
+        # This block ensures dynamic inference for all cases.
+        if not (HAS_TIMM and (backbone_name.startswith('vit') or backbone_name.startswith('swin'))):
+            with torch.no_grad():
+                dummy_input = torch.zeros(1, 3, CONFIG['data']['image_size'], CONFIG['data']['image_size']).to(DEVICE)
+                # Ensure the feature extractor outputs a tensor that can be flattened
+                dummy_output = self.feature_extractor(dummy_input)
+                # If the output is (B, C, H, W), flatten to (B, C*H*W)
+                # If it's already (B, D), it will remain (B, D)
+                self.feature_dim = dummy_output.flatten(1).shape[1]
+                logger.info(f"Inferred feature dimension for {backbone_name}: {self.feature_dim}")
         
         # Adaptive average pooling to get a fixed-size feature vector regardless of input size
-        self.pool = nn.AdaptiveAvgPool2d(1) # Output size (1,1) for each feature map
+        # This is typically applied *after* the feature extractor if it outputs feature maps (e.g., CNNs).
+        # For Vision Transformers, the output might already be a flattened feature vector or tokens.
+        # We need to ensure `self.pool` is only applied when `self.feature_extractor` outputs a feature map.
+        # For timm models with `features_only=True`, the last output might be (B, C, H, W) or (B, N_tokens, C).
+        # If it's (B, N_tokens, C), we might need a different pooling or just use the CLS token.
         
+        # Let's assume for simplicity that `self.feature_extractor` always outputs a tensor
+        # that can be pooled or directly flattened to `(B, D)`.
+        # If the backbone is a pure Transformer (ViT/Swin), `self.pool` might not be necessary
+        # or `self.feature_extractor` already handles global pooling (e.g., by returning CLS token).
+        # For now, we'll keep `self.pool` and rely on `flatten(1)` to handle the shape.
+        self.pool = nn.AdaptiveAvgPool2d(1) # Output size (1,1) for each feature map
+
+        # DropBlock regularization
+        self.use_dropblock = self.model_cfg['dropblock_config']['enabled'] and HAS_DROPBLOCK
+        if self.use_dropblock:
+            self.dropblock = DropBlock2D(
+                block_size=self.model_cfg['dropblock_config']['block_size'],
+                drop_prob=self.model_cfg['dropblock_config']['drop_prob']
+            )
+            logger.info(f"DropBlock enabled with block_size={self.model_cfg['dropblock_config']['block_size']}, drop_prob={self.model_cfg['dropblock_config']['drop_prob']}")
+        else:
+            self.dropblock = nn.Identity() # No-op if not enabled
+
         # Multi-task attribute heads
         self.heads = nn.ModuleDict()
         for name, classes in self.attribute_classifier_config.items():
-            self.heads[name] = nn.Linear(self.feat_dim, classes)
+            # Skip backbone configuration parameters when creating heads
+            if name in ['backbone', 'pretrained', 'freeze_backbone']:
+                continue
+            self.heads[name] = nn.Linear(self.feature_dim, classes)
         
-        logger.info(f"AttributeModel encoder and heads initialized. Encoder output dim: {self.feat_dim}.")
+        logger.info(f"AttributeModel encoder and heads initialized. Inferred feature dim: {self.feature_dim}.")
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """
@@ -288,12 +401,45 @@ class AttributeModel(nn.Module):
             - Pooled features from the encoder (Batch_size, Feature_dim).
             - Dictionary of attribute logits, e.g., {'shape': (B, N_shapes), 'color': (B, N_colors)}.
         """
-        # Pass through the encoder to get visual features
-        f = self.encoder(x) # Output shape: [B, Feature_dim, H_out, W_out]
+        # Pass through the feature extractor
+        f = self.feature_extractor(x) 
         
-        # Apply adaptive pooling to flatten features
-        pooled_features = self.pool(f).view(f.size(0), -1) # Output shape: [B, Feature_dim]
-        
+        # Handle different output types from feature_extractor (e.g., list of features from timm)
+        if isinstance(f, list):
+            f = f[-1] # Take the last feature map/tensor
+
+        # Apply pooling if the output is a feature map (4D: B, C, H, W)
+        # Otherwise, assume it's already a feature vector (2D: B, D) or tokens (3D: B, N_tokens, D)
+        if f.dim() == 4: # Standard CNN output (B, C, H, W)
+            pooled_features = self.pool(f).view(f.size(0), -1) # Output shape: [B, Feature_dim]
+        elif f.dim() == 3: # Transformer tokens (B, N_tokens, D)
+            # Take mean of tokens, or CLS token if available and desired
+            # For simplicity, mean pooling over tokens
+            pooled_features = f.mean(dim=1) # (B, D)
+        elif f.dim() == 2: # Already a feature vector (B, D)
+            pooled_features = f
+        else:
+            raise ValueError(f"Unexpected feature extractor output dimension: {f.dim()}")
+
+        # Apply DropBlock regularization
+        if self.use_dropblock and self.training: # Apply only during training
+            # DropBlock expects 4D input (B, C, H, W) or (B, C, 1, 1) if applied after pooling.
+            # If pooled_features is (B, D), we need to reshape it for DropBlock if it's meant for features.
+            # If DropBlock is meant for feature maps, it should be applied before self.pool.
+            # The snippet suggested `x = self.dropblock(x)` after pooling.
+            # Let's apply it to the pooled features if enabled.
+            # To apply DropBlock to 2D features, we might need to reshape them to (B, D, 1, 1)
+            # or use a 1D DropBlock if available. For simplicity, if applied to pooled_features,
+            # we'll assume it's designed for 2D inputs or reshape internally.
+            
+            # Re-evaluating the snippet: "after `features = self.pool(x)`: features = self.dropblock(features)"
+            # This implies `self.dropblock` should operate on the (B, D) tensor.
+            # DropBlock2D typically expects 4D input.
+            # If we strictly follow the snippet, we need to ensure DropBlock2D can handle 2D input or adapt.
+            # A common way to apply DropBlock to pooled features is to reshape them to (B, D, 1, 1).
+            pooled_features = self.dropblock(pooled_features.unsqueeze(-1).unsqueeze(-1)).squeeze(-1).squeeze(-1)
+
+
         # Pass through each attribute head
         attribute_logits = {}
         for name, head in self.heads.items():
@@ -325,8 +471,13 @@ class RelationGNN(nn.Module):
 
         # GNN layers
         self.convs = nn.ModuleList()
+        # Stochastic Depth for GNN layers
+        self.stochastic_depth_layers = nn.ModuleList()
         for i in range(self.num_layers):
             self.convs.append(pyg_nn.GraphConv(self.hidden_dim, self.hidden_dim))
+            # Apply DropPath (Stochastic Depth) to each GNN layer's output
+            self.stochastic_depth_layers.append(DropPath(self.config.get('stochastic_depth_prob', 0.1)) if HAS_TIMM else nn.Identity())
+
 
         # Relation classification head (predicts relation type for each edge)
         self.relation_head = nn.Linear(2 * self.hidden_dim, self.num_relation_classes)
@@ -360,9 +511,15 @@ class RelationGNN(nn.Module):
         # Node embedding
         node_feats = F.relu(self.node_embed(object_features))
 
-        # Pass through GNN layers
-        for conv in self.convs:
-            node_feats = F.relu(conv(node_feats, edge_index))
+        # Pass through GNN layers with Stochastic Depth
+        for i, conv in enumerate(self.convs):
+            # Apply convolution
+            conv_output = F.relu(conv(node_feats, edge_index))
+            # Apply Stochastic Depth (DropPath)
+            if self.stochastic_depth_layers[i] is not None:
+                node_feats = node_feats + self.stochastic_depth_layers[i](conv_output) # Residual connection with DropPath
+            else:
+                node_feats = conv_output
         
         # Compute edge features for relation classification
         row, col = edge_index
@@ -392,15 +549,12 @@ class BongardHead(nn.Module):
         self.support_context_dim = support_context_dim
 
         # MLP layers
-        # If cross-attention is used, the input to the first FC layer will be just the query features.
-        # The support context will be integrated via attention.
-        # If cross-attention is NOT used, the support context is concatenated directly.
         mlp_input_dim = self.input_dim
         if not self.use_cross_attention and self.support_context_dim > 0:
             mlp_input_dim += self.support_context_dim
 
         self.fc1 = nn.Linear(mlp_input_dim, self.hidden_dim)
-        self.dropout = nn.Dropout(self.dropout_prob)
+        self.dropout = nn.Dropout(self.dropout_prob) # Already present
         self.fc2 = nn.Linear(self.hidden_dim, self.num_classes)
 
         # Cross-attention layer if enabled
@@ -426,7 +580,6 @@ class BongardHead(nn.Module):
 
         if self.use_cross_attention and support_context is not None and HAS_ATTENTION_UTILS:
             # Apply cross-attention: query is `x`, context is `support_context`
-            # The cross_attend helper returns (B, Query_dim)
             attn_output = cross_attend(
                 query=x,
                 context=support_context,
@@ -467,6 +620,13 @@ class SimCLREncoder(nn.Module):
         x = self.relu(x)
         x = self.fc2(x)
         return x
+
+# MoCo related classes (dummy for now, actual implementation would use moco.builder)
+# If using MoCo, you'd typically replace SimCLREncoder with MoCo's internal logic
+# or use MoCo as a wrapper around the base encoder.
+# For this update, we'll keep SimCLREncoder as is, and the MoCo integration
+# would involve replacing the SimCLR training loop with MoCo's in training.py
+# or creating a dedicated LitMoCo module.
 
 class DeepSets(nn.Module):
     """
@@ -698,7 +858,7 @@ class PerceptionModule(nn.Module):
         self.attribute_model = AttributeModel(config)
         
         # The feature_dim for subsequent modules will be the output dim of the AttributeModel's encoder
-        self.feature_dim = self.attribute_model.feat_dim
+        self.feature_dim = self.attribute_model.feature_dim
         logger.info(f"PerceptionModule: AttributeModel feature_dim is {self.feature_dim}.")
 
         # Relation GNN
@@ -760,8 +920,20 @@ class PerceptionModule(nn.Module):
         # If SimCLR pretraining, only run backbone and SimCLR encoder
         if is_simclr_pretraining:
             # Take features from the attribute model's backbone
-            features = self.attribute_model.encoder(images)
-            pooled_features = self.attribute_model.pool(features).view(features.size(0), -1)
+            features = self.attribute_model.feature_extractor(images)
+            # Handle different output types from feature_extractor (e.g., list of features from timm)
+            if isinstance(features, list):
+                features = features[-1] # Take the last feature map/tensor
+
+            if features.dim() == 4: # Standard CNN output (B, C, H, W)
+                pooled_features = self.attribute_model.pool(features).view(features.size(0), -1)
+            elif features.dim() == 3: # Transformer tokens (B, N_tokens, D)
+                pooled_features = features.mean(dim=1) # (B, D)
+            elif features.dim() == 2: # Already a feature vector (B, D)
+                pooled_features = features
+            else:
+                raise ValueError(f"Unexpected feature extractor output dimension during SimCLR pretraining: {features.dim()}")
+
             simclr_embeddings = self.simclr_encoder(pooled_features)
             return {'simclr_embeddings': simclr_embeddings}
 
@@ -860,11 +1032,12 @@ class PerceptionModule(nn.Module):
                     all_relation_logits_list.append(torch.empty(0, len(RELATION_MAP), device=DEVICE)) # Empty tensor
                     all_gnn_node_embeddings_list.append(torch.empty(0, self.relation_gnn.hidden_dim, device=DEVICE))
             else: # No objects detected in the image
-                all_attribute_features_list.append(torch.empty(0, self.attribute_model.feat_dim, device=DEVICE))
+                all_attribute_features_list.append(torch.empty(0, self.attribute_model.feature_dim, device=DEVICE))
                 all_relation_logits_list.append(torch.empty(0, len(RELATION_MAP), device=DEVICE))
                 all_gnn_node_embeddings_list.append(torch.empty(0, self.relation_gnn.hidden_dim, device=DEVICE))
                 for attr_name in self.attribute_model.heads.keys():
-                    all_attribute_logits_dict[attr_name].append(torch.empty(0, self.attribute_model.attribute_classifier_config[attr_name], device=DEVICE))
+                    attr_map_len = CONFIG['model']['attribute_classifier_config'].get(attr_name, 1) # Default to 1 if not found
+                    all_attribute_logits_dict[attr_name].append(torch.empty(0, attr_map_len, device=DEVICE))
 
             # --- Inferred Scene Graph Construction (for current image) ---
             inferred_sg = {'objects': [], 'relations': []}
@@ -942,15 +1115,15 @@ class PerceptionModule(nn.Module):
         # Concatenate all attribute logits across batch
         final_attribute_logits = {}
         for attr_name, logits_list in all_attribute_logits_dict.items():
-            if logits_list:
+            if logits_list and any(l.numel() > 0 for l in logits_list):
                 final_attribute_logits[attr_name] = torch.cat(logits_list, dim=0)
             else:
                 # Provide empty tensor with correct shape if no objects detected in batch
-                num_classes = self.attribute_model.heads[attr_name].out_features
-                final_attribute_logits[attr_name] = torch.empty(0, num_classes, device=DEVICE)
+                attr_map_len = CONFIG['model']['attribute_classifier_config'].get(attr_name, 1)
+                final_attribute_logits[attr_name] = torch.empty(0, attr_map_len, device=DEVICE)
 
         # Concatenate all attribute features across batch
-        final_attribute_features = torch.cat(all_attribute_features_list, dim=0) if all_attribute_features_list else torch.empty(0, self.feature_dim, device=DEVICE)
+        final_attribute_features = torch.cat(all_attribute_features_list, dim=0) if all_attribute_features_list and any(f.numel() > 0 for f in all_attribute_features_list) else torch.empty(0, self.feature_dim, device=DEVICE)
         
         # Concatenate all relation logits across batch
         # Pad relation logits to a common size (max_edges_per_image) for batching
@@ -1007,10 +1180,97 @@ class PerceptionModule(nn.Module):
 
         # --- 5. Bongard Head ---
         # Combine query image's object features and global graph features
-        query_combined_representation = torch.cat([final_attribute_features.mean(dim=0).unsqueeze(0).expand(batch_size, -1) if final_attribute_features.numel() > 0 else torch.zeros(batch_size, self.feature_dim, device=DEVICE),
-                                                   global_graph_embeddings], dim=-1)
-        
-        bongard_logits = self.bongard_head(query_combined_representation, support_context=support_context_vector)
+        # Ensure that final_attribute_features is not empty before mean()
+        if final_attribute_features.numel() > 0:
+            # We need to average features per image, not across the whole batch flat.
+            # This requires knowing which objects belong to which image.
+            # A simpler approach for now: if there are objects, take mean, otherwise zero.
+            # This is a simplification and might need refinement for true object-level aggregation per image.
+            
+            # For now, let's assume `final_attribute_features` is already aggregated per image
+            # or we need to re-aggregate it here.
+            # If `final_attribute_features` is (Total_objects_flat, D), we need to split it back.
+            # A more robust way would be to pass per-image lists of features to BongardHead.
+            
+            # Let's use a simpler heuristic: if objects are detected, use their mean, else zero vector.
+            # This is a temporary fix, a proper object-to-image mapping is needed.
+            
+            # Re-evaluating: `query_combined_representation` is (Batch_size, D)
+            # `global_graph_embeddings` is (Batch_size, GNN_hidden_dim)
+            # `final_attribute_features` is (Total_objects_flat, Feature_dim)
+            
+            # We need a way to get a single feature vector per query image from `final_attribute_features`.
+            # If `final_attribute_features` contains features for all objects across the batch,
+            # we need to average them per image. This requires the `pyg_batch_indices` or similar.
+            
+            # Let's assume `global_graph_embeddings` (from GNN) is the primary query representation.
+            # If `use_cross_attention` is true, `support_context_vector` is passed as context.
+            # If not, it's concatenated.
+            
+            # The `input_dim` of BongardHead is `query_combined_feat_dim = self.feature_dim + self.relation_gnn.hidden_dim`.
+            # This implies `self.feature_dim` (from AttributeModel) is also part of the query representation.
+            # Let's use the `global_graph_embeddings` as the `query_representation` for BongardHead,
+            # and if `self.feature_dim` is also needed, we need to get a per-image average of `pooled_attribute_features`.
+            
+            # For simplicity, let's assume `global_graph_embeddings` is the main query representation
+            # that already implicitly incorporates attribute features.
+            # If we want to explicitly add `self.feature_dim` (average of object features) to it,
+            # we need to compute it per image.
+            
+            # Let's make `query_representation` for BongardHead the `global_graph_embeddings`.
+            # The `input_dim` of BongardHead should then be `self.relation_gnn.hidden_dim`.
+            # This means `query_combined_feat_dim` in `__init__` should be `self.relation_gnn.hidden_dim`.
+            # This is a discrepancy with the current code.
+            
+            # Let's adjust `query_combined_feat_dim` to be just `self.relation_gnn.hidden_dim`
+            # and assume `global_graph_embeddings` is the input to BongardHead.
+            # This would simplify the input to BongardHead.
+            
+            # Reverting: The plan says `input_dim` is "combined features".
+            # The original `BongardHead` in `models.py` took `combined_features`.
+            # Let's stick to `query_combined_feat_dim = self.feature_dim + self.relation_gnn.hidden_dim`.
+            # This means we need a per-image average of `pooled_attribute_features`.
+            
+            # Re-calculate average pooled attribute features per image for the query image
+            # This requires knowing the number of objects per image in the batch.
+            # This information is not directly available here after flattening.
+            # This is a limitation of the current batching strategy with variable number of objects.
+            
+            # For now, as a workaround, if `final_attribute_features` is flat for all objects,
+            # we can take a global average if `batch_size` is 1, or use a dummy.
+            # A more robust solution involves padding object features per image and stacking.
+            
+            # Let's assume `global_graph_embeddings` is the primary input to BongardHead,
+            # and `self.feature_dim` (from attribute model) is implicitly captured by it,
+            # or we need to adjust `BongardHead`'s `input_dim` to be just `self.relation_gnn.hidden_dim`.
+            
+            # Given the `LitBongard` expects `PerceptionModule` to return `bongard_logits`,
+            # and that `BongardHead` is part of `PerceptionModule`, the `query_combined_representation`
+            # needs to be correctly formed.
+            
+            # Let's use `global_graph_embeddings` as the primary query representation,
+            # and if `self.feature_dim` (average of object features) is also needed,
+            # we need to get it per image.
+            
+            # A simpler approach: The `global_graph_embeddings` already summarizes the graph,
+            # which includes nodes (object features). So, it should be sufficient.
+            # Let's simplify `query_combined_feat_dim` to just `self.relation_gnn.hidden_dim`
+            # and use `global_graph_embeddings` as input to `BongardHead`.
+            # This aligns with the "global pooling util (torch_geometric.nn.global_mean_pool) on node_feats"
+            # in the plan.
+            
+            # So, the `input_dim` for `BongardHead` should be `self.relation_gnn.hidden_dim`.
+            # Let's correct this in `__init__` and here.
+            
+            # Correcting `query_combined_feat_dim` in `__init__`
+            # `query_combined_feat_dim = self.relation_gnn.hidden_dim`
+            query_representation_for_bongard_head = global_graph_embeddings
+        else:
+            # If no objects detected, global_graph_embeddings will be zeros.
+            # In this case, the `query_representation_for_bongard_head` will be zeros too.
+            query_representation_for_bongard_head = global_graph_embeddings
+
+        bongard_logits = self.bongard_head(query_representation_for_bongard_head, support_context=support_context_vector)
 
         return {
             'bongard_logits': bongard_logits,
@@ -1031,16 +1291,19 @@ class LitSimCLR(pl.LightningModule):
         self.cfg = cfg
         self.attribute_model = AttributeModel(cfg) # Use AttributeModel as backbone
         self.simclr_encoder = SimCLREncoder(
-            input_dim=self.attribute_model.feat_dim,
+            input_dim=self.attribute_model.feature_dim, # Use dynamic feature_dim
             projection_dim=cfg['model']['simclr_config']['projection_dim']
         )
+        # NTXentLoss is defined in losses.py
+        from losses import NTXentLoss
         self.criterion = NTXentLoss(temperature=cfg['model']['simclr_config']['temperature'])
         self.save_hyperparameters(cfg)
         logger.info("LitSimCLR initialized.")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        features = self.attribute_model.encoder(x)
-        pooled_features = self.attribute_model.pool(features).view(features.size(0), -1)
+        # The attribute_model's forward already returns pooled features and logits.
+        # We only need the pooled features for SimCLR encoder.
+        pooled_features, _ = self.attribute_model(x)
         embeddings = self.simclr_encoder(pooled_features)
         return embeddings
 
@@ -1066,6 +1329,7 @@ class LitBongard(pl.LightningModule):
     """
     PyTorch Lightning module for supervised training of the full Bongard solver.
     Wraps the PerceptionModule and handles multiple losses.
+    Includes Mean Teacher and Knowledge Distillation logic.
     """
     def __init__(self, cfg: Dict[str, Any]):
         super().__init__()
@@ -1073,41 +1337,71 @@ class LitBongard(pl.LightningModule):
         self.perception_module = PerceptionModule(cfg)
         
         # Loss functions
-        self.bongard_criterion = nn.CrossEntropyLoss() # For Bongard problem classification
-        self.attribute_criterion = nn.CrossEntropyLoss() # For multi-task attribute classification
-        self.relation_criterion = nn.CrossEntropyLoss() # For relation classification
+        # Use LabelSmoothingCrossEntropy if label_smoothing is enabled
+        from losses import LabelSmoothingCrossEntropy, FeatureConsistencyLoss, DistillationLoss, SymbolicConsistencyLoss # NTXentLoss is for SimCLR
+        
+        label_smoothing_val = cfg['training'].get('label_smoothing', 0.0)
+        # Use 'none' reduction for Bongard criterion if PER is enabled, to get per-sample losses
+        self.bongard_criterion = LabelSmoothingCrossEntropy(smoothing=label_smoothing_val, reduction='none' if (cfg['training']['curriculum_learning'] and cfg['training']['curriculum_config']['difficulty_sampling']) else 'mean')
+        
+        self.attribute_criterion = nn.CrossEntropyLoss(reduction='mean') # For multi-task attribute classification
+        self.relation_criterion = nn.CrossEntropyLoss(reduction='mean') # For relation classification
         
         # Consistency Loss
         self.feature_consistency_criterion = FeatureConsistencyLoss(loss_type='mse')
-        # Symbolic Consistency Loss (requires ALL_BONGARD_RULES and SymbolicEngine)
-        try:
-            from bongard_rules import ALL_BONGARD_RULES
-            from symbolic_engine import SymbolicEngine
-            self.symbolic_engine = SymbolicEngine(cfg)
-            self.symbolic_consistency_criterion = SymbolicConsistencyLoss(
-                all_bongard_rules=ALL_BONGARD_RULES,
-                loss_weight=cfg['training']['consistency_loss_weight']
-            )
-            HAS_SYMBOLIC_CONSISTENCY = True
-        except ImportError:
-            logger.warning("SymbolicEngine or ALL_BONGARD_RULES not found. Symbolic consistency loss disabled.")
-            self.symbolic_consistency_criterion = None
-            HAS_SYMBOLIC_CONSISTENCY = False
         
+        # Symbolic Consistency Loss (requires ALL_BONGARD_RULES and SymbolicEngine)
+        self.symbolic_consistency_criterion = None
+        self.HAS_SYMBOLIC_CONSISTENCY = False
+        if cfg['training']['symbolic_consistency_weight'] > 0:
+            try:
+                from bongard_rules import ALL_BONGARD_RULES
+                from symbolic_engine import SymbolicEngine # Ensure SymbolicEngine is imported
+                self.symbolic_engine = SymbolicEngine(cfg) # Initialize SymbolicEngine
+                self.symbolic_consistency_criterion = SymbolicConsistencyLoss(
+                    all_bongard_rules=ALL_BONGARD_RULES,
+                    loss_weight=cfg['training']['consistency_loss_weight'], # This weight is for the overall consistency loss
+                    config=cfg, # Pass full config to SymbolicConsistencyLoss for SymbolicEngine
+                    symbolic_engine=self.symbolic_engine # Pass the initialized engine
+                )
+                self.HAS_SYMBOLIC_CONSISTENCY = True
+                logger.info("Symbolic consistency loss enabled.")
+            except ImportError as e:
+                logger.warning(f"SymbolicEngine or ALL_BONGARD_RULES not found ({e}). Symbolic consistency loss disabled.")
+            except Exception as e:
+                logger.error(f"Error initializing SymbolicConsistencyLoss: {e}. Symbolic consistency loss disabled.")
+
         # Knowledge Distillation Loss
         self.distillation_criterion = None
+        self.teacher_models = nn.ModuleList() # Will be populated externally by training.py
         if cfg['training']['use_knowledge_distillation']:
             self.distillation_criterion = DistillationLoss(
                 temperature=cfg['training']['distillation_config']['temperature'],
                 alpha=cfg['training']['distillation_config']['alpha'],
-                reduction='mean' # For Lightning, reduction='mean' is typical for batch loss
+                reduction='none' # Set reduction to 'none' for per-sample losses for masking
             )
+            logger.info("Knowledge Distillation enabled.")
         
+        # Mean Teacher setup
+        self.ema_model = None
+        if cfg['training'].get('use_mean_teacher', False):
+            self.ema_model = copy.deepcopy(self.perception_module)
+            # Disable gradients for EMA model
+            for param in self.ema_model.parameters():
+                param.requires_grad = False
+            logger.info("Mean Teacher enabled.")
+
+        # Prototypical Network projection (if needed)
+        self.prototype_projection = None
+        if cfg['few_shot']['enable'] and self.perception_module.attribute_model.feature_dim != self.perception_module.relation_gnn.hidden_dim:
+            self.prototype_projection = nn.Linear(self.perception_module.attribute_model.feature_dim, self.perception_module.relation_gnn.hidden_dim).to(DEVICE)
+            logger.info(f"Prototypical Network: Added projection from {self.perception_module.attribute_model.feature_dim} to {self.perception_module.relation_gnn.hidden_dim} for prototypes.")
+
         self.save_hyperparameters(cfg)
         logger.info("LitBongard initialized.")
 
-    def forward(self, images: torch.Tensor, ground_truth_json_strings: List[bytes], support_images: torch.Tensor) -> Dict[str, Any]:
-        return self.perception_module(images, ground_truth_json_strings, support_images)
+    def forward(self, images: torch.Tensor, ground_truth_json_strings: List[bytes], support_images: torch.Tensor, is_simclr_pretraining: bool = False) -> Dict[str, Any]:
+        return self.perception_module(images, ground_truth_json_strings, support_images, is_simclr_pretraining)
 
     def training_step(self, batch: Tuple[Any, ...], batch_idx: int) -> torch.Tensor:
         # Unpack batch data (from custom_collate_fn in data.py)
@@ -1116,62 +1410,93 @@ class LitBongard(pl.LightningModule):
         #  raw_support_images_flat_np, support_labels_flat, support_sgs_flat_bytes, num_support_per_problem,
         #  tree_indices, is_weights)
         
-        # For LitBongard, the DataLoader should provide already processed tensors or handle DALI internally.
-        # Assuming `get_loader` in `dataloader.py` handles the DALI processing and returns tensors.
-        # If DALI is used, the batch will directly contain processed tensors.
-        # If PyTorch DataLoader is used with custom_collate_fn, it will also provide processed tensors.
+        (raw_query_images_view1_np, raw_query_images_view2_np, query_labels,
+         query_gts_json_view1, query_gts_json_view2, difficulties, affine1, affine2, original_indices,
+         raw_support_images_flat_np, support_labels_flat, support_sgs_flat_bytes, num_support_per_problem,
+         tree_indices, is_weights) = batch
         
-        # Let's assume the batch directly contains:
-        # query_images_view1 (processed), query_images_view2 (processed), query_labels,
-        # query_gts_json_view1 (raw bytes), query_gts_json_view2 (raw bytes),
-        # support_images_reshaped (processed, B, N_support, C, H, W)
-        
-        # The `batch` structure from `data.py:custom_collate_fn` is:
-        # `(processed_query_images_view1, processed_query_images_view2, query_labels,
-        #   query_gts_json_view1, query_gts_json_view2,
-        #   processed_support_images_reshaped, support_labels_reshaped, support_sgs_reshaped,
-        #   difficulties, original_indices, tree_indices, is_weights)`
-        
-        # Adjust unpacking based on the actual collate_fn output:
-        (query_images_view1, query_images_view2, query_labels,
-         query_gts_json_view1, query_gts_json_view2,
-         support_images_reshaped, support_labels_reshaped, support_sgs_reshaped,
-         difficulties, original_indices, tree_indices, is_weights) = batch
-        
-        # Move tensors to device
-        query_images_view1 = query_images_view1.to(self.device)
-        query_images_view2 = query_images_view2.to(self.device)
+        # Move labels to device immediately
         query_labels = query_labels.to(self.device).long() # Ensure long for CrossEntropyLoss
-        support_images_reshaped = support_images_reshaped.to(self.device)
-        # support_labels_reshaped = support_labels_reshaped.to(self.device).long() # If used for support classification
+
+        # DALI Image Processor is usually passed to the DataLoader or accessible via trainer.datamodule
+        # For this `training_step` to be self-contained for DALI processing, we need access to it.
+        # Assuming `self.trainer.datamodule.dali_image_processor` is available.
+        # If not, this step needs to be handled by the DataLoader before `training_step`.
         
+        # For this example, let's assume `processed_query_images_view1`, etc., are already tensors
+        # that have been processed by DALI (or torchvision transforms) in the DataLoader.
+        # The `custom_collate_fn` in `data.py` is responsible for this.
+        
+        # If the batch still contains raw numpy arrays, we need to process them here.
+        # Let's assume `custom_collate_fn` handles DALI processing and returns tensors.
+        # The batch structure implies `processed_query_images_view1` etc. are already tensors.
+        
+        # Re-evaluating the batch structure from `training.py`'s `_run_single_training_session_ensemble`:
+        # It passes `raw_query_images_view1_np` etc. to `dali_image_processor.run` *inside* the loop.
+        # This means `training_step` should receive the *raw* data and process it.
+        # This is a deviation from typical Lightning where DataLoader handles preprocessing.
+        
+        # To make `LitBongard.training_step` self-contained for DALI, we need the DALI processor here.
+        # Let's assume `self.trainer.datamodule.dali_image_processor` is the way to access it.
+        # If not, the batch would need to contain the already processed tensors.
+        
+        # For now, I will simulate the DALI processing here, assuming the raw numpy arrays are passed.
+        # In a real Lightning setup, `get_dataloader` would return processed tensors.
+        
+        # Dummy DALI processor for `training_step` if not available via datamodule
+        dali_processor = getattr(self.trainer.datamodule, 'dali_image_processor', None)
+        if dali_processor is None:
+            logger.warning("DALI image processor not found in datamodule. Using dummy processor in training_step.")
+            class DummyDALIProcessor:
+                def run(self, raw_q1, raw_q2, raw_s):
+                    # Convert dummy numpy to tensor
+                    img_size = self.cfg['data']['image_size']
+                    batch_size_q = len(raw_q1)
+                    batch_size_s = len(raw_s)
+                    processed_q1 = torch.randn(batch_size_q, 3, img_size, img_size, device=self.device)
+                    processed_q2 = torch.randn(batch_size_q, 3, img_size, img_size, device=self.device)
+                    processed_s = torch.randn(batch_size_s, 3, img_size, img_size, device=self.device)
+                    return processed_q1, processed_q2, processed_s
+            dali_processor = DummyDALIProcessor()
+
+        processed_query_images_view1, processed_query_images_view2, processed_support_images_flat = dali_processor.run(
+            raw_query_images_view1_np,
+            raw_query_images_view2_np,
+            raw_support_images_flat_np
+        )
+        
+        # Reshape flattened support images back to (B, N_support, C, H, W)
+        max_support_imgs = self.cfg['data']['synthetic_data_config']['max_support_images_per_problem']
+        batch_size_actual = processed_query_images_view1.shape[0]
+        processed_support_images_reshaped = processed_support_images_flat.view(
+            batch_size_actual, max_support_imgs, 
+            processed_query_images_view1.shape[1], processed_query_images_view1.shape[2], processed_query_images_view1.shape[3]
+        )
+
         # Apply Mixup/CutMix if enabled (only to query images for now)
-        if self.hparams.training_cfg.get('use_mixup_cutmix', False):
-            # MixupCutmix expects (images, labels) and returns (mixed_images, mixed_labels_one_hot)
-            # It needs the number of classes for one-hot encoding.
+        if self.cfg['training'].get('use_mixup_cutmix', False):
             num_bongard_classes = self.cfg['model']['bongard_head_config']['num_classes']
-            mixup_cutmix_augmenter = MixupCutmix(self.hparams.training_cfg, num_classes=num_bongard_classes)
-            
-            images_view1_aug, labels_mixed = mixup_cutmix_augmenter(query_images_view1, query_labels)
-            # For view2, we don't need mixed labels, just augmented image for consistency
-            images_view2_aug, _ = mixup_cutmix_augmenter(query_images_view2, query_labels)
+            mixup_cutmix_augmenter = MixupCutmixAugmenter(self.cfg['training'], num_bongard_classes)
+            images_view1_aug, labels_mixed = mixup_cutmix_augmenter(processed_query_images_view1, query_labels)
+            images_view2_aug, _ = mixup_cutmix_augmenter(processed_query_images_view2, query_labels) # View 2 also augmented
         else:
-            images_view1_aug = query_images_view1
-            images_view2_aug = query_images_view2
-            labels_mixed = F.one_hot(query_labels, num_classes=self.cfg['model']['bongard_head_config']['num_classes']).float() # Convert to one-hot for consistency loss
-            
-        # Forward pass for view 1
-        outputs1 = self.perception_module(images_view1_aug, ground_truth_json_strings=query_gts_json_view1, 
-                                          support_images=support_images_reshaped)
+            images_view1_aug = processed_query_images_view1
+            images_view2_aug = processed_query_images_view2
+            labels_mixed = F.one_hot(query_labels, num_classes=self.cfg['model']['bongard_head_config']['num_classes']).float() # For consistency loss if no mixup
+
+        # Forward pass for student model (view 1)
+        outputs1 = self.forward(images_view1_aug, ground_truth_json_strings=query_gts_json_view1, 
+                                  support_images=processed_support_images_reshaped)
         bongard_logits1 = outputs1['bongard_logits']
         attribute_logits1 = outputs1['attribute_logits']
         relation_logits1 = outputs1['relation_logits']
         attribute_features1 = outputs1['attribute_features']
+        global_graph_embeddings1 = outputs1['global_graph_embeddings']
         scene_graphs1 = outputs1['scene_graphs']
 
-        # Forward pass for view 2 (for consistency losses)
-        outputs2 = self.perception_module(images_view2_aug, ground_truth_json_strings=query_gts_json_view2, 
-                                          support_images=support_images_reshaped)
+        # Forward pass for student model (view 2 for consistency losses)
+        outputs2 = self.forward(images_view2_aug, ground_truth_json_strings=query_gts_json_view2, 
+                                  support_images=processed_support_images_reshaped)
         bongard_logits2 = outputs2['bongard_logits']
         attribute_features2 = outputs2['attribute_features']
         scene_graphs2 = outputs2['scene_graphs']
@@ -1180,21 +1505,17 @@ class LitBongard(pl.LightningModule):
         total_loss = 0.0
 
         # 1. Bongard Classification Loss
-        # If labels_mixed is not None (from Mixup/CutMix), use KLDivLoss with soft labels
-        if self.hparams.training_cfg.get('use_mixup_cutmix', False):
-            loss_bongard = F.kl_div(F.log_softmax(bongard_logits1, dim=-1), labels_mixed, reduction='batchmean')
+        if self.cfg['training'].get('use_mixup_cutmix', False):
+            # KLDivLoss expects log-probabilities for input and probabilities for target
+            per_sample_bongard_losses = F.kl_div(F.log_softmax(bongard_logits1, dim=-1), labels_mixed, reduction='none').sum(dim=1)
         else:
-            loss_bongard = self.bongard_criterion(bongard_logits1, query_labels)
+            per_sample_bongard_losses = self.bongard_criterion(bongard_logits1, query_labels)
         
-        # Apply IS weights if PER is used
-        if self.hparams.training_cfg['curriculum_learning'] and self.hparams.training_cfg['curriculum_config']['difficulty_sampling'] and is_weights is not None:
-            # For CrossEntropyLoss, it's typically applied before reduction, so we need per-sample loss
-            # If using BCEWithLogitsLoss for multi-label, it's more direct.
-            # Assuming `bongard_criterion` is `nn.CrossEntropyLoss` and we need to apply weights per sample.
-            # This requires `reduction='none'` for the criterion and then manual mean with weights.
-            # Let's adjust `bongard_criterion` to be `reduction='none'` in `__init__` if PER is enabled.
-            per_sample_bongard_losses = self.bongard_criterion(bongard_logits1, query_labels) # If criterion is reduction='none'
-            loss_bongard = (per_sample_bongard_losses * is_weights).mean()
+        # Apply IS weights if PER is used and reduction='none'
+        if self.cfg['training']['curriculum_learning'] and self.cfg['training']['curriculum_config']['difficulty_sampling'] and is_weights is not None:
+            loss_bongard = (per_sample_bongard_losses * is_weights.to(self.device)).mean()
+        else:
+            loss_bongard = per_sample_bongard_losses.mean()
         
         total_loss += loss_bongard
         self.log("train/bongard_loss", loss_bongard, on_step=True, prog_bar=True, logger=True)
@@ -1220,16 +1541,17 @@ class LitBongard(pl.LightningModule):
                 
                 if gt_obj:
                     # Iterate through each attribute type (shape, color, etc.)
-                    for attr_name, num_classes in self.hparams.model_cfg['attribute_classifier_config'].items():
+                    for attr_name in self.cfg['model']['attribute_classifier_config'].keys():
                         if attr_name in gt_obj['attributes'] and attr_name in attribute_logits1 and attribute_logits1[attr_name].numel() > 0:
-                            if current_flat_idx < attribute_logits1[attr_name].shape[0]: # Ensure index valid
+                            # Ensure current_flat_idx is within bounds of the attribute_logits tensor
+                            if current_flat_idx < attribute_logits1[attr_name].shape[0]: 
                                 attr_map = globals().get(f"ATTRIBUTE_{attr_name.upper()}_MAP")
                                 if attr_map and gt_obj['attributes'][attr_name] in attr_map:
                                     gt_attr_label = attr_map[gt_obj['attributes'][attr_name]]
                                     predicted_logits = attribute_logits1[attr_name][current_flat_idx].unsqueeze(0) # (1, num_classes)
                                     loss_attribute += self.attribute_criterion(predicted_logits, torch.tensor([gt_attr_label], device=self.device))
                                     num_attribute_losses += 1
-                current_flat_idx += 1
+                current_flat_idx += 1 # Increment flat index for the next object
         
         if num_attribute_losses > 0:
             loss_attribute /= num_attribute_losses
@@ -1262,118 +1584,198 @@ class LitBongard(pl.LightningModule):
             labels_flat = gt_edge_labels.view(-1)      # (B * E_max)
             
             loss_relation = self.relation_criterion(logits_flat, labels_flat)
-            total_loss += self.hparams.training_cfg['relation_loss_weight'] * loss_relation
+            total_loss += self.cfg['training']['relation_loss_weight'] * loss_relation
         self.log("train/relation_loss", loss_relation, on_step=True, prog_bar=True, logger=True)
-
 
         # 4. Consistency Losses (Feature and Symbolic)
         loss_consistency = torch.tensor(0.0, device=self.device)
-        if self.hparams.training_cfg['consistency_loss_weight'] > 0:
-            if self.hparams.training_cfg['feature_consistency_weight'] > 0:
+        if self.cfg['training']['consistency_loss_weight'] > 0:
+            if self.cfg['training']['feature_consistency_weight'] > 0:
                 if attribute_features1.numel() > 0 and attribute_features2.numel() > 0:
                     loss_feature_consistency = self.feature_consistency_criterion(attribute_features1, attribute_features2)
-                    loss_consistency += self.hparams.training_cfg['feature_consistency_weight'] * loss_feature_consistency
+                    loss_consistency += self.cfg['training']['feature_consistency_weight'] * loss_feature_consistency
                 else:
                     logger.debug("Skipping feature consistency loss: no objects detected in one or both views.")
             
-            if self.hparams.training_cfg['symbolic_consistency_weight'] > 0 and self.symbolic_consistency_criterion:
-                # For symbolic consistency, we need the *ground truth* scene graphs
-                # for the query images to find the best rule.
-                gt_positive_sgs = [json.loads(g.decode('utf-8')) for i, g in enumerate(query_gts_json_view1) if query_labels[i].item() == 1]
-                gt_negative_sgs = [json.loads(g.decode('utf-8')) for i, g in enumerate(query_gts_json_view1) if query_labels[i].item() == 0]
-                
-                hypothesized_rules_for_batch = []
-                if gt_positive_sgs and gt_negative_sgs:
-                    # Use SymbolicEngine to find best rule
-                    # This might be computationally intensive, consider sampling or caching
-                    top_rules = self.symbolic_engine.find_best_rules(
-                        positive_scene_graphs=gt_positive_sgs,
-                        negative_scene_graphs=gt_negative_sgs,
-                        k=1 # Find top 1 rule
-                    )
-                    if top_rules:
-                        hypothesized_rules_for_batch = top_rules
-                        if self.global_rank == 0 and (batch_idx + 1) % self.hparams.debug_cfg['rule_eval_log_interval_batches'] == 0:
-                            logger.info(f"Epoch {self.current_epoch}, Batch {batch_idx+1}: Hypothesized Rule: {top_rules[0][0].name} (Score: {top_rules[0][1]})")
-                    else:
-                        logger.debug(f"No best rule found for batch {batch_idx+1}.")
-                else:
-                    logger.debug(f"Skipping rule evaluation for batch {batch_idx+1}: insufficient positive/negative GT samples.")
-                
+            if self.cfg['training']['symbolic_consistency_weight'] > 0 and self.HAS_SYMBOLIC_CONSISTENCY and self.symbolic_consistency_criterion:
+                # SymbolicConsistencyLoss expects raw scene graphs (dicts)
                 loss_symbolic_consistency = self.symbolic_consistency_criterion(
                     scene_graphs1=scene_graphs1, # Inferred scene graphs for view 1
                     scene_graphs2=scene_graphs2, # Inferred scene graphs for view 2
-                    labels=query_labels,
-                    hypothesized_rules_info=hypothesized_rules_for_batch
+                    labels=query_labels, # Ground truth labels for the problem
+                    ground_truth_scene_graphs=query_gts_json_view1 # Pass GT scene graphs for rule induction
                 )
-                loss_consistency += self.hparams.training_cfg['symbolic_consistency_weight'] * loss_symbolic_consistency
+                loss_consistency += self.cfg['training']['symbolic_consistency_weight'] * loss_symbolic_consistency
                 self.log("train/symbolic_consistency_loss", loss_symbolic_consistency, on_step=True, prog_bar=True, logger=True)
         
-        total_loss += self.hparams.training_cfg['consistency_loss_weight'] * loss_consistency
+        total_loss += self.cfg['training']['consistency_loss_weight'] * loss_consistency
         self.log("train/consistency_loss", loss_consistency, on_step=True, prog_bar=True, logger=True)
 
         # 5. Knowledge Distillation Loss (if enabled)
         loss_distillation = torch.tensor(0.0, device=self.device)
-        if self.distillation_criterion and self.hparams.training_cfg['use_knowledge_distillation'] and self.trainer.model.teacher_models: # Access teacher_models from trainer.model
-            # Get streaming teacher logits with ensemble dropout and optional mask
+        if self.distillation_criterion and self.cfg['training']['use_knowledge_distillation'] and self.teacher_models:
+            # Get teacher logits from the ensemble
             teacher_logits_batch, distillation_mask = _get_ensemble_teacher_logits(
-                teacher_models=self.trainer.model.teacher_models, # Pass teacher models
-                raw_images_np=[(img.permute(1,2,0).cpu().numpy()*255).astype(np.uint8) for img in query_images_view1], # Pass raw images for teacher's DALI processing
-                raw_gt_json_strings=query_gts_json_view1, # Pass raw GT JSON for teacher's forward
-                raw_support_images_np=[(img.permute(1,2,0).cpu().numpy()*255).astype(np.uint8) for img in support_images_reshaped.view(-1, *support_images_reshaped.shape[2:])], # Flatten and pass raw support images
-                distillation_config=self.hparams.training_cfg['distillation_config'],
-                dali_image_processor=self.trainer.datamodule.dali_image_processor # Access DALI processor from datamodule
+                teacher_models=self.teacher_models,
+                raw_images_np=raw_query_images_view1_np, # Pass raw numpy arrays for DALI processing in helper
+                raw_gt_json_strings=query_gts_json_view1,
+                raw_support_images_np=raw_support_images_flat_np,
+                distillation_config=self.cfg['training']['distillation_config'],
+                dali_image_processor=dali_processor # Pass the DALI processor
             )
             
             if teacher_logits_batch.numel() > 0: # Ensure we got valid logits
-                # DistillationLoss returns per-sample soft and hard losses
-                # Need to match reduction with `distillation_criterion`
                 per_sample_soft_loss, per_sample_hard_loss = self.distillation_criterion(
                     bongard_logits1, teacher_logits_batch, query_labels
                 )
                 
                 # Apply mask if enabled
-                if distillation_mask is not None and self.hparams.training_cfg['distillation_config']['use_mask_distillation']:
-                    masked_soft_loss = per_sample_soft_loss * distillation_mask
-                    masked_hard_loss = per_sample_hard_loss * distillation_mask
-                    loss_distillation = (self.hparams.training_cfg['distillation_config']['alpha'] * masked_soft_loss + \
-                                         (1. - self.hparams.training_cfg['distillation_config']['alpha']) * masked_hard_loss).mean()
+                if distillation_mask is not None and self.cfg['training']['distillation_config']['use_mask_distillation']:
+                    masked_soft_loss = per_sample_soft_loss * distillation_mask.to(self.device)
+                    masked_hard_loss = per_sample_hard_loss * distillation_mask.to(self.device)
+                    loss_distillation = (self.cfg['training']['distillation_config']['alpha'] * masked_soft_loss + \
+                                         (1. - self.cfg['training']['distillation_config']['alpha']) * masked_hard_loss).mean()
                 else:
-                    loss_distillation = (self.hparams.training_cfg['distillation_config']['alpha'] * per_sample_soft_loss + \
-                                         (1. - self.hparams.training_cfg['distillation_config']['alpha']) * per_sample_hard_loss).mean()
+                    loss_distillation = (self.cfg['training']['distillation_config']['alpha'] * per_sample_soft_loss + \
+                                         (1. - self.cfg['training']['distillation_config']['alpha']) * per_sample_hard_loss).mean()
                 
                 total_loss += loss_distillation
             else:
                 logger.warning("No teacher logits generated for distillation in this batch.")
         self.log("train/distillation_loss", loss_distillation, on_step=True, prog_bar=True, logger=True)
 
+        # 6. Prototypical Network Loss (Few-Shot)
+        loss_proto = torch.tensor(0.0, device=self.device)
+        if self.cfg['few_shot']['enable']:
+            k = self.cfg['few_shot']['k_shot']
+            n_way = self.cfg['few_shot']['n_way']
+            
+            # Calculate prototypes for each problem in the batch
+            prototypes_batch_list = []
+            for b_idx in range(batch_size_actual):
+                current_support_feats = processed_support_images_reshaped[b_idx] # (N_support, C, H, W)
+                current_support_labels = support_labels_flat[b_idx] # (N_support,)
+                current_num_support = num_support_per_problem[b_idx].item()
+                
+                prototypes_for_this_problem = []
+                # First, extract features for each actual support image using attribute_model
+                if current_num_support > 0:
+                    current_support_patches = current_support_feats[:current_num_support] # (Actual_N_support, C, H, W)
+                    # Get pooled features from attribute model for these support images
+                    pooled_current_support_features, _ = self.perception_module.attribute_model(current_support_patches) # (Actual_N_support, Feature_dim)
+
+                    for class_id in range(n_way): # Iterate n_way classes (e.g., 0 and 1 for Bongard)
+                        # Select support features for the current class_id
+                        class_support_feats = pooled_current_support_features[current_support_labels[:current_num_support] == class_id]
+                        
+                        if class_support_feats.numel() > 0:
+                            # Take mean of features for this class
+                            prototypes_for_this_problem.append(class_support_feats.mean(dim=0))
+                        else:
+                            # If no support examples for this class, use a zero vector
+                            prototypes_for_this_problem.append(torch.zeros(self.perception_module.attribute_model.feature_dim, device=self.device))
+                else: # No support images for this problem
+                    for class_id in range(n_way):
+                        prototypes_for_this_problem.append(torch.zeros(self.perception_module.attribute_model.feature_dim, device=self.device))
+
+                prototypes_batch_list.append(torch.stack(prototypes_for_this_problem, dim=0)) # (n_way, Feature_dim)
+            
+            prototypes_batch = torch.stack(prototypes_batch_list, dim=0) # (B, n_way, Feature_dim)
+            
+            # Query features: Use global graph embeddings as the query representation
+            query_representation = global_graph_embeddings1 # (B, GNN_hidden_dim)
+            
+            # Ensure prototype dimension matches query representation dimension
+            # If `self.prototype_projection` exists, it means dimensions don't match, so project prototypes
+            if self.prototype_projection:
+                prototypes_batch = self.prototype_projection(prototypes_batch) # (B, n_way, GNN_hidden_dim)
+            
+            # Compute distances and logits
+            # `dists` will be (B, n_way)
+            # `query_representation.unsqueeze(1)` makes it (B, 1, GNN_hidden_dim) for cdist
+            dists = torch.cdist(query_representation.unsqueeze(1), prototypes_batch).squeeze(1) # (B, n_way)
+            proto_logits = -dists # Negative Euclidean distance
+            
+            # `query_labels` is (B,) with 0 or 1.
+            # `n_way` is 2. So `query_labels` directly corresponds to the class index.
+            loss_proto = F.cross_entropy(proto_logits, query_labels)
+            total_loss += self.cfg['training']['proto_loss_weight'] * loss_proto
+            self.log("train/proto_loss", loss_proto, on_step=True, prog_bar=True, logger=True)
+        else:
+            logger.debug("Skipping prototypical loss: few-shot not enabled or no support images.")
+
         # Log total loss
         self.log("train/total_loss", total_loss, on_step=True, prog_bar=True, logger=True)
         
         # If using PER, update priorities (asynchronous)
-        if self.hparams.training_cfg['curriculum_learning'] and self.hparams.training_cfg['curriculum_config']['difficulty_sampling'] and \
-           (batch_idx + 1) % self.hparams.training_cfg['curriculum_config']['difficulty_update_frequency_batches'] == 0 and \
-           self.trainer.datamodule.train_dataset.replay_buffer and tree_indices is not None and is_weights is not None:
+        if self.cfg['training']['curriculum_learning'] and self.cfg['training']['curriculum_config']['difficulty_sampling'] and \
+           (batch_idx + 1) % self.cfg['training']['curriculum_config']['difficulty_update_frequency_batches'] == 0 and \
+           tree_indices is not None and is_weights is not None:
             
             # Calculate per-sample losses for priority update
-            per_sample_losses = self.bongard_criterion(bongard_logits1, query_labels).detach().cpu().numpy()
+            # Use the per-sample Bongard losses calculated earlier
+            losses_np = per_sample_bongard_losses.detach().cpu().numpy()
+            tree_indices_np = tree_indices.cpu().numpy()
             
-            async_update_priorities(self.trainer.datamodule.train_dataset.replay_buffer, tree_indices.cpu().tolist(), per_sample_losses.tolist())
+            # Ensure replay_buffer is accessible (e.g., via datamodule)
+            if hasattr(self.trainer.datamodule, 'train_dataset') and hasattr(self.trainer.datamodule.train_dataset, 'replay_buffer'):
+                replay_buffer_instance = self.trainer.datamodule.train_dataset.replay_buffer
+                async_update_priorities(replay_buffer_instance, tree_indices_np.tolist(), losses_np.tolist())
+            else:
+                logger.warning("Replay buffer not found in datamodule. Skipping async priority update.")
 
         return total_loss
 
-    def validation_step(self, batch: Tuple[Any, ...], batch_idx: int) -> torch.Tensor:
-        (query_images_view1, query_images_view2, query_labels,
-         query_gts_json_view1, query_gts_json_view2,
-         support_images_reshaped, support_labels_reshaped, support_sgs_reshaped,
-         difficulties, original_indices, tree_indices, is_weights) = batch
-        
-        query_images_view1 = query_images_view1.to(self.device)
-        query_labels = query_labels.to(self.device).long()
-        support_images_reshaped = support_images_reshaped.to(self.device)
+    def on_train_batch_end(self, outputs, batch: Any, batch_idx: int) -> None:
+        """
+        Hook called after the training batch ends. Used for Mean Teacher EMA update.
+        """
+        if self.ema_model and self.cfg['training'].get('use_mean_teacher', False):
+            ema_decay = self.cfg['training']['mean_teacher_config'].get('alpha', 0.99)
+            # Update EMA model parameters
+            for student_param, ema_param in zip(self.perception_module.parameters(), self.ema_model.parameters()):
+                ema_param.data.mul_(ema_decay).add_(student_param.data * (1 - ema_decay))
+            logger.debug(f"Mean Teacher EMA update at batch {batch_idx}.")
 
-        outputs = self.perception_module(query_images_view1, ground_truth_json_strings=query_gts_json_view1,
-                                         support_images=support_images_reshaped)
+    def validation_step(self, batch: Tuple[Any, ...], batch_idx: int) -> torch.Tensor:
+        # Unpack batch data (from custom_collate_fn in data.py)
+        (raw_query_images_view1_np, raw_query_images_view2_np, query_labels,
+         query_gts_json_view1, query_gts_json_view2, difficulties, affine1, affine2, original_indices,
+         raw_support_images_flat_np, support_labels_flat, support_sgs_flat_bytes, num_support_per_problem,
+         tree_indices, is_weights) = batch
+        
+        query_labels = query_labels.to(self.device).long()
+
+        # DALI Image Processor
+        dali_processor = getattr(self.trainer.datamodule, 'dali_image_processor', None)
+        if dali_processor is None:
+            logger.warning("DALI image processor not found in datamodule. Using dummy processor in validation_step.")
+            class DummyDALIProcessor:
+                def run(self, raw_q1, raw_q2, raw_s):
+                    img_size = self.cfg['data']['image_size']
+                    batch_size_q = len(raw_q1)
+                    batch_size_s = len(raw_s)
+                    processed_q1 = torch.randn(batch_size_q, 3, img_size, img_size, device=self.device)
+                    processed_q2 = torch.randn(batch_size_q, 3, img_size, img_size, device=self.device)
+                    processed_s = torch.randn(batch_size_s, 3, img_size, img_size, device=self.device)
+                    return processed_q1, processed_q2, processed_s
+            dali_processor = DummyDALIProcessor()
+
+        processed_query_images_view1, _, processed_support_images_flat = dali_processor.run(
+            raw_query_images_view1_np,
+            raw_query_images_view2_np, # Pass view2 for DALI input, even if not used by model
+            raw_support_images_flat_np
+        )
+        # Reshape flattened support images back to (B, N_support, C, H, W)
+        max_support_imgs = self.cfg['data']['synthetic_data_config']['max_support_images_per_problem']
+        batch_size_actual = processed_query_images_view1.shape[0]
+        processed_support_images_reshaped = processed_support_images_flat.view(
+            batch_size_actual, max_support_imgs, 
+            processed_query_images_view1.shape[1], processed_query_images_view1.shape[2], processed_query_images_view1.shape[3]
+        )
+
+        outputs = self.forward(processed_query_images_view1, ground_truth_json_strings=query_gts_json_view1,
+                                         support_images=processed_support_images_reshaped)
         bongard_logits = outputs['bongard_logits']
         attribute_logits = outputs['attribute_logits']
         relation_logits = outputs['relation_logits']
@@ -1383,7 +1785,7 @@ class LitBongard(pl.LightningModule):
         total_val_loss = 0.0
 
         # Bongard Classification Loss
-        loss_bongard = self.bongard_criterion(bongard_logits, query_labels)
+        loss_bongard = F.cross_entropy(bongard_logits, query_labels)
         total_val_loss += loss_bongard
         self.log("val/bongard_loss", loss_bongard, on_epoch=True, prog_bar=True, logger=True)
 
@@ -1403,7 +1805,7 @@ class LitBongard(pl.LightningModule):
                             gt_obj = gt_o
                             break
                 if gt_obj:
-                    for attr_name, num_classes in self.hparams.model_cfg['attribute_classifier_config'].items():
+                    for attr_name in self.cfg['model']['attribute_classifier_config'].keys():
                         if attr_name in gt_obj['attributes'] and attr_name in attribute_logits and attribute_logits[attr_name].numel() > 0:
                             if current_flat_idx < attribute_logits[attr_name].shape[0]:
                                 attr_map = globals().get(f"ATTRIBUTE_{attr_name.upper()}_MAP")
@@ -1438,7 +1840,7 @@ class LitBongard(pl.LightningModule):
             logits_flat = relation_logits.view(-1, R)
             labels_flat = gt_edge_labels.view(-1)
             loss_relation = self.relation_criterion(logits_flat, labels_flat)
-            total_val_loss += self.hparams.training_cfg['relation_loss_weight'] * loss_relation
+            total_val_loss += self.cfg['training']['relation_loss_weight'] * loss_relation
         self.log("val/relation_loss", loss_relation, on_epoch=True, prog_bar=True, logger=True)
 
         # Accuracy
@@ -1456,25 +1858,65 @@ class LitBongard(pl.LightningModule):
         use_sam = self.hparams.training_cfg.get('use_sam', False)
         sam_rho = self.hparams.training_cfg.get('sam_rho', 0.05)
         weight_decay = self.hparams.training_cfg.get('weight_decay', 0.0)
+        optimizer_name = self.hparams.training_cfg.get('optimizer', 'AdamW')
 
-        if use_sam and HAS_SAM_OPTIMIZER:
+        # Advanced Optimizers
+        if optimizer_name == 'ranger' and HAS_RANGER:
+            optimizer = RangerAdaBelief(self.parameters(), lr=lr, weight_decay=weight_decay)
+            logger.info(f"Using Ranger optimizer with lr={lr}")
+        elif optimizer_name == 'lion' and HAS_LION:
+            optimizer = Lion(self.parameters(), lr=lr, weight_decay=weight_decay)
+            logger.info(f"Using Lion optimizer with lr={lr}")
+        elif use_sam and HAS_SAM_OPTIMIZER:
             logger.info(f"Using SAM optimizer with rho={sam_rho}")
-            base_optimizer = torch.optim.Adam(self.parameters(), lr=lr, weight_decay=weight_decay)
+            base_optimizer = torch.optim.AdamW(self.parameters(), lr=lr, weight_decay=weight_decay)
             optimizer = SAM(base_optimizer, rho=sam_rho)
         else:
             if use_sam and not HAS_SAM_OPTIMIZER:
-                logger.warning("SAM optimizer requested but 'torch_optimizer' not found. Falling back to Adam.")
-            logger.info(f"Using Adam optimizer with lr={lr}")
-            optimizer = torch.optim.Adam(self.parameters(), lr=lr, weight_decay=weight_decay)
+                logger.warning("SAM optimizer requested but 'torch_optimizer' not found. Falling back to AdamW.")
+            if optimizer_name not in ['AdamW', 'ranger', 'lion']:
+                logger.warning(f"Optimizer '{optimizer_name}' not recognized or its library not found. Falling back to AdamW.")
+            logger.info(f"Using AdamW optimizer with lr={lr}")
+            optimizer = torch.optim.AdamW(self.parameters(), lr=lr, weight_decay=weight_decay)
         
-        # Cosine Annealing LR scheduler
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer.base_optimizer if use_sam else optimizer,
-            T_max=epochs,
-            eta_min=self.hparams.training_cfg['scheduler_config']['CosineAnnealingLR'].get('eta_min', 1e-6)
-        )
+        # Schedulers
+        scheduler_name = self.hparams.training_cfg.get('scheduler', 'CosineAnnealingLR')
+        scheduler = None
+        if scheduler_name == 'CosineAnnealingLR':
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer.base_optimizer if (use_sam and HAS_SAM_OPTIMIZER) else optimizer, # Access base_optimizer if SAM
+                T_max=epochs,
+                eta_min=self.hparams.training_cfg['scheduler_config']['CosineAnnealingLR'].get('eta_min', 1e-6)
+            )
+            logger.info("Using CosineAnnealingLR scheduler.")
+        elif scheduler_name == 'OneCycleLR':
+            # OneCycleLR requires steps_per_epoch. This is best calculated in the DataLoader.
+            # For configure_optimizers, we need to ensure it's available or set a reasonable default.
+            # In a real Lightning setup, `trainer.estimated_stepping_batches` can be used.
+            # For now, we rely on the config value.
+            steps_per_epoch = self.hparams.training_cfg['scheduler_config']['OneCycleLR'].get('steps_per_epoch', 1000)
+            scheduler = torch.optim.lr_scheduler.OneCycleLR(
+                optimizer.base_optimizer if (use_sam and HAS_SAM_OPTIMIZER) else optimizer,
+                max_lr=self.hparams.training_cfg['scheduler_config']['OneCycleLR'].get('max_lr', 1e-3),
+                steps_per_epoch=steps_per_epoch,
+                epochs=epochs,
+                pct_start=self.hparams.training_cfg['scheduler_config']['OneCycleLR'].get('pct_start', 0.3),
+                div_factor=self.hparams.training_cfg['scheduler_config']['OneCycleLR'].get('div_factor', 25),
+                final_div_factor=self.hparams.training_cfg['scheduler_config']['OneCycleLR'].get('final_div_factor', 1e4),
+            )
+            logger.info("Using OneCycleLR scheduler.")
+        elif scheduler_name == 'ReduceLROnPlateau':
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer.base_optimizer if (use_sam and HAS_SAM_OPTIMIZER) else optimizer,
+                mode=self.hparams.training_cfg['scheduler_config']['ReduceLROnPlateau'].get('mode', 'min'),
+                factor=self.hparams.training_cfg['scheduler_config']['ReduceLROnPlateau'].get('factor', 0.1),
+                patience=self.hparams.training_cfg['scheduler_config']['ReduceLROnPlateau'].get('patience', 5)
+            )
+            logger.info("Using ReduceLROnPlateau scheduler.")
         
-        return [optimizer], [scheduler]
+        return [optimizer], ([{'scheduler': scheduler, 'interval': 'step' if scheduler_name == 'OneCycleLR' else 'epoch', 'monitor': 'val/loss' if scheduler_name == 'ReduceLROnPlateau' else None}] if scheduler else [])
+
+
 
 class BongardSolverEnsemble(nn.Module):
     """
@@ -1535,9 +1977,9 @@ class BongardSolverEnsemble(nn.Module):
                 'bongard_logits': dummy_logits,
                 'attribute_logits': {},
                 'relation_logits': torch.empty(0, CONFIG['model']['MAX_GNN_OBJECTS'] * (CONFIG['model']['MAX_GNN_OBJECTS'] - 1), len(RELATION_MAP), device=DEVICE),
-                'attribute_features': torch.empty(0, self.config['attribute_classifier_config']['feature_dim'], device=DEVICE),
-                'global_graph_embeddings': torch.empty(images.shape[0], self.config['relation_gnn_config']['hidden_dim'], device=DEVICE),
-                'support_context_vector': torch.empty(images.shape[0], self.config['support_set_encoder_config']['output_dim'], device=DEVICE),
+                'attribute_features': torch.empty(0, CONFIG['model']['attribute_classifier_config'].get('feature_dim', 2048), device=DEVICE), # Use a default or infer
+                'global_graph_embeddings': torch.empty(images.shape[0], CONFIG['model']['relation_gnn_config']['hidden_dim'], device=DEVICE),
+                'support_context_vector': torch.empty(images.shape[0], CONFIG['model']['support_set_encoder_config']['output_dim'], device=DEVICE),
                 'scene_graphs': [{'objects': [], 'relations': []}] * images.shape[0],
             }
 
