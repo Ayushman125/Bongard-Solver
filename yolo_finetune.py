@@ -12,8 +12,7 @@ from tqdm import tqdm
 
 # --- CONFIGURATION ---
 CONFIG = {
-    # UPDATED: Ensure data_root is an absolute path for robustness
-    'data_root': str(Path('./datasets/bongard_objects').resolve()), 
+    'data_root': './datasets/bongard_objects', # Root directory where phase1.py saved data
     'model_save_dir': './runs/train/yolov8_bongard', # Directory to save trained models
     'model_name': 'yolov8n.pt', # Base YOLOv8 model (n=nano, s=small, m=medium, l=large, x=extra-large)
     'num_classes': 1, # Only one class: 'object'
@@ -26,6 +25,7 @@ CONFIG = {
     'seed': 42, # Random seed for reproducibility
     'visualize_predictions_samples': 10, # Number of validation samples to visualize predictions for
     'visualize_save_dir': './runs/predict/yolov8_bongard_val_preds', # Directory to save prediction visualizations
+    'resume': True # Set to True to attempt resuming from last checkpoint
 }
 
 # --- LOGGING SETUP ---
@@ -69,8 +69,7 @@ class BongardYOLODataset(Dataset):
         img = cv2.imread(str(img_path))
         if img is None:
             logger.error(f"Failed to load image: {img_path}")
-            # If image loading fails, try a different random sample to avoid stopping the DataLoader
-            return self.__getitem__(random.randint(0, len(self) - 1)) 
+            return self.__getitem__(random.randint(0, len(self) - 1)) # Return a random sample if load fails
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) # Convert to RGB
 
         # Resize image if necessary (YOLOv8's internal transform will handle final sizing)
@@ -88,8 +87,7 @@ class BongardYOLODataset(Dataset):
                         labels.append(parts)
         except FileNotFoundError:
             logger.warning(f"Label file not found for {img_path}. Skipping.")
-            # If label loading fails, try a different random sample
-            return self.__getitem__(random.randint(0, len(self) - 1)) 
+            return self.__getitem__(random.randint(0, len(self) - 1)) # Return a random sample if label fails
 
         # Convert labels to a PyTorch tensor (format: [class_id, x_center, y_center, width, height])
         # For YOLOv8 training, labels should be a tensor of shape (num_objects, 5)
@@ -191,75 +189,20 @@ def main_yolo_finetune():
     data_yaml_path = Path(CONFIG['data_root']) / 'data.yaml'
     create_data_yaml(CONFIG['data_root'], CONFIG['class_names'], data_yaml_path)
 
-    # --- UPDATED: Data Path Verification with image file check ---
-    base_data_path = Path(CONFIG['data_root'])
-    train_img_dir = base_data_path / 'images' / 'train'
-    train_label_dir = base_data_path / 'labels' / 'train'
-    val_img_dir = base_data_path / 'images' / 'val'
-    val_label_dir = base_data_path / 'labels' / 'val'
-
-    required_dirs = {
-        'train_images': train_img_dir,
-        'train_labels': train_label_dir,
-        'val_images': val_img_dir,
-        'val_labels': val_label_dir
-    }
-
-    for name, d_path in required_dirs.items():
-        if not d_path.exists():
-            logger.error(f"Required data directory not found for {name}: {d_path}. Please ensure phase1.py has generated data correctly.")
-            logger.error("Exiting. You might need to run phase1.py first to create the dataset structure.")
-            return
-        
-        # Check for actual image files in image directories
-        if 'images' in name:
-            image_files_found = list(d_path.rglob('*.png')) # Assuming PNGs from your generator
-            if not image_files_found:
-                logger.error(f"No .png image files found in {d_path}. Ultralytics requires images for training/validation.")
-                logger.error("Please verify the content of this directory and ensure phase1.py generated images.")
-                logger.error("You can use 'ls -lR {d_path}' in your terminal to inspect its contents and permissions.")
-                return
-            else:
-                logger.info(f"Found {len(image_files_found)} .png images in {d_path}.")
-        # Check for label files in label directories
-        elif 'labels' in name:
-            label_files_found = list(d_path.rglob('*.txt'))
-            if not label_files_found:
-                logger.warning(f"No .txt label files found in {d_path}. This might lead to issues if images exist without labels.")
-                # Do not exit here, as some datasets might have images without labels,
-                # but it's important for the user to be aware.
-            else:
-                logger.info(f"Found {len(label_files_found)} .txt label files in {d_path}.")
-    logger.info("All required data directories and files verified.")
-    # --- END UPDATED: Data Path Verification ---
-
-    # 2. Prepare DataLoaders (Ultralytics handles this internally if you use model.train(data=data_yaml_path))
-    # The commented out DataLoader setup below is for reference if you ever need to manually
-    # create PyTorch DataLoaders for custom training loops or debugging.
-    # train_dataset = BongardYOLODataset(
-    #     img_dir=train_img_dir,
-    #     label_dir=train_label_dir,
-    #     img_size=CONFIG['img_size']
-    # )
-    # val_dataset = BongardYOLODataset(
-    #     img_dir=val_img_dir,
-    #     label_dir=val_label_dir,
-    #     img_size=CONFIG['img_size']
-    # )
-    # # Note: collate_fn=lambda x: tuple(zip(*x)) is for handling variable number of objects per image
-    # train_loader = DataLoader(train_dataset, batch_size=CONFIG['batch_size'], shuffle=True, num_workers=os.cpu_count() // 2, collate_fn=lambda x: tuple(zip(*x)))
-    # val_loader = DataLoader(val_dataset, batch_size=CONFIG['batch_size'], shuffle=False, num_workers=os.cpu_count() // 2, collate_fn=lambda x: tuple(zip(*x)))
-    # logger.info("DataLoaders prepared.")
-
-    # 3. Load YOLOv8 Model
-    logger.info(f"Loading YOLOv8 model: {CONFIG['model_name']}")
-    model = YOLO(CONFIG['model_name']) # Load a pre-trained YOLOv8n model
+    # 2. Load YOLOv8 Model
+    model_path = Path(CONFIG['model_save_dir']) / 'weights' / 'last.pt'
+    if model_path.exists() and CONFIG.get('resume', False): # Check if resume is enabled in CONFIG
+        logger.info(f"Resuming training from checkpoint: {model_path}")
+        model = YOLO(str(model_path))
+    else:
+        logger.info(f"Loading base YOLOv8 model: {CONFIG['model_name']}")
+        model = YOLO(CONFIG['model_name']) # Load a pre-trained YOLOv8n model
 
     # Set device
     model.to(CONFIG['device'])
     logger.info(f"Model loaded and moved to device: {CONFIG['device']}")
 
-    # 4. Fine-tune the model
+    # 3. Fine-tune the model
     logger.info(f"Starting model training for {CONFIG['epochs']} epochs...")
     results = model.train(
         data=str(data_yaml_path), # Path to the data.yaml file
@@ -271,17 +214,15 @@ def main_yolo_finetune():
         optimizer='AdamW', # AdamW is a good choice for fine-tuning
         # Augmentations are handled internally by Ultralytics' train method
         # e.g., mosaic=1.0, mixup=0.0, copy_paste=0.0 (default values)
+        # You can adjust these in the train call if needed.
         project=Path(CONFIG['model_save_dir']).parent, # Parent directory for runs
         name=Path(CONFIG['model_save_dir']).name, # Specific run name
         save=True, # Save checkpoints
         val=True, # Validate every epoch
         seed=CONFIG['seed'],
-        workers=1, # UPDATED: Reduced workers to 1 to mitigate shared memory issues.
-                   # If you have control over your environment (e.g., Docker),
-                   # consider increasing /dev/shm size (e.g., --shm-size=2gb)
-                   # and then you can increase workers back to os.cpu_count() // 2.
+        workers=os.cpu_count() // 2, # Number of DataLoader workers
+        # resume is now handled by explicit model loading
         # patience=50, # Optional: Early stopping patience
-        # resume=True # Optional: Resume from last checkpoint
     )
     logger.info("Model training completed.")
 
@@ -295,7 +236,7 @@ def main_yolo_finetune():
         name=f"{Path(CONFIG['model_save_dir']).name}_val",
         split='val', # Explicitly specify validation split
         seed=CONFIG['seed'],
-        workers=1 # UPDATED: Reduced workers to 1 for evaluation as well.
+        workers=os.cpu_count() // 2
     )
     logger.info(f"Validation Metrics: {metrics.results_dict}")
     logger.info(f"mAP50-95: {metrics.box.map}") # mAP50-95
@@ -306,13 +247,11 @@ def main_yolo_finetune():
     # 6. Visualize Predictions on Validation Set
     logger.info("Visualizing sample predictions on validation set...")
     val_dataset_for_vis = BongardYOLODataset(
-        img_dir=val_img_dir, # Use verified path
-        label_dir=val_label_dir, # Use verified path
+        img_dir=Path(CONFIG['data_root']) / 'images' / 'val',
+        label_dir=Path(CONFIG['data_root']) / 'labels' / 'val',
         img_size=CONFIG['img_size']
     )
-    # For visualization, batch size 1 is generally preferred to get individual images
-    # and num_workers=1 is fine as it's not a performance-critical loop.
-    val_loader_for_vis = DataLoader(val_dataset_for_vis, batch_size=1, shuffle=True, num_workers=1, collate_fn=lambda x: tuple(zip(*x))) 
+    val_loader_for_vis = DataLoader(val_dataset_for_vis, batch_size=1, shuffle=True, num_workers=1, collate_fn=lambda x: tuple(zip(*x))) # Batch size 1 for easy visualization
 
     plot_predictions(
         model,

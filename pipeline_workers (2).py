@@ -9,6 +9,7 @@ from PIL import Image  # For image handling
 from typing import Dict, Any, List, Tuple
 import threading
 from queue import Queue, Empty # Import Queue and Empty
+import time # Import time for sleep
 
 # Import from config
 from config import CONFIG, DEVICE
@@ -175,33 +176,40 @@ def start_prefetch_worker(dali_pipeline: Any, cfg: Dict[str, Any]) -> Queue:
     """
     Starts a DALI prefetch worker in a separate thread.
     This worker continuously runs the DALI pipeline and puts outputs into a queue.
+    It includes enhanced error handling for queue underflow/overflow.
 
     Args:
-        dali_pipeline: An initialized DALI pipeline object (e.g., from data.py's bongard_dali_pipeline).
+        dali_pipeline: An initialized DALI pipeline object.
         cfg (Dict[str, Any]): The configuration dictionary, specifically for 'dali' settings.
 
     Returns:
         Queue: A queue from which processed batches can be retrieved.
     """
-    queue_size = cfg['dali'].get('queue_size', 10) # Default queue size
+    queue_size = cfg['dali'].get('queue_size', 3)
+    put_timeout = cfg['dali'].get('put_timeout', 1.0) # Timeout for putting data into queue
+    worker_sleep = cfg['dali'].get('worker_sleep', 0.01) # Sleep interval for worker loop
+
     q = Queue(maxsize=queue_size)
     
     def worker():
         logger.info("DALI prefetch worker started.")
         while True:
             try:
-                # `dali_pipeline.run()` executes one iteration of the DALI pipeline
-                # and returns a list of outputs (e.g., [query_img1_batch, query_img2_batch, support_imgs_flat_batch])
-                out = dali_pipeline.run()
-                q.put(out, timeout=1) # Put with timeout to prevent blocking indefinitely
-            except Empty: # This exception is for q.put timeout, not dali_pipeline.run
-                logger.debug("DALI worker: Queue is full, retrying put.")
-                continue
+                # Attempt to run the DALI pipeline
+                data = dali_pipeline.run()
+                try:
+                    # Attempt to put data into the queue with a timeout
+                    q.put(data, timeout=put_timeout)
+                except Exception as e: # Catch any exception during put (e.g., Full, Timeout)
+                    logging.warning(f"DALI queue overflow (put timeout: {put_timeout}s). Error: {e}")
+            except Empty: # This is for dali_pipeline.run() returning Empty, indicating underflow
+                logging.warning("DALI pipeline underflow (no data available from pipeline).")
             except Exception as e:
-                logger.error(f"DALI prefetch worker error: {e}")
+                logging.error(f"DALI worker error: {e}")
                 # In a real scenario, you might want to handle specific DALI errors
                 # or signal the main thread to stop. For now, break the loop.
                 break
+            time.sleep(worker_sleep) # Sleep to prevent busy-waiting
         logger.info("DALI prefetch worker stopped.")
 
     # Start the worker thread as a daemon so it exits when the main program exits
