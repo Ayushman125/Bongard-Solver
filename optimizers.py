@@ -4,12 +4,23 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import _LRScheduler, OneCycleLR, ReduceLROnPlateau, CosineAnnealingLR
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts # Added for 7.1
 import logging
 import math  # Import math for SophiaG placeholder
 from typing import Dict, Any, Optional, Union
 
 # Import from config (for conditional imports)
-from config import HAS_TIMM_OPTIM # Assuming this exists in config.py
+from config import HAS_TIMM_OPTIM  # Assuming this exists in config.py
+
+# Added for 7.1
+try:
+    from warmup_scheduler import GradualWarmupScheduler
+    HAS_GRADUAL_WARMUP = True
+    logging.getLogger(__name__).info("GradualWarmupScheduler found and enabled.")
+except ImportError:
+    HAS_GRADUAL_WARMUP = False
+    logging.getLogger(__name__).warning("warmup_scheduler not found. Gradual Warmup functionality will be disabled.")
+
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +109,6 @@ except ImportError:
     logger = logging.getLogger(__name__)
     logger.warning("nystrom_attention not found. Nystrom attention will be disabled.")
 
-
 # --- Optimizer Functions ---
 def get_optimizer(model: nn.Module, config: Dict[str, Any]) -> optim.Optimizer:
     """
@@ -176,6 +186,25 @@ def get_scheduler(optimizer: optim.Optimizer, config: Dict[str, Any], total_step
         # T_max can be total_epochs or total_steps depending on desired annealing
         # Here, assuming T_max refers to epochs for simplicity
         scheduler = CosineAnnealingLR(optimizer, T_max=config['epochs'])
+    # 7.1 Gradual Warmup + Cosine Restarts
+    elif scheduler_name == 'warmup_cosine':
+        if HAS_GRADUAL_WARMUP:
+            scheduler_cos = CosineAnnealingWarmRestarts(
+                optimizer, 
+                T_0=scheduler_config['warmup_cosine'].get('T_0', 10), # First restart period
+                T_mult=scheduler_config['warmup_cosine'].get('T_mult', 2), # Multiplier for T_0
+                eta_min=scheduler_config['warmup_cosine'].get('eta_min', 1e-6) # Minimum learning rate
+            )
+            scheduler = GradualWarmupScheduler(
+                optimizer, 
+                multiplier=scheduler_config['warmup_cosine'].get('multiplier', 1.0), # Multiplier for learning rate
+                total_epoch=scheduler_config['warmup_cosine'].get('warmup_epochs', 5), # Number of warmup epochs
+                after_scheduler=scheduler_cos
+            )
+            logger.info(f"Initialized warmup_cosine scheduler with warmup_epochs={scheduler_config['warmup_cosine'].get('warmup_epochs', 5)}, T_0={scheduler_config['warmup_cosine'].get('T_0', 10)}.")
+        else:
+            logger.warning("warmup_cosine scheduler requested but GradualWarmupScheduler not found. Falling back to CosineAnnealingLR.")
+            scheduler = CosineAnnealingLR(optimizer, T_max=config['epochs']) # Fallback
     elif scheduler_name != 'None':
         logger.warning(f"Scheduler '{scheduler_name}' not found or supported. No scheduler will be used.")
     
@@ -190,18 +219,15 @@ def get_attention_layer(cfg: Dict[str, Any]) -> nn.Module:
     """
     Returns an attention layer based on the configuration.
     Supports standard MultiheadAttention, PerformerSelfAttention, and NystromAttention.
-
     Args:
         cfg (Dict[str, Any]): The configuration dictionary, specifically for 'attn' and 'model' settings.
-
     Returns:
         nn.Module: An initialized attention layer.
-
     Raises:
         ValueError: If an unsupported attention type is specified.
     """
     attn_type = cfg['attn'].get('type', 'multihead')
-    feat_dim = cfg['model']['feat_dim'] # Feature dimension for attention input
+    feat_dim = cfg['model']['feat_dim']  # Feature dimension for attention input
     heads = cfg['attn'].get('heads', 8)
 
     if attn_type == 'performer':
@@ -210,11 +236,11 @@ def get_attention_layer(cfg: Dict[str, Any]) -> nn.Module:
             return PerformerSelfAttention(
                 dim=feat_dim,
                 heads=heads,
-                causal=cfg['attn'].get('causal', False) # Causal attention (e.g., for sequences)
+                causal=cfg['attn'].get('causal', False)  # Causal attention (e.g., for sequences)
             )
         else:
             logger.warning("Performer attention requested but library not found. Falling back to MultiheadAttention.")
-            return nn.MultiheadAttention(feat_dim, heads, batch_first=True) # batch_first=True for consistency
+            return nn.MultiheadAttention(feat_dim, heads, batch_first=True)  # batch_first=True for consistency
     elif attn_type == 'nystrom':
         if HAS_NYSTROM:
             num_landmarks = cfg['attn'].get('landmarks', 64)
@@ -222,17 +248,17 @@ def get_attention_layer(cfg: Dict[str, Any]) -> nn.Module:
             return NystromAttention(
                 dim=feat_dim,
                 num_landmarks=num_landmarks,
-                heads=heads # NystromAttention also takes heads
+                heads=heads  # NystromAttention also takes heads
             )
         else:
             logger.warning("Nystrom attention requested but library not found. Falling back to MultiheadAttention.")
-            return nn.MultiheadAttention(feat_dim, heads, batch_first=True) # batch_first=True for consistency
+            return nn.MultiheadAttention(feat_dim, heads, batch_first=True)  # batch_first=True for consistency
     elif attn_type == 'multihead':
         logger.info(f"Using standard MultiheadAttention with embed_dim={feat_dim}, num_heads={heads}.")
         return nn.MultiheadAttention(
             embed_dim=feat_dim,
             num_heads=heads,
-            batch_first=True # Use batch_first for easier integration with (B, S, D) tensors
+            batch_first=True  # Use batch_first for easier integration with (B, S, D) tensors
         )
     else:
         raise ValueError(f"Unsupported attention type: {attn_type}")

@@ -2,48 +2,43 @@
 # File: hpo.py
 import logging
 import os
-import argparse   # Import argparse for command-line arguments
-import json   # For saving best config
+import argparse  # Import argparse for command-line arguments
+import json  # For saving best config
 from typing import Dict, Any, Tuple
 import copy  # For deepcopy
-import joblib # For saving Optuna study
-
+import joblib  # For saving Optuna study
 # Conditional import for Ray Tune (previous HPO framework)
 try:
-    from ray import tune
-    from ray.tune.schedulers import ASHAScheduler
-    from ray.tune.stopper import CombinedStopper, TrialPlateauStopper
-    HAS_RAY_TUNE = True
-    logger = logging.getLogger(__name__)
-    logger.info("Ray Tune found and enabled for HPO (as an alternative).")
+    from ray import tune
+    from ray.tune.schedulers import ASHAScheduler
+    from ray.tune.stopper import CombinedStopper, TrialPlateauStopper
+    HAS_RAY_TUNE = True
+    logger = logging.getLogger(__name__)
+    logger.info("Ray Tune found and enabled for HPO (as an alternative).")
 except ImportError:
-    HAS_RAY_TUNE = False
-    logger = logging.getLogger(__name__)
-    logger.warning("Ray Tune not found.")
-
+    HAS_RAY_TUNE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("Ray Tune not found.")
 # Conditional import for Optuna (new HPO framework)
 try:
-    import optuna
-    from optuna.pruners import HyperbandPruner
-    HAS_OPTUNA = True
-    logger = logging.getLogger(__name__)
-    logger.info("Optuna found and enabled for HPO.")
+    import optuna
+    from optuna.pruners import HyperbandPruner
+    HAS_OPTUNA = True
+    logger = logging.getLogger(__name__)
+    logger.info("Optuna found and enabled for HPO.")
 except ImportError:
-    HAS_OPTUNA = False
-    logger = logging.getLogger(__name__)
-    logger.warning("Optuna not found. Hyperparameter optimization with Optuna will be disabled.")
-
+    HAS_OPTUNA = False
+    logger = logging.getLogger(__name__)
+    logger.warning("Optuna not found. Hyperparameter optimization with Optuna will be disabled.")
 # Import necessary functions from training.py and config.py
 try:
-    from training import run_training_once   # This function runs a single training trial
-    from config import load_config, CONFIG   # CONFIG for default values
+    from training import run_training_once  # This function runs a single training trial
+    from config import load_config, CONFIG  # CONFIG for default values
 except ImportError:
-    logger.error("Could not import run_training_once or load_config. HPO will not function.")
-    run_training_once = None
-    load_config = None
-
+    logger.error("Could not import run_training_once or load_config. HPO will not function.")
+    run_training_once = None
+    load_config = None
 logger = logging.getLogger(__name__)
-
 # Optuna logging callback
 class OptunaLoggingCallback:
     def __call__(self, study: optuna.study.Study, trial: optuna.trial.FrozenTrial) -> None:
@@ -51,7 +46,6 @@ class OptunaLoggingCallback:
             logger.info(f"Trial {trial.number} finished with value: {trial.value:.4f} and parameters: {trial.params}")
         elif trial.state == optuna.trial.TrialState.PRUNED:
             logger.info(f"Trial {trial.number} pruned.")
-
 # --- Optuna Objective Function ---
 def objective(trial: optuna.trial.Trial, initial_cfg: Dict[str, Any]) -> float:
     """
@@ -91,7 +85,6 @@ def objective(trial: optuna.trial.Trial, initial_cfg: Dict[str, Any]) -> float:
     trial.report(val_accuracy, step=hpo_epochs)  # Report final accuracy after all epochs
     
     return val_accuracy
-
 # --- Main HPO Functions (Ray Tune and Optuna) ---
 # Ray Tune HPO (kept for reference from previous iterations)
 def hpo_train_fn_ray_tune(config_update: Dict[str, Any], initial_cfg: Dict[str, Any]):
@@ -114,7 +107,6 @@ def hpo_train_fn_ray_tune(config_update: Dict[str, Any], initial_cfg: Dict[str, 
     
     val_accuracy = run_training_once(trial_cfg, epochs=trial_cfg['training']['hpo_epochs'])
     tune.report(val_accuracy=val_accuracy)
-
 def run_hyperparameter_optimization_ray_tune(cfg: Dict[str, Any]):
     """
     Main function to orchestrate hyperparameter optimization using Ray Tune.
@@ -184,9 +176,8 @@ def run_hyperparameter_optimization_ray_tune(cfg: Dict[str, Any]):
         json.dump(best_trial.config, f, indent=4)
     logger.info(f"Best Ray Tune HPO configuration saved to: {best_config_path}")
     return best_trial.config
-
 # Optuna HPO (new implementation)
-def run_hyperparameter_optimization_optuna(cfg: Dict[str, Any], n_trials: int = 30):
+def run_hyperparameter_optimization_optuna(cfg: Dict[str, Any], n_trials: int = 30, timeout: Optional[int] = None, n_jobs: int = 1):
     """
     Main function to orchestrate hyperparameter optimization using Optuna.
     """
@@ -210,9 +201,12 @@ def run_hyperparameter_optimization_optuna(cfg: Dict[str, Any], n_trials: int = 
     )
     
     # Optimize the objective function
-    # The objective function `objective` will be called `n_trials` times.
-    # It will use the `trial` object to suggest parameters and report metrics.
-    study.optimize(lambda t: objective(t, cfg), n_trials=n_trials, callbacks=[OptunaLoggingCallback()])
+    # Pass timeout and n_jobs to study.optimize(...)
+    study.optimize(lambda t: objective(t, cfg),
+                   n_trials=n_trials,
+                   timeout=timeout, # Exposed via --timeout
+                   n_jobs=n_jobs,   # Exposed via --n-jobs
+                   callbacks=[OptunaLoggingCallback()])
     
     logger.info("Optuna Hyperparameter Optimization finished.")
     
@@ -234,7 +228,6 @@ def run_hyperparameter_optimization_optuna(cfg: Dict[str, Any], n_trials: int = 
     logger.info(f"Optuna study saved to: {study_path}")
     
     return study.best_params
-
 # --- Main Entry Point for CLI ---
 def main():
     """
@@ -250,20 +243,26 @@ def main():
                         choices=["optuna", "ray_tune"],
                         help="Choose HPO framework: 'optuna' or 'ray_tune'.")
     parser.add_argument("--output_dir", type=str, default="./hpo_results",
-                        help="Directory to save HPO results (study, best config).") # Added output_dir argument
+                        help="Directory to save HPO results (study, best config).")  # Added output_dir argument
+    
+    # 9.1 Expose --timeout and --n-jobs
+    parser.add_argument('--timeout', type=int, default=None, # Default to None to use Optuna's default or no timeout
+                        help="Stop optimization after the given number of seconds.")
+    parser.add_argument('--n-jobs', type=int, default=1, # Default to 1 (sequential)
+                        help="The number of parallel jobs. Set to -1 to use all available CPU cores.")
+
     args = parser.parse_args()
     
-    os.makedirs(args.output_dir, exist_ok=True) # Ensure output directory exists
-
+    os.makedirs(args.output_dir, exist_ok=True)  # Ensure output directory exists
     cfg = load_config(args.config)
     # Update config with output_dir for saving study and best config
     cfg['hpo']['output_study_path'] = os.path.join(args.output_dir, cfg['hpo'].get('output_study_filename', 'optuna_study.pkl'))
-    cfg['debug']['save_model_checkpoints'] = args.output_dir # Use output_dir for checkpoints too
-
+    cfg['debug']['save_model_checkpoints'] = args.output_dir  # Use output_dir for checkpoints too
+    
     if args.hpo_framework == "optuna":
-        run_hyperparameter_optimization_optuna(cfg, n_trials=args.trials)
+        # Pass timeout and n_jobs to the Optuna function
+        run_hyperparameter_optimization_optuna(cfg, n_trials=args.trials, timeout=args.timeout, n_jobs=args.n_jobs)
     elif args.hpo_framework == "ray_tune":
         run_hyperparameter_optimization_ray_tune(cfg)
-
 if __name__ == "__main__":
     main()

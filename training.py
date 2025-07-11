@@ -34,12 +34,11 @@ from config import (
     ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_TEXTURE_MAP,
     RELATION_MAP, IMAGENET_MEAN, IMAGENET_STD
 )
-
 # Import PyTorch Lightning modules
 import pytorch_lightning as pl
-from models import LitBongard, LitSimCLR, PerceptionModule # Import PerceptionModule
-from data import BongardDataModule, create_dataloader # Import create_dataloader
-from losses import LabelSmoothingCrossEntropy # Assuming this is used
+from models import LitBongard, LitSimCLR, PerceptionModule  # Import PerceptionModule
+from data import BongardDataModule, create_dataloader  # Import create_dataloader
+from losses import LabelSmoothingCrossEntropy, DistillationLoss, FeatureConsistencyLoss, SymbolicConsistencyLoss # Assuming these are used
 
 # Import for torchvision.transforms.v2 for MixUp/CutMix
 try:
@@ -54,7 +53,7 @@ except ImportError:
 
 # Import SAM optimizer
 try:
-    from torch_optimizer import SAM # Assuming SAM is from torch_optimizer
+    from sam import SAM  # Assuming SAM is from your local sam.py
     HAS_SAM_OPTIMIZER = True
 except ImportError:
     HAS_SAM_OPTIMIZER = False
@@ -67,6 +66,7 @@ try:
     HAS_RANGER = True
 except ImportError:
     HAS_RANGER = False
+    logger = logging.getLogger(__name__)
     logger.warning("RangerAdaBelief not found. Ranger optimizer will be disabled.")
 
 try:
@@ -74,7 +74,19 @@ try:
     HAS_LION = True
 except ImportError:
     HAS_LION = False
+    logger = logging.getLogger(__name__)
     logger.warning("Lion optimizer not found. Lion optimizer will be disabled.")
+
+# Import GradNorm
+try:
+    from grad_norm import GradNorm # Assuming grad_norm.py is available
+    HAS_GRAD_NORM = True
+    logger = logging.getLogger(__name__)
+    logger.info("GradNorm found and enabled.")
+except ImportError:
+    HAS_GRAD_NORM = False
+    logger = logging.getLogger(__name__)
+    logger.warning("GradNorm not found. GradNorm functionality will be disabled.")
 
 logger = logging.getLogger(__name__)
 
@@ -91,15 +103,17 @@ def set_seed(seed: int):
     logger.info(f"Random seed set to {seed}")
 
 # Dummy async_update_priorities for PER
-def async_update_priorities(replay_buffer, indices, losses):
+def async_update_priorities(replay_buffer, indices, losses, cfg): # Added cfg
     """Dummy function for asynchronous priority update."""
     # In a real scenario, this would involve a separate thread or process
     # updating the replay buffer's priorities.
     # For now, just log a message.
     logger.debug(f"Async update priorities called for {len(indices)} samples.")
     # Example: replay_buffer.update_priorities(indices, losses)
+    # For now, directly call update for demonstration
+    replay_buffer.update_priorities(indices, losses, cfg) # Pass cfg
 
-# Dummy QAT/PTQ functions
+# Dummy QAT/PTQ functions (actual implementations might be in prune_quantize.py)
 def quantize_model_qat(model: nn.Module, cfg: Dict[str, Any]) -> nn.Module:
     """Dummy function for Quantization Aware Training (QAT)."""
     logger.info("Performing dummy Quantization Aware Training (QAT).")
@@ -138,7 +152,6 @@ class EarlyStopping:
 
     def __call__(self, val_loss: float, model: nn.Module):
         score = -val_loss
-
         if self.best_score is None:
             self.best_score = score
             self.save_checkpoint(val_loss, model)
@@ -194,7 +207,7 @@ class MixupCutmixAugmenter:
     def __call__(self, images: torch.Tensor, labels: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         if self.aug:
             return self.aug(images, labels)
-        return images, F.one_hot(labels, num_classes=self.num_classes).float() # Return one-hot for consistency if no mixup
+        return images, F.one_hot(labels, num_classes=self.num_classes).float()  # Return one-hot for consistency if no mixup
 
 # Ensemble Teacher Logits (from previous context)
 def _get_ensemble_teacher_logits(
@@ -203,7 +216,7 @@ def _get_ensemble_teacher_logits(
     raw_gt_json_strings: List[bytes],
     raw_support_images_np: List[np.ndarray],
     distillation_config: Dict[str, Any],
-    dali_image_processor: Any = None # DALI processor from datamodule
+    dali_image_processor: Any = None  # DALI processor from datamodule
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
     """
     Helper function to get ensemble teacher logits for distillation.
@@ -213,10 +226,10 @@ def _get_ensemble_teacher_logits(
         return torch.empty(0), None
 
     all_teacher_logits = []
-    all_distillation_masks = [] # For per-sample masking
+    all_distillation_masks = []  # For per-sample masking
 
     for teacher_model in teacher_models:
-        teacher_model.eval() # Set teacher to evaluation mode
+        teacher_model.eval()  # Set teacher to evaluation mode
         with torch.no_grad():
             # Process images using DALI or torchvision transforms
             if dali_image_processor is None:
@@ -232,7 +245,7 @@ def _get_ensemble_teacher_logits(
                 # DALI returns processed tensors
                 processed_images, _, processed_support_images_flat = dali_image_processor.run(
                     raw_images_np,
-                    [np.zeros((1,1,3), dtype=np.uint8)] * len(raw_images_np), # Dummy view2
+                    [np.zeros((1,1,3), dtype=np.uint8)] * len(raw_images_np),  # Dummy view2
                     raw_support_images_np
                 )
             
@@ -243,7 +256,6 @@ def _get_ensemble_teacher_logits(
                 batch_size_actual, max_support_imgs, 
                 processed_images.shape[1], processed_images.shape[2], processed_images.shape[3]
             )
-
             # Teacher forward pass
             # Note: Teacher models also need ground_truth_json_strings and support_labels_flat
             # for their internal PerceptionModule to build scene graphs and compute bongard_logits.
@@ -252,7 +264,7 @@ def _get_ensemble_teacher_logits(
                 processed_images,
                 ground_truth_json_strings=raw_gt_json_strings,
                 support_images=processed_support_images_reshaped,
-                support_labels_flat=torch.zeros_like(processed_support_images_reshaped[:,:,0,0,0], dtype=torch.long) # Dummy labels
+                support_labels_flat=torch.zeros_like(processed_support_images_reshaped[:,:,0,0,0], dtype=torch.long)  # Dummy labels
             )
             teacher_logits = teacher_outputs['bongard_logits']
             
@@ -269,22 +281,21 @@ def _get_ensemble_teacher_logits(
 
     # Average logits from all teachers
     if all_teacher_logits:
-        ensemble_logits = torch.stack(all_teacher_logits, dim=0).mean(dim=0) # (B, num_classes)
+        ensemble_logits = torch.stack(all_teacher_logits, dim=0).mean(dim=0)  # (B, num_classes)
         # Combine masks (e.g., logical AND if any teacher masks out, it's masked out)
         final_distillation_mask = torch.stack(all_distillation_masks, dim=0).prod(dim=0)
         return ensemble_logits, final_distillation_mask
     return torch.empty(0), None
 
 # --- Main Training Function ---
-def run_training_once(cfg: Dict[str, Any], epochs: int = None) -> float:
+def run_training_once(cfg: Dict[str, Any], epochs: int = None, trial: Optional[Any] = None) -> float: # Added trial argument
     """
     Runs a single training session for the Bongard solver.
     This function is used for both standard training and HPO trials.
-
     Args:
         cfg (Dict[str, Any]): The configuration dictionary.
         epochs (int, optional): Number of epochs to train. If None, uses cfg['training']['epochs'].
-
+        trial (optuna.trial.Trial, optional): Optuna trial object for pruning.
     Returns:
         float: The final validation accuracy achieved.
     """
@@ -295,7 +306,7 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None) -> float:
 
     # Initialize data modules and loaders
     data_module = BongardDataModule(cfg)
-    data_module.setup(stage='fit') # Call setup to prepare data loaders
+    data_module.setup(stage='fit')  # Call setup to prepare data loaders
     train_loader = data_module.train_dataloader()
     val_loader = data_module.val_dataloader()
 
@@ -321,7 +332,7 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None) -> float:
         else:
             logger.warning("Lion optimizer requested but not available. Falling back to AdamW.")
             base_optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    else: # Default to AdamW
+    else:  # Default to AdamW
         base_optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
     # Wrap with SAM if configured
@@ -331,7 +342,7 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None) -> float:
         logger.info("SAM optimizer initialized for manual training loop.")
     else:
         if cfg['training'].get('optimizer', 'AdamW') == 'sam':
-            logger.warning("SAM optimizer requested but `torch_optimizer.SAM` not found. Proceeding without SAM.")
+            logger.warning("SAM optimizer requested but `sam.SAM` not found. Proceeding without SAM.")
 
     # Scheduler setup
     scheduler = None
@@ -341,7 +352,7 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None) -> float:
             steps_per_epoch = len(train_loader)
         else:
             logger.warning("Train loader is empty, cannot calculate steps_per_epoch for OneCycleLR. Using default.")
-            steps_per_epoch = 1000 # Fallback
+            steps_per_epoch = 1000  # Fallback
         scheduler = OneCycleLR(
             optimizer.base_optimizer if (isinstance(optimizer, SAM) and HAS_SAM_OPTIMIZER) else optimizer,
             max_lr=cfg['training']['scheduler_config']['OneCycleLR'].get('max_lr', 1e-3),
@@ -367,6 +378,23 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None) -> float:
             patience=cfg['training']['scheduler_config']['ReduceLROnPlateau'].get('patience', 5)
         )
         logger.info("ReduceLROnPlateau scheduler initialized.")
+    elif scheduler_name == 'warmup_cosine': # Added for 7.1
+        if HAS_GRADUAL_WARMUP:
+            scheduler_cos = CosineAnnealingWarmRestarts(
+                optimizer.base_optimizer if (isinstance(optimizer, SAM) and HAS_SAM_OPTIMIZER) else optimizer, 
+                T_0=cfg['training']['scheduler_config']['warmup_cosine'].get('T_0', 10), 
+                T_mult=cfg['training']['scheduler_config']['warmup_cosine'].get('T_mult', 2), 
+                eta_min=cfg['training']['scheduler_config']['warmup_cosine'].get('eta_min', 1e-6)
+            )
+            scheduler = GradualWarmupScheduler(
+                optimizer.base_optimizer if (isinstance(optimizer, SAM) and HAS_SAM_OPTIMIZER) else optimizer, 
+                multiplier=cfg['training']['scheduler_config']['warmup_cosine'].get('multiplier', 1.0), 
+                total_epoch=cfg['training']['scheduler_config']['warmup_cosine'].get('warmup_epochs', 5), 
+                after_scheduler=scheduler_cos
+            )
+            logger.info("warmup_cosine scheduler initialized.")
+        else:
+            logger.warning("warmup_cosine scheduler requested but GradualWarmupScheduler not found. Falling back to no scheduler.")
     else:
         logger.warning(f"Scheduler '{scheduler_name}' not recognized. No scheduler will be used.")
 
@@ -394,17 +422,38 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None) -> float:
             param.requires_grad = False
         logger.info("Mean Teacher (EMA) model initialized.")
 
+    # GradNorm (if enabled)
+    grad_norm = None
+    if cfg['training'].get('use_grad_norm', False) and HAS_GRAD_NORM:
+        # Assuming GradNorm needs task weights or a similar setup
+        # For a single-task Bongard problem, it might just monitor overall gradients
+        # or if there are multiple loss components, it can balance them.
+        # Here, we'll assume it's set up to balance bongard_loss with other potential losses
+        # or just monitor overall gradient norm.
+        # Initial task weights (e.g., all 1.0)
+        initial_task_weights = {'bongard_loss': 1.0} # Add other loss names if applicable
+        grad_norm = GradNorm(model, initial_task_weights, cfg['training']['grad_norm_alpha'], DEVICE)
+        logger.info("GradNorm initialized.")
+
     best_val_accuracy = 0.0
     num_epochs = epochs if epochs is not None else cfg['training']['epochs']
 
     for epoch in range(num_epochs):
+        # 8.2 Hyperband Pruner Callbacks
+        if trial: # Check if trial object is provided (for Optuna HPO)
+            trial.report(best_val_accuracy, step=epoch) # Report current best accuracy to Optuna
+            if trial.should_prune():
+                logger.info(f"Trial {trial.number} pruned at epoch {epoch+1}.")
+                raise optuna.TrialPruned()
+
         model.train()
         total_train_loss = 0
         train_correct_predictions = 0
         train_total_samples = 0
-
+        
         # Wrap train_loader with tqdm for progress bar
         train_loop = tqdm(train_loader, leave=True, desc=f"Epoch {epoch+1}/{num_epochs} [Train]")
+
         for batch_idx, batch in enumerate(train_loop):
             # Unpack batch data
             (raw_query_images_view1_np, raw_query_images_view2_np, query_labels,
@@ -457,7 +506,7 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None) -> float:
                                     support_labels_flat=support_labels_reshaped)
                     bongard_logits = outputs['bongard_logits']
                     # Calculate loss (only Bongard loss for simplicity in SAM step)
-                    loss = model.bongard_criterion(bongard_logits, labels_mixed).mean() # Use mean for SAM step
+                    loss = model.bongard_criterion(bongard_logits, labels_mixed).mean()  # Use mean for SAM step
                 
                 if cfg['training']['use_amp']:
                     scaler.scale(loss).backward()
@@ -465,7 +514,7 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None) -> float:
                 else:
                     loss.backward()
                     optimizer.first_step(zero_grad=True)
-
+                
                 # Second forward-backward pass
                 with autocast(enabled=cfg['training']['use_amp']) if cfg['training']['use_amp'] else torch.no_grad():
                     outputs2 = model(images_view1_aug, ground_truth_json_strings=query_gts_json_view1,
@@ -473,13 +522,13 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None) -> float:
                                      support_labels_flat=support_labels_reshaped)
                     bongard_logits2 = outputs2['bongard_logits']
                     # Calculate total loss for the second step
-                    total_batch_loss = model.bongard_criterion(bongard_logits2, labels_mixed).mean() # Use mean for SAM step
+                    total_batch_loss = model.bongard_criterion(bongard_logits2, labels_mixed).mean()  # Use mean for SAM step
                     # Add other losses if needed, similar to LitBongard's training_step
                     # For simplicity in this `run_training_once`, we'll just use bongard_loss for SAM.
                 
                 if cfg['training']['use_amp']:
                     scaler.scale(total_batch_loss).backward()
-                    scaler.unscale_(optimizer) # Unscale before clipping
+                    scaler.unscale_(optimizer)  # Unscale before clipping
                 else:
                     total_batch_loss.backward()
                 
@@ -491,10 +540,10 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None) -> float:
                     scaler.step(optimizer)
                     scaler.update()
                 else:
-                    optimizer.second_step(zero_grad=True) # zero_grad=True for SAM's second step
+                    optimizer.second_step(zero_grad=True)  # zero_grad=True for SAM's second step
                 
                 current_loss = total_batch_loss.item()
-            else: # Standard optimizer
+            else:  # Standard optimizer
                 optimizer.zero_grad()
                 with autocast(enabled=cfg['training']['use_amp']) if cfg['training']['use_amp'] else torch.no_grad():
                     outputs = model(images_view1_aug, ground_truth_json_strings=query_gts_json_view1,
@@ -503,20 +552,63 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None) -> float:
                     bongard_logits = outputs['bongard_logits']
                     
                     # Calculate full loss (similar to LitBongard's training_step)
-                    per_sample_bongard_losses = model.bongard_criterion(bongard_logits, labels_mixed).sum(dim=1) # sum for MixUp/CutMix
-                    loss_bongard = per_sample_bongard_losses.mean() # Mean for batch
+                    per_sample_bongard_losses = model.bongard_criterion(bongard_logits, labels_mixed).sum(dim=1)  # sum for MixUp/CutMix
+                    loss_bongard = per_sample_bongard_losses.mean()  # Mean for batch
 
                     # Placeholder for attribute and relation losses (simplified for run_training_once)
-                    # In a full LitBongard, these would be computed from outputs['attribute_logits'] etc.
                     loss_attribute = torch.tensor(0.0, device=DEVICE)
                     loss_relation = torch.tensor(0.0, device=DEVICE)
                     
-                    total_batch_loss = loss_bongard + loss_attribute * cfg['training'].get('attribute_loss_weight', 1.0) + \
-                                       loss_relation * cfg['training'].get('relation_loss_weight', 1.0)
+                    # Feature Consistency Loss
+                    if cfg['training'].get('feature_consistency_alpha', 0) > 0:
+                        _, _, aggregated_outputs_view2 = model(processed_query_images_view2, query_gts_json_view2, processed_support_images_reshaped, support_labels_reshaped)
+                        feature_consistency_criterion = FeatureConsistencyLoss(loss_type=cfg['training']['feature_consistency_loss_type'])
+                        consistency_loss_features = feature_consistency_criterion(
+                            outputs['image_features_student'],
+                            aggregated_outputs_view2['image_features_student']
+                        )
+                        loss_bongard += cfg['training']['feature_consistency_alpha'] * consistency_loss_features
+                    
+                    # Symbolic Consistency Loss
+                    if cfg['training'].get('symbolic_consistency_alpha', 0) > 0:
+                        symbolic_cons_loss_fn = SymbolicConsistencyLoss(
+                            all_bongard_rules=ALL_BONGARD_RULES, # Pass rules if needed
+                            config=cfg
+                        )
+                        # This needs actual scene graphs from both views
+                        # For simplicity, passing dummy inputs if not fully integrated
+                        symbolic_consistency_loss = symbolic_cons_loss_fn(
+                            outputs['extracted_scene_graphs'],
+                            outputs['extracted_scene_graphs'] # Use same for both views as dummy
+                        )
+                        loss_bongard += cfg['training']['symbolic_consistency_alpha'] * symbolic_consistency_loss
+
+                    # Knowledge Distillation (if teacher model provided) - assuming teacher is set up in LitBongard
+                    if cfg['training'].get('use_knowledge_distillation', False) and hasattr(model, 'teacher_model') and model.teacher_model is not None:
+                        dist_criterion = DistillationLoss(
+                            temperature=cfg['training']['distillation_temperature'],
+                            alpha=cfg['training']['distillation_alpha'],
+                            reduction='mean'
+                        )
+                        # Get teacher logits (assuming teacher_model is a single model or ensemble)
+                        # This needs to be done carefully to match teacher's forward signature
+                        # For now, assuming model.teacher_model can directly process images_view1_aug
+                        with torch.no_grad():
+                            teacher_logits, _, _ = model.teacher_model(processed_query_images_view1, query_gts_json_view1, processed_support_images_reshaped, support_labels_reshaped)
+                        
+                        dist_loss = dist_criterion(
+                            student_logits=bongard_logits,
+                            teacher_logits=teacher_logits,
+                            target_labels=query_labels # Hard labels for the hard component
+                        )
+                        total_batch_loss = dist_loss # Distillation loss replaces main loss if enabled (soft target only)
+                    else:
+                        total_batch_loss = loss_bongard + loss_attribute * cfg['training'].get('attribute_loss_weight', 1.0) + \
+                                           loss_relation * cfg['training'].get('relation_loss_weight', 1.0)
                 
                 if cfg['training']['use_amp']:
                     scaler.scale(total_batch_loss).backward()
-                    scaler.unscale_(optimizer) # Unscale before clipping
+                    scaler.unscale_(optimizer)  # Unscale before clipping
                 else:
                     total_batch_loss.backward()
                 
@@ -537,24 +629,49 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None) -> float:
             # Scheduler step per batch (for OneCycleLR)
             if scheduler is not None and isinstance(scheduler, OneCycleLR):
                 scheduler.step()
+            elif scheduler is not None and isinstance(scheduler, GradualWarmupScheduler) and isinstance(scheduler.after_scheduler, CosineAnnealingWarmRestarts):
+                # For GradualWarmupScheduler with CosineAnnealingWarmRestarts, step the wrapper
+                scheduler.step()
 
             # Update EMA Teacher
             if ema_model and cfg['training'].get('use_mean_teacher', False):
                 ema_decay = cfg['training']['mean_teacher_config'].get('alpha', 0.99)
                 for student_param, ema_param in zip(model.parameters(), ema_model.parameters()):
                     ema_param.data.mul_(ema_decay).add_(student_param.data * (1 - ema_decay))
+            
+            # Update GradNorm weights
+            if grad_norm and HAS_GRAD_NORM:
+                # Assuming GradNorm.backward() was called earlier or it hooks into the loss.
+                # Here, we update its weights after optimizer step.
+                # This needs to be integrated with how GradNorm computes its loss.
+                # For simple logging, we can just access its weights.
+                pass # GradNorm logic is more complex, handled within LitBongard if integrated there.
 
             # Update progress bar
             train_loop.set_postfix(loss=current_loss)
-
+            
             # Calculate accuracy for logging
             predictions = torch.argmax(bongard_logits, dim=1)
             train_correct_predictions += (predictions == query_labels).sum().item()
             train_total_samples += query_labels.size(0)
 
+            # Update replay buffer priorities (for PER)
+            if cfg['training'].get('curriculum_learning', False) and cfg['training']['curriculum_config'].get('difficulty_sampling', False) and hasattr(data_module.train_dataset, 'replay_buffer'):
+                # Get per-sample losses for priority update
+                per_sample_losses = model.bongard_criterion(bongard_logits, query_labels, reduction='none')
+                data_module.train_dataset.replay_buffer.update_priorities(original_indices.cpu().tolist(), per_sample_losses.cpu().tolist(), cfg) # Pass cfg
+
         avg_train_loss = total_train_loss / len(train_loader)
         train_accuracy = train_correct_predictions / train_total_samples
         logger.info(f"Epoch {epoch+1} | Train Loss: {avg_train_loss:.4f} | Train Acc: {train_accuracy:.4f}")
+
+        # Log GradNorm Weights to TensorBoard
+        if grad_norm and HAS_GRAD_NORM and hasattr(model, 'logger') and hasattr(model.logger, 'experiment'):
+            # Assuming model has a logger with a TensorBoard experiment
+            writer = model.logger.experiment # Access the TensorBoard writer
+            for name, w in grad_norm.weights_.items():
+                writer.add_scalar(f"GradNorm/{name}", w, epoch)
+            logger.info(f"GradNorm weights logged for epoch {epoch+1}.")
 
         # Validation phase
         model.eval()
@@ -602,7 +719,6 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None) -> float:
                 
                 loss_val = model.bongard_criterion(bongard_logits_val, query_labels_val).mean()
                 total_val_loss += loss_val.item()
-
                 predictions_val = torch.argmax(bongard_logits_val, dim=1)
                 val_correct_predictions += (predictions_val == query_labels_val).sum().item()
                 val_total_samples += query_labels_val.size(0)
@@ -613,7 +729,7 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None) -> float:
         logger.info(f"Epoch {epoch+1} | Val Loss: {avg_val_loss:.4f} | Val Acc: {val_accuracy:.4f}")
 
         # Scheduler step per epoch (for CosineAnnealingLR, ReduceLROnPlateau)
-        if scheduler is not None and not isinstance(scheduler, OneCycleLR):
+        if scheduler is not None and not isinstance(scheduler, OneCycleLR) and not isinstance(scheduler, GradualWarmupScheduler):
             if isinstance(scheduler, ReduceLROnPlateau):
                 scheduler.step(avg_val_loss)
             else:
@@ -648,15 +764,44 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None) -> float:
         optimized_model_path = os.path.join(cfg['debug']['save_model_checkpoints'], "qat_optimized_bongard_model.pth")
         torch.save(model.state_dict(), optimized_model_path)
         logger.info(f"QAT optimized model saved to: {optimized_model_path}")
-
     if cfg['quantization']['ptq']:
-        model = quantize_model_ptq(model, val_loader, cfg) # Pass val_loader for calibration
+        model = quantize_model_ptq(model, val_loader, cfg)  # Pass val_loader for calibration
         optimized_model_path = os.path.join(cfg['debug']['save_model_checkpoints'], "ptq_optimized_bongard_model.pth")
         torch.save(model.state_dict(), optimized_model_path)
         logger.info(f"PTQ optimized model saved to: {optimized_model_path}")
 
     logger.info("--- Training Pipeline finished. ---")
     return best_val_accuracy
+
+# Dummy functions for pruning (actual implementations might be in prune_quantize.py)
+def compute_layer_sensitivity(model: nn.Module, val_loader: DataLoader, dali_image_processor: Any, current_rank: int) -> Dict[str, float]:
+    logger.info("Performing dummy layer sensitivity computation.")
+    # Return dummy sensitivities for demonstration
+    sensitivities = {}
+    for name, module in model.named_modules():
+        if hasattr(module, 'weight') and isinstance(module, (nn.Linear, nn.Conv2d)):
+            sensitivities[name] = random.uniform(0.1, 1.0) # Dummy sensitivity
+    return sensitivities
+
+def apply_structured_pruning(
+    model: nn.Module,
+    cfg: Dict[str, Any],
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    dali_image_processor: Any,
+    current_rank: int,
+    is_ddp_initialized: bool,
+    sensitivity_scores: Optional[Dict[str, float]] = None,
+    groups: int = 1 # Added groups
+) -> nn.Module:
+    logger.info(f"Performing dummy structured pruning with groups={groups}.")
+    # Dummy pruning logic: apply some pruning to a few layers
+    for name, module in model.named_modules():
+        if isinstance(module, (nn.Linear, nn.Conv2d)):
+            if random.random() < cfg['training']['pruning'].get('pruning_target_layers_ratio', 0.5):
+                prune.random_unstructured(module, name="weight", amount=cfg['training']['pruning'].get('amount', 0.2))
+                logger.info(f"Dummy pruning applied to {name} with amount {cfg['training']['pruning'].get('amount', 0.2)}")
+    return model
 
 # Main execution block (for direct script execution)
 if __name__ == "__main__":
@@ -673,6 +818,12 @@ if __name__ == "__main__":
     #   scheduler_config:
     #     CosineAnnealingLR:
     #       eta_min: 1e-6
+    #     warmup_cosine: # Added for 7.1
+    #       T_0: 10
+    #       T_mult: 2
+    #       eta_min: 1e-6
+    #       multiplier: 1.0
+    #       warmup_epochs: 5
     #   use_amp: False
     #   early_stop_patience: 5
     #   early_stop_delta: 0.001
@@ -683,6 +834,8 @@ if __name__ == "__main__":
     #   consistency_loss_weight: 0.0
     #   feature_consistency_weight: 0.0
     #   symbolic_consistency_weight: 0.0
+    #   use_grad_norm: False # Added for 8.1
+    #   grad_norm_alpha: 0.1 # Added for 8.1
     # model:
     #   backbone: mobilenet_v3_small
     #   pretrained: True
@@ -730,6 +883,12 @@ if __name__ == "__main__":
     #   dataloader_workers: 4
     #   synthetic_data_config:
     #     max_support_images_per_problem: 5
+    #     num_train_problems: 100
+    #     num_val_problems: 20
+    #     min_objects_per_image: 1
+    #     max_objects_per_image: 5
+    #     min_support_images_per_problem: 2
+    #     max_support_images_per_problem: 5
     # object_detector:
     #   use_yolo: False
     #   fine_tune: False
@@ -752,14 +911,21 @@ if __name__ == "__main__":
     #   qat: False
     #   ptq: False
     # HAS_WANDB: False
+    # replay: # Added for 6.1
+    #   anneal_epochs: 10
+    #   alpha_start: 0.6
+    #   alpha_end: 0.0
+    #   beta_start: 0.4
+    #   beta_end: 1.0
 
-    cfg = CONFIG # Load the default config from config.py
-
+    cfg = CONFIG  # Load the default config from config.py
     # Example: Override some config values for a quick test run
-    # cfg['training']['epochs'] = 2
-    # cfg['debug']['save_model_checkpoints'] = './temp_checkpoints'
-    # os.makedirs(cfg['debug']['save_model_checkpoints'], exist_ok=True)
+    cfg['training']['epochs'] = 2
+    cfg['debug']['save_model_checkpoints'] = './temp_checkpoints'
+    os.makedirs(cfg['debug']['save_model_checkpoints'], exist_ok=True)
 
-    # Run the training
-    # final_accuracy = run_training_once(cfg)
-    # print(f"Training finished. Final validation accuracy: {final_accuracy:.4f}")
+    # For `run_training_once` to work without a full HPO setup,
+    # we need to ensure the `trial` object is `None` or a dummy.
+    # When called from hpo.py, `trial` will be provided.
+    final_accuracy = run_training_once(cfg, trial=None) 
+    print(f"Training finished. Final validation accuracy: {final_accuracy:.4f}")

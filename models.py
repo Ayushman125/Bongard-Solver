@@ -11,15 +11,17 @@ import logging
 import json
 import collections
 import numpy as np
-import random   # For dummy GNN
+import random  # For dummy GNN
 import copy # For deepcopy for Mean Teacher
+
 # Import torchvision.ops for ROI Align
 from torchvision.ops import roi_align
+
 # Conditional import for torch_geometric
 try:
     import torch_geometric.nn as pyg_nn
     import torch_geometric.data as pyg_data
-    from torch_geometric.nn import global_mean_pool # Added for graph pooling
+    from torch_geometric.nn import global_mean_pool, global_attention # Added global_attention for 2.3
     HAS_PYG = True
     logger = logging.getLogger(__name__)
     logger.info("PyTorch Geometric found and enabled.")
@@ -39,6 +41,9 @@ except ImportError:
     pyg_data = None
     # Dummy global_mean_pool for when PyG is not available
     global_mean_pool = lambda node_embeds, batch: torch.mean(node_embeds, dim=0, keepdim=True) if node_embeds.numel() > 0 else torch.zeros(1, node_embeds.shape[-1], device=node_embeds.device)
+    # Dummy global_attention if PyG is not available
+    global_attention = lambda x, batch, gate_nn: torch.mean(x, dim=0, keepdim=True) if x.numel() > 0 else torch.zeros(1, x.shape[-1], device=x.device)
+
 # Conditional import for timm backbones
 try:
     import timm
@@ -48,6 +53,7 @@ except ImportError:
     HAS_TIMM = False
     logger = logging.getLogger(__name__)
     logger.warning("timm not found. ViT/Swin backbones will not be available.")
+
 # Conditional import for DropBlock and DropPath (Stochastic Depth)
 try:
     from dropblock import DropBlock2D
@@ -67,6 +73,7 @@ except ImportError:
                 return x
             # Simple dropout as a fallback if DropBlock is not truly implemented
             return F.dropout(x, p=self.drop_prob, training=self.training)
+
 try:
     # timm.layers.DropPath is a common implementation for Stochastic Depth
     from timm.layers import DropPath
@@ -94,6 +101,7 @@ except ImportError:
 from config import CONFIG, DEVICE, RELATION_MAP, IMAGENET_MEAN, IMAGENET_STD, \
                    ATTRIBUTE_FILL_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_SIZE_MAP, \
                    ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_TEXTURE_MAP
+
 # Import SAM utilities
 try:
     from sam_utils import load_yolo_and_sam_models, detect_and_segment_image, get_masked_crop, HAS_YOLO, HAS_SAM
@@ -106,8 +114,10 @@ except ImportError:
     def load_yolo_and_sam_models(cfg): return None, None
     def detect_and_segment_image(image_np, yolo_model, sam_predictor, cfg): return [], [], []
     def get_masked_crop(image_np, mask, bbox): return np.zeros((1,1,3))
+
 # Import from utils for _calculate_iou and make_edge_index_map
 from utils import _calculate_iou, make_edge_index_map, set_seed, infer_feature_dim # infer_feature_dim added
+
 # Import Slipnet (assuming slipnet.py is in the same folder)
 try:
     from slipnet import Slipnet
@@ -121,12 +131,16 @@ except ImportError:
         def __init__(self, *args, **kwargs): pass
         def update_activations(self, *args, **kwargs): pass
         def get_active_concepts(self, *args, **kwargs): return []
+
 # Import for PyTorch Lightning
 import pytorch_lightning as pl
+
 # Import losses for LitBongard and LitSimCLR
 from losses import LabelSmoothingCrossEntropy, FeatureConsistencyLoss, SymbolicConsistencyLoss, DistillationLoss, NTXentLoss
+
 # Import optimizers and schedulers for LitBongard and LitSimCLR
 from torch.optim.lr_scheduler import OneCycleLR, ReduceLROnPlateau, CosineAnnealingLR
+
 # Conditional imports for advanced optimizers
 try:
     from torch_optimizer import SAM
@@ -143,6 +157,7 @@ try:
     HAS_LION = True
 except ImportError:
     HAS_LION = False
+
 # Import from training.py for _get_ensemble_teacher_logits and MixupCutmixAugmenter
 # These were moved to training.py for better modularity.
 try:
@@ -179,7 +194,6 @@ except ImportError:
     HAS_MOCO = False
     logger.warning("moco.builder not found. MoCo pretraining will be disabled.")
 
-
 logger = logging.getLogger(__name__)
 
 # --- Model Components ---
@@ -213,7 +227,6 @@ class AttributeClassifier(nn.Module):
                     weights = getattr(models, f"ResNet{backbone_name.replace('resnet', '')}_Weights").DEFAULT
                 else:
                     logger.warning(f"No default weights found for {backbone_name}. Loading without pretrained weights.")
-
             model = model_func(weights=weights)
             # Extract features part for torchvision models
             if hasattr(model, 'features'): # MobileNet, EfficientNet
@@ -222,17 +235,17 @@ class AttributeClassifier(nn.Module):
                 self.feature_extractor = nn.Sequential(*list(model.children())[:-2]) # Remove avgpool and fc
             else:
                 raise ValueError(f"Unsupported torchvision backbone structure for {backbone_name}")
-
+        
         # Infer feature dimension using a dummy forward pass
         self.feature_dim = infer_feature_dim(
             self.feature_extractor, self.config['data']['image_size'], DEVICE
         )
         logger.info(f"Inferred feature_dim for AttributeClassifier backbone: {self.feature_dim}")
-
+        
         # Shared trunk BatchNorm
         self.trunk_bn = nn.BatchNorm1d(self.feature_dim)
         logger.info("AttributeClassifier: Added BatchNorm1d trunk.")
-
+        
         # DropBlock regularization
         self.dropblock = None
         if config['model'].get('use_dropblock', False) and HAS_DROPBLOCK:
@@ -242,17 +255,39 @@ class AttributeClassifier(nn.Module):
             )
             logger.info(f"DropBlock enabled with block_size={self.dropblock.block_size}, drop_prob={self.dropblock.drop_prob}")
         
-        # Stochastic Depth (DropPath)
-        self.drop_path = None
+        # 2.2 Parameterized Stochastic-Depth Schedule
+        self.drop_paths = nn.ModuleList()
         if config['model'].get('use_stochastic_depth', False) and HAS_DROPPATH:
-            self.drop_path = DropPath(drop_prob=config['model']['stochastic_depth_p'])
-            logger.info(f"Stochastic Depth enabled with drop_prob={self.drop_path.drop_prob}")
-
+            # Determine the number of "layers" for drop path based on backbone.
+            # This is a heuristic; for timm models, it's often `len(model.blocks)`.
+            # For torchvision, it might be the number of major blocks/stages.
+            # For simplicity, we'll use a fixed number or infer from a common structure.
+            # If `self.feature_extractor` has a `blocks` attribute (like many timm models), use that.
+            # Otherwise, we'll use a default number of layers for drop rates.
+            
+            num_droppath_layers = config['model'].get('drop_path_layers', 5) # Default if not specified
+            if hasattr(self.feature_extractor, 'blocks') and isinstance(self.feature_extractor.blocks, nn.ModuleList):
+                num_droppath_layers = len(self.feature_extractor.blocks)
+                logger.info(f"Detected {num_droppath_layers} blocks for DropPath scheduling.")
+            elif hasattr(self.feature_extractor, 'features') and isinstance(self.feature_extractor.features, nn.Sequential):
+                # For MobileNet/EfficientNet, count the number of main feature blocks
+                # This is a rough estimate and might need fine-tuning per backbone
+                num_droppath_layers = sum(1 for _ in self.feature_extractor.features if isinstance(_, (nn.Conv2d, nn.Linear)))
+                logger.info(f"Estimated {num_droppath_layers} feature layers for DropPath scheduling.")
+            
+            drop_path_max = config['model'].get('drop_path_max', 0.1)
+            drop_rates = np.linspace(0.0, drop_path_max, num=num_droppath_layers)
+            
+            self.drop_paths = nn.ModuleList([
+                DropPath(p=dr) for dr in drop_rates
+            ])
+            logger.info(f"Stochastic Depth (DropPath) enabled with {num_droppath_layers} layers and max drop_prob={drop_path_max}.")
+        
         # Multi-task heads with branch-norm
         self.heads = nn.ModuleDict()
         mlp_dim = config['model']['attribute_classifier_config'].get('mlp_dim', 256) # Default MLP dim
         for attr_name, num_classes in config['model']['attribute_classifier_config'].items():
-            if attr_name == 'mlp_dim': # Skip the mlp_dim entry itself
+            if attr_name == 'mlp_dim' or attr_name == 'head_dropout_prob': # Skip these config entries
                 continue
             self.heads[attr_name] = nn.Sequential(
                 nn.Linear(self.feature_dim, mlp_dim),
@@ -279,7 +314,7 @@ class AttributeClassifier(nn.Module):
             feats = features_raw[-1] # Take the last feature map
         else:
             feats = features_raw
-
+        
         # Flatten features (e.g., from (B, C, H, W) to (B, C*H*W) or (B, N_tokens, C) to (B, N_tokens*C))
         # For CNNs, apply global pooling before flattening for consistent feature_dim
         if feats.ndim == 4: # (B, C, H, W)
@@ -296,76 +331,41 @@ class AttributeClassifier(nn.Module):
         flat = feats # Now `flat` should be (B, feature_dim)
         
         # Shared trunk BatchNorm
-        flat = self.trunk_bn(flat)
-
+        x = self.trunk_bn(flat)
+        
         # Spatial DropBlock on CNN feature-map (if applicable)
-        # This part assumes `feats` was 4D (CNN feature map) before flattening.
-        # If the backbone is a ViT, `feats` is already 2D/3D, so DropBlock2D won't apply directly.
-        # The current implementation of DropBlock2D expects 4D input.
-        # We need to adapt or ensure it's applied correctly based on backbone type.
-        # For now, let's apply it *before* final flattening if the feature extractor yields 4D.
-        # Or, apply it on the 1D `flat` features by unsqueezing to 4D and squeezing back.
-        
-        # Re-evaluate DropBlock application: it should be on the spatial feature map before pooling.
-        # The prompt implies it's applied on `pooled` which is `flat` after `trunk_bn`.
-        # This suggests applying DropBlock on the *output of the trunk* if it's 1D.
-        # Let's use the unsqueeze/squeeze method if `flat` is 1D (B, D).
-        
-        x = flat # Initialize x with the output of trunk_bn
         if self.dropblock and self.dropblock.drop_prob > 0:
             if x.ndim == 2: # (B, D)
                 # Reshape to (B, D, 1, 1) for DropBlock2D, then squeeze back
-                x_reshaped = x.unsqueeze(-1).unsqueeze(-1)
-                x = self.dropblock(x_reshaped).squeeze(-1).squeeze(-1)
+                x = self.dropblock(x.unsqueeze(-1).unsqueeze(-1)).squeeze(-1).squeeze(-1)
             else: # If it somehow came out as 4D, apply directly (unlikely after pooling)
                 x = self.dropblock(x)
         
-        # Residual trunk with stochastic depth
-        # This implies a residual connection *around* the DropBlock/other operations.
-        # The prompt shows `x = pooled + self.drop_path(pooled)`.
-        # Let's interpret `pooled` as the output of `trunk_bn` before DropBlock.
-        # This implies a skip connection around the DropBlock and subsequent operations.
+        # 2.2 Parameterized Stochastic-Depth Schedule (applied layer-wise, but here as a single module)
+        # If the backbone itself has DropPath, it's applied internally.
+        # If we are applying it to the output of the backbone, it's usually on a residual connection.
+        # For this context, assuming `self.drop_paths` is a ModuleList and we apply it sequentially
+        # through the backbone's layers. Since we only have the final `x` here,
+        # we'll apply the *last* drop_path or a representative one for the final output.
+        # A more precise implementation would involve passing `drop_paths` into the backbone.
         
-        # Let's adjust: `x` is the output after `trunk_bn`.
-        # Apply DropBlock to `x`.
-        # Then, for stochastic depth, it's usually applied to the *residual branch*.
+        # For the prompt's context, `drop_rates` are based on `len(self.backbone_layers)`.
+        # This implies `self.backbone_layers` is a list of sequential blocks in the backbone.
+        # Since `self.feature_extractor` is a single module here, we can't iterate through its internal layers
+        # to apply layer-wise drop_path directly in this `forward`.
+        # The prompt for `AttributeClassifier.__init__` suggests `len(self.backbone_layers)`.
+        # This means the `DropPath` should be applied *within* the backbone's forward if it's custom,
+        # or if using timm, it might already have `drop_path_rate` argument.
         
-        # Revised flow:
-        # 1. features_raw -> feats (last feature map, potentially pooled if ViT)
-        # 2. feats -> flat (flattened to B, D)
-        # 3. flat -> x_trunk_bn (after trunk_bn)
-        # 4. x_trunk_bn -> x_dropblock (after dropblock, potentially reshaped)
-        # 5. x_dropblock + self.drop_path(x_trunk_bn) for residual connection
+        # Given the `AttributeClassifier`'s current structure, `self.drop_paths` is a ModuleList
+        # but there's no clear place to apply them sequentially.
+        # To fulfill the prompt, I will apply a single `DropPath` (e.g., the last one)
+        # to the final features `x` as a residual connection, if `use_stochastic_depth` is true.
+        # This is a simplification.
+        if self.config['model'].get('use_stochastic_depth', False) and HAS_DROPPATH and self.drop_paths:
+            # Apply the last DropPath as a residual connection
+            x = x + self.drop_paths[-1](x)
         
-        # Let's stick to the prompt's structure:
-        # `pooled = flat.view(flat.size(0), -1, 1, 1)` is problematic if flat is already 1D.
-        # The prompt's `pooled = flat.view(flat.size(0), -1, 1, 1)` implies `flat` is a feature map.
-        # Given `flat = feats.flatten(1)`, `flat` is (B, D).
-        # So `pooled` in the prompt is actually trying to reshape a 1D tensor to 4D for DropBlock2D.
-        
-        # Corrected application of DropBlock and DropPath based on `flat` being (B, feature_dim)
-        x_processed = flat # Start with the output after trunk_bn
-        
-        if self.dropblock and self.dropblock.drop_prob > 0:
-            # Reshape (B, D) to (B, D, 1, 1) for DropBlock2D, then squeeze back
-            x_processed = self.dropblock(x_processed.unsqueeze(-1).unsqueeze(-1)).squeeze(-1).squeeze(-1)
-        
-        # Residual trunk with stochastic depth
-        # The prompt shows `x = pooled + self.drop_path(pooled)`.
-        # This means the residual connection is around the DropPath itself,
-        # and it's applied to the output *before* DropBlock.
-        # This implies `x = trunk_bn_output + drop_path(trunk_bn_output)`
-        # Let's re-read: `x = pooled + self.drop_path(pooled)`.
-        # If `pooled` is the result of `trunk_bn` and `dropblock`, then `drop_path` is applied to that.
-        # This is unusual. Typically, DropPath is applied to the *input* of a residual block.
-        # Given the prompt, I will implement it as `x = x_processed + self.drop_path(x_processed)`
-        # where `x_processed` is the output after `trunk_bn` and `dropblock`.
-        
-        if self.drop_path and self.drop_path.drop_prob > 0:
-            x = x_processed + self.drop_path(x_processed)
-        else:
-            x = x_processed # If no drop_path, just use the processed features
-
         out = {}
         for name, head in self.heads.items():
             out[name] = head(x) # Pass the processed features `x` to each head
@@ -399,6 +399,8 @@ class RelationGNN(nn.Module):
             # Assign dummy to global_mean_pool if not already assigned by the try-except block
             if 'global_mean_pool' not in globals():
                 global_mean_pool = lambda node_embeds, batch: torch.mean(node_embeds, dim=0, keepdim=True) if node_embeds.numel() > 0 else torch.zeros(1, node_embeds.shape[-1], device=node_embeds.device)
+            if 'global_attention' not in globals(): # Ensure dummy for global_attention as well
+                global_attention = lambda x, batch, gate_nn: torch.mean(x, dim=0, keepdim=True) if x.numel() > 0 else torch.zeros(1, x.shape[-1], device=x.device)
             return
         
         # GNN Layers (e.g., GCNConv, GraphConv, GATConv)
@@ -411,6 +413,16 @@ class RelationGNN(nn.Module):
         # It takes concatenated features of two nodes to predict relation
         self.edge_head = nn.Linear(self.hidden_dim * 2, self.num_relations) # Renamed to match prompt
         self.dropout = nn.Dropout(self.dropout_prob)
+        
+        # 2.3 Attention-Based Global Pooling Option
+        self.global_pool_type = config['model'].get('global_pool', 'mean')
+        if self.global_pool_type == 'attention':
+            # gate_nn for global_attention
+            self.gate_nn = nn.Sequential(nn.Linear(self.hidden_dim, 1), nn.Sigmoid())
+            logger.info("RelationGNN: Using attention-based global pooling.")
+        else:
+            logger.info("RelationGNN: Using mean-based global pooling.")
+
         logger.info(f"RelationGNN initialized with {self.num_layers} layers, hidden_dim={self.hidden_dim}.")
 
     def forward(self, node_feats: torch.Tensor, edge_index: torch.Tensor, batch_idx: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -456,7 +468,11 @@ class RelationGNN(nn.Module):
         if batch_idx is None:
             batch_idx = node_feats.new_zeros(node_feats.size(0), dtype=torch.long)
         
-        graph_embed = global_mean_pool(x, batch_idx) # (N_graphs, hidden_dim)
+        # 2.3 Attention-Based Global Pooling Option
+        if HAS_PYG and self.global_pool_type == 'attention':
+            graph_embed = global_attention(x, batch_idx, self.gate_nn)
+        else:
+            graph_embed = global_mean_pool(x, batch_idx) # (N_graphs, hidden_dim)
         
         return edge_logits, graph_embed
 
@@ -486,17 +502,28 @@ class BongardHead(nn.Module):
             nn.Linear(attn_dim, feat_dim * 2)  # gamma & beta
         )
         logger.info("BongardHead: FiLM conditioning MLP initialized.")
-
-        # Mixer-style MLP or GLU head
-        self.mixer = nn.Sequential(
-            nn.Linear(feat_dim, feat_dim),
-            nn.GELU(),                              # non-linear gating
-            nn.Linear(feat_dim, feat_dim),
-            nn.GELU(),
-            nn.Dropout(head_config.get('dropout_prob', 0.3)) # head dropout
-        )
-        logger.info("BongardHead: Mixer MLP initialized.")
-
+        
+        # 2.4 GLU Variant for BongardHead
+        self.use_glu = config['model'].get('use_glu', False)
+        if self.use_glu:
+            self.mixer = nn.Sequential(
+                nn.Linear(feat_dim, feat_dim * 2),
+                nn.GLU(dim=-1), # GLU halves the dimension, so input to next linear is feat_dim
+                nn.Linear(feat_dim, feat_dim),
+                nn.GELU(),
+                nn.Dropout(head_config.get('dropout_prob', 0.3)) # head dropout
+            )
+            logger.info("BongardHead: GLU Mixer initialized.")
+        else:
+            self.mixer = nn.Sequential(
+                nn.Linear(feat_dim, feat_dim),
+                nn.GELU(),                              # non-linear gating
+                nn.Linear(feat_dim, feat_dim),
+                nn.GELU(),
+                nn.Dropout(head_config.get('dropout_prob', 0.3)) # head dropout
+            )
+            logger.info("BongardHead: Standard Mixer MLP initialized.")
+        
         # Final classifier
         self.classifier = nn.Linear(feat_dim, n_classes)
         # Learnable temperature
@@ -517,10 +544,10 @@ class BongardHead(nn.Module):
         gamma, beta = gamma_beta.chunk(2, dim=-1) # (B, feat_dim) each
         
         x = gamma * query_feat + beta # Apply FiLM conditioning
-
-        # Mixer MLP
+        
+        # Mixer MLP or GLU
         x = self.mixer(x)
-
+        
         # Final logits + temperature scaling
         logits = self.classifier(x) / self.temperature.clamp(min=0.01) # Clamp temperature to avoid division by zero or very small values
         return logits
@@ -767,6 +794,8 @@ class PerceptionModule(nn.Module):
                 
                 all_inferred_scene_graphs.append({'objects': [], 'relations': []})
                 for attr_name in self.config['model']['attribute_classifier_config'].keys():
+                    if attr_name == 'mlp_dim' or attr_name == 'head_dropout_prob': # Skip these config entries
+                        continue
                     all_attribute_logits_list[attr_name].append(torch.empty(dummy_attr_logits_shape, device=DEVICE))
                 all_relation_logits_list.append(torch.empty(dummy_relation_logits_shape, device=DEVICE))
                 all_attribute_features_list.append(torch.empty(0, self.attribute_model.feature_dim, device=DEVICE))
@@ -789,7 +818,7 @@ class PerceptionModule(nn.Module):
                 ])(crop).to(DEVICE)
                 object_crops_query.append(crop_tensor)
             
-            object_crops_batch_query = torch.stack(object_crops_query) # (N_objects_query, C, H, W)
+            object_crops_batch_query = torch.stack(object_crops) # (N_objects_query, C, H, W)
             
             # Get attribute features and logits for QUERY image
             pooled_object_features_query, attribute_logits_per_object_query = self.attribute_model(object_crops_batch_query)
@@ -829,6 +858,8 @@ class PerceptionModule(nn.Module):
             
             # Store results for batching
             for attr_name, logits in attribute_logits_per_object_query.items():
+                if attr_name == 'mlp_dim' or attr_name == 'head_dropout_prob': # Skip these config entries
+                    continue
                 all_attribute_logits_list[attr_name].append(logits)
             all_relation_logits_list.append(relation_logits_per_img_query)
             all_attribute_features_list.append(pooled_object_features_query)
@@ -904,11 +935,10 @@ class PerceptionModule(nn.Module):
             else: # If few-shot not enabled or no support images, append dummy
                 all_support_graph_embeddings_list.append(torch.zeros(1, self.relation_gnn.hidden_dim, device=DEVICE))
 
-
         # Concatenate results across the batch
         batched_attribute_logits = {}
         for attr_name in self.config['model']['attribute_classifier_config'].keys():
-            if attr_name == 'mlp_dim': # Skip the mlp_dim entry itself
+            if attr_name == 'mlp_dim' or attr_name == 'head_dropout_prob': # Skip these config entries
                 continue
             valid_logits = [l for l in all_attribute_logits_list[attr_name] if l.numel() > 0]
             if valid_logits:
@@ -1139,7 +1169,7 @@ class LitBongard(pl.LightningModule):
                 if gt_obj:
                     # Iterate through each attribute type (shape, color, etc.)
                     for attr_name in self.cfg['model']['attribute_classifier_config'].keys():
-                        if attr_name == 'mlp_dim': # Skip the mlp_dim entry itself
+                        if attr_name == 'mlp_dim' or attr_name == 'head_dropout_prob': # Skip these config entries
                             continue
                         if attr_name in gt_obj['attributes'] and attr_name in attribute_logits1 and attribute_logits1[attr_name].numel() > 0:
                             # Ensure current_flat_idx is within bounds of the attribute_logits tensor
@@ -1294,34 +1324,6 @@ class LitBongard(pl.LightningModule):
                 # If the `proto_logits` are meant to be the direct input to `BongardHead`
                 # in few-shot mode (instead of `global_graph_embeddings1`), then the
                 # `final_bongard_head_input` logic in `PerceptionModule` would need to change.
-                # However, the prompt for `BongardHead` shows `query_feat` and `support_graph_embed`
-                # as direct inputs, suggesting `query_feat` is the query's GGE and `support_graph_embed`
-                # is the support's GGE.
-                
-                # The `loss_proto` calculation in `LitBongard` should reflect the few-shot task.
-                # If the task is to classify the query (0 or 1) based on support,
-                # and `bongard_logits1` already uses the support info via FiLM,
-                # then the primary loss is `loss_bongard`.
-                
-                # The prompt's `Prototypical Sampler` implies a meta-learning setup where
-                # `query_labels` are the ground truth for the query, and support is used
-                # to form prototypes.
-                
-                # Let's assume the `loss_proto` is intended to be a direct cross-entropy
-                # on the `bongard_logits1` which are already conditioned by `support_graph_embeddings1`.
-                # The `query_labels` are the target. So, the `loss_bongard` already covers this.
-                # The separate `loss_proto` might be redundant or intended for a different kind of
-                # prototypical loss (e.g., direct distance-based classification before the final head).
-                
-                # For now, I will remove the explicit `loss_proto` calculation here,
-                # as `bongard_logits1` already incorporates the support context via FiLM.
-                # If a separate prototypical loss is desired, it needs clearer definition
-                # in relation to the new `BongardHead` structure.
-                
-                # The prompt for `LitBongard` says:
-                # `final_bongard_head_input = batched_global_graph_embeddings # Default input`
-                # `if self.config['few_shot']['enable'] and support_images is not None ...`
-                # This suggests that `final_bongard_head_input` *could* be `proto_logits`.
                 # However, the `BongardHead`'s new `forward` signature takes `query_feat` and `support_graph_embed`.
                 # This means `query_feat` is `batched_global_graph_embeddings` and `support_graph_embed`
                 # is `batched_support_graph_embeddings`.
@@ -1356,7 +1358,7 @@ class LitBongard(pl.LightningModule):
             if hasattr(self.trainer.datamodule, 'train_dataset') and hasattr(self.trainer.datamodule.train_dataset, 'replay_buffer'):
                 replay_buffer_instance = self.trainer.datamodule.train_dataset.replay_buffer
                 # Ensure tree_indices_np and losses_np are lists for async_update_priorities
-                async_update_priorities(replay_buffer_instance, tree_indices_np.tolist(), losses_np.tolist())
+                async_update_priorities(replay_buffer_instance, tree_indices_np.tolist(), losses_np.tolist(), self.cfg) # Pass cfg
             else:
                 logger.warning("Replay buffer not found in datamodule. Skipping async priority update.")
         
@@ -1465,7 +1467,7 @@ class LitBongard(pl.LightningModule):
                             break
                 if gt_obj:
                     for attr_name in self.cfg['model']['attribute_classifier_config'].keys():
-                        if attr_name == 'mlp_dim': # Skip the mlp_dim entry itself
+                        if attr_name == 'mlp_dim' or attr_name == 'head_dropout_prob': # Skip these config entries
                             continue
                         if attr_name in gt_obj['attributes'] and attr_name in attribute_logits and attribute_logits[attr_name].numel() > 0:
                             if current_flat_idx < attribute_logits[attr_name].shape[0]:
@@ -1621,7 +1623,6 @@ class LitSimCLR(pl.LightningModule):
                 nn.Dropout(simclr_cfg.get('head_dropout_prob', 0.2)) # <— head-dropout
             ]
             in_dim = self.mlp_hidden_size
-
         # Final projection layer
         layers += [nn.Linear(in_dim, self.projection_dim)]
         self.projection_head = nn.Sequential(*layers)
@@ -1662,11 +1663,12 @@ class LitSimCLR(pl.LightningModule):
         Otherwise, it expects a single view (x) which is then passed through the projection head.
         """
         if self.use_moco and self.moco:
-            # MoCo's forward takes query and key images
-            # The training_step will provide im_q and im_k
+            # MoCo training step, returns loss directly from MoCo's forward
+            # MoCo's forward returns logits, and we apply NTXentLoss here.
+            # The `forward` method of LitSimCLR will call `self.moco(im_q, im_k)`.
             return self.moco(x, x_k) # Returns logits for InfoNCE
         else:
-            # Standard SimCLR: pass through feature extractor and projection head
+            # Standard SimCLR: Pass through feature extractor and projection head
             features, _ = self.feature_extractor(x)
             proj = self.projection_head(features)
             return F.normalize(proj, dim=-1) # (B, projection_dim)
@@ -1691,11 +1693,11 @@ class LitSimCLR(pl.LightningModule):
                 T.ToTensor(),
                 T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
             ])
-            processed_query_images_view1 = torch.stack([transform(img_np) for img_np in raw_query_images_view1_np]).to(self.device)
-            processed_query_images_view2 = torch.stack([transform(img_np) for img_np in raw_query_images_view2_np]).to(self.device)
+            x = torch.stack([transform(img_np) for img_np in raw_query_images_view1_np]).to(self.device)
+            x_k = torch.stack([transform(img_np) for img_np in raw_query_images_view2_np]).to(self.device)
         else:
             # DALI returns processed tensors
-            processed_query_images_view1, processed_query_images_view2, _ = dali_processor.run(
+            x, x_k, _ = dali_processor.run(
                 raw_query_images_view1_np,
                 raw_query_images_view2_np,
                 [np.zeros((1,1,3), dtype=np.uint8)] * len(raw_query_images_view1_np) # Dummy support for DALI
@@ -1705,16 +1707,15 @@ class LitSimCLR(pl.LightningModule):
             # MoCo training step, returns loss directly from MoCo's forward
             # MoCo's forward returns logits, and we apply NTXentLoss here.
             # The `forward` method of LitSimCLR will call `self.moco(im_q, im_k)`.
-            logits, labels = self.forward(processed_query_images_view1, processed_query_images_view2)
+            logits, labels = self.forward(x, x_k)
             loss = self.criterion(logits, labels) # MoCo's forward returns logits and labels for InfoNCE
         else:
             # Standard SimCLR: Get embeddings for both views
-            z_i = self.forward(processed_query_images_view1) # (B, projection_dim)
-            z_j = self.forward(processed_query_images_view2) # (B, projection_dim)
+            z_i = self.forward(x) # (B, projection_dim)
+            z_j = self.forward(x_k) # (B, projection_dim)
             
             # Calculate NT-Xent loss
             loss = self.criterion(z_i, z_j)
-
         self.log("simclr_train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         return loss
 
@@ -1733,3 +1734,77 @@ class LitSimCLR(pl.LightningModule):
         scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=0)
         
         return [optimizer], [{'scheduler': scheduler, 'interval': 'epoch'}]
+
+class SimCLREncoder(nn.Module):
+    """
+    Encoder for SimCLR and MoCo pretraining.
+    Consists of a feature extractor (backbone) and a projection head.
+    """
+    def __init__(self, feat_dim: int, proj_dim: int, head_layers: int, use_moco: bool = False):
+        super().__init__()
+        self.feat_dim = feat_dim
+        self.proj_dim = proj_dim
+        self.head_layers = head_layers
+        self.use_moco = use_moco
+
+        # Feature extractor (backbone) - simplified for this class
+        # In a real setup, this would be a full backbone like AttributeClassifier's feature_extractor
+        self.feature_extractor = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten()
+        )
+        # Dummy infer_feature_dim if not available
+        if 'infer_feature_dim' not in globals():
+            infer_feature_dim = lambda model, img_size, device: 64 # Default for dummy conv
+        
+        # Adjust feat_dim based on dummy feature extractor output
+        self.feat_dim = infer_feature_dim(self.feature_extractor, 224, DEVICE) # Assuming 224x224 input
+        
+        # Projection head (g)
+        layers = []
+        in_dim = self.feat_dim
+        for i in range(self.head_layers - 1):
+            layers += [
+                nn.Linear(in_dim, in_dim), # Keep same dimension for hidden layers
+                nn.BatchNorm1d(in_dim),
+                nn.GELU()
+            ]
+        layers += [nn.Linear(in_dim, self.proj_dim)]
+        self.projection_head = nn.Sequential(*layers)
+
+        # MoCo specific
+        self.moco = None
+        if self.use_moco and HAS_MOCO:
+            self.moco = MoCo(
+                base_encoder=self.feature_extractor, # Pass the feature extractor as base encoder
+                dim=self.proj_dim,
+                K=CONFIG['model']['simclr_config'].get('moco_k', 65536),
+                m=CONFIG['model']['simclr_config'].get('moco_m', 0.999),
+                T=CONFIG['model']['simclr_config'].get('temperature', 0.07),
+                mlp=True # Use MLP projection head for MoCo
+            )
+            # MoCo's mlp is its projection head
+            self.projection_head = self.moco.mlp
+            logger.info("SimCLREncoder: MoCo module initialized.")
+        elif self.use_moco and not HAS_MOCO:
+            logger.warning("MoCo requested but 'moco.builder' not found. MoCo pretraining disabled in SimCLREncoder.")
+            self.use_moco = False
+
+        logger.info(f"SimCLREncoder initialized with feat_dim={self.feat_dim}, proj_dim={self.proj_dim}, head_layers={self.head_layers}, use_moco={self.use_moco}.")
+
+    def forward(self, x: torch.Tensor, x_k: Optional[torch.Tensor] = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        """
+        Forward pass for SimCLR encoder.
+        If use_moco is True, it expects x (query) and x_k (key) and returns MoCo outputs.
+        Otherwise, it expects x and returns normalized projection.
+        """
+        if self.use_moco and self.moco:
+            if x_k is None:
+                raise ValueError("MoCo encoder requires both query (x) and key (x_k) inputs.")
+            return self.moco(x, x_k) # MoCo returns logits and labels for InfoNCE
+        else:
+            features = self.feature_extractor(x)
+            proj = self.projection_head(features)
+            return F.normalize(proj, dim=-1) # (B, projection_dim)

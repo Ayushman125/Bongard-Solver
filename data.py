@@ -1,5 +1,5 @@
 # Folder: bongard_solver/
-# File: data.py (renamed to dataloader.py for clarity based on user's request)
+# File: data.py (formerly dataloader.py)
 import os
 import glob
 import json
@@ -52,7 +52,7 @@ try:
 except ImportError:
     logger.error("Could not import CONFIG, IMAGENET_MEAN, IMAGENET_STD, DEVICE or ALL_BONGARD_RULES from config.py/bongard_rules.py. Data loading might fail.")
      # Define dummy values if imports fail to prevent crashes
-    CONFIG = {'data': {'image_size': 128, 'synthetic_data_config': {'max_support_images_per_problem': 5, 'num_train_problems': 100, 'num_val_problems': 20, 'num_test_problems': 10}, 'dataloader_workers': 0, 'use_synthetic_data': True, 'use_dali': False, 'real_data_config': {'dataset_path': '', 'dataset_name': '', 'train_split': 0.8}, 'data_root_path': './data'}, 'training': {'batch_size': 16, 'curriculum_learning': False, 'curriculum_config': {'difficulty_sampling': False, 'difficulty_update_frequency_batches': 100, 'beta_anneal_epochs': 10}, 'augmentation_config': {'use_autoaugment': False, 'use_randaugment': False, 'randaugment_num_ops': 2, 'randaugment_magnitude': 9, 'use_random_erasing': False, 'random_erasing_prob': 0.5, 'random_erasing_scale_min': 0.02, 'random_erasing_scale_max': 0.33, 'random_erasing_ratio_min': 0.3, 'random_erasing_ratio_max': 3.3, 'use_color_jitter': False, 'color_jitter_brightness': 0.8, 'color_jitter_contrast': 0.8, 'color_jitter_saturation': 0.8, 'color_jitter_hue': 0.2, 'use_gaussian_blur': False, 'gaussian_blur_sigma': 1.0, 'use_random_flip': False, 'use_random_resized_crop': False, 'random_resized_crop_area_min': 0.08, 'random_resized_crop_ratio_min': 0.75, 'random_resized_crop_ratio_max': 1.33}}, 'few_shot': {'enable': False, 'k_shot': 1, 'n_way': 2}}, 'dali': {'num_threads': 4, 'device_id': 0, 'queue_size': 3, 'monitor_interval': 1.0, 'erase_fill': 0.0, 'erase_prob': 0.5, 'mixup_prob': 0.5, 'mixup_alpha': 0.2}} # Added DALI specific config for dummy
+    CONFIG = {'data': {'image_size': 128, 'synthetic_data_config': {'max_support_images_per_problem': 5, 'num_train_problems': 100, 'num_val_problems': 20, 'num_test_problems': 10}, 'dataloader_workers': 0, 'use_synthetic_data': True, 'use_dali': False, 'real_data_config': {'dataset_path': '', 'dataset_name': '', 'train_split': 0.8}, 'data_root_path': './data'}, 'training': {'batch_size': 16, 'curriculum_learning': False, 'curriculum_config': {'difficulty_sampling': False, 'difficulty_update_frequency_batches': 100, 'beta_anneal_epochs': 10}, 'augmentation_config': {'use_autoaugment': False, 'use_randaugment': False, 'randaugment_num_ops': 2, 'randaugment_magnitude': 9, 'use_random_erasing': False, 'random_erasing_prob': 0.5, 'random_erasing_scale_min': 0.02, 'random_erasing_scale_max': 0.33, 'random_erasing_ratio_min': 0.3, 'random_erasing_ratio_max': 3.3, 'use_color_jitter': False, 'color_jitter_brightness': 0.8, 'color_jitter_contrast': 0.8, 'color_jitter_saturation': 0.8, 'color_jitter_hue': 0.2, 'use_gaussian_blur': False, 'gaussian_blur_sigma': 1.0, 'use_random_flip': False, 'use_random_resized_crop': False, 'random_resized_crop_area_min': 0.08, 'random_resized_crop_ratio_min': 0.75, 'random_resized_crop_ratio_max': 1.33, 'use_augmix': False, 'augmix_alpha': 0.5}}, 'dali': {'num_threads': 4, 'device_id': 0, 'queue_size': 3, 'monitor_interval': 1.0, 'erase_fill': 0.0, 'erase_prob': 0.5, 'mixup_prob': 0.5, 'mixup_alpha': 0.2}} # Added DALI specific config for dummy, and augmix
     IMAGENET_MEAN = [0.485, 0.456, 0.406]
     IMAGENET_STD = [0.229, 0.224, 0.225]
     DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -434,7 +434,7 @@ def load_bongard_data(dataset_path: str, dataset_name: str, train_split: float =
         label = random.choice([0, 1])
         
          # Create dummy image files
-        dummy_img_path1 = os.path.join(dummy_image_dir, f"img1_{i}.png")
+        dummy_img_path1 = os.out.join(dummy_image_dir, f"img1_{i}.png")
         dummy_img_path2 = os.path.join(dummy_image_dir, f"img2_{i}.png")
         
          # Create dummy image content (e.g., a blank image)
@@ -547,7 +547,7 @@ def custom_collate_fn(batch: List[Tuple[Any, ...]]) -> Dict[str, Any]:
 
 # --- DALI Pipeline and Loader ---
 @fn.pipeline_def
-def dali_pipeline_synthetic(image_size: int, is_training: bool, curriculum_config: Dict[str, Any], augmentation_config: Dict[str, Any]):
+def dali_pipeline_synthetic(image_size: int, is_training: bool, curriculum_config: Dict[str, Any], augmentation_config: Dict[str, Any], cfg: Dict[str, Any]):
      # Use external_source to get data from Python side for synthetic data.
     query_img1_raw = fn.external_source(name="query_img1", device="cpu")
     query_img2_raw = fn.external_source(name="query_img2", device="cpu")
@@ -566,37 +566,8 @@ def dali_pipeline_synthetic(image_size: int, is_training: bool, curriculum_confi
     is_weights = fn.external_source(name="is_weights", device="cpu")
 
      # Image processing function within DALI pipeline (for synthetic data)
-    def process_image_dali_synthetic(img_raw):
-         # Apply augmentations if training
-        if is_training:
-             # Example: Randomly flip horizontally
-            if augmentation_config.get('use_random_flip', False):
-                img_raw = fn.coin_flip(img_raw, probability=0.5)
-             # Add other DALI augmentations here if needed
-            if augmentation_config.get('use_color_jitter', False):
-                img_raw = fn.color_twist(img_raw,
-                                         brightness=fn.random.uniform(range=[1.0 - augmentation_config['color_jitter_brightness'], 1.0 + augmentation_config['color_jitter_brightness']]),
-                                         contrast=fn.random.uniform(range=[1.0 - augmentation_config['color_jitter_contrast'], 1.0 + augmentation_config['color_jitter_contrast']]),
-                                         saturation=fn.random.uniform(range=[1.0 - augmentation_config['color_jitter_saturation'], 1.0 + augmentation_config['color_jitter_saturation']]),
-                                         hue=fn.random.uniform(range=[-augmentation_config['color_jitter_hue'], augmentation_config['color_jitter_hue']]))
-            if augmentation_config.get('use_gaussian_blur', False):
-                img_raw = fn.gaussian_blur(img_raw, sigma=augmentation_config['gaussian_blur_sigma'])
-            
-            # Fuse RandomErasing
-            if augmentation_config.get('use_random_erasing', False):
-                img_raw = fn.erase(img_raw,
-                                   anchor=fn.random.uniform(range=[0.0, 1.0], shape=[2]),
-                                   shape=fn.random.uniform(range=[augmentation_config['random_erasing_scale_min'], augmentation_config['random_erasing_scale_max']], shape=[2]),
-                                   axis_names="HW",
-                                   fill_value=cfg['dali']['erase_fill'],
-                                   normalized=True, # Use normalized coordinates for anchor/shape
-                                   output_dtype=types.UINT8, # Erase operates on original dtype
-                                   axis=[0,1], # Apply along H and W
-                                   k_factor=augmentation_config['random_erasing_ratio_min'] / augmentation_config['random_erasing_ratio_max'], # Ratio for aspect ratio
-                                   # probability is handled by the `if` condition
-                                   )
-            
-         # Resize and normalize
+    def process_image_dali_synthetic_base(img_raw):
+         # Resize and normalize (common steps)
         output_images = fn.resize(img_raw, resize_x=image_size, resize_y=image_size)
         output_images = fn.cast(output_images, dtype=types.FLOAT)
         output_images = fn.crop_mirror_normalize(
@@ -608,53 +579,61 @@ def dali_pipeline_synthetic(image_size: int, is_training: bool, curriculum_confi
         )
         return output_images
 
-    processed_query_img1 = process_image_dali_synthetic(query_img1_raw)
-    processed_query_img2 = process_image_dali_synthetic(query_img2_raw)
-    
-     # Process support images (requires a loop or map operation if they are a batch)
-     # For simplicity, assuming padded_support_imgs_raw is already a batch of images (B, N_support, H, W, C)
-     # This might need adjustment based on how `BongardSyntheticDataset.__getitem__` returns it for DALI.
-     # If it's a flat list of images, need to reshape. Assuming it's already structured for DALI.
-    
-     # If padded_support_imgs_raw is a single tensor of shape (B, N_support, H, W, C)
-     # We need to apply `process_image_dali_synthetic` to each support image.
-     # This is complex with DALI's `fn` operations on nested batches.
-     # For now, let's assume `padded_support_imgs_raw` is a list of individual support images
-     # and we process them one by one. Or, if it's already a batch, apply transforms to the whole batch.
-    
-     # The `external_source` for padded_support_imgs_raw should yield (N_support, H, W, C) per batch item.
-     # This means the DALI pipeline would receive a batch of (N_support, H, W, C) tensors.
-    
-     # Let's simplify: if `padded_support_imgs_raw` is expected to be a batch of images,
-     # apply the same processing.
-    processed_padded_support_imgs = process_image_dali_synthetic(padded_support_imgs_raw)
+     # Define augmentation branches for AugMix
+    def apply_augmix_branch1(img):
+         # Apply color jitter
+        if augmentation_config.get('use_color_jitter', False):
+            img = fn.color_twist(img,
+                                         brightness=fn.random.uniform(range=[1.0 - augmentation_config['color_jitter_brightness'], 1.0 + augmentation_config['color_jitter_brightness']]),
+                                         contrast=fn.random.uniform(range=[1.0 - augmentation_config['color_jitter_contrast'], 1.0 + augmentation_config['color_jitter_contrast']]),
+                                         saturation=fn.random.uniform(range=[1.0 - augmentation_config['color_jitter_saturation'], 1.0 + augmentation_config['color_jitter_saturation']]),
+                                         hue=fn.random.uniform(range=[-augmentation_config['color_jitter_hue'], augmentation_config['color_jitter_hue']]))
+         # Apply random flip
+        if augmentation_config.get('use_random_flip', False):
+            img = fn.coin_flip(img, probability=0.5)
+        return img
 
-    # Fuse MixUp/CutMix (assuming it's applied to the main query images)
-    # MixUp typically takes two batches of images and mixes them.
-    # The user's snippet `mix(cmn(aug(decode(images))), cmn(aug(decode(images))))` implies
-    # mixing augmented versions of the same batch.
-    # For a proper MixUp/CutMix, you'd usually mix `processed_query_img1` with another random sample.
-    # DALI's MixUp op expects two inputs that are already processed.
-    # For now, let's just apply it to `processed_query_img1` using itself as the second input
-    # for a simplified demonstration, or better, assume `query_img2_raw` is the second input.
-    # The user's snippet uses `decode(images)` twice, implying two views from the same source.
-    # Let's use `processed_query_img1` and `processed_query_img2` as the two views for MixUp.
-    if is_training and augmentation_config.get('use_mixup_cutmix', False): # Assuming a flag for this
-        # MixUp takes two inputs and a probability. It outputs mixed data and labels.
-        # For simplicity, we'll just mix the images. Labels mixing is more complex.
-        # This might need a separate `external_source` for the labels to be mixed.
-        # DALI's `MixUp` op is for data mixing, not label mixing.
-        # For full MixUp/CutMix, you'd need to handle label blending outside DALI or with custom ops.
-        # Let's just demonstrate image mixing.
-        
-        # `fn.mix` requires `prob` and `alpha`.
-        # `mixup_prob` and `mixup_alpha` should be in `cfg['dali']` or `augmentation_config`.
-        # Assuming `cfg['dali']` has them.
-        mixed_query_img1 = fn.mix(processed_query_img1, processed_query_img2,
-                                  prob=cfg['dali']['mixup_prob'], alpha=cfg['dali']['mixup_alpha'])
-        # If you want to use CutMix, you'd use `fn.cutmix` instead.
-        # For now, let's assume `mixup` implies the general mixing.
-        processed_query_img1 = mixed_query_img1 # Replace original with mixed
+    def apply_augmix_branch2(img):
+         # Apply gaussian blur
+        if augmentation_config.get('use_gaussian_blur', False):
+            img = fn.gaussian_blur(img, sigma=augmentation_config['gaussian_blur_sigma'])
+         # Apply RandomErasing
+        if augmentation_config.get('use_random_erasing', False):
+            img = fn.erase(img,
+                           anchor=fn.random.uniform(range=[0.0, 1.0], shape=[2]),
+                           shape=fn.random.uniform(range=[augmentation_config['random_erasing_scale_min'], augmentation_config['random_erasing_scale_max']], shape=[2]),
+                           axis_names="HW",
+                           fill_value=cfg['dali']['erase_fill'],
+                           normalized=True,
+                           output_dtype=types.UINT8,
+                           axis=[0,1])
+        return img
+
+     # Process query images
+    processed_query_img1 = process_image_dali_synthetic_base(query_img1_raw)
+    processed_query_img2 = process_image_dali_synthetic_base(query_img2_raw)
+    
+     # Process support images (assuming it's a batch of images)
+    processed_padded_support_imgs = process_image_dali_synthetic_base(padded_support_imgs_raw)
+
+    if is_training and augmentation_config.get('use_augmix', False):
+        logger.debug("Applying AugMix to synthetic data.")
+        aug1_view1 = apply_augmix_branch1(query_img1_raw) # Apply to raw image before base processing
+        aug2_view1 = apply_augmix_branch2(query_img1_raw) # Apply to raw image before base processing
+        
+        # Blend the two augmented branches, then apply base processing
+        blended_query_img1_raw = fn.blend(aug1_view1, aug2_view1, alpha=augmentation_config.get('augmix_alpha', 0.5))
+        processed_query_img1 = process_image_dali_synthetic_base(blended_query_img1_raw)
+        # AugMix is typically applied to a single input, not necessarily both views for Bongard.
+        # For query_img2, we can apply standard augmentations or none.
+        # For simplicity, let's keep query_img2 processing as is, or apply a different mix.
+        # If `use_mixup_cutmix` is also true, AugMix will take precedence for query_img1.
+    elif is_training and augmentation_config.get('use_mixup_cutmix', False):
+        logger.debug("Applying MixUp/CutMix to synthetic data.")
+        # MixUp/CutMix logic as previously implemented
+        mixed_query_img1 = fn.mix(processed_query_img1, processed_query_img2,
+                                 prob=cfg['dali']['mixup_prob'], alpha=cfg['dali']['mixup_alpha'])
+        processed_query_img1 = mixed_query_img1
 
     return (processed_query_img1, processed_query_img2, query_labels,
             query_gts_json_view1, query_gts_json_view2, difficulties, affine1, affine2, original_indices,
@@ -666,11 +645,9 @@ def dali_pipeline_real(cfg: Dict[str, Any], is_training: bool):
      # DALI pipeline for real data using FileReader
     image_size = cfg['data']['image_size']
     mean, std = IMAGENET_MEAN, IMAGENET_STD
+    augmentation_config = cfg['training']['augmentation_config']
     
      # FileReader for image paths and labels
-     # DALI's FileReader expects `file_root` and `files` (list of relative paths) or `file_list` (list of full paths)
-     # and `labels` (list of labels).
-     # We will pass full paths from `load_bongard_data` and let FileReader handle it.
     images, labels = fn.readers.file(
         file_root=cfg['data']['data_root_path'],
         file_list=cfg['data']['real_data_config']['train_file_list'] if is_training else cfg['data']['real_data_config']['val_file_list'],
@@ -682,65 +659,79 @@ def dali_pipeline_real(cfg: Dict[str, Any], is_training: bool):
      # Decode images (mixed device for CPU decoding, then GPU for further ops)
     decoded_images = fn.decoders.image(images, device="mixed", output_type=types.RGB)
     
-     # Augmentations on GPU
-     # PhotoMetricDistortion for brightness/contrast/saturation/hue
-    if is_training and cfg['training']['augmentation_config'].get('use_color_jitter', False):
-        augmented_images = fn.color_twist(decoded_images,
-                                             brightness=fn.random.uniform(range=[1.0 - cfg['training']['augmentation_config']['color_jitter_brightness'], 1.0 + cfg['training']['augmentation_config']['color_jitter_brightness']]),
-                                             contrast=fn.random.uniform(range=[1.0 - cfg['training']['augmentation_config']['color_jitter_contrast'], 1.0 + cfg['training']['augmentation_config']['color_jitter_contrast']]),
-                                             saturation=fn.random.uniform(range=[1.0 - cfg['training']['augmentation_config']['color_jitter_saturation'], 1.0 + cfg['training']['augmentation_config']['color_jitter_saturation']]),
-                                             hue=fn.random.uniform(range=[-cfg['training']['augmentation_config']['color_jitter_hue'], cfg['training']['augmentation_config']['color_jitter_hue']]),
-                                             device="gpu")
+     # Base image processing (resize, cast, normalize)
+    def process_image_dali_real_base(img):
+        output_images = fn.resize(img, resize_x=image_size, resize_y=image_size, device="gpu")
+        output_images = fn.crop_mirror_normalize(
+            output_images,
+            dtype=types.FLOAT,
+            output_layout=types.NCHW,
+            mean=mean,
+            std=std,
+            device="gpu"
+        )
+        return output_images
+
+     # Define augmentation branches for AugMix (similar to synthetic)
+    def apply_augmix_branch1_real(img):
+        if augmentation_config.get('use_color_jitter', False):
+            img = fn.color_twist(img,
+                                         brightness=fn.random.uniform(range=[1.0 - augmentation_config['color_jitter_brightness'], 1.0 + augmentation_config['color_jitter_brightness']]),
+                                         contrast=fn.random.uniform(range=[1.0 - augmentation_config['color_jitter_contrast'], 1.0 + augmentation_config['color_jitter_contrast']]),
+                                         saturation=fn.random.uniform(range=[1.0 - augmentation_config['color_jitter_saturation'], 1.0 + augmentation_config['color_jitter_saturation']]),
+                                         hue=fn.random.uniform(range=[-augmentation_config['color_jitter_hue'], augmentation_config['color_jitter_hue']]),
+                                         device="gpu")
+        if augmentation_config.get('use_random_flip', False):
+            img = fn.flip(img, horizontal=fn.random.coin_flip(probability=0.5), device="gpu")
+        return img
+
+    def apply_augmix_branch2_real(img):
+        if augmentation_config.get('use_gaussian_blur', False):
+            img = fn.gaussian_blur(img, sigma=augmentation_config['gaussian_blur_sigma'], device="gpu")
+        if augmentation_config.get('use_random_erasing', False):
+            img = fn.erase(img,
+                           anchor=fn.random.uniform(range=[0.0, 1.0], shape=[2]),
+                           shape=fn.random.uniform(range=[augmentation_config['random_erasing_scale_min'], augmentation_config['random_erasing_scale_max']], shape=[2]),
+                           axis_names="HW",
+                           fill_value=cfg['dali']['erase_fill'],
+                           normalized=True,
+                           output_dtype=types.UINT8,
+                           axis=[0,1])
+        return img
+
+    if is_training and augmentation_config.get('use_augmix', False):
+        logger.debug("Applying AugMix to real data.")
+        aug1_decoded = apply_augmix_branch1_real(decoded_images)
+        aug2_decoded = apply_augmix_branch2_real(decoded_images)
+        
+        blended_images = fn.blend(aug1_decoded, aug2_decoded, alpha=augmentation_config.get('augmix_alpha', 0.5), device="gpu")
+        final_processed_images = process_image_dali_real_base(blended_images)
     else:
-        augmented_images = decoded_images
-    
-    if is_training and cfg['training']['augmentation_config'].get('use_gaussian_blur', False):
-        augmented_images = fn.gaussian_blur(augmented_images, sigma=cfg['training']['augmentation_config']['gaussian_blur_sigma'], device="gpu")
-    if is_training and cfg['training']['augmentation_config'].get('use_random_flip', False):
-        augmented_images = fn.flip(augmented_images, horizontal=fn.random.coin_flip(probability=0.5), device="gpu")
-
-    # Fuse RandomErasing for real data
-    if is_training and cfg['training']['augmentation_config'].get('use_random_erasing', False):
-        augmented_images = fn.erase(augmented_images,
-                                   anchor=fn.random.uniform(range=[0.0, 1.0], shape=[2]),
-                                   shape=fn.random.uniform(range=[cfg['training']['augmentation_config']['random_erasing_scale_min'], cfg['training']['augmentation_config']['random_erasing_scale_max']], shape=[2]),
-                                   axis_names="HW",
-                                   fill_value=cfg['dali']['erase_fill'],
-                                   normalized=True,
-                                   output_dtype=types.UINT8,
-                                   axis=[0,1],
-                                   k_factor=cfg['training']['augmentation_config']['random_erasing_ratio_min'] / cfg['training']['augmentation_config']['random_erasing_ratio_max'],
-                                   )
-
-     # Resize and normalize
-     # CropMirrorNormalize for resizing, normalization, and layout change
-    output_images = fn.resize(augmented_images, resize_x=image_size, resize_y=image_size, device="gpu")
-    output_images = fn.crop_mirror_normalize(
-        output_images,
-        dtype=types.FLOAT,
-        output_layout=types.NCHW,  # Convert to NCHW for PyTorch
-        mean=mean,
-        std=std,
-        device="gpu"  # Perform on GPU
-    )
-    
-    # MixUp/CutMix for real data
-    # This is more complex for FileReader as it provides one image.
-    # To do MixUp/CutMix, you'd typically need to read two images and mix them.
-    # This would require a custom operator or two FileReader instances, which complicates the pipeline.
-    # For now, let's omit MixUp/CutMix for real data in DALI unless explicitly requested with a clear strategy.
-    # If it were implemented, it would involve something like:
-    # images_mixed, labels_mixed = fn.readers.file(...)
-    # decoded_images_mixed = fn.decoders.image(images_mixed, device="mixed", output_type=types.RGB)
-    # processed_images_mixed = fn.crop_mirror_normalize(...)
-    # final_output_images = fn.mix(output_images, processed_images_mixed, ...)
-    # For now, we assume MixUp/CutMix is primarily for synthetic data or handled differently for real data.
-
+         # Apply standard sequential augmentations if not using AugMix
+        current_images = decoded_images
+        if is_training and augmentation_config.get('use_color_jitter', False):
+            current_images = fn.color_twist(current_images,
+                                                 brightness=fn.random.uniform(range=[1.0 - augmentation_config['color_jitter_brightness'], 1.0 + augmentation_config['color_jitter_brightness']]),
+                                                 contrast=fn.random.uniform(range=[1.0 - augmentation_config['color_jitter_contrast'], 1.0 + augmentation_config['color_jitter_contrast']]),
+                                                 saturation=fn.random.uniform(range=[1.0 - augmentation_config['color_jitter_saturation'], 1.0 + augmentation_config['color_jitter_saturation']]),
+                                                 hue=fn.random.uniform(range=[-augmentation_config['color_jitter_hue'], augmentation_config['color_jitter_hue']]),
+                                                 device="gpu")
+        if is_training and augmentation_config.get('use_gaussian_blur', False):
+            current_images = fn.gaussian_blur(current_images, sigma=augmentation_config['gaussian_blur_sigma'], device="gpu")
+        if is_training and augmentation_config.get('use_random_flip', False):
+            current_images = fn.flip(current_images, horizontal=fn.random.coin_flip(probability=0.5), device="gpu")
+        if is_training and augmentation_config.get('use_random_erasing', False):
+            current_images = fn.erase(current_images,
+                                       anchor=fn.random.uniform(range=[0.0, 1.0], shape=[2]),
+                                       shape=fn.random.uniform(range=[augmentation_config['random_erasing_scale_min'], augmentation_config['random_erasing_scale_max']], shape=[2]),
+                                       axis_names="HW",
+                                       fill_value=cfg['dali']['erase_fill'],
+                                       normalized=True,
+                                       output_dtype=types.UINT8,
+                                       axis=[0,1])
+        final_processed_images = process_image_dali_real_base(current_images)
 
      # Dummy outputs for other elements expected by collate_fn if not directly from DALI
-     # For real data, we don't have view2, gt_json, difficulties etc. from FileReader directly.
-     # These would typically be loaded by the dataset and passed via external_source if needed.
-     # For now, return dummy tensors/lists for these.
     batch_size_dummy = cfg['training']['batch_size']
     num_support_dummy = cfg['data']['synthetic_data_config']['max_support_images_per_problem']
     dummy_query_img2 = fn.constant(0.0, shape=[image_size, image_size, 3], dtype=types.FLOAT, device="gpu")
@@ -758,7 +749,7 @@ def dali_pipeline_real(cfg: Dict[str, Any], is_training: bool):
     dummy_is_weights = fn.constant(1.0, shape=[1], dtype=types.FLOAT, device="cpu")
 
      # Set outputs matching the custom_collate_fn structure
-    return (output_images, dummy_query_img2, labels, # labels from FileReader
+    return (final_processed_images, dummy_query_img2, labels, # labels from FileReader
             dummy_query_gts_json_view1, dummy_query_gts_json_view2, dummy_difficulties,
             dummy_affine1, dummy_affine2, dummy_original_indices,
             dummy_padded_support_imgs, dummy_padded_support_labels, dummy_padded_support_sgs_bytes,
@@ -788,7 +779,8 @@ def build_dali_loader(cfg: Dict[str, Any], dataset: Dataset, is_train: bool, ran
             image_size=cfg['data']['image_size'],
             is_training=is_train,
             curriculum_config=cfg['training']['curriculum_config'],
-            augmentation_config=cfg['training']['augmentation_config']
+            augmentation_config=cfg['training']['augmentation_config'],
+            cfg=cfg # Pass full config for DALI specific params
         )
          # For synthetic data, the DALIGenericIterator needs to be fed by the dataset's __getitem__
         class ExternalSourceIteratorWrapper:
@@ -890,7 +882,7 @@ def build_dali_loader(cfg: Dict[str, Any], dataset: Dataset, is_train: bool, ran
             output_map=[
                 "query_img1", "query_img2", "query_labels",
                 "query_gts_json_view1", "query_gts_json_view2", "difficulties",
-                "affine1", "affine2", "original_indices",
+                "affine1", "query_img2_affine", "original_indices", # Renamed affine2 to query_img2_affine for clarity
                 "padded_support_imgs", "padded_support_labels", "padded_support_sgs_bytes",
                 "num_support_per_problem", "tree_indices", "is_weights"
             ],

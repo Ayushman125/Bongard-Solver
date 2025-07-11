@@ -6,6 +6,8 @@ import logging
 import torch  # Import torch for attribute_logits and relation_logits
 import torch.nn.functional as F  # For softmax
 from typing import List, Dict, Any, Tuple, Optional
+import matplotlib.pyplot as plt # Added for 3.1
+
 # Import topological features
 try:
     from topo_features import TopologicalFeatureExtractor
@@ -20,12 +22,15 @@ except ImportError:
     class TopologicalFeatureExtractor:
         def __init__(self, *args, **kwargs): pass
         def extract(self, mask): return np.zeros(64)  # Return a dummy array
+
 # Import _calculate_iou from utils
 try:
-    from utils import _calculate_iou
+    from utils import _calculate_iou, make_edge_index_map # make_edge_index_map is also used
 except ImportError:
-    logger.warning("utils.py not found. _calculate_iou will be a dummy function.")
+    logger.warning("utils.py not found. _calculate_iou and make_edge_index_map will be dummy functions.")
     def _calculate_iou(box1: List[float], box2: List[float]) -> float: return 0.0
+    def make_edge_index_map(num_objects: int) -> Dict[Tuple[int, int], int]: return {}
+
 # Import RELATION_MAP from config for reverse mapping
 try:
     from config import RELATION_MAP, ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_COLOR_MAP, \
@@ -42,7 +47,9 @@ except ImportError:
     ATTRIBUTE_SIZE_MAP = {'small': 0, 'medium': 1, 'large': 2}
     ATTRIBUTE_ORIENTATION_MAP = {'upright': 0, 'inverted': 1}
     ATTRIBUTE_TEXTURE_MAP = {'none': 0, 'striped': 1, 'dotted': 2}
-    CONFIG = {'model': {'use_persistent_homology': False, 'ph_pixel_thresh': 0.5, 'ph_feature_dim': 64}} # Dummy config for topo
+    CONFIG = {'model': {'use_persistent_homology': False, 'ph_pixel_thresh': 0.5, 'ph_feature_dim': 64},
+              'debug': {'plot_persistence': False}} # Added debug for 3.1
+
 logger = logging.getLogger(__name__)
 
 class SceneGraphBuilder:
@@ -84,7 +91,8 @@ class SceneGraphBuilder:
         detected_masks: List[np.ndarray],  # Binary numpy masks
         attribute_logits: Dict[str, torch.Tensor],  # Dict of {attr_name: (N_objects, N_classes)}
         relation_logits: torch.Tensor,  # (N_edges, N_relations)
-        graph_embed: Optional[torch.Tensor] = None # Added for graph embedding from RelationGNN
+        graph_embed: Optional[torch.Tensor] = None, # Added for graph embedding from RelationGNN
+        idx: int = 0 # Added for 3.1 to check for first image in batch
     ) -> Dict[str, Any]:
         """
         Builds a scene graph for a single image.
@@ -97,6 +105,7 @@ class SceneGraphBuilder:
                                             Each tensor is (N_objects, Num_classes_for_attr).
             relation_logits (torch.Tensor): Tensor of relation classification logits (N_edges, Num_relations).
             graph_embed (Optional[torch.Tensor]): Global graph embedding from RelationGNN (1, hidden_dim).
+            idx (int): Index of the current image in the batch (for debug plotting).
         Returns:
             Dict[str, Any]: A scene graph dictionary.
         """
@@ -137,6 +146,41 @@ class SceneGraphBuilder:
             if self.topo_feature_extractor and HAS_TOPO_FEATURES:
                 ph_vector = self.topo_feature_extractor.extract(mask)
                 obj_entry['topo_features'] = ph_vector.tolist()  # Convert to list for JSON
+
+                # 3.1 Debug-Mode Persistence Image Plot
+                if self.config['debug'].get('plot_persistence', False) and idx == 0:
+                    # Assuming topo_feature_extractor can generate a persistence image or similar visual
+                    # This is a placeholder as TopologicalFeatureExtractor.extract returns a vector.
+                    # If you have a method to get the actual persistence image, use it here.
+                    # For now, we'll just plot the mask itself or a dummy image.
+                    # A more direct way would be if `topo_features.py` had a `get_persistence_image` method.
+                    # For demonstration, let's plot the mask as a grayscale image.
+                    # Or, if `ph_vector` can be reshaped into a meaningful 2D image.
+                    
+                    # For now, let's assume `topo_features.py` provides a method to get the persistence image.
+                    # If not, this part needs to be adapted.
+                    # As a fallback, we can just plot the mask or a dummy representation.
+                    
+                    # Dummy persistence image for plotting if not available from topo_features
+                    ph_image = np.zeros((64, 64), dtype=np.float32) # Example dummy size
+                    if ph_vector.size == ph_image.size:
+                        ph_image = ph_vector.reshape(ph_image.shape)
+                    else:
+                        logger.warning("Topological feature vector size does not match dummy image size for plotting. Plotting dummy image.")
+                        ph_image = np.random.rand(64, 64).astype(np.float32) # Random dummy image
+                    
+                    plt.figure(figsize=(6, 6))
+                    plt.imshow(ph_image, cmap='hot')
+                    plt.title(f'PH Image for Object {obj_id} (Problem {idx})')
+                    plt.colorbar(label='Persistence Value')
+                    plt.tight_layout()
+                    
+                    # Save the plot
+                    plot_dir = './debug_plots/persistence_images'
+                    os.makedirs(plot_dir, exist_ok=True)
+                    plt.savefig(os.path.join(plot_dir, f'problem_{idx}_obj_{obj_id}_ph_image.png'))
+                    plt.close()
+                    logger.info(f"Persistence image plot saved for problem {idx}, object {obj_id}.")
             
             scene_graph['objects'].append(obj_entry)
         
@@ -172,10 +216,11 @@ class SceneGraphBuilder:
                 logger.warning("Relation logits are empty or shape mismatch. No relations inferred from GNN output.")
         else:
             logger.debug("Only one object detected. No relations to infer.")
-
+        
         # 3. Add Global Graph Embedding (if provided)
         if graph_embed is not None and graph_embed.numel() > 0:
-            scene_graph['global_graph_embedding'] = graph_embed.squeeze(0).tolist() # Convert (1, D) to (D) list
-
+            scene_graph['global_graph_embedding'] = graph_embed.squeeze(0).tolist()  # Convert (1, D) to (D) list
+        
         logger.debug(f"Scene graph built with {len(scene_graph['objects'])} objects and {len(scene_graph['relations'])} relations.")
         return scene_graph
+

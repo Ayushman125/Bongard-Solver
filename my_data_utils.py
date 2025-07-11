@@ -5,7 +5,7 @@ import logging
 import numpy as np
 from pathlib import Path
 from collections import Counter
-import math # For math.ceil
+import math  # For math.ceil
 
 import cv2
 import yaml
@@ -20,7 +20,8 @@ try:
     from nvidia.dali.plugin.pytorch import DALIGenericIterator, LastBatchPolicy
     HAS_DALI = True
     dali_logger = logging.getLogger("dali_logger")
-    dali_logger.setLevel(logging.INFO)
+    # Set DALI logger level to ERROR to suppress all INFO and WARNING messages
+    dali_logger.setLevel(logging.ERROR) 
     if not dali_logger.handlers:
         dali_logger.addHandler(logging.StreamHandler())
     dali_logger.info("NVIDIA DALI found and imported.")
@@ -40,9 +41,18 @@ logger.setLevel(logging.INFO)
 
 
 # --- YOLO Classes and IDs ---
-YOLO_CLASSES = {0: 'object', 1: 'shape', 2: 'relation'} 
-CLASS_ID = {name: idx for idx, name in YOLO_CLASSES.items()}
-
+# These should match the classes used in the main pipeline script
+YOLO_CLASSES_LIST = [
+    'circle','triangle','square','rectangle',
+    'pentagon','hexagon','octagon','polygon'
+]
+CLASS_ID = {name: idx for idx, name in enumerate(YOLO_CLASSES_LIST)} # Corrected line: use enumerate()
+# --- Difficulty Weights (must match CONFIG in main script) ---
+DIFFICULTY_WEIGHTS = { 
+    'num_objects': 0.4,
+    'avg_complexity': 0.3,
+    'num_relations': 0.3,
+}
 
 # --- Helper Functions (Full Implementations) ---
 
@@ -94,7 +104,7 @@ def cnt_to_yolo(contour, img_width, img_height, min_contour_area=0):
         img_height (int): Height of the original image.
         min_contour_area (int): Minimum contour area to process.
     Returns:
-        str: YOLO format string "class_id center_x center_y width height" or None if invalid.
+        tuple: (class_id, center_x, center_y, width, height) or None if invalid.
     """
     if cv2.contourArea(contour) < min_contour_area:
         return None
@@ -107,12 +117,15 @@ def cnt_to_yolo(contour, img_width, img_height, min_contour_area=0):
     norm_height = h / img_height
 
     if not (0 <= center_x <= 1 and 0 <= center_y <= 1 and 0 <= norm_width <= 1 and 0 <= norm_height <= 1):
-        logger.warning(f"Invalid YOLO box coordinates calculated for contour: ({center_x}, {center_y}, {norm_width}, {norm_height}). Skipping.")
+        # logger.warning(f"Invalid YOLO box coordinates calculated for contour: ({center_x}, {center_y}, {norm_width}, {norm_height}). Skipping.")
         return None
 
-    class_id = CLASS_ID.get('object', 0) 
+    # Determine class_id based on shape type (extracted in extract_attrs)
+    # For now, we'll use a generic 'object' class_id as the primary detection target
+    # The detailed shape type will be in the attributes.
+    class_id = CLASS_ID.get('object', 0) # Default to 'object' if not specifically mapped
 
-    return f"{class_id} {center_x:.6f} {center_y:.6f} {norm_width:.6f} {norm_height:.6f}"
+    return (class_id, center_x, center_y, norm_width, norm_height)
 
 
 def extract_attrs(contour, image_color, img_size_categories=(0.01, 0.05, 0.15)):
@@ -302,18 +315,18 @@ def compute_relations(attributes_list):
 
 def random_bg(img_np, bg_paths):
     if not bg_paths:
-        logger.warning("No background images found for random_bg. Returning original image.")
+        # logger.warning("No background images found for random_bg. Returning original image.")
         return img_np
 
     if img_np is None or img_np.size == 0:
-        logger.warning("Input image for random_bg is empty or None. Returning empty array.")
+        # logger.warning("Input image for random_bg is empty or None. Returning empty array.")
         return img_np
 
     bg_path = random.choice(bg_paths)
     try:
         bg = cv2.imread(str(bg_path))
         if bg is None:
-            logger.warning(f"Could not read background image: {bg_path}. Returning original image.")
+            # logger.warning(f"Could not read background image: {bg_path}. Returning original image.")
             return img_np
         
         bg = cv2.resize(bg, (img_np.shape[1], img_np.shape[0]), interpolation=cv2.INTER_LINEAR)
@@ -359,7 +372,7 @@ def occlude(img, occlude_p, occlude_max_factor):
     pw = int(w * random.uniform(0.05, mf))
 
     if ph <= 0 or pw <= 0:
-        logger.debug("Occlusion patch dimensions too small. Skipping occlusion.")
+        # logger.debug("Occlusion patch dimensions too small. Skipping occlusion.")
         return img.copy()
 
     # Calculate random top-left corner for the patch
@@ -591,14 +604,97 @@ def jpeg_np(x: np.ndarray, quality_range: tuple):
     return cv2.imdecode(buf, cv2.IMREAD_COLOR)
 # ---------------------------------------------------------
 
+# --- NEW: Integrated DALI Python Function for Annotation and Difficulty ---
+def _process_image_and_annotate_dali(image_np, config_dict, class_id_map, yolo_classes_list, difficulty_weights):
+    """
+    Processes a single image (already augmented by DALI) to detect contours,
+    extract attributes, compute relations, and calculate a difficulty score.
+    This function is designed to be called by DALI's fn.python_function.
+
+    Args:
+        image_np (np.ndarray): The augmented image from DALI (HWC, float32 or uint8).
+        config_dict (dict): A dictionary containing necessary configuration parameters
+                            (e.g., cnt_block, cnt_C, min_area, max_cnt, morphological_ops).
+        class_id_map (dict): Mapping from class name to ID (e.g., {'object': 0}).
+        yolo_classes_list (list): List of YOLO class names.
+        difficulty_weights (dict): Weights for difficulty scoring.
+
+    Returns:
+        tuple: (yolo_labels_array, annotations_json_string, difficulty_score_float)
+    """
+    # Ensure image is uint8 for OpenCV operations if it's float32 from DALI
+    if image_np.dtype != np.uint8:
+        image_np = np.clip(image_np, 0, 255).astype(np.uint8)
+
+    img_height, img_width, _ = image_np.shape
+    image_gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY) # Convert to grayscale for contour detection
+
+    # 1. Detect Contours
+    contours = detect_contours(
+        image_gray=image_gray,
+        block_size=config_dict['cnt_block'],
+        C=config_dict['cnt_C'],
+        min_area=config_dict['min_area'],
+        max_contours_to_find=config_dict['max_cnt'],
+        morphological_ops=config_dict['morphological_ops']
+    )
+
+    yolo_labels = [] # List of (class_id, cx, cy, w, h)
+    attributes_list = [] # List of attribute dicts for each object
+
+    # 2. Extract Attributes and Generate YOLO Labels
+    for contour in contours:
+        yolo_box = cnt_to_yolo(contour, img_width, img_height, config_dict['min_area'])
+        if yolo_box:
+            yolo_labels.append(yolo_box)
+            attrs = extract_attrs(contour, image_np) # Pass original color image for color extraction
+            attributes_list.append(attrs)
+
+    # 3. Compute Relations
+    relations = compute_relations(attributes_list)
+
+    # 4. Calculate Difficulty Score
+    num_objects = len(attributes_list)
+    avg_complexity = np.mean([a.get('complexity', 0) for a in attributes_list]) if attributes_list else 0
+    num_relations = len(relations)
+
+    difficulty_score = (
+        difficulty_weights.get('num_objects', 0) * num_objects +
+        difficulty_weights.get('avg_complexity', 0) * avg_complexity +
+        difficulty_weights.get('num_relations', 0) * num_relations
+    )
+    # Normalize difficulty score (e.g., to a 0-1 range or a known max)
+    # This normalization factor might need tuning based on actual data
+    max_possible_difficulty = (
+        difficulty_weights.get('num_objects', 0) * config_dict['max_cnt'] + # Max objects
+        difficulty_weights.get('avg_complexity', 0) * 100 + # Assuming max complexity around 100
+        difficulty_weights.get('num_relations', 0) * (config_dict['max_cnt'] * (config_dict['max_cnt'] - 1) / 2) # Max possible relations
+    )
+    difficulty_score = difficulty_score / max_possible_difficulty if max_possible_difficulty > 0 else 0.0
+    difficulty_score = np.clip(difficulty_score, 0.0, 1.0) # Ensure it's between 0 and 1
+
+    # Prepare outputs
+    yolo_labels_np = np.array(yolo_labels, dtype=np.float32) if yolo_labels else np.zeros((0, 5), dtype=np.float32)
+    annotations_dict = {
+        'objects': attributes_list,
+        'relations': relations,
+        'difficulty_score': float(difficulty_score) # Ensure it's a standard float
+    }
+    annotations_json_string = json.dumps(annotations_dict)
+
+    # DALI python_function expects NumPy arrays as output
+    # Convert yolo_labels_np to a 2D array, even if empty
+    # Convert scalar difficulty_score to a 0-D array (scalar)
+    return yolo_labels_np, np.array(annotations_json_string, dtype=object), np.array(difficulty_score, dtype=np.float32)
+
 
 if HAS_DALI:
     class BongardDaliPipeline(Pipeline):
-        def __init__(self, file_root, file_list, config, device_id):
+        def __init__(self, file_root, file_list, config, device_id, is_training=True):
             super().__init__(
-                batch_size=config['batch_size'],
+                batch_size=config['dali_batch_size'], # Use dali_batch_size from config
                 num_threads=config['dali_num_threads'], 
-                device_id=device_id, # This device_id is passed to the DALI backend
+                device_id=device_id,  # This device_id is passed to the DALI backend
                 seed=config['seed'],
                 py_num_workers=config.get('dali_py_num_workers', 0),
                 prefetch_queue_depth=config['dali_prefetch_queue'], 
@@ -607,16 +703,12 @@ if HAS_DALI:
             self.config    = config
             self.file_root = str(file_root)
             self.file_list = str(file_list)
+            self.is_training = is_training # Flag to control augmentations
 
-            # Initialize a counter for debug logging within Python functions
-            self.debug_log_limit = 2 # Log only for the first 2 batches
-            self.debug_log_counter = 0
-
-            dali_logger.info(f"DALI Pipeline Initialized: batch_size={config['batch_size']}, threads={config['dali_num_threads']}, device_id={device_id}")
+            dali_logger.info(f"DALI Pipeline Initialized: batch_size={config['dali_batch_size']}, threads={config['dali_num_threads']}, device_id={device_id}")
             dali_logger.info(f"DALI Reader configured with: file_root='{self.file_root}', file_list='{self.file_list}'")
 
             # Determine DALI operator device based on config and actual device_id
-            # If force_cpu_dali is True, always use CPU for DALI ops
             if config.get('force_cpu_dali', False):
                 self.dali_op_device = "cpu"
                 self.decode_device = "cpu"
@@ -627,152 +719,141 @@ if HAS_DALI:
 
             dali_logger.info(f"[NVML Check] DALI pipeline device_id={self.device_id}, decode device='{self.decode_device}'")
 
+            # Store parameters needed by the Python function
+            self.dali_py_func_args = {
+                'cnt_block': self.config['cnt_block'],
+                'cnt_C': self.config['cnt_C'],
+                'min_area': self.config['min_area'],
+                'max_cnt': self.config['max_cnt'],
+                'morphological_ops': self.config['morphological_ops'],
+                'difficulty_weights': DIFFICULTY_WEIGHTS, # Use the global DIFFICULTY_WEIGHTS
+                'class_id_map': CLASS_ID,
+                'yolo_classes_list': YOLO_CLASSES_LIST,
+            }
+
 
         def define_graph(self):
-            images_raw_data, labels = fn.readers.file( 
+            # Reader will read image bytes and file name (label is not directly read here)
+            images_raw_data, _ = fn.readers.file( 
                 file_root     = self.file_root,
                 file_list     = self.file_list,
-                random_shuffle= True,
+                random_shuffle= self.is_training, # Shuffle only for training
                 name           = "Reader"
             )
-            # Removed per-batch logging for reader outputs
             
             decoded_images = fn.decoders.image(
                 images_raw_data, 
                 device=self.decode_device, 
                 output_type=types.RGB
             )
-            # Removed per-batch logging for decoder
             
             # If decode was on CPU but ops are on GPU, copy to GPU
             if self.decode_device == "cpu" and self.dali_op_device == "gpu":
                 decoded_images = fn.copy(decoded_images, device="gpu") 
-            # Removed per-batch logging for copy
             
             resized_images = fn.resize(
                 decoded_images, 
-                resize_x=self.config['image_size'][1], # Use keyword arg
-                resize_y=self.config['image_size'][0], # Use keyword arg
+                resize_x=self.config['image_size'][1],  # Use keyword arg
+                resize_y=self.config['image_size'][0],  # Use keyword arg
                 interp_type=types.INTERP_LINEAR,
                 device=self.dali_op_device 
             )
-            # Removed per-batch logging for resize
             
             imgs_augmented = resized_images 
 
-            # Elastic Transform / Warp Affine Fallback
-            if self.config.get('elastic_p', 0.0) > 0:
-                coin_flip_elastic = fn.random.coin_flip(probability=self.config['elastic_p'])
-                if hasattr(fn, 'elastic_transform'):
-                    e_transformed = fn.elastic_transform(
-                        imgs_augmented, 
-                        alpha=(self.config['elastic']['alpha'], self.config['elastic']['alpha']),
-                        sigma=(self.config['elastic']['sigma'], self.config['elastic']['sigma']),
-                        interp_type=types.INTERP_LINEAR,
-                        device=self.dali_op_device
-                    )
-                else:
-                    angle = fn.random.uniform(range=(-5.0, 5.0)) 
-                    affine_matrix = fn.transforms.rotation(
-                        angle=angle,
-                        device="cpu" 
-                    )
-                    e_transformed = fn.warp_affine(
+            # Apply augmentations only if is_training is True
+            if self.is_training:
+                # Elastic Transform / Warp Affine Fallback
+                if self.config.get('elastic_p', 0.0) > 0:
+                    coin_flip_elastic = fn.random.coin_flip(probability=self.config['elastic_p'])
+                    if hasattr(fn, 'elastic_transform'):
+                        e_transformed = fn.elastic_transform(
+                            imgs_augmented, 
+                            alpha=(self.config['elastic']['alpha'], self.config['elastic']['alpha']),
+                            sigma=(self.config['elastic']['sigma'], self.config['elastic']['sigma']),
+                            interp_type=types.INTERP_LINEAR,
+                            device=self.dali_op_device
+                        )
+                    else:
+                        angle = fn.random.uniform(range=(-5.0, 5.0)) 
+                        affine_matrix = fn.transforms.rotation(
+                            angle=angle,
+                            device="cpu" 
+                        )
+                        e_transformed = fn.warp_affine(
+                            imgs_augmented,
+                            matrix=affine_matrix, 
+                            interp_type=types.INTERP_LINEAR,
+                            fill_value=0, 
+                            device=self.dali_op_device
+                        )
+                    
+                    imgs_augmented = fn.cast(coin_flip_elastic, dtype=types.FLOAT) * e_transformed + \
+                                     (1 - fn.cast(coin_flip_elastic, dtype=types.FLOAT)) * imgs_augmented
+                
+                # Gaussian Blur
+                if self.config.get('phot_blur_p', 0.0) > 0:
+                    coin_flip_blur = fn.random.coin_flip(probability=self.config['phot_blur_p'])
+                    b_blurred = fn.gaussian_blur(
                         imgs_augmented,
-                        matrix=affine_matrix, 
-                        interp_type=types.INTERP_LINEAR,
-                        fill_value=0, 
+                        sigma=tuple(self.config['phot_blur']),
                         device=self.dali_op_device
                     )
+                    
+                    imgs_augmented = fn.cast(coin_flip_blur, dtype=types.FLOAT) * b_blurred + \
+                                     (1 - fn.cast(coin_flip_blur, dtype=types.FLOAT)) * imgs_augmented
                 
-                imgs_augmented = fn.cast(coin_flip_elastic, dtype=types.FLOAT) * e_transformed + \
-                                 (1 - fn.cast(coin_flip_elastic, dtype=types.FLOAT)) * imgs_augmented
-                # Removed per-batch logging for elastic/warp_affine
+                # JPEG Compression Distortion using OpenCV Fallback
+                if self.config.get('jpeg_p', 0.0) > 0:
+                    coin_flip_jpeg = fn.random.coin_flip(probability=self.config['jpeg_p'])
+                    
+                    imgs_uint8 = fn.python_function(
+                        imgs_augmented, # Use imgs_augmented directly
+                        function=clamp_to_uint8,
+                        device="cpu",        # runs on CPU so you can use numpy
+                        num_outputs=1
+                    )
+                    jpeg_ready = fn.copy(imgs_uint8) 
+                    
+                    j_compressed_uint8 = fn.python_function(
+                        jpeg_ready, 
+                        function=lambda x: jpeg_np(x, self.config['jpeg_q']), 
+                        device="cpu",  # OpenCV operations run on CPU
+                        num_outputs=1
+                    )
+                    
+                    j_float = fn.cast(j_compressed_uint8, dtype=types.FLOAT)
+                    imgs_augmented = fn.cast(coin_flip_jpeg, dtype=types.FLOAT) * j_float + \
+                                     (1 - fn.cast(coin_flip_jpeg, dtype=types.FLOAT)) * imgs_augmented
             
-            # Gaussian Blur
-            if self.config.get('phot_blur_p', 0.0) > 0:
-                coin_flip_blur = fn.random.coin_flip(probability=self.config['phot_blur_p'])
-                b_blurred = fn.gaussian_blur(
-                    imgs_augmented,
-                    sigma=tuple(self.config['phot_blur']),
-                    device=self.dali_op_device
-                )
-                
-                imgs_augmented = fn.cast(coin_flip_blur, dtype=types.FLOAT) * b_blurred + \
-                                 (1 - fn.cast(coin_flip_blur, dtype=types.FLOAT)) * imgs_augmented
-                # Removed per-batch logging for gaussian blur
-
-            # --- Debug Hook 1: Inspect imgs_augmented before JPEG processing ---
-            def inspect_imgs_augmented(img_np):
-                if self.debug_log_counter < self.debug_log_limit:
-                    dali_logger.info(f">>> DEBUG HOOK (Pre-JPEG aug): Dtype={img_np.dtype}, Shape={img_np.shape}, Min={img_np.min()}, Max={img_np.max()}")
-                return img_np
-
-            imgs_augmented_hooked = fn.python_function(
-                imgs_augmented,
-                function=inspect_imgs_augmented,
-                device="cpu", # Run on CPU to access NumPy array directly
-                num_outputs=1
+            # --- Integrated Python Function for Annotation and Difficulty ---
+            # This function will run on CPU, as it involves OpenCV and JSON operations
+            yolo_labels_out, annotations_json_string_out, difficulty_score_out = fn.python_function(
+                imgs_augmented, # Pass the augmented image
+                function=_process_image_and_annotate_dali,
+                num_outputs=3,
+                device="cpu",
+                # Pass the arguments needed by _process_image_and_annotate_dali
+                # These are passed once during graph definition
+                function_args=[
+                    self.dali_py_func_args['cnt_block'],
+                    self.dali_py_func_args['cnt_C'],
+                    self.dali_py_func_args['min_area'],
+                    self.dali_py_func_args['max_cnt'],
+                    self.dali_py_func_args['morphological_ops'],
+                    self.dali_py_func_args['class_id_map'], # Pass class_id_map
+                    self.dali_py_func_args['yolo_classes_list'], # Pass yolo_classes_list
+                    self.dali_py_func_args['difficulty_weights'], # Pass difficulty_weights
+                ]
             )
-            # --- End Debug Hook 1 ---
 
-
-            # UPDATED: JPEG Compression Distortion using OpenCV Fallback
-            if self.config.get('jpeg_p', 0.0) > 0:
-                coin_flip_jpeg = fn.random.coin_flip(probability=self.config['jpeg_p'])
-                
-                # Use Python function to clamp and cast to UINT8
-                imgs_uint8 = fn.python_function(
-                    imgs_augmented_hooked,
-                    function=clamp_to_uint8,
-                    device="cpu",        # runs on CPU so you can use numpy
-                    num_outputs=1
-                )
-                # Force materialization before passing to jpeg_np (optional but safe)
-                jpeg_ready = fn.copy(imgs_uint8) 
-                
-                # Removed per-batch logging for JPEG preparation
-
-                # --- Debug Hook 2: Inspect jpeg_ready (input to jpeg_np) ---
-                def inspect_jpeg_ready(img_np):
-                    if self.debug_log_counter < self.debug_log_limit:
-                        dali_logger.info(f">>> DEBUG HOOK (Post-Clamp-Cast-Copy Pre-OpenCV JPEG): Dtype={img_np.dtype}, Shape={img_np.shape}, Min={img_np.min()}, Max={img_np.max()}")
-                    return img_np
-
-                jpeg_ready_hooked = fn.python_function(
-                    jpeg_ready,
-                    function=inspect_jpeg_ready,
-                    device="cpu", # Run on CPU to access NumPy array directly
-                    num_outputs=1
-                )
-                # --- End Debug Hook 2 ---
-
-                # Perform JPEG compression/decompression using OpenCV via python_function
-                j_compressed_uint8 = fn.python_function(
-                    jpeg_ready_hooked, 
-                    function=lambda x: jpeg_np(x, self.config['jpeg_q']), 
-                    device="cpu", # OpenCV operations run on CPU
-                    num_outputs=1
-                )
-
-                # Removed per-batch logging for JPEG compression output
-                
-                # Convert j_compressed_uint8 back to float for the rest of your pipeline:
-                j_float = fn.cast(j_compressed_uint8, dtype=types.FLOAT)
-                imgs_augmented = fn.cast(coin_flip_jpeg, dtype=types.FLOAT) * j_float + \
-                                 (1 - fn.cast(coin_flip_jpeg, dtype=types.FLOAT)) * imgs_augmented
-                # Removed per-batch logging for conditional selection
-            
-            # Increment the counter after all conditional logging for this batch
-            self.debug_log_counter += 1
-
-            # Normalize and change layout to NCHW float [0,1]
+            # Normalize and change layout to NCHW float [0,1] for the image output
             final_images = fn.crop_mirror_normalize(
                     imgs_augmented,
                     dtype=types.FLOAT,
                     output_layout=types.NCHW,
                     mean=[0.0,0.0,0.0],
                     std=[255.0,255.0,255.0])
-            # Removed per-batch logging for final output
-
-            return final_images, labels
+            
+            # Return the processed image, YOLO labels, annotations JSON, and difficulty score
+            return final_images, yolo_labels_out, annotations_json_string_out, difficulty_score_out
