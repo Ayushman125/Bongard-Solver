@@ -15,14 +15,17 @@ from tqdm.auto import tqdm
 import logging
 import os
 import collections
-import random  # For MixupCutmix
-import numpy as np  # For MixupCutmix
-import json  # For parsing GT JSON
+import random
+import numpy as np
+import json
 from typing import List, Dict, Any, Tuple, Optional, Union
-from PIL import Image  # For saving synthetic images for Grad-CAM
-import torchvision.transforms as T  # For converting tensor to PIL Image for Grad-CAM
-import threading  # For async updates (conceptual)
-import copy  # For deepcopy for Mean Teacher
+from PIL import Image
+import torchvision.transforms as T
+import threading
+import copy
+
+# PyTorch Profiler imports
+from torch.profiler import profile, record_function, ProfilerActivity
 
 # Import for pruning
 import torch.nn.utils.prune as prune
@@ -34,11 +37,14 @@ from config import (
     ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_TEXTURE_MAP,
     RELATION_MAP, IMAGENET_MEAN, IMAGENET_STD
 )
+
 # Import PyTorch Lightning modules
 import pytorch_lightning as pl
-from models import LitBongard, LitSimCLR, PerceptionModule  # Import PerceptionModule
-from data import BongardDataModule, create_dataloader  # Import create_dataloader
-from losses import LabelSmoothingCrossEntropy, DistillationLoss, FeatureConsistencyLoss, SymbolicConsistencyLoss # Assuming these are used
+from models import LitBongard, LitSimCLR, PerceptionModule
+from data import BongardDataModule, get_loader # Changed from create_dataloader to get_loader
+
+# Import losses (assuming these are used)
+from losses import LabelSmoothingCrossEntropy, DistillationLoss, FeatureConsistencyLoss, SymbolicConsistencyLoss
 
 # Import for torchvision.transforms.v2 for MixUp/CutMix
 try:
@@ -53,7 +59,7 @@ except ImportError:
 
 # Import SAM optimizer
 try:
-    from sam import SAM  # Assuming SAM is from your local sam.py
+    from sam import SAM
     HAS_SAM_OPTIMIZER = True
 except ImportError:
     HAS_SAM_OPTIMIZER = False
@@ -79,7 +85,7 @@ except ImportError:
 
 # Import GradNorm
 try:
-    from grad_norm import GradNorm # Assuming grad_norm.py is available
+    from grad_norm import GradNorm
     HAS_GRAD_NORM = True
     logger = logging.getLogger(__name__)
     logger.info("GradNorm found and enabled.")
@@ -87,6 +93,19 @@ except ImportError:
     HAS_GRAD_NORM = False
     logger = logging.getLogger(__name__)
     logger.warning("GradNorm not found. GradNorm functionality will be disabled.")
+
+# Import GradualWarmupScheduler and CosineAnnealingWarmRestarts (for 7.1)
+try:
+    from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+    from warmup_scheduler import GradualWarmupScheduler # Assuming this is available
+    HAS_GRADUAL_WARMUP = True
+    logger = logging.getLogger(__name__)
+    logger.info("GradualWarmupScheduler and CosineAnnealingWarmRestarts found and enabled.")
+except ImportError:
+    HAS_GRADUAL_WARMUP = False
+    logger = logging.getLogger(__name__)
+    logger.warning("GradualWarmupScheduler or CosineAnnealingWarmRestarts not found. Warmup cosine scheduler will be disabled.")
+
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +122,7 @@ def set_seed(seed: int):
     logger.info(f"Random seed set to {seed}")
 
 # Dummy async_update_priorities for PER
-def async_update_priorities(replay_buffer, indices, losses, cfg): # Added cfg
+def async_update_priorities(replay_buffer, indices, losses, cfg):
     """Dummy function for asynchronous priority update."""
     # In a real scenario, this would involve a separate thread or process
     # updating the replay buffer's priorities.
@@ -111,7 +130,7 @@ def async_update_priorities(replay_buffer, indices, losses, cfg): # Added cfg
     logger.debug(f"Async update priorities called for {len(indices)} samples.")
     # Example: replay_buffer.update_priorities(indices, losses)
     # For now, directly call update for demonstration
-    replay_buffer.update_priorities(indices, losses, cfg) # Pass cfg
+    replay_buffer.update_priorities(indices, losses) # Removed cfg from here, as it's not used in the buffer's update_priorities
 
 # Dummy QAT/PTQ functions (actual implementations might be in prune_quantize.py)
 def quantize_model_qat(model: nn.Module, cfg: Dict[str, Any]) -> nn.Module:
@@ -182,7 +201,6 @@ class MixupCutmixAugmenter:
         self.mixup_alpha = training_cfg.get('mixup_alpha', 0.2)
         self.cutmix_alpha = training_cfg.get('cutmix_alpha', 1.0)
         self.num_classes = num_classes
-
         if not HAS_TORCHVISION_V2:
             logger.warning("torchvision.transforms.v2 not available. MixUp/CutMix will not function.")
             self.aug = None
@@ -207,7 +225,7 @@ class MixupCutmixAugmenter:
     def __call__(self, images: torch.Tensor, labels: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         if self.aug:
             return self.aug(images, labels)
-        return images, F.one_hot(labels, num_classes=self.num_classes).float()  # Return one-hot for consistency if no mixup
+        return images, F.one_hot(labels, num_classes=self.num_classes).float() # Return one-hot for consistency if no mixup
 
 # Ensemble Teacher Logits (from previous context)
 def _get_ensemble_teacher_logits(
@@ -216,7 +234,7 @@ def _get_ensemble_teacher_logits(
     raw_gt_json_strings: List[bytes],
     raw_support_images_np: List[np.ndarray],
     distillation_config: Dict[str, Any],
-    dali_image_processor: Any = None  # DALI processor from datamodule
+    dali_image_processor: Any = None # DALI processor from datamodule
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
     """
     Helper function to get ensemble teacher logits for distillation.
@@ -224,12 +242,10 @@ def _get_ensemble_teacher_logits(
     if not teacher_models:
         logger.warning("No teacher models provided for distillation. Returning empty logits.")
         return torch.empty(0), None
-
     all_teacher_logits = []
-    all_distillation_masks = []  # For per-sample masking
-
+    all_distillation_masks = [] # For per-sample masking
     for teacher_model in teacher_models:
-        teacher_model.eval()  # Set teacher to evaluation mode
+        teacher_model.eval() # Set teacher to evaluation mode
         with torch.no_grad():
             # Process images using DALI or torchvision transforms
             if dali_image_processor is None:
@@ -245,7 +261,7 @@ def _get_ensemble_teacher_logits(
                 # DALI returns processed tensors
                 processed_images, _, processed_support_images_flat = dali_image_processor.run(
                     raw_images_np,
-                    [np.zeros((1,1,3), dtype=np.uint8)] * len(raw_images_np),  # Dummy view2
+                    [np.zeros((1,1,3), dtype=np.uint8)] * len(raw_images_np), # Dummy view2
                     raw_support_images_np
                 )
             
@@ -264,7 +280,7 @@ def _get_ensemble_teacher_logits(
                 processed_images,
                 ground_truth_json_strings=raw_gt_json_strings,
                 support_images=processed_support_images_reshaped,
-                support_labels_flat=torch.zeros_like(processed_support_images_reshaped[:,:,0,0,0], dtype=torch.long)  # Dummy labels
+                support_labels_flat=torch.zeros_like(processed_support_images_reshaped[:,:,0,0,0], dtype=torch.long) # Dummy labels
             )
             teacher_logits = teacher_outputs['bongard_logits']
             
@@ -278,17 +294,16 @@ def _get_ensemble_teacher_logits(
             
             all_teacher_logits.append(teacher_logits)
             all_distillation_masks.append(current_distillation_mask)
-
     # Average logits from all teachers
     if all_teacher_logits:
-        ensemble_logits = torch.stack(all_teacher_logits, dim=0).mean(dim=0)  # (B, num_classes)
+        ensemble_logits = torch.stack(all_teacher_logits, dim=0).mean(dim=0) # (B, num_classes)
         # Combine masks (e.g., logical AND if any teacher masks out, it's masked out)
         final_distillation_mask = torch.stack(all_distillation_masks, dim=0).prod(dim=0)
         return ensemble_logits, final_distillation_mask
     return torch.empty(0), None
 
 # --- Main Training Function ---
-def run_training_once(cfg: Dict[str, Any], epochs: int = None, trial: Optional[Any] = None) -> float: # Added trial argument
+def run_training_once(cfg: Dict[str, Any], epochs: int = None, trial: Optional[Any] = None) -> float:
     """
     Runs a single training session for the Bongard solver.
     This function is used for both standard training and HPO trials.
@@ -299,14 +314,12 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None, trial: Optional[A
     Returns:
         float: The final validation accuracy achieved.
     """
-    set_seed(cfg['training']['seed'])  # Ensure reproducibility for each trial
-
+    set_seed(cfg['training']['seed']) # Ensure reproducibility for each trial
     # Initialize model
     model = LitBongard(cfg).to(DEVICE)
-
     # Initialize data modules and loaders
     data_module = BongardDataModule(cfg)
-    data_module.setup(stage='fit')  # Call setup to prepare data loaders
+    data_module.setup(stage='fit') # Call setup to prepare data loaders
     train_loader = data_module.train_dataloader()
     val_loader = data_module.val_dataloader()
 
@@ -332,7 +345,7 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None, trial: Optional[A
         else:
             logger.warning("Lion optimizer requested but not available. Falling back to AdamW.")
             base_optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    else:  # Default to AdamW
+    else: # Default to AdamW
         base_optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
     # Wrap with SAM if configured
@@ -352,7 +365,7 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None, trial: Optional[A
             steps_per_epoch = len(train_loader)
         else:
             logger.warning("Train loader is empty, cannot calculate steps_per_epoch for OneCycleLR. Using default.")
-            steps_per_epoch = 1000  # Fallback
+            steps_per_epoch = 1000 # Fallback
         scheduler = OneCycleLR(
             optimizer.base_optimizer if (isinstance(optimizer, SAM) and HAS_SAM_OPTIMIZER) else optimizer,
             max_lr=cfg['training']['scheduler_config']['OneCycleLR'].get('max_lr', 1e-3),
@@ -438,6 +451,21 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None, trial: Optional[A
     best_val_accuracy = 0.0
     num_epochs = epochs if epochs is not None else cfg['training']['epochs']
 
+    # PyTorch Profiler setup
+    # The schedule means: wait for 1 step, then warmup for 1 step, then active for 3 steps, then repeat 2 times.
+    # This will profile steps 2,3,4 and 7,8,9.
+    # The trace will be saved to cfg.paths.logs_dir (e.g., './logs/').
+    # Make sure this directory exists and is writable.
+    prof = profile(
+        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=2),
+        on_trace_ready=torch.profiler.tensorboard_trace_handler(cfg.paths.logs_dir),
+        record_shapes=True,
+        profile_memory=True, # Enable memory profiling
+        with_stack=True # Record stack information
+    )
+    prof.start() # Start the profiler
+
     for epoch in range(num_epochs):
         # 8.2 Hyperband Pruner Callbacks
         if trial: # Check if trial object is provided (for Optuna HPO)
@@ -453,7 +481,6 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None, trial: Optional[A
         
         # Wrap train_loader with tqdm for progress bar
         train_loop = tqdm(train_loader, leave=True, desc=f"Epoch {epoch+1}/{num_epochs} [Train]")
-
         for batch_idx, batch in enumerate(train_loop):
             # Unpack batch data
             (raw_query_images_view1_np, raw_query_images_view2_np, query_labels,
@@ -466,8 +493,12 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None, trial: Optional[A
             support_labels_flat = support_labels_flat.to(DEVICE).long()
 
             # DALI Image Processor
-            dali_processor = getattr(data_module, 'dali_image_processor', None)
-            if dali_processor is None:
+            # Assuming dali_processor is correctly initialized and available from data_module
+            # If using PyTorch DataLoader, dali_processor will be None, and transforms are applied.
+            dali_processor = getattr(data_module, 'dali_train_loader', None) # Access the DALI loader directly if it's a DALIGenericIterator
+            
+            # If not using DALI, apply PyTorch transforms manually
+            if not (cfg['data']['use_dali'] and HAS_DALI): # Check if DALI is enabled and available
                 transform = T.Compose([
                     T.ToPILImage(),
                     T.Resize((cfg['data']['image_size'], cfg['data']['image_size'])),
@@ -478,12 +509,16 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None, trial: Optional[A
                 processed_query_images_view2 = torch.stack([transform(img_np) for img_np in raw_query_images_view2_np]).to(DEVICE)
                 processed_support_images_flat = torch.stack([transform(img_np) for img_np in raw_support_images_flat_np]).to(DEVICE)
             else:
-                processed_query_images_view1, processed_query_images_view2, processed_support_images_flat = dali_processor.run(
-                    raw_query_images_view1_np,
-                    raw_query_images_view2_np,
-                    raw_support_images_flat_np
-                )
-            
+                # If DALI is used, the batch items are already tensors on the correct device
+                # and processed by the DALI pipeline.
+                processed_query_images_view1 = batch['query_img1'].to(DEVICE)
+                processed_query_images_view2 = batch['query_img2'].to(DEVICE)
+                processed_support_images_flat = batch['padded_support_imgs'].to(DEVICE)
+                # For DALI, other items like query_gts_json_view1 might still be on CPU or need specific handling
+                # based on how they are passed through the DALI pipeline.
+                # Assuming they are passed as raw data and handled by the model's forward.
+
+
             # Reshape flattened support images back to (B, N_support, C, H, W)
             max_support_imgs = cfg['data']['synthetic_data_config']['max_support_images_per_problem']
             batch_size_actual = processed_query_images_view1.shape[0]
@@ -497,132 +532,133 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None, trial: Optional[A
             # Apply Mixup/CutMix
             images_view1_aug, labels_mixed = mixup_cutmix_augmenter(processed_query_images_view1, query_labels)
 
-            # SAM Optimizer first step
-            if isinstance(optimizer, SAM) and HAS_SAM_OPTIMIZER:
-                # First forward-backward pass
-                with autocast(enabled=cfg['training']['use_amp']) if cfg['training']['use_amp'] else torch.no_grad():
-                    outputs = model(images_view1_aug, ground_truth_json_strings=query_gts_json_view1,
-                                    support_images=processed_support_images_reshaped,
-                                    support_labels_flat=support_labels_reshaped)
-                    bongard_logits = outputs['bongard_logits']
-                    # Calculate loss (only Bongard loss for simplicity in SAM step)
-                    loss = model.bongard_criterion(bongard_logits, labels_mixed).mean()  # Use mean for SAM step
-                
-                if cfg['training']['use_amp']:
-                    scaler.scale(loss).backward()
-                    optimizer.first_step(zero_grad=True)
-                else:
-                    loss.backward()
-                    optimizer.first_step(zero_grad=True)
-                
-                # Second forward-backward pass
-                with autocast(enabled=cfg['training']['use_amp']) if cfg['training']['use_amp'] else torch.no_grad():
-                    outputs2 = model(images_view1_aug, ground_truth_json_strings=query_gts_json_view1,
-                                     support_images=processed_support_images_reshaped,
-                                     support_labels_flat=support_labels_reshaped)
-                    bongard_logits2 = outputs2['bongard_logits']
-                    # Calculate total loss for the second step
-                    total_batch_loss = model.bongard_criterion(bongard_logits2, labels_mixed).mean()  # Use mean for SAM step
-                    # Add other losses if needed, similar to LitBongard's training_step
-                    # For simplicity in this `run_training_once`, we'll just use bongard_loss for SAM.
-                
-                if cfg['training']['use_amp']:
-                    scaler.scale(total_batch_loss).backward()
-                    scaler.unscale_(optimizer)  # Unscale before clipping
-                else:
-                    total_batch_loss.backward()
-                
-                # Gradient Clipping before optimizer.second_step
-                if cfg['training'].get('max_grad_norm', 0.0) > 0:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), cfg['training']['max_grad_norm'])
-                
-                if cfg['training']['use_amp']:
-                    scaler.step(optimizer)
-                    scaler.update()
-                else:
-                    optimizer.second_step(zero_grad=True)  # zero_grad=True for SAM's second step
-                
-                current_loss = total_batch_loss.item()
-            else:  # Standard optimizer
-                optimizer.zero_grad()
-                with autocast(enabled=cfg['training']['use_amp']) if cfg['training']['use_amp'] else torch.no_grad():
-                    outputs = model(images_view1_aug, ground_truth_json_strings=query_gts_json_view1,
-                                    support_images=processed_support_images_reshaped,
-                                    support_labels_flat=support_labels_reshaped)
-                    bongard_logits = outputs['bongard_logits']
+            # PyTorch Profiler: Mark model inference section
+            with record_function("model_inference"):
+                # SAM Optimizer first step
+                if isinstance(optimizer, SAM) and HAS_SAM_OPTIMIZER:
+                    # First forward-backward pass
+                    with autocast(enabled=cfg['training']['use_amp']) if cfg['training']['use_amp'] else torch.no_grad():
+                        outputs = model(images_view1_aug, ground_truth_json_strings=query_gts_json_view1,
+                                        support_images=processed_support_images_reshaped,
+                                        support_labels_flat=support_labels_reshaped)
+                        bongard_logits = outputs['bongard_logits']
+                        # Calculate loss (only Bongard loss for simplicity in SAM step)
+                        loss = model.bongard_criterion(bongard_logits, labels_mixed).mean() # Use mean for SAM step
                     
-                    # Calculate full loss (similar to LitBongard's training_step)
-                    per_sample_bongard_losses = model.bongard_criterion(bongard_logits, labels_mixed).sum(dim=1)  # sum for MixUp/CutMix
-                    loss_bongard = per_sample_bongard_losses.mean()  # Mean for batch
-
-                    # Placeholder for attribute and relation losses (simplified for run_training_once)
-                    loss_attribute = torch.tensor(0.0, device=DEVICE)
-                    loss_relation = torch.tensor(0.0, device=DEVICE)
-                    
-                    # Feature Consistency Loss
-                    if cfg['training'].get('feature_consistency_alpha', 0) > 0:
-                        _, _, aggregated_outputs_view2 = model(processed_query_images_view2, query_gts_json_view2, processed_support_images_reshaped, support_labels_reshaped)
-                        feature_consistency_criterion = FeatureConsistencyLoss(loss_type=cfg['training']['feature_consistency_loss_type'])
-                        consistency_loss_features = feature_consistency_criterion(
-                            outputs['image_features_student'],
-                            aggregated_outputs_view2['image_features_student']
-                        )
-                        loss_bongard += cfg['training']['feature_consistency_alpha'] * consistency_loss_features
-                    
-                    # Symbolic Consistency Loss
-                    if cfg['training'].get('symbolic_consistency_alpha', 0) > 0:
-                        symbolic_cons_loss_fn = SymbolicConsistencyLoss(
-                            all_bongard_rules=ALL_BONGARD_RULES, # Pass rules if needed
-                            config=cfg
-                        )
-                        # This needs actual scene graphs from both views
-                        # For simplicity, passing dummy inputs if not fully integrated
-                        symbolic_consistency_loss = symbolic_cons_loss_fn(
-                            outputs['extracted_scene_graphs'],
-                            outputs['extracted_scene_graphs'] # Use same for both views as dummy
-                        )
-                        loss_bongard += cfg['training']['symbolic_consistency_alpha'] * symbolic_consistency_loss
-
-                    # Knowledge Distillation (if teacher model provided) - assuming teacher is set up in LitBongard
-                    if cfg['training'].get('use_knowledge_distillation', False) and hasattr(model, 'teacher_model') and model.teacher_model is not None:
-                        dist_criterion = DistillationLoss(
-                            temperature=cfg['training']['distillation_temperature'],
-                            alpha=cfg['training']['distillation_alpha'],
-                            reduction='mean'
-                        )
-                        # Get teacher logits (assuming teacher_model is a single model or ensemble)
-                        # This needs to be done carefully to match teacher's forward signature
-                        # For now, assuming model.teacher_model can directly process images_view1_aug
-                        with torch.no_grad():
-                            teacher_logits, _, _ = model.teacher_model(processed_query_images_view1, query_gts_json_view1, processed_support_images_reshaped, support_labels_reshaped)
-                        
-                        dist_loss = dist_criterion(
-                            student_logits=bongard_logits,
-                            teacher_logits=teacher_logits,
-                            target_labels=query_labels # Hard labels for the hard component
-                        )
-                        total_batch_loss = dist_loss # Distillation loss replaces main loss if enabled (soft target only)
+                    if cfg['training']['use_amp']:
+                        scaler.scale(loss).backward()
+                        optimizer.first_step(zero_grad=True)
                     else:
-                        total_batch_loss = loss_bongard + loss_attribute * cfg['training'].get('attribute_loss_weight', 1.0) + \
-                                           loss_relation * cfg['training'].get('relation_loss_weight', 1.0)
-                
-                if cfg['training']['use_amp']:
-                    scaler.scale(total_batch_loss).backward()
-                    scaler.unscale_(optimizer)  # Unscale before clipping
-                else:
-                    total_batch_loss.backward()
-                
-                # Gradient Clipping
-                if cfg['training'].get('max_grad_norm', 0.0) > 0:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), cfg['training']['max_grad_norm'])
-                
-                if cfg['training']['use_amp']:
-                    scaler.step(optimizer)
-                    scaler.update()
-                else:
-                    optimizer.step()
-                
-                current_loss = total_batch_loss.item()
+                        loss.backward()
+                        optimizer.first_step(zero_grad=True)
+                    
+                    # Second forward-backward pass
+                    with autocast(enabled=cfg['training']['use_amp']) if cfg['training']['use_amp'] else torch.no_grad():
+                        outputs2 = model(images_view1_aug, ground_truth_json_strings=query_gts_json_view1,
+                                        support_images=processed_support_images_reshaped,
+                                        support_labels_flat=support_labels_reshaped)
+                        bongard_logits2 = outputs2['bongard_logits']
+                        # Calculate total loss for the second step
+                        total_batch_loss = model.bongard_criterion(bongard_logits2, labels_mixed).mean() # Use mean for SAM step
+                        # Add other losses if needed, similar to LitBongard's training_step
+                        # For simplicity in this `run_training_once`, we'll just use bongard_loss for SAM.
+                    
+                    if cfg['training']['use_amp']:
+                        scaler.scale(total_batch_loss).backward()
+                        scaler.unscale_(optimizer) # Unscale before clipping
+                    else:
+                        total_batch_loss.backward()
+                    
+                    # Gradient Clipping before optimizer.second_step
+                    if cfg['training'].get('max_grad_norm', 0.0) > 0:
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), cfg['training']['max_grad_norm'])
+                    
+                    if cfg['training']['use_amp']:
+                        scaler.step(optimizer)
+                        scaler.update()
+                    else:
+                        optimizer.second_step(zero_grad=True) # zero_grad=True for SAM's second step
+                    
+                    current_loss = total_batch_loss.item()
+                else: # Standard optimizer
+                    optimizer.zero_grad()
+                    with autocast(enabled=cfg['training']['use_amp']) if cfg['training']['use_amp'] else torch.no_grad():
+                        outputs = model(images_view1_aug, ground_truth_json_strings=query_gts_json_view1,
+                                        support_images=processed_support_images_reshaped,
+                                        support_labels_flat=support_labels_reshaped)
+                        bongard_logits = outputs['bongard_logits']
+                        
+                        # Calculate full loss (similar to LitBongard's training_step)
+                        per_sample_bongard_losses = model.bongard_criterion(bongard_logits, labels_mixed).sum(dim=1) # sum for MixUp/CutMix
+                        loss_bongard = per_sample_bongard_losses.mean() # Mean for batch
+                        # Placeholder for attribute and relation losses (simplified for run_training_once)
+                        loss_attribute = torch.tensor(0.0, device=DEVICE)
+                        loss_relation = torch.tensor(0.0, device=DEVICE)
+                        
+                        # Feature Consistency Loss
+                        if cfg['training'].get('feature_consistency_alpha', 0) > 0:
+                            _, _, aggregated_outputs_view2 = model(processed_query_images_view2, query_gts_json_view2, processed_support_images_reshaped, support_labels_reshaped)
+                            feature_consistency_criterion = FeatureConsistencyLoss(loss_type=cfg['training']['feature_consistency_loss_type'])
+                            consistency_loss_features = feature_consistency_criterion(
+                                outputs['image_features_student'],
+                                aggregated_outputs_view2['image_features_student']
+                            )
+                            loss_bongard += cfg['training']['feature_consistency_alpha'] * consistency_loss_features
+                        
+                        # Symbolic Consistency Loss
+                        if cfg['training'].get('symbolic_consistency_alpha', 0) > 0:
+                            symbolic_cons_loss_fn = SymbolicConsistencyLoss(
+                                all_bongard_rules=ALL_BONGARD_RULES, # Pass rules if needed
+                                config=cfg
+                            )
+                            # This needs actual scene graphs from both views
+                            # For simplicity, passing dummy inputs if not fully integrated
+                            symbolic_consistency_loss = symbolic_cons_loss_fn(
+                                outputs['extracted_scene_graphs'],
+                                outputs['extracted_scene_graphs'] # Use same for both views as dummy
+                            )
+                            loss_bongard += cfg['training']['symbolic_consistency_alpha'] * symbolic_consistency_loss
+                        
+                        # Knowledge Distillation (if teacher model provided) - assuming teacher is set up in LitBongard
+                        if cfg['training'].get('use_knowledge_distillation', False) and hasattr(model, 'teacher_model') and model.teacher_model is not None:
+                            dist_criterion = DistillationLoss(
+                                temperature=cfg['training']['distillation_temperature'],
+                                alpha=cfg['training']['distillation_alpha'],
+                                reduction='mean'
+                            )
+                            # Get teacher logits (assuming teacher_model is a single model or ensemble)
+                            # This needs to be done carefully to match teacher's forward signature
+                            # For now, assuming model.teacher_model can directly process images_view1_aug
+                            with torch.no_grad():
+                                teacher_logits, _, _ = model.teacher_model(processed_query_images_view1, query_gts_json_view1, processed_support_images_reshaped, support_labels_reshaped)
+                            
+                            dist_loss = dist_criterion(
+                                student_logits=bongard_logits,
+                                teacher_logits=teacher_logits,
+                                target_labels=query_labels # Hard labels for the hard component
+                            )
+                            total_batch_loss = dist_loss # Distillation loss replaces main loss if enabled (soft target only)
+                        else:
+                            total_batch_loss = loss_bongard + loss_attribute * cfg['training'].get('attribute_loss_weight', 1.0) + \
+                                               loss_relation * cfg['training'].get('relation_loss_weight', 1.0)
+                    
+                    if cfg['training']['use_amp']:
+                        scaler.scale(total_batch_loss).backward()
+                        scaler.unscale_(optimizer) # Unscale before clipping
+                    else:
+                        total_batch_loss.backward()
+                    
+                    # Gradient Clipping
+                    if cfg['training'].get('max_grad_norm', 0.0) > 0:
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), cfg['training']['max_grad_norm'])
+                    
+                    if cfg['training']['use_amp']:
+                        scaler.step(optimizer)
+                        scaler.update()
+                    else:
+                        optimizer.step()
+                    
+                    current_loss = total_batch_loss.item()
             
             total_train_loss += current_loss
             
@@ -632,7 +668,7 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None, trial: Optional[A
             elif scheduler is not None and isinstance(scheduler, GradualWarmupScheduler) and isinstance(scheduler.after_scheduler, CosineAnnealingWarmRestarts):
                 # For GradualWarmupScheduler with CosineAnnealingWarmRestarts, step the wrapper
                 scheduler.step()
-
+            
             # Update EMA Teacher
             if ema_model and cfg['training'].get('use_mean_teacher', False):
                 ema_decay = cfg['training']['mean_teacher_config'].get('alpha', 0.99)
@@ -646,7 +682,7 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None, trial: Optional[A
                 # This needs to be integrated with how GradNorm computes its loss.
                 # For simple logging, we can just access its weights.
                 pass # GradNorm logic is more complex, handled within LitBongard if integrated there.
-
+            
             # Update progress bar
             train_loop.set_postfix(loss=current_loss)
             
@@ -659,7 +695,10 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None, trial: Optional[A
             if cfg['training'].get('curriculum_learning', False) and cfg['training']['curriculum_config'].get('difficulty_sampling', False) and hasattr(data_module.train_dataset, 'replay_buffer'):
                 # Get per-sample losses for priority update
                 per_sample_losses = model.bongard_criterion(bongard_logits, query_labels, reduction='none')
-                data_module.train_dataset.replay_buffer.update_priorities(original_indices.cpu().tolist(), per_sample_losses.cpu().tolist(), cfg) # Pass cfg
+                data_module.train_dataset.replay_buffer.update_priorities(original_indices.cpu().tolist(), per_sample_losses.cpu().tolist()) # Removed cfg
+            
+            # PyTorch Profiler: Step the profiler after each batch
+            prof.step()
 
         avg_train_loss = total_train_loss / len(train_loader)
         train_accuracy = train_correct_predictions / train_total_samples
@@ -688,7 +727,8 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None, trial: Optional[A
                 query_labels_val = query_labels_val.to(DEVICE).long()
                 support_labels_flat_val = support_labels_flat_val.to(DEVICE).long()
 
-                if dali_processor is None:
+                # If not using DALI, apply PyTorch transforms manually
+                if not (cfg['data']['use_dali'] and HAS_DALI):
                     transform = T.Compose([
                         T.ToPILImage(),
                         T.Resize((cfg['data']['image_size'], cfg['data']['image_size'])),
@@ -698,12 +738,9 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None, trial: Optional[A
                     processed_query_images_view1_val = torch.stack([transform(img_np) for img_np in raw_query_images_view1_np]).to(DEVICE)
                     processed_support_images_flat_val = torch.stack([transform(img_np) for img_np in raw_support_images_flat_np_val]).to(DEVICE)
                 else:
-                    processed_query_images_view1_val, _, processed_support_images_flat_val = dali_processor.run(
-                        raw_query_images_view1_np,
-                        [np.zeros((1,1,3), dtype=np.uint8)] * len(raw_query_images_view1_np),
-                        raw_support_images_flat_np_val
-                    )
-                
+                    processed_query_images_view1_val = batch_val['query_img1'].to(DEVICE)
+                    processed_support_images_flat_val = batch_val['padded_support_imgs'].to(DEVICE)
+
                 max_support_imgs_val = cfg['data']['synthetic_data_config']['max_support_images_per_problem']
                 batch_size_actual_val = processed_query_images_view1_val.shape[0]
                 processed_support_images_reshaped_val = processed_support_images_flat_val.view(
@@ -729,7 +766,7 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None, trial: Optional[A
         logger.info(f"Epoch {epoch+1} | Val Loss: {avg_val_loss:.4f} | Val Acc: {val_accuracy:.4f}")
 
         # Scheduler step per epoch (for CosineAnnealingLR, ReduceLROnPlateau)
-        if scheduler is not None and not isinstance(scheduler, OneCycleLR) and not isinstance(scheduler, GradualWarmupScheduler):
+        if scheduler is not None and not isinstance(scheduler, OneCycleLR) and not (isinstance(scheduler, GradualWarmupScheduler) and isinstance(scheduler.after_scheduler, CosineAnnealingWarmRestarts)):
             if isinstance(scheduler, ReduceLROnPlateau):
                 scheduler.step(avg_val_loss)
             else:
@@ -748,6 +785,10 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None, trial: Optional[A
             torch.save(model.state_dict(), model_save_path)
             logger.info(f"New best model saved to {model_save_path} with accuracy: {best_val_accuracy:.4f}")
 
+    # Stop the profiler after the training loop
+    prof.stop()
+    logger.info("PyTorch Profiler trace saved.")
+
     # Load best model for potential QAT/PTQ
     if os.path.exists(early_stop_path):
         model.load_state_dict(torch.load(early_stop_path))
@@ -765,7 +806,7 @@ def run_training_once(cfg: Dict[str, Any], epochs: int = None, trial: Optional[A
         torch.save(model.state_dict(), optimized_model_path)
         logger.info(f"QAT optimized model saved to: {optimized_model_path}")
     if cfg['quantization']['ptq']:
-        model = quantize_model_ptq(model, val_loader, cfg)  # Pass val_loader for calibration
+        model = quantize_model_ptq(model, val_loader, cfg) # Pass val_loader for calibration
         optimized_model_path = os.path.join(cfg['debug']['save_model_checkpoints'], "ptq_optimized_bongard_model.pth")
         torch.save(model.state_dict(), optimized_model_path)
         logger.info(f"PTQ optimized model saved to: {optimized_model_path}")
@@ -917,13 +958,11 @@ if __name__ == "__main__":
     #   alpha_end: 0.0
     #   beta_start: 0.4
     #   beta_end: 1.0
-
-    cfg = CONFIG  # Load the default config from config.py
+    cfg = CONFIG # Load the default config from config.py
     # Example: Override some config values for a quick test run
     cfg['training']['epochs'] = 2
     cfg['debug']['save_model_checkpoints'] = './temp_checkpoints'
     os.makedirs(cfg['debug']['save_model_checkpoints'], exist_ok=True)
-
     # For `run_training_once` to work without a full HPO setup,
     # we need to ensure the `trial` object is `None` or a dummy.
     # When called from hpo.py, `trial` will be provided.

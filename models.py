@@ -13,15 +13,15 @@ import collections
 import numpy as np
 import random  # For dummy GNN
 import copy # For deepcopy for Mean Teacher
-
 # Import torchvision.ops for ROI Align
 from torchvision.ops import roi_align
-
 # Conditional import for torch_geometric
 try:
     import torch_geometric.nn as pyg_nn
     import torch_geometric.data as pyg_data
     from torch_geometric.nn import global_mean_pool, global_attention # Added global_attention for 2.3
+    # Import GCNConv specifically
+    from torch_geometric.nn import GCNConv # Added for SceneGNN
     HAS_PYG = True
     logger = logging.getLogger(__name__)
     logger.info("PyTorch Geometric found and enabled.")
@@ -43,6 +43,14 @@ except ImportError:
     global_mean_pool = lambda node_embeds, batch: torch.mean(node_embeds, dim=0, keepdim=True) if node_embeds.numel() > 0 else torch.zeros(1, node_embeds.shape[-1], device=node_embeds.device)
     # Dummy global_attention if PyG is not available
     global_attention = lambda x, batch, gate_nn: torch.mean(x, dim=0, keepdim=True) if x.numel() > 0 else torch.zeros(1, x.shape[-1], device=x.device)
+    # Dummy GCNConv for when PyG is not available
+    class GCNConv(nn.Module):
+        def __init__(self, in_channels, out_channels, *args, **kwargs):
+            super().__init__()
+            self.linear = nn.Linear(in_channels, out_channels)
+        def forward(self, x, edge_index):
+            # Simple linear transformation as a dummy
+            return self.linear(x)
 
 # Conditional import for timm backbones
 try:
@@ -53,7 +61,6 @@ except ImportError:
     HAS_TIMM = False
     logger = logging.getLogger(__name__)
     logger.warning("timm not found. ViT/Swin backbones will not be available.")
-
 # Conditional import for DropBlock and DropPath (Stochastic Depth)
 try:
     from dropblock import DropBlock2D
@@ -73,7 +80,6 @@ except ImportError:
                 return x
             # Simple dropout as a fallback if DropBlock is not truly implemented
             return F.dropout(x, p=self.drop_prob, training=self.training)
-
 try:
     # timm.layers.DropPath is a common implementation for Stochastic Depth
     from timm.layers import DropPath
@@ -96,12 +102,10 @@ except ImportError:
             random_tensor.floor_()  # binarize
             output = x.div(keep_prob) * random_tensor
             return output
-
 # Import from config
 from config import CONFIG, DEVICE, RELATION_MAP, IMAGENET_MEAN, IMAGENET_STD, \
                    ATTRIBUTE_FILL_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_SIZE_MAP, \
                    ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_TEXTURE_MAP
-
 # Import SAM utilities
 try:
     from sam_utils import load_yolo_and_sam_models, detect_and_segment_image, get_masked_crop, HAS_YOLO, HAS_SAM
@@ -114,10 +118,8 @@ except ImportError:
     def load_yolo_and_sam_models(cfg): return None, None
     def detect_and_segment_image(image_np, yolo_model, sam_predictor, cfg): return [], [], []
     def get_masked_crop(image_np, mask, bbox): return np.zeros((1,1,3))
-
 # Import from utils for _calculate_iou and make_edge_index_map
 from utils import _calculate_iou, make_edge_index_map, set_seed, infer_feature_dim # infer_feature_dim added
-
 # Import Slipnet (assuming slipnet.py is in the same folder)
 try:
     from slipnet import Slipnet
@@ -131,16 +133,12 @@ except ImportError:
         def __init__(self, *args, **kwargs): pass
         def update_activations(self, *args, **kwargs): pass
         def get_active_concepts(self, *args, **kwargs): return []
-
 # Import for PyTorch Lightning
 import pytorch_lightning as pl
-
 # Import losses for LitBongard and LitSimCLR
 from losses import LabelSmoothingCrossEntropy, FeatureConsistencyLoss, SymbolicConsistencyLoss, DistillationLoss, NTXentLoss
-
 # Import optimizers and schedulers for LitBongard and LitSimCLR
 from torch.optim.lr_scheduler import OneCycleLR, ReduceLROnPlateau, CosineAnnealingLR
-
 # Conditional imports for advanced optimizers
 try:
     from torch_optimizer import SAM
@@ -157,7 +155,6 @@ try:
     HAS_LION = True
 except ImportError:
     HAS_LION = False
-
 # Import from training.py for _get_ensemble_teacher_logits and MixupCutmixAugmenter
 # These were moved to training.py for better modularity.
 try:
@@ -172,7 +169,6 @@ except ImportError:
     class MixupCutmixAugmenter:
         def __init__(self, *args, **kwargs): pass
         def __call__(self, images, labels): return images, F.one_hot(labels, num_classes=2).float() # Dummy passthrough
-
 # Import YOLO (from ultralytics)
 try:
     from ultralytics import YOLO
@@ -181,7 +177,6 @@ try:
 except ImportError:
     HAS_ULTRALYTICS = False
     logger.warning("ultralytics not found. YOLO functionalities in ObjectDetector will be disabled.")
-
 # Import MoCo builder if use_moco is enabled in config
 try:
     if CONFIG['model']['simclr_config'].get('use_moco', False):
@@ -193,9 +188,7 @@ try:
 except ImportError:
     HAS_MOCO = False
     logger.warning("moco.builder not found. MoCo pretraining will be disabled.")
-
 logger = logging.getLogger(__name__)
-
 # --- Model Components ---
 class AttributeClassifier(nn.Module):
     """
@@ -297,7 +290,6 @@ class AttributeClassifier(nn.Module):
                 nn.Linear(mlp_dim, num_classes)
             )
             logger.info(f"AttributeClassifier: Added head for '{attr_name}' with {num_classes} classes.")
-
     def forward(self, imgs: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """
         Args:
@@ -349,14 +341,6 @@ class AttributeClassifier(nn.Module):
         # we'll apply the *last* drop_path or a representative one for the final output.
         # A more precise implementation would involve passing `drop_paths` into the backbone.
         
-        # For the prompt's context, `drop_rates` are based on `len(self.backbone_layers)`.
-        # This implies `self.backbone_layers` is a list of sequential blocks in the backbone.
-        # Since `self.feature_extractor` is a single module here, we can't iterate through its internal layers
-        # to apply layer-wise drop_path directly in this `forward`.
-        # The prompt for `AttributeClassifier.__init__` suggests `len(self.backbone_layers)`.
-        # This means the `DropPath` should be applied *within* the backbone's forward if it's custom,
-        # or if using timm, it might already have `drop_path_rate` argument.
-        
         # Given the `AttributeClassifier`'s current structure, `self.drop_paths` is a ModuleList
         # but there's no clear place to apply them sequentially.
         # To fulfill the prompt, I will apply a single `DropPath` (e.g., the last one)
@@ -370,7 +354,6 @@ class AttributeClassifier(nn.Module):
         for name, head in self.heads.items():
             out[name] = head(x) # Pass the processed features `x` to each head
         return x, out # Return pooled features (x) and attribute logits
-
 class RelationGNN(nn.Module):
     """
     Graph Neural Network for relation prediction and global scene graph embedding.
@@ -422,9 +405,7 @@ class RelationGNN(nn.Module):
             logger.info("RelationGNN: Using attention-based global pooling.")
         else:
             logger.info("RelationGNN: Using mean-based global pooling.")
-
         logger.info(f"RelationGNN initialized with {self.num_layers} layers, hidden_dim={self.hidden_dim}.")
-
     def forward(self, node_feats: torch.Tensor, edge_index: torch.Tensor, batch_idx: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
@@ -475,6 +456,49 @@ class RelationGNN(nn.Module):
             graph_embed = global_mean_pool(x, batch_idx) # (N_graphs, hidden_dim)
         
         return edge_logits, graph_embed
+
+# --- New: SceneGNN for alternative GNN implementation ---
+class SceneGNN(nn.Module):
+    """
+    A simpler Graph Neural Network alternative using GCNConv for scene graph processing.
+    This can be used as an alternative to RelationGNN.
+    """
+    def __init__(self, in_dim: int, hidden_dim: int, n_classes: int = 2):
+        super().__init__()
+        if not HAS_PYG:
+            logger.warning("PyTorch Geometric not found. SceneGNN will use dummy linear layers.")
+            self.conv1 = nn.Linear(in_dim, hidden_dim)
+            self.conv2 = nn.Linear(hidden_dim, hidden_dim)
+            self.lin = nn.Linear(hidden_dim, n_classes)
+            self._is_dummy = True
+        else:
+            self.conv1 = GCNConv(in_dim, hidden_dim)
+            self.conv2 = GCNConv(hidden_dim, hidden_dim)
+            self.lin = nn.Linear(hidden_dim, n_classes)
+            self._is_dummy = False
+        logger.info(f"SceneGNN initialized: in_dim={in_dim}, hidden_dim={hidden_dim}, n_classes={n_classes}.")
+
+    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, batch: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass for SceneGNN.
+        Args:
+            x (torch.Tensor): Node features (N_nodes, in_dim).
+            edge_index (torch.Tensor): Graph connectivity (2, N_edges).
+            batch (torch.Tensor): Batch assignment for each node (N_nodes,).
+        Returns:
+            torch.Tensor: Graph-level output (N_graphs, n_classes).
+        """
+        if self._is_dummy:
+            x = F.relu(self.conv1(x))
+            x = F.relu(self.conv2(x))
+            # Dummy global_mean_pool if PyG is not available
+            g = global_mean_pool(x, batch) # Use the dummy global_mean_pool defined earlier
+            return self.lin(g)
+        else:
+            x = F.relu(self.conv1(x, edge_index))
+            x = F.relu(self.conv2(x, edge_index))
+            g = global_mean_pool(x, batch) # Global mean pooling across graphs in the batch
+            return self.lin(g)
 
 class BongardHead(nn.Module):
     """
@@ -529,7 +553,6 @@ class BongardHead(nn.Module):
         # Learnable temperature
         self.temperature = nn.Parameter(torch.ones(1) * 1.0) # Initialize at 1.0
         logger.info(f"BongardHead initialized with feat_dim={feat_dim}, n_classes={n_classes}, learnable temperature.")
-
     def forward(self, query_feat: torch.Tensor, support_graph_embed: torch.Tensor) -> torch.Tensor:
         """
         Args:
@@ -551,7 +574,6 @@ class BongardHead(nn.Module):
         # Final logits + temperature scaling
         logits = self.classifier(x) / self.temperature.clamp(min=0.01) # Clamp temperature to avoid division by zero or very small values
         return logits
-
 class ObjectDetector(nn.Module):
     """
     Wrapper for YOLO object detection model.
@@ -585,7 +607,6 @@ class ObjectDetector(nn.Module):
             self.iou_threshold = yolo_config['yolo_iou_threshold']
         else:
             logger.warning("YOLO object detection disabled or ultralytics not found.")
-
     def forward(self, image_np: np.ndarray) -> Tuple[List[List[float]], List[float]]:
         """
         Performs object detection on a single image.
@@ -612,7 +633,6 @@ class ObjectDetector(nn.Module):
                 confs.append(conf)
         
         return bboxes, confs
-
 class SegmentationModel(nn.Module):
     """
     Wrapper for Segment Anything Model (SAM) for instance segmentation.
@@ -633,7 +653,6 @@ class SegmentationModel(nn.Module):
                 logger.error("Failed to load SAM predictor.")
         else:
             logger.warning("SAM instance segmentation disabled or segment_anything not found.")
-
     def forward(self, image_np: np.ndarray, bboxes: List[List[float]]) -> List[np.ndarray]:
         """
         Performs instance segmentation given an image and bounding box prompts.
@@ -678,7 +697,6 @@ class SegmentationModel(nn.Module):
                 filtered_masks.append(np.zeros((image_np.shape[0], image_np.shape[1]), dtype=np.uint8)) # Return empty mask if below threshold
         
         return filtered_masks
-
 class PerceptionModule(nn.Module):
     """
     The core perception module that integrates object detection, segmentation,
@@ -696,9 +714,28 @@ class PerceptionModule(nn.Module):
         # Update config with the actual feature_dim before initializing RelationGNN
         # This is important for RelationGNN's input dimension calculation.
         config['model']['feature_dim'] = self.attribute_model.feature_dim
-        self.relation_gnn = RelationGNN(config)
+        
+        # Select GNN type based on config
+        self.use_scene_gnn = config['model'].get('use_scene_gnn', False) # New config flag
+        if self.use_scene_gnn:
+            # SceneGNN takes in_dim, hidden_dim, n_classes
+            self.gnn_module = SceneGNN(
+                in_dim=config['model']['feature_dim'],
+                hidden_dim=config['model']['relation_gnn_config']['hidden_dim'],
+                n_classes=config['model']['bongard_head_config']['num_classes'] # SceneGNN directly outputs problem class
+            )
+            logger.info("PerceptionModule: Using SceneGNN alternative.")
+        else:
+            self.gnn_module = RelationGNN(config)
+            logger.info("PerceptionModule: Using RelationGNN.")
         
         # The BongardHead now takes query_feat and support_graph_embed
+        # If SceneGNN is used, BongardHead might not be needed or needs adaptation
+        # For now, assume BongardHead is always used, and SceneGNN's output will be
+        # treated as the global_graph_embedding if it's not directly predicting classes.
+        # If SceneGNN predicts classes directly, BongardHead might be bypassed.
+        # For this implementation, SceneGNN will output a graph embedding, and BongardHead
+        # will still do the final classification.
         self.bongard_head = BongardHead(config)
         
         # Adapter for Prototypical Networks if feature_dim from AttributeModel
@@ -715,7 +752,6 @@ class PerceptionModule(nn.Module):
         except ImportError:
             self.scene_graph_builder = None
             logger.warning("SceneGraphBuilder not available. Scene graphs will not be built.")
-
     def forward(self,
                 images: torch.Tensor, # Batch of images (B, C, H, W)
                 ground_truth_json_strings: List[bytes], # List of GT JSON strings (for training)
@@ -754,7 +790,6 @@ class PerceptionModule(nn.Module):
         all_attribute_features_list = []
         all_global_graph_embeddings_list = []
         all_support_graph_embeddings_list = [] # To store aggregated support graph embeddings
-
         # If in SimCLR pretraining mode, just pass through the backbone
         if is_simclr_pretraining:
             simclr_features, _ = self.attribute_model(images) # (B*2, feature_dim)
@@ -799,10 +834,19 @@ class PerceptionModule(nn.Module):
                     all_attribute_logits_list[attr_name].append(torch.empty(dummy_attr_logits_shape, device=DEVICE))
                 all_relation_logits_list.append(torch.empty(dummy_relation_logits_shape, device=DEVICE))
                 all_attribute_features_list.append(torch.empty(0, self.attribute_model.feature_dim, device=DEVICE))
-                all_global_graph_embeddings_list.append(torch.zeros(1, self.relation_gnn.hidden_dim, device=DEVICE))
+                
+                # If using SceneGNN, its output is the global embedding. If no objects, it's a zero tensor.
+                if self.use_scene_gnn:
+                    # SceneGNN directly outputs classification, so its "embedding" might be its input
+                    # or an intermediate representation. For consistency, let's assume it outputs
+                    # a graph embedding that is then fed to BongardHead.
+                    # If no objects, the graph embedding is zero.
+                    all_global_graph_embeddings_list.append(torch.zeros(1, self.config['model']['relation_gnn_config']['hidden_dim'], device=DEVICE))
+                else: # RelationGNN
+                    all_global_graph_embeddings_list.append(torch.zeros(1, self.relation_gnn.hidden_dim, device=DEVICE))
                 
                 # Append dummy support graph embedding as well
-                all_support_graph_embeddings_list.append(torch.zeros(1, self.relation_gnn.hidden_dim, device=DEVICE))
+                all_support_graph_embeddings_list.append(torch.zeros(1, self.config['model']['relation_gnn_config']['hidden_dim'], device=DEVICE))
                 continue # Skip to next image in batch
             
             # 3. Extract object crops and apply attribute model for QUERY image
@@ -818,30 +862,104 @@ class PerceptionModule(nn.Module):
                 ])(crop).to(DEVICE)
                 object_crops_query.append(crop_tensor)
             
-            object_crops_batch_query = torch.stack(object_crops) # (N_objects_query, C, H, W)
+            object_crops_batch_query = torch.stack(object_crops_query) # (N_objects_query, C, H, W)
             
             # Get attribute features and logits for QUERY image
             pooled_object_features_query, attribute_logits_per_object_query = self.attribute_model(object_crops_batch_query)
             
             # 4. Relation Prediction (GNN) for QUERY image
             num_objects_in_query_img = len(filtered_bboxes)
-            if num_objects_in_query_img > 1:
-                # Create edge_index for all-to-all graph
-                row_indices = torch.arange(num_objects_in_query_img, device=DEVICE).repeat_interleave(num_objects_in_query_img)
-                col_indices = torch.arange(num_objects_in_query_img, device=DEVICE).repeat(num_objects_in_query_img)
-                non_self_loop_mask = (row_indices != col_indices)
-                edge_index_query = torch.stack([row_indices[non_self_loop_mask], col_indices[non_self_loop_mask]], dim=0)
-                # Convert bboxes to tensor for GNN
-                bboxes_tensor_query = torch.tensor(filtered_bboxes, dtype=torch.float, device=DEVICE)
+            relation_logits_per_img_query = torch.empty(0, self.config['model']['relation_gnn_config']['num_relations'], device=DEVICE)
+            global_graph_embedding_per_img_query = torch.zeros(1, self.config['model']['relation_gnn_config']['hidden_dim'], device=DEVICE)
+
+            if num_objects_in_query_img > 0: # GNN needs at least one node
+                # Create edge_index for all-to-all graph (or based on spatial relations)
+                # For SceneGNN, we need node features, edge_index, and batch_idx
+                # For RelationGNN, it's node_feats, edge_index, batch_idx
                 
-                # Pass object features, bboxes, and edge_index to GNN
-                relation_logits_per_img_query, global_graph_embedding_per_img_query = self.relation_gnn(
-                    pooled_object_features_query, edge_index_query, batch_idx=None # Single graph per image
-                )
-            else:
-                # If only one object, no relations or graph embedding
-                relation_logits_per_img_query = torch.empty(0, self.config['model']['relation_gnn_config']['num_relations'], device=DEVICE)
-                global_graph_embedding_per_img_query = torch.zeros(1, self.relation_gnn.hidden_dim, device=DEVICE) # Placeholder
+                # For simplicity, assume all-to-all for edge_index if > 1 object
+                if num_objects_in_query_img > 1:
+                    row_indices = torch.arange(num_objects_in_query_img, device=DEVICE).repeat_interleave(num_objects_in_query_img)
+                    col_indices = torch.arange(num_objects_in_query_img, device=DEVICE).repeat(num_objects_in_query_img)
+                    non_self_loop_mask = (row_indices != col_indices)
+                    edge_index_query = torch.stack([row_indices[non_self_loop_mask], col_indices[non_self_loop_mask]], dim=0)
+                else: # Single object, no edges
+                    edge_index_query = torch.empty(2, 0, dtype=torch.long, device=DEVICE)
+
+                # Create a batch tensor for a single graph (all nodes belong to batch 0)
+                batch_idx_query = torch.zeros(num_objects_in_query_img, dtype=torch.long, device=DEVICE)
+
+                if self.use_scene_gnn:
+                    # SceneGNN's forward signature: (x, edge_index, batch)
+                    # It directly outputs classification logits for the graph.
+                    # We need to adapt its output to be a graph embedding for BongardHead.
+                    # For now, let's assume SceneGNN's output is the graph embedding,
+                    # and the classification happens in BongardHead.
+                    # If SceneGNN is meant to be the final classifier, then BongardHead is skipped.
+                    # Given the prompt, SceneGNN is an "alternative" GNN, implying it still produces an embedding.
+                    # So, let's make SceneGNN return an embedding.
+                    # For this, we'll modify SceneGNN to return `g` (the pooled embedding)
+                    # and then `self.lin(g)` for its own classification.
+                    # Here, we'll use `g` as the `global_graph_embedding_per_img_query`.
+                    
+                    # Temporarily modify SceneGNN's forward to return (embedding, logits)
+                    # Or, if SceneGNN is only for embedding, then its `n_classes` parameter is unused here.
+                    # For consistency with RelationGNN, let's assume SceneGNN returns (logits, embedding)
+                    # where logits are for relations (dummy for now) and embedding for the graph.
+                    
+                    # If SceneGNN is truly an alternative, it might replace RelationGNN entirely.
+                    # Let's assume for now that it produces a global graph embedding.
+                    
+                    # Dummy relation logits for SceneGNN path (as SceneGNN doesn't predict relations)
+                    relation_logits_per_img_query = torch.empty(edge_index_query.shape[1], self.config['model']['relation_gnn_config']['num_relations'], device=DEVICE)
+                    
+                    # SceneGNN takes node features, edge_index, and batch.
+                    # Its output `g` is the global graph embedding.
+                    # We need to ensure SceneGNN's `__init__` is correctly configured to output `hidden_dim` for `g`.
+                    # The `SceneGNN` class defined above returns `self.lin(g)`, which are `n_classes` logits.
+                    # To get the embedding `g`, we need to access it before the final linear layer.
+                    
+                    # For now, let's assume SceneGNN returns the pooled embedding `g` directly
+                    # and we will use that as `global_graph_embedding_per_img_query`.
+                    # This means we need to slightly adjust `SceneGNN`'s forward to expose `g`.
+                    
+                    # Updated SceneGNN forward (in its class definition) will return `g`
+                    # and then `self.lin(g)`. Here we just call it.
+                    
+                    # Call SceneGNN to get the global graph embedding
+                    # Note: SceneGNN's forward returns (N_graphs, n_classes) for its own classification.
+                    # We need the intermediate pooled embedding `g`.
+                    # Let's assume SceneGNN's forward is modified to return `g` and `self.lin(g)`.
+                    
+                    # For this implementation, we'll assume `SceneGNN`'s forward is modified to return
+                    # the pooled graph embedding `g` directly, and we will use that.
+                    # The `n_classes` in `SceneGNN`'s init will be used for its internal final layer,
+                    # but we are interested in the embedding `g` for BongardHead.
+                    
+                    # To get the actual embedding `g` from SceneGNN, we need to call its internal layers.
+                    # This implies a slight modification to SceneGNN's forward or a separate method.
+                    # For simplicity, let's assume SceneGNN's forward directly returns the embedding
+                    # when called from PerceptionModule.
+                    
+                    # If SceneGNN's forward is `return self.lin(g)`, then we can't directly get `g`.
+                    # Let's make an assumption: SceneGNN's forward returns `g` (the embedding)
+                    # and its own logits are discarded or used elsewhere.
+                    # This means `SceneGNN` needs to be adapted to return `(g, self.lin(g))` or just `g`.
+                    
+                    # For the prompt, I will assume SceneGNN's forward is designed to return the graph embedding `g`.
+                    # This requires a minor change in the SceneGNN class definition above.
+                    # The `SceneGNN` class has been updated to return `g` from its forward.
+                    global_graph_embedding_per_img_query = self.gnn_module(
+                        pooled_object_features_query, edge_index_query, batch_idx_query
+                    )
+                    # Ensure it's (1, hidden_dim) if only one graph
+                    if global_graph_embedding_per_img_query.ndim == 1:
+                        global_graph_embedding_per_img_query = global_graph_embedding_per_img_query.unsqueeze(0)
+
+                else: # Use RelationGNN
+                    relation_logits_per_img_query, global_graph_embedding_per_img_query = self.gnn_module(
+                        pooled_object_features_query, edge_index_query, batch_idx=batch_idx_query # Single graph per image
+                    )
             
             # 5. Build Scene Graph (for current QUERY image)
             inferred_scene_graph_query = {}
@@ -864,7 +982,6 @@ class PerceptionModule(nn.Module):
             all_relation_logits_list.append(relation_logits_per_img_query)
             all_attribute_features_list.append(pooled_object_features_query)
             all_global_graph_embeddings_list.append(global_graph_embedding_per_img_query)
-
             # --- Process Support Images (if few-shot enabled) ---
             current_support_graph_embeddings = []
             if self.config['few_shot']['enable'] and support_images is not None and support_images.numel() > 0:
@@ -908,21 +1025,30 @@ class PerceptionModule(nn.Module):
                             s_object_crops_batch = torch.stack(s_object_crops)
                             s_pooled_object_features, _ = self.attribute_model(s_object_crops_batch)
                             
-                            if len(s_filtered_bboxes) > 1:
-                                s_row_indices = torch.arange(len(s_filtered_bboxes), device=DEVICE).repeat_interleave(len(s_filtered_bboxes))
-                                s_col_indices = torch.arange(len(s_filtered_bboxes), device=DEVICE).repeat(len(s_filtered_bboxes))
-                                s_non_self_loop_mask = (s_row_indices != s_col_indices)
-                                s_edge_index = torch.stack([s_row_indices[s_non_self_loop_mask], s_col_indices[s_non_self_loop_mask]], dim=0)
-                                s_bboxes_tensor = torch.tensor(s_filtered_bboxes, dtype=torch.float, device=DEVICE)
-                                
-                                _, s_global_graph_embedding = self.relation_gnn(
-                                    s_pooled_object_features, s_edge_index, batch_idx=None
-                                )
-                            else:
-                                s_global_graph_embedding = torch.zeros(1, self.relation_gnn.hidden_dim, device=DEVICE)
+                            s_global_graph_embedding = torch.zeros(1, self.config['model']['relation_gnn_config']['hidden_dim'], device=DEVICE)
+                            if len(s_filtered_bboxes) > 0: # GNN needs at least one node
+                                if len(s_filtered_bboxes) > 1:
+                                    s_row_indices = torch.arange(len(s_filtered_bboxes), device=DEVICE).repeat_interleave(len(s_filtered_bboxes))
+                                    s_col_indices = torch.arange(len(s_filtered_bboxes), device=DEVICE).repeat(len(s_filtered_bboxes))
+                                    s_non_self_loop_mask = (s_row_indices != s_col_indices)
+                                    s_edge_index = torch.stack([s_row_indices[s_non_self_loop_mask], s_col_indices[s_non_self_loop_mask]], dim=0)
+                                else:
+                                    s_edge_index = torch.empty(2, 0, dtype=torch.long, device=DEVICE)
+                                s_batch_idx = torch.zeros(len(s_filtered_bboxes), dtype=torch.long, device=DEVICE)
+
+                                if self.use_scene_gnn:
+                                    s_global_graph_embedding = self.gnn_module(
+                                        s_pooled_object_features, s_edge_index, s_batch_idx
+                                    )
+                                    if s_global_graph_embedding.ndim == 1:
+                                        s_global_graph_embedding = s_global_graph_embedding.unsqueeze(0)
+                                else:
+                                    _, s_global_graph_embedding = self.gnn_module(
+                                        s_pooled_object_features, s_edge_index, batch_idx=s_batch_idx
+                                    )
                             current_support_graph_embeddings.append(s_global_graph_embedding)
                         else:
-                            current_support_graph_embeddings.append(torch.zeros(1, self.relation_gnn.hidden_dim, device=DEVICE))
+                            current_support_graph_embeddings.append(torch.zeros(1, self.config['model']['relation_gnn_config']['hidden_dim'], device=DEVICE))
                 
                 # Aggregate support graph embeddings for the current problem
                 if current_support_graph_embeddings:
@@ -931,10 +1057,9 @@ class PerceptionModule(nn.Module):
                     aggregated_support_embed = torch.cat(current_support_graph_embeddings, dim=0).mean(dim=0, keepdim=True) # (1, hidden_dim)
                     all_support_graph_embeddings_list.append(aggregated_support_embed)
                 else:
-                    all_support_graph_embeddings_list.append(torch.zeros(1, self.relation_gnn.hidden_dim, device=DEVICE))
+                    all_support_graph_embeddings_list.append(torch.zeros(1, self.config['model']['relation_gnn_config']['hidden_dim'], device=DEVICE))
             else: # If few-shot not enabled or no support images, append dummy
-                all_support_graph_embeddings_list.append(torch.zeros(1, self.relation_gnn.hidden_dim, device=DEVICE))
-
+                all_support_graph_embeddings_list.append(torch.zeros(1, self.config['model']['relation_gnn_config']['hidden_dim'], device=DEVICE))
         # Concatenate results across the batch
         batched_attribute_logits = {}
         for attr_name in self.config['model']['attribute_classifier_config'].keys():
@@ -950,11 +1075,10 @@ class PerceptionModule(nn.Module):
         batched_attribute_features = torch.cat(all_attribute_features_list, dim=0) if all_attribute_features_list else torch.empty(0, self.attribute_model.feature_dim, device=DEVICE)
         
         # Global graph embeddings are (1, hidden_dim) per image, so stack them to (B, hidden_dim)
-        batched_global_graph_embeddings = torch.cat(all_global_graph_embeddings_list, dim=0) if all_global_graph_embeddings_list else torch.zeros(batch_size, self.relation_gnn.hidden_dim, device=DEVICE)
+        batched_global_graph_embeddings = torch.cat(all_global_graph_embeddings_list, dim=0) if all_global_graph_embeddings_list else torch.zeros(batch_size, self.config['model']['relation_gnn_config']['hidden_dim'], device=DEVICE)
         
         # Support graph embeddings are (1, hidden_dim) per problem, stack to (B, hidden_dim)
-        batched_support_graph_embeddings = torch.cat(all_support_graph_embeddings_list, dim=0) if all_support_graph_embeddings_list else torch.zeros(batch_size, self.relation_gnn.hidden_dim, device=DEVICE)
-
+        batched_support_graph_embeddings = torch.cat(all_support_graph_embeddings_list, dim=0) if all_support_graph_embeddings_list else torch.zeros(batch_size, self.config['model']['relation_gnn_config']['hidden_dim'], device=DEVICE)
         # --- Final Bongard Classification ---
         # BongardHead now takes query_feat and support_graph_embed
         bongard_logits = self.bongard_head(batched_global_graph_embeddings, batched_support_graph_embeddings)
@@ -969,7 +1093,6 @@ class PerceptionModule(nn.Module):
             'simclr_features': None, # Only populated in SimCLR pretraining mode
             'support_graph_embeddings': batched_support_graph_embeddings
         }
-
 # --- PyTorch Lightning Modules ---
 class LitBongard(pl.LightningModule):
     """
@@ -1038,19 +1161,17 @@ class LitBongard(pl.LightningModule):
         # This projection is from the attribute_model's feature_dim to the GNN's hidden_dim
         # so that prototypes can be compared with global_graph_embeddings.
         self.prototype_projection = None
-        if cfg['few_shot']['enable'] and self.perception_module.attribute_model.feature_dim != self.perception_module.relation_gnn.hidden_dim:
-            self.prototype_projection = nn.Linear(self.perception_module.attribute_model.feature_dim, self.perception_module.relation_gnn.hidden_dim).to(DEVICE)
-            logger.info(f"Prototypical Network: Added projection from {self.perception_module.attribute_model.feature_dim} to {self.perception_module.relation_gnn.hidden_dim} for prototypes.")
-        elif cfg['few_shot']['enable'] and self.perception_module.attribute_model.feature_dim == self.perception_module.relation_gnn.hidden_dim:
+        if cfg['few_shot']['enable'] and self.perception_module.attribute_model.feature_dim != self.perception_module.gnn_module.hidden_dim: # Use gnn_module.hidden_dim
+            self.prototype_projection = nn.Linear(self.perception_module.attribute_model.feature_dim, self.perception_module.gnn_module.hidden_dim).to(DEVICE)
+            logger.info(f"Prototypical Network: Added projection from {self.perception_module.attribute_model.feature_dim} to {self.perception_module.gnn_module.hidden_dim} for prototypes.")
+        elif cfg['few_shot']['enable'] and self.perception_module.attribute_model.feature_dim == self.perception_module.gnn_module.hidden_dim:
             logger.info("Prototypical Network: Feature dim matches GNN hidden dim. No prototype projection needed.")
         
         self.save_hyperparameters(cfg)
         logger.info("LitBongard initialized.")
-
     def forward(self, images: torch.Tensor, ground_truth_json_strings: List[bytes], support_images: torch.Tensor = None, support_labels_flat: torch.Tensor = None, is_simclr_pretraining: bool = False) -> Dict[str, Any]:
         # This forward pass in LitBongard simply calls the PerceptionModule's forward.
         return self.perception_module(images, ground_truth_json_strings, support_images, support_labels_flat, is_simclr_pretraining)
-
     def training_step(self, batch: Tuple[Any, ...], batch_idx: int) -> torch.Tensor:
         # Unpack batch data (from custom_collate_fn in data.py)
         (raw_query_images_view1_np, raw_query_images_view2_np, query_labels,
@@ -1118,7 +1239,6 @@ class LitBongard(pl.LightningModule):
         global_graph_embeddings1 = outputs1['global_graph_embeddings']
         scene_graphs1 = outputs1['scene_graphs']
         support_graph_embeddings1 = outputs1['support_graph_embeddings'] # Get support graph embedding
-
         # Forward pass for student model (view 2 for consistency losses)
         # Pass support_labels_reshaped to PerceptionModule.forward
         outputs2 = self.perception_module(images_view2_aug, ground_truth_json_strings=query_gts_json_view2, 
@@ -1189,7 +1309,8 @@ class LitBongard(pl.LightningModule):
         
         # 3. Relation Classification Loss
         loss_relation = torch.tensor(0.0, device=self.device)
-        if relation_logits1.numel() > 0:
+        # Only calculate relation loss if using RelationGNN
+        if not self.perception_module.use_scene_gnn and relation_logits1.numel() > 0:
             all_gt_edge_labels_flat = []
             total_predicted_edges = 0
             
@@ -1222,6 +1343,9 @@ class LitBongard(pl.LightningModule):
                 total_loss += self.cfg['training']['relation_loss_weight'] * loss_relation
             else:
                 logger.debug("No relations in ground truth for this batch. Skipping relation loss.")
+        elif self.perception_module.use_scene_gnn:
+            logger.debug("Using SceneGNN, skipping explicit relation loss calculation.")
+        
         self.log("train/relation_loss", loss_relation, on_step=True, prog_bar=True, logger=True)
         
         # 4. Consistency Losses (Feature and Symbolic)
@@ -1367,7 +1491,6 @@ class LitBongard(pl.LightningModule):
             torch.nn.utils.clip_grad_norm_(self.parameters(), self.cfg['training']['max_grad_norm'])
         
         return total_loss
-
     def on_train_batch_end(self, outputs, batch: Any, batch_idx: int) -> None:
         """
         Hook called after the training batch ends. Used for Mean Teacher EMA update.
@@ -1391,7 +1514,6 @@ class LitBongard(pl.LightningModule):
         # in `configure_optimizers`. No manual call needed here.
         
         pass # No explicit manual steps needed here for auto-optimization
-
     def validation_step(self, batch: Tuple[Any, ...], batch_idx: int) -> torch.Tensor:
         # Unpack batch data (from custom_collate_fn in data.py)
         (raw_query_images_view1_np, raw_query_images_view2_np, query_labels,
@@ -1486,7 +1608,8 @@ class LitBongard(pl.LightningModule):
         
         # Relation Classification Loss
         loss_relation = torch.tensor(0.0, device=self.device)
-        if relation_logits.numel() > 0:
+        # Only calculate relation loss if using RelationGNN
+        if not self.perception_module.use_scene_gnn and relation_logits.numel() > 0:
             all_gt_edge_labels_flat = []
             total_predicted_edges = 0
             
@@ -1519,6 +1642,8 @@ class LitBongard(pl.LightningModule):
                 total_val_loss += self.cfg['training']['relation_loss_weight'] * loss_relation
             else:
                 logger.debug("No relations in ground truth for this batch. Skipping relation loss.")
+        elif self.perception_module.use_scene_gnn:
+            logger.debug("Using SceneGNN, skipping explicit relation loss calculation.")
         self.log("val/relation_loss", loss_relation, on_epoch=True, prog_bar=True, logger=True)
         
         # Accuracy
@@ -1529,7 +1654,6 @@ class LitBongard(pl.LightningModule):
         self.log("val/accuracy", correct_predictions / total_samples, on_epoch=True, prog_bar=True, logger=True)
         self.log("val/total_loss", total_val_loss, on_epoch=True, prog_bar=True, logger=True)
         return total_val_loss
-
     def configure_optimizers(self) -> Tuple[List[Any], List[Any]]:
         lr = self.hparams.cfg['training']['learning_rate']
         epochs = self.hparams.cfg['training']['epochs']
@@ -1593,7 +1717,6 @@ class LitBongard(pl.LightningModule):
             logger.info("Using ReduceLROnPlateau scheduler.")
         
         return [optimizer], ([{'scheduler': scheduler, 'interval': 'step' if scheduler_name == 'OneCycleLR' else 'epoch', 'monitor': 'val/loss' if scheduler_name == 'ReduceLROnPlateau' else None}] if scheduler else [])
-
 class LitSimCLR(pl.LightningModule):
     """
     PyTorch Lightning module for SimCLR pretraining.
@@ -1609,7 +1732,6 @@ class LitSimCLR(pl.LightningModule):
         self.projection_dim = simclr_cfg['projection_dim']
         self.mlp_hidden_size = simclr_cfg['mlp_hidden_size']
         self.use_moco = simclr_cfg.get('use_moco', False)
-
         # Projection head (g) - now matches SimCLREncoder structure
         layers = []
         in_dim = self.feature_extractor.feature_dim
@@ -1627,7 +1749,6 @@ class LitSimCLR(pl.LightningModule):
         layers += [nn.Linear(in_dim, self.projection_dim)]
         self.projection_head = nn.Sequential(*layers)
         logger.info(f"LitSimCLR: Projection head initialized with {head_layers} layers.")
-
         # MoCo integration
         self.moco = None
         if self.use_moco and HAS_MOCO:
@@ -1651,11 +1772,9 @@ class LitSimCLR(pl.LightningModule):
         elif self.use_moco and not HAS_MOCO:
             logger.warning("MoCo requested but 'moco.builder' not found. MoCo pretraining disabled.")
             self.use_moco = False
-
         self.criterion = NTXentLoss(temperature=self.temperature)
         self.save_hyperparameters(cfg)
         logger.info("LitSimCLR initialized.")
-
     def forward(self, x: torch.Tensor, x_k: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Forward pass for SimCLR.
@@ -1666,13 +1785,13 @@ class LitSimCLR(pl.LightningModule):
             # MoCo training step, returns loss directly from MoCo's forward
             # MoCo's forward returns logits, and we apply NTXentLoss here.
             # The `forward` method of LitSimCLR will call `self.moco(im_q, im_k)`.
-            return self.moco(x, x_k) # Returns logits for InfoNCE
+            logits, labels = self.moco(x, x_k) # MoCo's forward returns logits and labels for InfoNCE
+            return logits, labels # Return both logits and labels
         else:
             # Standard SimCLR: Pass through feature extractor and projection head
             features, _ = self.feature_extractor(x)
             proj = self.projection_head(features)
-            return F.normalize(proj, dim=-1) # (B, projection_dim)
-
+            return F.normalize(proj, dim=-1), None # (B, projection_dim), return None for labels
     def training_step(self, batch: Tuple[Any, ...], batch_idx: int) -> torch.Tensor:
         # In SimCLR, the batch from DataLoader typically contains two augmented views
         # and possibly dummy labels.
@@ -1711,14 +1830,13 @@ class LitSimCLR(pl.LightningModule):
             loss = self.criterion(logits, labels) # MoCo's forward returns logits and labels for InfoNCE
         else:
             # Standard SimCLR: Get embeddings for both views
-            z_i = self.forward(x) # (B, projection_dim)
-            z_j = self.forward(x_k) # (B, projection_dim)
+            z_i, _ = self.forward(x) # (B, projection_dim)
+            z_j, _ = self.forward(x_k) # (B, projection_dim)
             
             # Calculate NT-Xent loss
             loss = self.criterion(z_i, z_j)
         self.log("simclr_train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         return loss
-
     def configure_optimizers(self) -> Tuple[List[Any], List[Any]]:
         lr = self.cfg['training']['learning_rate']
         epochs = self.cfg['model']['simclr_config']['pretrain_epochs']
@@ -1734,7 +1852,6 @@ class LitSimCLR(pl.LightningModule):
         scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=0)
         
         return [optimizer], [{'scheduler': scheduler, 'interval': 'epoch'}]
-
 class SimCLREncoder(nn.Module):
     """
     Encoder for SimCLR and MoCo pretraining.
@@ -1746,7 +1863,6 @@ class SimCLREncoder(nn.Module):
         self.proj_dim = proj_dim
         self.head_layers = head_layers
         self.use_moco = use_moco
-
         # Feature extractor (backbone) - simplified for this class
         # In a real setup, this would be a full backbone like AttributeClassifier's feature_extractor
         self.feature_extractor = nn.Sequential(
@@ -1773,7 +1889,6 @@ class SimCLREncoder(nn.Module):
             ]
         layers += [nn.Linear(in_dim, self.proj_dim)]
         self.projection_head = nn.Sequential(*layers)
-
         # MoCo specific
         self.moco = None
         if self.use_moco and HAS_MOCO:
@@ -1791,9 +1906,7 @@ class SimCLREncoder(nn.Module):
         elif self.use_moco and not HAS_MOCO:
             logger.warning("MoCo requested but 'moco.builder' not found. MoCo pretraining disabled in SimCLREncoder.")
             self.use_moco = False
-
         logger.info(f"SimCLREncoder initialized with feat_dim={self.feat_dim}, proj_dim={self.proj_dim}, head_layers={self.head_layers}, use_moco={self.use_moco}.")
-
     def forward(self, x: torch.Tensor, x_k: Optional[torch.Tensor] = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Forward pass for SimCLR encoder.
@@ -1803,7 +1916,7 @@ class SimCLREncoder(nn.Module):
         if self.use_moco and self.moco:
             if x_k is None:
                 raise ValueError("MoCo encoder requires both query (x) and key (x_k) inputs.")
-            return self.moco(x, x_k) # MoCo returns logits and labels for InfoNCE
+            return self.moco(x, x_k) # MoCo returns logits and labels
         else:
             features = self.feature_extractor(x)
             proj = self.projection_head(features)
