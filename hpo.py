@@ -1,99 +1,149 @@
 # Folder: bongard_solver/
 # File: hpo.py
-import optuna
 import logging
 import os
-import sys
-
-# Add the parent directory to the Python path to import modules
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-from config import CONFIG, load_config
-from training import run_training_once # This function is designed for HPO trials
-
+from typing import Dict, Any, Tuple
+# Conditional import for Ray Tune
+try:
+    from ray import tune
+    from ray.tune.schedulers import ASHAScheduler
+    from ray.tune.stopper import CombinedStopper, TrialPlateauStopper
+    HAS_RAY_TUNE = True
+    logger = logging.getLogger(__name__)
+    logger.info("Ray Tune found and enabled for HPO.")
+except ImportError:
+    HAS_RAY_TUNE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("Ray Tune not found. Hyperparameter optimization will be disabled.")
+# Import necessary functions from training.py and config.py
+try:
+    from training import run_training_once # This function runs a single training trial
+    from config import load_config, CONFIG # CONFIG for default values
+except ImportError:
+    logger.error("Could not import run_training_once or load_config. HPO will not function.")
+    run_training_once = None
+    load_config = None
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
-def objective(trial: optuna.Trial) -> float:
+def hpo_train_fn(config_update: Dict[str, Any], initial_cfg: Dict[str, Any]):
     """
-    Objective function for Optuna, defining the search space and returning a metric.
+    Wrapper function for Ray Tune.
+    This function will be called by Ray Tune for each trial.
+    It updates the initial configuration with trial-specific hyperparameters
+    and then runs a single training session.
     """
-    # Load the base configuration
-    cfg = load_config("config.yaml") # Assuming config.yaml exists for base settings
-
-    # Define hyperparameter search space using Optuna trial suggestions
-    # Training parameters
-    cfg['training']['learning_rate'] = trial.suggest_loguniform("lr", 1e-5, 1e-2)
-    cfg['training']['weight_decay'] = trial.suggest_loguniform("wd", 1e-6, 1e-2)
+    if run_training_once is None:
+        raise RuntimeError("run_training_once is not available. HPO cannot proceed.")
     
-    # Model parameters (example: dropout probability)
-    # Ensure 'dropout_prob' exists in your CONFIG['model'] for this to work
-    if 'dropout_prob' in cfg['model']['bongard_head_config']:
-        cfg['model']['bongard_head_config']['dropout_prob'] = trial.suggest_uniform("drop", 0.0, 0.5)
-    else:
-        logger.warning("Dropout probability not found in model config. Skipping HPO for dropout.")
-
-    # Add other hyperparameters to tune as needed
-    # Example: batch size (if not fixed by DDP)
-    # cfg['training']['batch_size'] = trial.suggest_categorical("batch_size", [16, 32, 64])
-
-    # For HPO, run a shorter training duration
-    hpo_epochs = cfg['training'].get('hpo_epochs', 5) # Define 'hpo_epochs' in your config for this
-
-    logger.info(f"Trial {trial.number}: Starting with HPs: {trial.params}")
+    # Create a deep copy of the initial configuration to avoid modifying it across trials
+    import copy
+    trial_cfg = copy.deepcopy(initial_cfg)
     
-    # Run a single training session with the suggested hyperparameters
-    # The `run_training_once` function should return a single metric (e.g., validation accuracy)
-    try:
-        val_acc = run_training_once(cfg, epochs=hpo_epochs)
-    except Exception as e:
-        logger.error(f"Trial {trial.number} failed: {e}")
-        # Propagate the exception or return a very low value to indicate failure
-        raise optuna.exceptions.TrialPruned() # Prune trial if it fails
+    # Update the configuration with the current trial's hyperparameters
+    # This part needs to be careful about nested dictionaries.
+    # A simple update might not be enough for deeply nested configs.
+    # For now, assuming top-level updates or simple nested updates.
+    for key, value in config_update.items():
+        if isinstance(value, dict) and key in trial_cfg and isinstance(trial_cfg[key], dict):
+            trial_cfg[key].update(value)
+        else:
+            trial_cfg[key] = value
     
-    logger.info(f"Trial {trial.number}: Validation Accuracy: {val_acc:.4f}")
-    return val_acc
-
-def run_hpo(n_trials: int = 30, study_name: str = "bongard_hpo", storage_url: Optional[str] = None):
+    # Set a unique seed for each trial if not already handled by run_training_once
+    # Ray Tune often handles reproducibility, but explicitly setting seed can be good.
+    # trial_cfg['training']['seed'] = tune.get_trial_id() # Example: use trial ID as seed
+    
+    # Run a single training session with the updated config
+    # The `run_training_once` function should return the metric to optimize (e.g., validation accuracy)
+    val_accuracy = run_training_once(trial_cfg, epochs=trial_cfg['training']['hpo_epochs'])
+    
+    # Report the metric to Ray Tune
+    tune.report(val_accuracy=val_accuracy)
+def run_hyperparameter_optimization(cfg: Dict[str, Any]):
     """
-    Runs the Optuna hyperparameter optimization study.
-    Args:
-        n_trials (int): Number of optimization trials.
-        study_name (str): Name of the Optuna study.
-        storage_url (Optional[str]): URL for Optuna storage (e.g., "sqlite:///db.sqlite3").
-                                     If None, an in-memory study is created.
+    Main function to orchestrate hyperparameter optimization using Ray Tune.
     """
-    logger.info(f"Starting Optuna HPO study: {study_name} for {n_trials} trials.")
+    if not HAS_RAY_TUNE:
+        logger.error("Ray Tune is not installed. Skipping hyperparameter optimization.")
+        return
+    if run_training_once is None or load_config is None:
+        logger.error("Required functions for HPO are missing. Skipping hyperparameter optimization.")
+        return
+    logger.info("--- Starting Hyperparameter Optimization ---")
     
-    # Create an Optuna study
-    # 'maximize' because we want to maximize validation accuracy
-    study = optuna.create_study(
-        direction="maximize",
-        study_name=study_name,
-        storage=storage_url,
-        load_if_exists=True # Load existing study if it exists
+    # Define the search space for hyperparameters
+    # This should be defined in your config.yaml or directly here.
+    # Example search space (customize based on your needs)
+    search_space = {
+        "training": {
+            "learning_rate": tune.loguniform(1e-5, 1e-3),
+            "batch_size": tune.choice([16, 32, 64]),
+            "weight_decay": tune.loguniform(1e-6, 1e-4),
+            "optimizer": tune.choice(["AdamW", "ranger", "lion"]), # Assuming these are enabled
+            "scheduler": tune.choice(["CosineAnnealingLR", "OneCycleLR"]),
+            "hpo_epochs": cfg['training'].get('hpo_epochs', 5) # Number of epochs for each HPO trial
+        },
+        "model": {
+            "backbone": tune.choice(["mobilenet_v3_small", "efficientnet_b0"]),
+            "bongard_head_config": {
+                "dropout_prob": tune.uniform(0.1, 0.5)
+            }
+        }
+        # Add more hyperparameters to tune as needed
+    }
+    
+    # Configure ASHA scheduler for early stopping of unpromising trials
+    scheduler = ASHAScheduler(
+        metric="val_accuracy",
+        mode="max",
+        max_t=cfg['training'].get('hpo_epochs', 5), # Max epochs for a trial
+        grace_period=1, # Minimum number of epochs before stopping a trial
+        reduction_factor=2 # Reduce the number of trials by this factor at each rung
     )
     
-    # Optimize the objective function
-    study.optimize(objective, n_trials=n_trials)
-
-    logger.info("HPO study finished.")
-    logger.info(f"Best trial: {study.best_trial.number}")
-    logger.info(f"Best value (validation accuracy): {study.best_value:.4f}")
-    logger.info(f"Best hyperparameters: {study.best_params}")
-
-    # You can also save the best hyperparameters to a file
-    best_hps_path = "best_hps.json"
-    with open(best_hps_path, 'w') as f:
-        json.dump(study.best_params, f, indent=4)
-    logger.info(f"Best hyperparameters saved to {best_hps_path}")
-
+    # Define a stopper to stop trials if they plateau
+    stopper = TrialPlateauStopper(
+        metric="val_accuracy",
+        mode="max",
+        patience=cfg['training'].get('hpo_plateau_patience', 3), # Stop if no improvement for X epochs
+        std=0.001 # Minimum change to be considered an improvement
+    )
+    
+    # Combine stoppers if needed (e.g., ASHA + TrialPlateauStopper)
+    combined_stopper = CombinedStopper(scheduler, stopper)
+    
+    # Run the Ray Tune experiment
+    analysis = tune.run(
+        tune.with_parameters(hpo_train_fn, initial_cfg=cfg), # Pass the initial full config
+        config=search_space,
+        num_samples=cfg['training'].get('hpo_num_samples', 10), # Number of different hyperparameter combinations to try
+        scheduler=scheduler, # Use ASHA scheduler
+        stop=stopper, # Use plateau stopper
+        resources_per_trial={"cpu": cfg['training'].get('hpo_cpus_per_trial', 1), 
+                             "gpu": cfg['training'].get('hpo_gpus_per_trial', 0)},
+        local_dir=cfg['debug']['ray_tune_dir'], # Directory for Ray Tune results
+        name="bongard_hpo_run",
+        callbacks=[tune.logger.WandbLoggerCallback(project="bongard_solver_hpo", api_key_file="~/.wandb_api_key")] if cfg['HAS_WANDB'] and cfg['training'].get('use_wandb', False) else None
+    )
+    logger.info("Hyperparameter Optimization finished.")
+    
+    # Get the best trial and its configuration
+    best_trial = analysis.best_trial
+    logger.info(f"Best trial config: {best_trial.config}")
+    logger.info(f"Best trial final validation accuracy: {best_trial.last_result['val_accuracy']:.4f}")
+    
+    # Optionally, save the best configuration
+    best_config_path = os.path.join(cfg['debug']['save_model_checkpoints'], "best_hpo_config.json")
+    with open(best_config_path, 'w') as f:
+        json.dump(best_trial.config, f, indent=4)
+    logger.info(f"Best HPO configuration saved to: {best_config_path}")
+    return best_trial.config
 if __name__ == "__main__":
-    # Example usage:
-    # To run an in-memory study:
-    run_hpo(n_trials=10)
-
-    # To run a study with persistent storage (e.g., SQLite database):
-    # Make sure to install `sqlalchemy` for database storage: pip install sqlalchemy
-    # run_hpo(n_trials=30, storage_url="sqlite:///bongard_hpo.db")
-
+    # Load the base configuration
+    cfg = load_config("config.yaml")
+    
+    # Ensure Ray Tune directory exists
+    os.makedirs(cfg['debug']['ray_tune_dir'], exist_ok=True)
+    
+    # Run HPO
+    best_hparams = run_hyperparameter_optimization(cfg)
+    logger.info(f"Optimal hyperparameters found: {best_hparams}")

@@ -3,7 +3,6 @@
 import logging
 import os
 from typing import Dict, Any, Optional
-
 # Conditional import for ultralytics
 try:
     from ultralytics import YOLO
@@ -14,9 +13,7 @@ except ImportError:
     HAS_ULTRALYTICS = False
     logger = logging.getLogger(__name__)
     logger.warning("ultralytics not found. YOLO fine-tuning will be disabled.")
-
 logger = logging.getLogger(__name__)
-
 def fine_tune_yolo(cfg: Dict[str, Any]) -> Optional[str]:
     """
     Fine-tunes a YOLO model on a custom dataset.
@@ -32,8 +29,7 @@ def fine_tune_yolo(cfg: Dict[str, Any]) -> Optional[str]:
     if not HAS_ULTRALYTICS:
         logger.error("ultralytics library not found. Cannot fine-tune YOLO.")
         return None
-
-    yolo_config = cfg # The object_detector config is passed directly here
+    yolo_config = cfg  # The object_detector config is passed directly here
     
     pretrained_weights = yolo_config.get('yolo_pretrained', 'yolov8n.pt')
     data_yaml_path = yolo_config.get('yolo_data_yaml')
@@ -45,15 +41,12 @@ def fine_tune_yolo(cfg: Dict[str, Any]) -> Optional[str]:
     if not os.path.exists(data_yaml_path):
         logger.error(f"YOLO data YAML file not found: {data_yaml_path}. Cannot fine-tune.")
         return None
-
     logger.info(f"Starting YOLO fine-tuning with: "
                 f"weights={pretrained_weights}, data={data_yaml_path}, epochs={epochs}, "
                 f"imgsz={imgsz}, batch={batch_size}, lr0={lr0}")
-
     try:
         # Load a pretrained YOLO model
         model = YOLO(pretrained_weights)
-
         # Train the model
         results = model.train(
             data=data_yaml_path,
@@ -65,7 +58,7 @@ def fine_tune_yolo(cfg: Dict[str, Any]) -> Optional[str]:
             # device='0' if torch.cuda.is_available() else 'cpu', # Ultralytics handles device automatically if not specified
             project='yolo_finetune',
             name='bongard_yolo_run',
-            exist_ok=True # Allow overwriting previous runs
+            exist_ok=True  # Allow overwriting previous runs
         )
         
         # The `results` object contains information about the training run.
@@ -83,24 +76,21 @@ def fine_tune_yolo(cfg: Dict[str, Any]) -> Optional[str]:
         else:
             logger.error(f"YOLO fine-tuning completed, but best weights not found at expected path: {best_weights_path}")
             return None
-
     except Exception as e:
         logger.error(f"An error occurred during YOLO fine-tuning: {e}", exc_info=True)
         return None
-
 if __name__ == "__main__":
     # Example usage:
     # This requires a dummy config that mimics the structure expected by fine_tune_yolo
     dummy_config = {
-        'yolo_pretrained': 'yolov8n.pt', # Or path to a local .pt file
-        'yolo_data_yaml': './data/yolo_dataset/data.yaml', # Create this dummy file for testing
-        'fine_tune_yolo': True, # Set to True to actually run fine-tuning
-        'fine_tune_epochs': 1, # Keep low for quick test
+        'yolo_pretrained': 'yolov8n.pt',  # Or path to a local .pt file
+        'yolo_data_yaml': './data/yolo_dataset/data.yaml',  # Create this dummy file for testing
+        'fine_tune_yolo': True,  # Set to True to actually run fine-tuning
+        'fine_tune_epochs': 1,  # Keep low for quick test
         'img_size': 224,
         'batch_size': 2,
         'lr': 0.001
     }
-
     # Create a dummy data.yaml for YOLO training if it doesn't exist
     dummy_data_yaml_path = dummy_config['yolo_data_yaml']
     if not os.path.exists(dummy_data_yaml_path):
@@ -118,10 +108,8 @@ test: images/test/ # test images (optional)
         logger.info(f"Created dummy YOLO data YAML at: {dummy_data_yaml_path}")
         logger.warning("You might need to create dummy image directories (e.g., data/datasets/bongard/images/train) for YOLO training to run without errors.")
         logger.warning("For a real test, populate data/datasets/bongard/images/train and val with images and labels.")
-
     best_weights = fine_tune_yolo(dummy_config)
     if best_weights:
         logger.info(f"Successfully fine-tuned YOLO. Best weights: {best_weights}")
     else:
         logger.error("YOLO fine-tuning failed.")
-
