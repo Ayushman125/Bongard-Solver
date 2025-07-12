@@ -7,6 +7,9 @@ from pathlib import Path
 import os
 import numpy as np
 
+# Import CONFIG from main.py for global access
+from main import CONFIG
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -14,67 +17,44 @@ logger.setLevel(logging.INFO)
 # In a real scenario, this would involve a lightweight training loop,
 # potentially on a very small subset of data or for very few epochs,
 # to get a proxy metric quickly.
-def quick_yolo_train(lr, weight_decay, label_smoothing, dropout, config):
+def quick_yolo_train(lr, weight_decay, label_smoothing, dropout, attention_type, se_reduction, learned_nms_score_threshold, learned_nms_hidden_dim, learned_nms_num_layers, config):
     """
     Performs a quick, lightweight YOLOv8 training run for Optuna evaluation.
     This function is a placeholder and should be replaced with actual
     training logic that returns relevant metrics.
     """
-    logger.info(f"Quick YOLO train: lr={lr}, wd={weight_decay}, ls={label_smoothing}, dr={dropout}")
+    logger.info(f"Quick YOLO train: lr={lr}, wd={weight_decay}, ls={label_smoothing}, dr={dropout}, attention={attention_type}, se_red={se_reduction}, l_nms_score_thresh={learned_nms_score_threshold}, l_nms_hidden_dim={learned_nms_hidden_dim}, l_nms_num_layers={learned_nms_num_layers}")
 
-    # Load a tiny YOLO model or a pre-trained one
-    # For a quick trial, we might not even load a full model or train.
-    # Instead, we'll simulate metrics.
-    # In a real setup, you'd load a model, a small dataset, and run a few epochs.
-    
     # --- SIMULATED METRICS FOR DEMONSTRATION ---
     # Replace this with actual YOLO training and validation metrics
-    # Example:
-    # model = YOLO('yolov8n.pt') # Load a nano model for speed
-    # model.to(config['yolo_device'])
-    #
-    # # Create a dummy data.yaml for a very small subset
-    # temp_data_yaml_path = Path(config['output_root']) / 'optuna_yolo_temp_data.yaml'
-    # temp_train_dir = Path(config['output_root']) / 'images' / 'train_subset'
-    # temp_val_dir = Path(config['output_root']) / 'images' / 'val_subset'
-    # # Populate these dirs with a very small number of images/labels
-    # # ... (logic to copy a few images/labels)
-    #
-    # temp_data_yaml_content = {
-    #     'path': str(Path(config['output_root']).resolve()),
-    #     'train': 'images/train_subset',
-    #     'val': 'images/val_subset',
-    #     'nc': config['num_classes'],
-    #     'names': config['class_names']
-    # }
-    # yaml.dump(temp_data_yaml_content, open(temp_data_yaml_path,'w'), sort_keys=False)
-    #
-    # results = model.train(
-    #     data=str(temp_data_yaml_path),
-    #     epochs=3, # Very few epochs
-    #     imgsz=config['yolo_img_size'][0], # Smallest image size
-    #     batch=config['yolo_batch_size'],
-    #     lr0=lr, lrf=0.01,
-    #     weight_decay=weight_decay,
-    #     label_smoothing=label_smoothing,
-    #     dropout=dropout,
-    #     project=Path(config['model_save_dir']).parent,
-    #     name='optuna_yolo_trial',
-    #     verbose=False,
-    #     device=config['yolo_device'],
-    #     workers=min(2, os.cpu_count() - 1) # Limit workers for quick trials
-    # )
-    # metrics = results.metrics # Access metrics like results.metrics.box.map50
+    # For a real implementation, you would:
+    # 1. Temporarily modify CONFIG with the trial's parameters.
+    # 2. Build a lightweight model (e.g., YOLOv8n) with these parameters.
+    # 3. Load a very small subset of your data.
+    # 4. Run a few epochs of training.
+    # 5. Evaluate and return the desired metric.
 
     # Simulate metrics for demonstration purposes
-    # In a real scenario, these would come from `results.metrics`
-    # We want to maximize mAP50, so return a value that can be maximized.
-    # Add some randomness to simulate different trial outcomes
-    simulated_map50 = random.uniform(0.50, 0.85) + (lr * 100) / 10000 + (1 - weight_decay * 1000) / 10 + (1 - label_smoothing) * 0.1 - dropout * 0.05
+    # We want to maximize mAP50.
+    # The simulated metrics are influenced by the hyperparameters to show variation.
+    simulated_map50 = random.uniform(0.50, 0.85) \
+                      + (lr * 100) / 10000 \
+                      + (1 - weight_decay * 1000) / 10 \
+                      + (1 - label_smoothing) * 0.1 \
+                      - dropout * 0.05
+    
+    # Add influence from new hyperparameters (conceptual)
+    if attention_type == 'se':
+        simulated_map50 += (se_reduction / 32) * 0.02 # Assume higher reduction helps slightly
+    elif attention_type == 'cbam':
+        simulated_map50 += 0.03 # Assume CBAM helps a bit more
+    
+    simulated_map50 += (learned_nms_score_threshold * 0.1) # Higher threshold might improve precision
+    simulated_map50 += (learned_nms_hidden_dim / 128) * 0.01 # Larger hidden dim might help
+    simulated_map50 += (learned_nms_num_layers / 3) * 0.005 # More layers might help
+
     simulated_map50 = np.clip(simulated_map50, 0.0, 0.95) # Keep it realistic
 
-    # For multi-objective, return a tuple: (map50, map)
-    # For now, let's just return map50 as the primary objective for simplicity.
     class MockMetrics:
         def __init__(self, map50_val, map_val):
             self.box = self.MockBox(map50_val, map_val)
@@ -83,7 +63,6 @@ def quick_yolo_train(lr, weight_decay, label_smoothing, dropout, config):
                 self.map50 = map50_val
                 self.map = map_val
     
-    # Return a mock object that mimics Ultralytics metrics structure
     return MockMetrics(simulated_map50, simulated_map50 * 0.9) # map is usually lower than map50
 
 def objective_yolo(trial, config):
@@ -95,8 +74,17 @@ def objective_yolo(trial, config):
     sm = trial.suggest_uniform('label_smoothing', 0.0, 0.2)
     dr = trial.suggest_uniform('dropout', 0.0, 0.3)
     
+    # Expand search space for new flags
+    attention_type = trial.suggest_categorical('attention.type', ['none', 'cbam', 'se'])
+    se_reduction = trial.suggest_int('attention.se_reduction', 8, 32)
+    
+    learned_nms_score_threshold = trial.suggest_float('learned_nms.score_threshold', 0.01, 0.2)
+    learned_nms_hidden_dim = trial.suggest_int('learned_nms.hidden_dim', 32, 128)
+    learned_nms_num_layers = trial.suggest_int('learned_nms.num_layers', 1, 3)
+
     # Train for a small number of epochs on a subset to get quick feedback
-    metrics = quick_yolo_train(lr, wd, sm, dr, config)
+    metrics = quick_yolo_train(lr, wd, sm, dr, attention_type, se_reduction, 
+                               learned_nms_score_threshold, learned_nms_hidden_dim, learned_nms_num_layers, config)
     
     # Return the metric to be maximized (e.g., mAP50)
     return metrics.box.map50
@@ -135,11 +123,22 @@ def run_yolo_tuning(config):
         best_params = study.best_trial.params
         best_score = study.best_trial.value
         logger.info(f"   ✅      YOLO Optuna tuning finished. Best mAP50: {best_score:.4f} with params: {best_params}")
+        
+        # Return the best parameters in a dictionary matching CONFIG structure
         return {
             'yolo_learning_rate': best_params['lr0'],
             'yolo_weight_decay': best_params['weight_decay'],
             'yolo_label_smoothing': best_params['label_smoothing'],
             'yolo_dropout': best_params['dropout'],
+            'attention': {
+                'type': best_params['attention.type'],
+                'se_reduction': best_params['attention.se_reduction']
+            },
+            'learned_nms': {
+                'score_threshold': best_params['learned_nms.score_threshold'],
+                'hidden_dim': best_params['learned_nms.hidden_dim'],
+                'num_layers': best_params['learned_nms.num_layers']
+            }
         }
     except ValueError:
         logger.warning("   ⚠️    YOLO Optuna tuning failed to find any valid configurations. Using default YOLO CONFIG.")
@@ -156,7 +155,14 @@ if __name__ == '__main__':
         'class_names': ['circle', 'square', 'triangle', 'line', 'polygon', 'dot'], # Example
         'yolo_img_size': [224, 224, 224], # Example
         'yolo_batch_size': 2, # Example
+        'tuning_db_path': 'sqlite:///datasets/bongard_objects/tuning_results.db',
         # Add other necessary config parameters for quick_yolo_train if it were real
+        'yolo_learning_rate': 1e-3, # Default, will be overridden
+        'yolo_weight_decay': 1e-4,   # Default, will be overridden
+        'yolo_label_smoothing': 0.0, # Default, will be overridden
+        'yolo_dropout': 0.0,         # Default, will be overridden
+        'attention': {'type': 'none', 'se_reduction': 16}, # Default
+        'learned_nms': {'score_threshold': 0.05, 'hidden_dim': 64, 'num_layers': 2}, # Default
     }
     # Ensure output directories exist for the dummy run
     Path(dummy_config['output_root']).mkdir(parents=True, exist_ok=True)

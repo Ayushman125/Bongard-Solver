@@ -4,6 +4,9 @@ import random
 from perlin_noise import PerlinNoise
 import logging
 
+# Import CONFIG from main.py for global access
+from main import CONFIG
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -105,10 +108,58 @@ def gen_texture(size, octaves_range=(2, 6), seed=None):
     logger.debug(f"Generated texture image with size {size}, octaves {octaves}, seed {current_seed}")
     return output_img
 
+def occlude(img, bboxes):
+    """
+    Applies random rectangular occlusion to an image, parametrized by CONFIG.
+    Args:
+        img (np.ndarray): Input image (HWC, uint8).
+        bboxes (list): List of bounding boxes (not modified by this function, passed for signature compatibility).
+    Returns:
+        np.ndarray: Image with occlusion.
+    """
+    # Use CONFIG for max_shapes (max_occlusions)
+    max_shapes = CONFIG['procedural'].get('max_occlusions', 3)
+    occlusion_prob = CONFIG['augmentation']['occlusion'].get('occlusion_prob', 0.5)
+
+    h, w = img.shape[:2]
+    occluded_img = img.copy()
+
+    for _ in range(random.randint(1, max_shapes)):
+        if random.random() > occlusion_prob:
+            break
+        
+        # Random size for the occlusion patch
+        patch_h = random.randint(10, h // 3)
+        patch_w = random.randint(10, w // 3)
+
+        # Random position for the occlusion patch
+        y = random.randint(0, h - patch_h) if h - patch_h > 0 else 0
+        x = random.randint(0, w - patch_w) if w - patch_w > 0 else 0
+        
+        # Fill with black (or a random color)
+        occluded_img[y:y+patch_h, x:x+patch_w] = 0 # Black occlusion
+
+    return occluded_img, bboxes # Return bboxes unchanged for now
+
 if __name__ == '__main__':
     # Example usage and saving
+    from pathlib import Path
     output_dir = Path("./procedural_test_output")
     output_dir.mkdir(exist_ok=True)
+
+    # Dummy CONFIG for testing procedural.py standalone
+    class DummyConfig:
+        def __init__(self):
+            self.augmentation = {'occlusion': {'max_shapes': 5, 'occlusion_prob': 0.7}}
+            self.procedural = {'max_occlusions': 5} # Added procedural key
+
+    # Temporarily set global CONFIG for testing if it's not already set
+    if 'CONFIG' not in globals():
+        global CONFIG
+        CONFIG = DummyConfig()
+    else: # If CONFIG exists, update it for the test
+        CONFIG.update(DummyConfig().__dict__)
+
 
     # Generate Cellular Automata
     for i in range(5):
@@ -121,3 +172,10 @@ if __name__ == '__main__':
         img_texture = gen_texture((224, 224))
         cv2.imwrite(str(output_dir / f"texture_example_{i}.png"), img_texture)
         logger.info(f"Saved texture_example_{i}.png")
+
+    # Test parametrized occlusion
+    test_img = np.full((224, 224, 3), 200, dtype=np.uint8) # A gray image
+    test_bboxes = [] # No bboxes for this test
+    occluded_test_img, _ = occlude(test_img.copy(), test_bboxes)
+    cv2.imwrite(str(output_dir / "occluded_example.png"), occluded_test_img)
+    logger.info("Saved occluded_example.png")

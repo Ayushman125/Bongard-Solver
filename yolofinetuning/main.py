@@ -40,13 +40,14 @@ CONFIG = {
     'splits':            {'train':0.7, 'val':0.15, 'test':0.15, 'challenge_val': 0.1}, # Added challenge_val split
     'seed':              42,
     'image_size':        [224, 224], # Target H, W for generated images and YOLO training
+
     # contour detection (used by _detect_labels_and_difficulty_wrapper in pipeline_workers)
     'cnt_block': 11, 'cnt_C':2, 'min_area':100, 'max_cnt':10,
     'morphological_ops': 'open', # 'open', 'close', or None for morphological cleanup
 
     # initial augmentation hyperparams (these will be tuned by Optuna, used by DALI)
     'elastic_p':         0.3,
-    'elastic':           {'alpha':1,'sigma':50}, 
+    'elastic':           {'alpha':1,'sigma':50},
     'phot_blur_p':       0.3,
     'phot_blur':         (3,7),
     'jpeg_p':            0.3,
@@ -99,6 +100,7 @@ CONFIG = {
     'tuning_min_labels_per_sample': 10, # Minimum labels required for a valid tuning sample
     'tuning_min_diffs_per_sample': 5, # Minimum difficulty scores required for a valid tuning sample
     'tuning_db_path': 'sqlite:///datasets/bongard_objects/tuning_results.db', # Relative to project root, in output dir
+
     # NEW Optuna parameters for YOLO-centric study
     'yolo_label_smoothing': 0.0, # Default, will be tuned
     'yolo_dropout': 0.0,         # Default, will be tuned
@@ -128,6 +130,7 @@ CONFIG = {
     'dali_py_num_workers': os.cpu_count(), # Number of Python workers for fn.python_function - Tweak after profiling
     'dali_prefetch_queue': 8, # DALI prefetch queue depth - Increased for better GPU utilization
     'force_cpu_dali': False, # Force DALI ops to CPU even if GPU is available
+
     # NEW DALI Memory Preallocation
     'dali_gpu_memory_bytes': 1024 * 1024 * 1024, # 1GB for DALI GPU pool (Increased)
     'dali_pinned_memory_bytes': 512 * 1024 * 1024, # 512MB for DALI pinned host memory (Increased)
@@ -141,7 +144,7 @@ CONFIG = {
     # Cache for raw image paths
     'raw_image_paths_cache': './datasets/bongard_objects/raw_image_paths_cache.json', # Relative to project root
     'cache_freshness_days': 7, # How many days until cache is considered stale
-    
+
     # Flag file to indicate if data generation is complete
     'data_generated_flag_file': './datasets/bongard_objects/.data_generation_complete', # Relative to project root
     # NEW: Flag file for raw annotation pre-computation
@@ -152,6 +155,7 @@ CONFIG = {
     'temp_generated_data_dir': './datasets/bongard_objects/temp_generated_data', # Relative to project root
     # File list for DALI reader (will now include annotation paths)
     'dali_file_list_path': './datasets/bongard_objects/dali_file_list.txt', # Relative to project root
+
     # NEW: Persistent directory for GAN images
     'gan_persistent_dir': './datasets/bongard_objects/gan_raw_images', # Relative to project root
     # NEW: Persistent directory for PIL generated images
@@ -163,6 +167,146 @@ CONFIG = {
     'hard_mining_conf_thresh': 0.05, # Confidence threshold for identifying hard examples (Refined)
     'hard_examples_dir': './datasets/bongard_objects/hard_examples', # Relative to project root
     'hard_mining_epochs': 5, # Epochs for retraining on hard examples
+
+    # --- NEW SECTIONS FROM PATCH ---
+    # Attention Modules
+    'attention': {
+        'type': 'se',           # options: 'none', 'cbam', 'se'
+        'se_reduction': 16      # Reduction ratio for SEBlock
+    },
+    # Multi-Backbone Ensemble
+    'ensemble': {
+        'enabled': True,
+        'detectors': [
+            {'type': 'yolov8', 'weights': 'runs/train/best.pt'},
+            {'type': 'fcos',   'weights': 'runs/fcos/best.pt', 'config': 'configs/fcos.yaml'}
+        ]
+    },
+    # Detector-Segmentor Joint Head
+    'mask_head': {
+        'enabled': True,
+        'type': 'yolact',
+        'num_classes': 1, # Number of classes for segmentation (e.g., 1 for foreground/background)
+        'prototype_channels': 32, # Channels for YOLACT prototypes
+        'mask_size': 28 # Output mask size (e.g., 28x28)
+    },
+    # Learned NMS
+    'learned_nms': {
+        'enabled': True,
+        'hidden_dim': 64,
+        'num_layers': 2,
+        'score_threshold': 0.05,
+        'iou_threshold': 0.5
+    },
+    # Inference-Time Settings
+    'inference': {
+        'tta': True,
+        'soft_nms': True,
+        'nms_threshold': 0.6
+    },
+    # Pretraining (SSL)
+    'pretrain': {
+        'enabled': False, # Set to True to enable SSL pretraining
+        'ssl_epochs': 50,
+        'encoder': 'resnet18', # or 'pvtv2_b0' if you have it implemented
+        'contrastive': {
+            'temperature': 0.07,
+            'batch_size': 256
+        }
+    },
+    # SimGAN for Domain Randomization
+    'simgan': {
+        'enabled': False, # Set to True to enable SimGAN
+        'path': '/path/to/simgan.pth' # Path to SimGAN generator weights
+    },
+    # CycleGAN for Domain Randomization
+    'cyclegan': {
+        'enabled': False, # Set to True to enable CycleGAN
+        'path': '/path/to/cyclegan.pth' # Path to CycleGAN generator weights
+    },
+    # Augmentation specific settings (for procedural.py and my_data_utils.py)
+    'augmentation': {
+        'simgan': False, # Controlled by 'simgan.enabled' now
+        'cyclegan': False, # Controlled by 'cyclegan.enabled' now
+        'occlusion': {
+            'max_shapes': 5,
+            'occlusion_prob': 0.5
+        }
+    },
+    # Model Architecture Enhancements
+    'model': {
+        'backbone': 'yolov8s.pt', # Default YOLOv8s, can be 'pvtv2_b0' if implemented
+        'attention': 'none', # options: 'none', 'cbam', 'se' # This will be overridden by 'attention' key directly
+        'neck_nas': False # Enable NAS-searchable neck (requires custom YOLOv8 implementation)
+    },
+    # Loss Function Enhancements
+    'loss': {
+        'dynamic_focal': True,
+        'initial_gamma': 2.0,
+        'min_gamma': 0.5,
+        'max_gamma': 5.0,
+        'dynamic_ciou': True
+    },
+    # Optimizer Enhancements
+    'optimizer': {
+        'lr': 1e-3, # Base learning rate, will be overridden by Optuna if enabled
+        'wd': 1e-4, # Weight decay, will be overridden by Optuna if enabled
+        'sam': {
+            'enabled': False, # Set to True to enable SAM optimizer
+            'rho': 0.05
+        }
+    },
+    # Semi-Supervised Learning
+    'semi_supervised': {
+        'enabled': False, # Set to True to enable semi-supervised learning
+        'teacher_weights': '/path/to/teacher.pt', # Path to pre-trained teacher model
+        'confidence_threshold': 0.7,
+        'co_teaching_rate': 0.2, # Not directly used in current pseudo-labeling logic
+        'start_epoch': 10 # Epoch to start pseudo-labeling
+    },
+    # Curriculum Learning
+    'curriculum': {
+        'enabled': False, # Set to True to enable curriculum learning
+        'score_map': 'data/curriculum_scores.json' # Path to JSON mapping image stems to difficulty scores
+    },
+    # Knowledge Distillation
+    'distillation': {
+        'enabled': False, # Set to True to enable distillation
+        'teacher': 'yolov8l.pt', # Teacher model weights (e.g., larger YOLOv8)
+        'student': 'yolov8s.pt', # Student model weights (e.g., current YOLOv8s)
+        'alpha': 0.9, # Weight for distillation loss
+        'temperature': 4.0
+    },
+    # Quantization-Aware Training (QAT)
+    'qat': {
+        'enabled': False, # Set to True to enable QAT
+        'bitwidth': 8
+    },
+    # Pruning
+    'pruning': {
+        'enabled': False, # Set to True to enable pruning
+        'target_sparsity': 0.3
+    },
+    # Hard Example Mining (OHEM and Active Learning)
+    'hard_mining': {
+        'ohem': {
+            'enabled': False, # Set to True to enable OHEM
+            'top_k': 128
+        },
+        'active': {
+            'enabled': False, # Set to True to enable active learning
+            'pool_path': './datasets/bongard_objects/unlabeled_pool', # Path to unlabeled image pool
+            'entropy_threshold': 1.5 # Threshold for selecting uncertain samples
+        }
+    },
+    # Training Configuration (newly added)
+    'train': {
+        'epochs': 50,
+        'batch_size': 8,
+        'resume_from': 'checkpoints/last.pt',    # path to checkpoint to resume (or None)
+        'checkpoint_dir': 'checkpoints',         # where to write .pt files
+        'save_every': 5                          # save a checkpoint every N epochs
+    },
 }
 
 # --- LOGGING ──────────────────────────────────────────────────────────────────
@@ -186,7 +330,7 @@ def evaluate_params(params, sample_imgs_paths, objectives):
     all_labels_flat, all_diffs = [], []
     temp_config = deepcopy(CONFIG)
     temp_config.update(params)
-    
+
     for p_img in sample_imgs_paths:
         anno_path = Path(CONFIG['raw_annotations_dir']) / (Path(p_img).stem + '.json')
         if not anno_path.exists():
@@ -201,24 +345,25 @@ def evaluate_params(params, sample_imgs_paths, objectives):
             logger.warning(f"Error reading annotation JSON for tuning sample {p_img}: {e}. Skipping.")
             continue
         if not labels:
-            continue  
+            continue
         all_labels_flat.extend(labels)
         all_diffs.append(diff)
 
     if len(all_labels_flat) < objectives['min_labels_per_sample'] or \
        len(all_diffs) < objectives['min_diffs_per_sample']:
         logging.getLogger().debug(f"Rejected config (too few samples): {params}")
-        return -1e9  
+        return -1e9
 
     counts = Counter(all_labels_flat)
     balance_score = class_entropy(counts)
     balance_score = np.clip(balance_score, 0, np.log2(len(my_data_utils.YOLO_CLASSES_LIST)))
+
     diff_score = np.std(all_diffs) if len(all_diffs) > 1 else 0.0
     diff_score = np.clip(diff_score, 0, 1.0)
 
     score = (objectives['balance_weight'] * balance_score +
              objectives['difficulty_weight'] * diff_score)
-    
+
     return score
 
 # --- HYPERPARAMETER TUNER (OPTUNA INTEGRATED) ────────────────────────────────
@@ -227,7 +372,7 @@ def tune_hyperparams(all_imgs_paths, param_space, objectives, n_trials=50, subse
     Performs hyperparameter tuning using Optuna with a stratified sampling strategy.
     """
     logger.info("Starting automatic hyperparameter tuning with Optuna (Data-centric study)...")
-    
+
     image_class_ids = {}
     for img_path in all_imgs_paths:
         anno_path = Path(CONFIG['raw_annotations_dir']) / (Path(img_path).stem + '.json')
@@ -252,16 +397,16 @@ def tune_hyperparams(all_imgs_paths, param_space, objectives, n_trials=50, subse
         logger.warning(f"Not enough valid images ({len(valid_imgs_for_strat)}) for stratified tuning subset of size {subset_size}. Using all valid images.")
         sample_imgs = valid_imgs_for_strat
     else:
-        _, sample_imgs = train_test_split(valid_imgs_for_strat, 
-                                          test_size=subset_size, 
-                                          stratify=labels_for_strat, 
+        _, sample_imgs = train_test_split(valid_imgs_for_strat,
+                                          test_size=subset_size,
+                                          stratify=labels_for_strat,
                                           random_state=CONFIG['seed'])
-    
+
     logger.info(f"Created stratified tuning sample of size {len(sample_imgs)}.")
-    
+
     if not sample_imgs:
-        logger.warning("   ⚠️    No valid images found for hyperparameter tuning. Skipping Optuna and using default CONFIG.")
-        return None 
+        logger.warning("     ⚠️        No valid images found for hyperparameter tuning. Skipping Optuna and using default CONFIG.")
+        return None
 
     def objective(trial):
         trial_params = {
@@ -274,7 +419,7 @@ def tune_hyperparams(all_imgs_paths, param_space, objectives, n_trials=50, subse
             'rand_mag': trial.suggest_int('rand_mag', param_space['rand_mag'][0], param_space['rand_mag'][-1]),
             'mixup_alpha': trial.suggest_float('mixup_alpha', param_space['mixup_alpha'][0], param_space['mixup_alpha'][-1]),
             'fract_depth': trial.suggest_int('fract_depth', param_space['fract_depth'][0], param_space['fract_depth'][-1]),
-            'fill_contour_p': trial.suggest_float('fill_contour_p', 0.0, 1.0), 
+            'fill_contour_p': trial.suggest_float('fill_contour_p', 0.0, 1.0),
             'num_clutter_patches': trial.suggest_int('num_clutter_patches', 1, 5),
             'clutter_max_factor': trial.suggest_float('clutter_max_factor', 0.05, 0.2),
             'yolo_learning_rate': trial.suggest_float('yolo_learning_rate', param_space['yolo_learning_rate'][0], param_space['yolo_learning_rate'][-1], log=True),
@@ -288,18 +433,18 @@ def tune_hyperparams(all_imgs_paths, param_space, objectives, n_trials=50, subse
             'dali_gaussian_noise_p': trial.suggest_float('dali_gaussian_noise_p', 0.0, 1.0),
             'dali_salt_pepper_p': trial.suggest_float('dali_salt_pepper_p', 0.0, 1.0),
         }
-        
+
         score = evaluate_params(trial_params, sample_imgs, objectives)
         if score == -1e9:
             with open("rejected_configs.log", "a") as f:
                 f.write(json.dumps({"trial_id": trial.number, "config": trial_params, "reason": "invalid_score"}) + "\n")
             raise optuna.exceptions.TrialPruned(f"Invalid configuration: {trial_params}")
-        
+
         return score
 
     study_name = "bongard_augmentation_tuning"
     storage_path = CONFIG['tuning_db_path']
-    
+
     try:
         optuna.delete_study(study_name=study_name, storage=storage_path)
         logger.info(f"Existing Optuna study '{study_name}' deleted from {storage_path}.")
@@ -313,14 +458,14 @@ def tune_hyperparams(all_imgs_paths, param_space, objectives, n_trials=50, subse
 
     from tqdm import tqdm # Import tqdm for Optuna progress bar
     study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
-    
+
     try:
         best_params = study.best_trial.params
         best_score = study.best_trial.value
-        logger.info(f"   ✅      Optuna tuning finished. Best score: {best_score:.4f} with params: {best_params}")
+        logger.info(f"     ✅            Optuna tuning finished. Best score: {best_score:.4f} with params: {best_params}")
         return best_params
     except ValueError:
-        logger.warning("   ⚠️    Optuna tuning failed to find any valid configurations. Using default CONFIG.")
+        logger.warning("     ⚠️        Optuna tuning failed to find any valid configurations. Using default CONFIG.")
         return None
 
 # --- CLEAN OUTPUT ─────────────────────────────────────────────────────────────
@@ -333,10 +478,10 @@ def prepare_output_directories():
         (out/'images'/sp).mkdir(parents=True, exist_ok=True)
         (out/'labels'/sp).mkdir(parents=True, exist_ok=True)
         (out/'annotations'/sp).mkdir(parents=True, exist_ok=True)
-    
+
     Path(CONFIG['raw_annotations_dir']).mkdir(parents=True, exist_ok=True)
     Path(CONFIG['hard_examples_dir']).mkdir(parents=True, exist_ok=True)
-    
+
     logger.info("Ensured output folders exist for data generation.")
 
 # --- COLLECT IMAGES ───────────────────────────────────────────────────────────
@@ -345,12 +490,12 @@ def collect_images():
     Collects paths to all raw Bongard images, using a cache file for speed.
     """
     cache_path = Path(CONFIG['raw_image_paths_cache'])
-    
+
     if cache_path.exists():
         file_mod_time = os.path.getmtime(cache_path)
         current_time = time.time()
         freshness_threshold_seconds = CONFIG['cache_freshness_days'] * 24 * 60 * 60
-        
+
         if (current_time - file_mod_time) < freshness_threshold_seconds:
             logger.info(f"Loading raw image paths from cache: {cache_path}")
             try:
@@ -371,7 +516,7 @@ def collect_images():
     imgs = list(bongard_root_abs.rglob('*.png'))
     end_time = time.time()
     logger.info(f"Collected {len(imgs)} raw images from {bongard_root_abs} in {end_time - start_time:.2f} seconds.")
-    
+
     try:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         with open(cache_path, 'w') as f:
@@ -379,6 +524,7 @@ def collect_images():
         logger.info(f"Saved raw image paths to cache: {cache_path}")
     except Exception as e:
             logger.error(f"Failed to save raw image paths to cache: {e}")
+
     return [str(p) for p in imgs] # Return as strings
 
 # --- DCGAN STUB / StyleGAN2-ADA Placeholder ───────────────────────────────────
@@ -406,13 +552,14 @@ class DCGAN_G(my_data_utils.nn.Module): # Use my_data_utils.nn for torch.nn
             my_data_utils.nn.ConvTranspose2d(ngf, nc, 4, 2, 1, bias=False),
             my_data_utils.nn.Tanh()
         )
+
     def forward(self, z):
         return self.net(z)
 
 def generate_gan_images(n_images=100, output_dir=None, img_size=(224, 224)):
     logger.info(f"Generating {n_images} synthetic images using DCGAN stub...")
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    
+
     # --- StyleGAN2-ADA Placeholder ---
     # To integrate StyleGAN2-ADA, you would typically:
     # 1. pip install stylegan2-ada-pytorch
@@ -426,25 +573,25 @@ def generate_gan_images(n_images=100, output_dir=None, img_size=(224, 224)):
     #    # and save them. This is a more involved process than a simple DCGAN stub replacement.
     # For now, we proceed with the simple DCGAN_G.
     G = DCGAN_G(nc=3).to(device).eval()
-    
+
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    
+
     generated_count = 0
     from tqdm import tqdm # Import tqdm here for local use
     with torch.no_grad():
         for i in tqdm(range(n_images), desc="Generating GAN images"):
             filename = output_path / f"gan_{i}.png"
-            if filename.exists(): 
+            if filename.exists():
                 generated_count += 1
-                continue 
+                continue
             noise = torch.randn(1, 100, 1, 1, device=device)
             generated_image_tensor = G(noise).cpu().detach()
-            
+
             img_np = ((generated_image_tensor[0].numpy() + 1) / 2 * 255).astype(np.uint8)
             img_np = np.transpose(img_np, (1, 2, 0))
             if img_np.shape[0] != img_size[0] or img_np.shape[1] != img_size[1]:
-                img_np = cv2.resize(img_np, (img_size[1], img_size[0]), interpolation=cv2.INTER_LINEAR)
+                img_np = cv2.resize(img_np, (img_size[1], img_size[0]), interpolation=cv2.INTERP_LINEAR)
             cv2.imwrite(str(filename), cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR))
             generated_count += 1
     logger.info(f"Finished generating {generated_count} synthetic images to {output_path}.")
@@ -464,37 +611,35 @@ def generate_pil_shapes_advanced(class_name, n=2000, size=(224,224), outdir='dat
     """
     class_output_dir = Path(outdir) / class_name
     class_output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     logger.info(f"Generating {n} {class_name} shapes using PIL (advanced)...")
     from tqdm import tqdm # Import tqdm here for local use
     for i in tqdm(range(n), desc=f"Generating PIL {class_name} shapes"):
         filename = class_output_dir / f"{class_name}_{i}.png"
         if filename.exists():
             continue
-
         img = Image.new('RGB', size, 'white')
         draw = ImageDraw.Draw(img)
-        
+
         outline_color = (random.randint(0, 200), random.randint(0, 200), random.randint(0, 200))
         # Variable stroke width
         stroke_width = random.randint(1, 6)
         # Variable fill patterns (None for outline, outline_color for solid, or random color)
         fill_choice = random.choice([None, outline_color, (random.randint(0, 200), random.randint(0, 200), random.randint(0, 200))])
         fill_color = fill_choice if random.random() < fill_p else None
-        
+
         min_dim = min(size)
         max_size_factor = random.uniform(0.3, 0.7)
         shape_size = int(min_dim * max_size_factor)
-        
+
         x_center = random.randint(shape_size // 2, size[0] - shape_size // 2)
         y_center = random.randint(shape_size // 2, size[1] - shape_size // 2)
         x1 = x_center - shape_size // 2
         y1 = y_center - shape_size // 2
         x2 = x_center + shape_size // 2
         y2 = y_center + shape_size // 2
-
         current_shape_bbox = None
-        
+
         if class_name == 'circle':
             draw.ellipse([x1, y1, x2, y2], outline=outline_color, fill=fill_color, width=stroke_width)
             current_shape_bbox = [x1, y1, x2, y2]
@@ -516,8 +661,8 @@ def generate_pil_shapes_advanced(class_name, n=2000, size=(224,224), outdir='dat
             current_shape_bbox = [min(line_x1,line_x2), min(line_y1,line_y2), max(line_x1,line_x2), max(line_y1,line_y2)]
         elif class_name == 'dot':
             dot_radius = random.randint(2, 5)
-            draw.ellipse([x_center - dot_radius, y_center - dot_radius, 
-                          x_center + dot_radius, y_center + dot_radius], 
+            draw.ellipse([x_center - dot_radius, y_center - dot_radius,
+                          x_center + dot_radius, y_center + dot_radius],
                           outline=outline_color, fill=fill_color or outline_color, width=1)
             current_shape_bbox = [x_center - dot_radius, y_center - dot_radius, x_center + dot_radius, y_center + dot_radius]
         elif class_name == 'polygon':
@@ -531,14 +676,14 @@ def generate_pil_shapes_advanced(class_name, n=2000, size=(224,224), outdir='dat
                 points.append((px, py))
             draw.polygon(points, outline=outline_color, fill=fill_color, width=stroke_width)
             current_shape_bbox = [min([p[0] for p in points]), min([p[1] for p in points]), max([p[0] for p in points]), max([p[1] for p in points])]
-        
+
         # Overlaps & Nesting
         if random.random() < 0.3 and current_shape_bbox:
             # Sample another random shape and composite it
             second_shape_class = random.choice(my_data_utils.YOLO_CLASSES_LIST)
             temp_img = Image.new('RGBA', size, (0,0,0,0)) # Transparent background
             temp_draw = ImageDraw.Draw(temp_img)
-            
+
             # Random position and size for the second shape, potentially overlapping
             second_shape_size = int(min_dim * random.uniform(0.2, 0.6))
             x_center2 = random.randint(0, size[0])
@@ -547,7 +692,6 @@ def generate_pil_shapes_advanced(class_name, n=2000, size=(224,224), outdir='dat
             y1_2 = y_center2 - second_shape_size // 2
             x2_2 = x_center2 + second_shape_size // 2
             y2_2 = y_center2 + second_shape_size // 2
-
             outline_color2 = (random.randint(0, 200), random.randint(0, 200), random.randint(0, 200))
             fill_color2 = (random.randint(0, 200), random.randint(0, 200), random.randint(0, 200)) if random.random() < fill_p else None
 
@@ -568,8 +712,8 @@ def generate_pil_shapes_advanced(class_name, n=2000, size=(224,224), outdir='dat
                 temp_draw.line([line_x1_2, line_y1_2, line_x2_2, line_y2_2], fill=outline_color2, width=random.randint(1, 5))
             elif second_shape_class == 'dot':
                 dot_radius2 = random.randint(2, 5)
-                temp_draw.ellipse([x_center2 - dot_radius2, y_center2 - dot_radius2, 
-                                   x_center2 + dot_radius2, y_center2 + dot_radius2], 
+                temp_draw.ellipse([x_center2 - dot_radius2, y_center2 - dot_radius2,
+                                   x_center2 + dot_radius2, y_center2 + dot_radius2],
                                    outline=outline_color2, fill=fill_color2 or outline_color2, width=1)
             elif second_shape_class == 'polygon':
                 num_vertices2 = random.randint(5, 8)
@@ -581,7 +725,7 @@ def generate_pil_shapes_advanced(class_name, n=2000, size=(224,224), outdir='dat
                     py2 = y_center2 + radius2 * np.sin(angle2)
                     points2.append((px2, py2))
                 temp_draw.polygon(points2, outline=outline_color2, fill=fill_color2, width=random.randint(1,4))
-            
+
             # Composite with random alpha
             alpha = random.uniform(0.5, 1.0)
             img = Image.alpha_composite(img.convert('RGBA'), Image.blend(Image.new('RGBA', size, (0,0,0,0)), temp_img, alpha)).convert('RGB')
@@ -601,10 +745,10 @@ def generate_pil_shapes_advanced(class_name, n=2000, size=(224,224), outdir='dat
         #     poly2_points = [(x_center, y1), (x1, y2), (x2, y2)] # Example triangle
         #     poly1 = Polygon(poly1_points)
         #     poly2 = Polygon(poly2_points)
-        #     
+        #
         #     # Perform boolean operation (e.g., union, difference, intersection)
         #     union_poly = poly1.union(poly2)
-        #     
+        #
         #     # Create a mask from the resulting Shapely polygon
         #     mask_img = Image.new('L', size, 0) # L for grayscale mask
         #     mask_draw = ImageDraw.Draw(mask_img)
@@ -613,29 +757,28 @@ def generate_pil_shapes_advanced(class_name, n=2000, size=(224,224), outdir='dat
         #             mask_draw.polygon(list(p.exterior.coords), fill=255)
         #     else:
         #         mask_draw.polygon(list(union_poly.exterior.coords), fill=255)
-        #     
+        #
         #     # Apply the mask to the image
         #     color_layer = Image.new('RGB', size, outline_color) # Or fill_color
         #     img.paste(color_layer, (0,0), mask_img)
 
-
         if rotation_range > 0:
             angle = random.uniform(-rotation_range, rotation_range)
             img = img.rotate(angle, expand=False, center=(x_center, y_center))
-        
+
         # Domain Randomization for backgrounds and lighting
         # This assumes `my_data_utils.random_bg` is available and takes PIL Image as input
         # Convert PIL Image to OpenCV format (numpy array) for `random_bg`
         img_np = np.array(img)
         img_np = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR) # Convert to BGR for OpenCV
-        
+
         background_paths = list(Path(CONFIG['background_root']).rglob('*.[pj][pn]g'))
         if background_paths:
             img_np = my_data_utils.random_bg(img_np, background_paths)
-        
+
         # Convert back to PIL Image for saving
         img = Image.fromarray(cv2.cvtColor(img_np, cv2.COLOR_BGR2RGB))
-        
+
         img.save(filename)
     logger.info(f"Finished generating {n} {class_name} shapes to {class_output_dir}.")
 
@@ -648,11 +791,11 @@ def run_pipeline():
         torch.cuda.manual_seed_all(CONFIG['seed'])
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
-    
+
     # Adjust paths to be relative to the current working directory of main.py
     # This ensures that when main.py is run from the project root, paths are correct.
-    project_root = Path(os.getcwd()) 
-    
+    project_root = Path(os.getcwd())
+
     CONFIG['output_root'] = str(project_root / CONFIG['output_root'])
     CONFIG['difficulty_csv_path'] = str(project_root / CONFIG['difficulty_csv_path'])
     CONFIG['model_save_dir'] = str(project_root / CONFIG['model_save_dir'])
@@ -668,33 +811,47 @@ def run_pipeline():
     CONFIG['dali_processed_stems_tracker'] = str(project_root / CONFIG['dali_processed_stems_tracker'])
     CONFIG['hard_examples_dir'] = str(project_root / CONFIG['hard_examples_dir'])
     CONFIG['tuning_db_path'] = str(project_root / CONFIG['tuning_db_path'])
-
+    # NEW: Paths for active learning
+    CONFIG['hard_mining']['active']['pool_path'] = str(project_root / CONFIG['hard_mining']['active']['pool_path'])
+    # NEW: Paths for distillation and semi-supervised teacher weights
+    if CONFIG['distillation']['enabled'] and CONFIG['distillation']['teacher']:
+        CONFIG['distillation']['teacher'] = str(project_root / CONFIG['distillation']['teacher'])
+    if CONFIG['semi_supervised']['enabled'] and CONFIG['semi_supervised']['teacher_weights']:
+        CONFIG['semi_supervised']['teacher_weights'] = str(project_root / CONFIG['semi_supervised']['teacher_weights'])
+    # NEW: Path for curriculum score map
+    if CONFIG['curriculum']['enabled'] and CONFIG['curriculum']['score_map']:
+        CONFIG['curriculum']['score_map'] = str(project_root / CONFIG['curriculum']['score_map'])
+    # NEW: Paths for SimGAN/CycleGAN
+    if CONFIG['simgan']['enabled'] and CONFIG['simgan']['path']:
+        CONFIG['simgan']['path'] = str(project_root / CONFIG['simgan']['path'])
+    if CONFIG['cyclegan']['enabled'] and CONFIG['cyclegan']['path']:
+        CONFIG['cyclegan']['path'] = str(project_root / CONFIG['cyclegan']['path'])
     # Ensure background root is also absolute
     CONFIG['background_root'] = str(project_root / CONFIG['background_root'])
 
     prepare_output_directories()
-    
+
     all_raw_imgs = collect_images()
     if not all_raw_imgs:
-        logger.error(f"   ❌      No raw images found in {CONFIG['bongard_root']}. Please ensure the dataset exists and is correctly structured.")
+        logger.error(f"     ❌        No raw images found in {CONFIG['bongard_root']}. Please ensure the dataset exists and is correctly structured.")
         logger.error("Exiting pipeline as there is no data to process.")
         return
 
     # --- GAN Image Generation ---
     gan_persistent_dir = Path(CONFIG['gan_persistent_dir'])
-    generate_gan_images(n_images=CONFIG['gan_generate_n'], 
-                        output_dir=gan_persistent_dir, 
+    generate_gan_images(n_images=CONFIG['gan_generate_n'],
+                        output_dir=gan_persistent_dir,
                         img_size=CONFIG['image_size'])
-    
+
     # --- PIL Batch-Generator for Basic Shapes ---
     pil_persistent_dir = Path(CONFIG['pil_persistent_dir'])
     for class_name in my_data_utils.YOLO_CLASSES_LIST:
         # Only generate basic shapes that PIL can easily create
         if class_name in ['circle', 'square', 'triangle', 'line', 'dot', 'polygon']:
-            generate_pil_shapes_advanced(class_name, n=CONFIG['pil_generate_n_per_class'], 
+            generate_pil_shapes_advanced(class_name, n=CONFIG['pil_generate_n_per_class'],
                                          size=tuple(CONFIG['image_size']),
                                          outdir=str(pil_persistent_dir))
-    
+
     # --- Advanced Procedural Generator ---
     # Import procedural functions
     try:
@@ -702,6 +859,7 @@ def run_pipeline():
         procedural_output_dir = Path(CONFIG['output_root']) / 'procedural_images'
         procedural_output_dir.mkdir(parents=True, exist_ok=True)
         logger.info("Generating advanced procedural images...")
+        all_images_for_precomputation_procedural = [] # Collect procedural images for annotation
         for i in range(CONFIG['gan_generate_n'] // 5): # Generate a fifth of GAN images as procedural
             img_type = random.choice(['cellular_automata', 'texture'])
             if img_type == 'cellular_automata':
@@ -711,27 +869,35 @@ def run_pipeline():
             else: # texture
                 img_np = procedural.gen_texture(tuple(CONFIG['image_size']))
                 filename = procedural_output_dir / f"texture_{i}.png"
-            
+
             # Apply random background to procedural images
             background_paths = list(Path(CONFIG['background_root']).rglob('*.[pj][pn]g'))
-            if background_paths and img_np is not None:
+            # Check if background_np is defined before using it
+            background_np = None # Initialize to None or a default value
+            if background_paths:
+                # Assuming procedural.py functions return numpy arrays
+                # and random_bg expects a numpy array and background paths.
+                # If random_bg is in my_data_utils, call it from there.
+                # If `img_np` is expected to be modified in-place, ensure it's mutable.
                 img_np = my_data_utils.random_bg(img_np, background_paths)
 
             if img_np is not None:
                 cv2.imwrite(str(filename), img_np)
                 # Add to all_images_for_precomputation for annotation
-                all_images_for_precomputation.append(str(filename))
+                all_images_for_precomputation_procedural.append(str(filename))
         logger.info("Finished generating advanced procedural images.")
     except ImportError:
         logger.warning("Could not import 'procedural.py'. Skipping advanced procedural generation.")
+        all_images_for_precomputation_procedural = []
     except Exception as e:
         logger.error(f"Error during procedural image generation: {e}", exc_info=True)
+        all_images_for_precomputation_procedural = []
 
-
-    # Combine original raw images, generated GAN images, and generated PIL images for pre-computation
+    # Combine original raw images, generated GAN images, generated PIL images, and procedural images for pre-computation
     all_images_for_precomputation = all_raw_imgs + \
                                     [str(p) for p in gan_persistent_dir.rglob('*.png')] + \
-                                    [str(p) for p in pil_persistent_dir.rglob('*.png')]
+                                    [str(p) for p in pil_persistent_dir.rglob('*.png')] + \
+                                    all_images_for_precomputation_procedural
     random.shuffle(all_images_for_precomputation)
 
     # --- Pre-compute Raw Image Annotations ---
@@ -748,7 +914,7 @@ def run_pipeline():
         'rand_mag':    [5, 10],
         'mixup_alpha': [0.2, 0.8],
         'fract_depth': [3, 6],
-        'fill_contour_p': [0.0, 1.0], 
+        'fill_contour_p': [0.0, 1.0],
         'num_clutter_patches': [1, 5],
         'clutter_max_factor': [0.05, 0.2],
         'yolo_learning_rate': [1e-4, 1e-2],
@@ -764,12 +930,12 @@ def run_pipeline():
     }
     objectives_for_tuner = {
         'target_per_class': len(my_data_utils.YOLO_CLASSES_LIST) * 5,
-        'balance_weight': 1.0, 
+        'balance_weight': 1.0,
         'difficulty_weight': 0.5,
         'min_labels_per_sample': CONFIG['tuning_min_labels_per_sample'],
         'min_diffs_per_sample': CONFIG['tuning_min_diffs_per_sample']
     }
-    
+
     tuned_params_path = Path(CONFIG['output_root']) / 'tuned_hyperparams.json'
     if tuned_params_path.exists():
         logger.info(f"Loading tuned hyperparameters from {tuned_params_path}")
@@ -814,12 +980,11 @@ def run_pipeline():
     except Exception as e:
         logger.error(f"Error during YOLO-centric Optuna tuning: {e}", exc_info=True)
 
-
     # --- Main Data Generation and Persistence (DALI, Splitting, Moving) ---
     data_generated_flag_file = Path(CONFIG['data_generated_flag_file'])
     temp_generated_data_dir = Path(CONFIG['temp_generated_data_dir'])
-    dali_processed_stems_tracker = Path(CONFIG['dali_processed_stems_tracker']) 
-    
+    dali_processed_stems_tracker = Path(CONFIG['dali_processed_stems_tracker'])
+
     if data_generated_flag_file.exists():
         logger.info(f"Data generation flag file found at {data_generated_flag_file}. Skipping DALI processing and data splitting/moving.")
         splits = {}
@@ -829,7 +994,7 @@ def run_pipeline():
             current_split_images = list(split_img_dir.rglob('*.png'))
             splits[split_name] = current_split_images
             logger.info(f"Loaded {len(splits[split_name])} images for '{split_name}' split from existing data.")
-            
+
         difficulty_csv_path = Path(CONFIG['difficulty_csv_path'])
         if difficulty_csv_path.exists():
             logger.info(f"Loading difficulty summary from {difficulty_csv_path}...")
@@ -841,7 +1006,7 @@ def run_pipeline():
             logger.warning("Existing data found, but difficulty summary CSV is missing. Difficulty scores will not be available for this run.")
     else: # Overall data generation needs to run (DALI, splitting, moving)
         logger.info(f"Data generation completion flag file not found at {data_generated_flag_file}. Starting DALI processing and data splitting/moving.")
-        
+
         processed_stems = set()
         if dali_processed_stems_tracker.exists():
             try:
@@ -862,8 +1027,8 @@ def run_pipeline():
                 logger.info(f"Cleaning up non-empty temporary DALI output directory: {temp_generated_data_dir}")
                 shutil.rmtree(temp_generated_data_dir)
                 temp_generated_data_dir.mkdir(parents=True, exist_ok=True)
-        
-        temp_generated_data_dir.mkdir(parents=True, exist_ok=True) 
+
+        temp_generated_data_dir.mkdir(parents=True, exist_ok=True)
         images_to_process_dali = []
         for img_path_str in all_images_for_precomputation:
             img_stem = Path(img_path_str).stem
@@ -872,7 +1037,7 @@ def run_pipeline():
             else:
                 logger.debug(f"Skipping DALI processing for {Path(img_path_str).name}: Already processed in previous DALI run.")
         random.shuffle(images_to_process_dali)
-        
+
         if not my_data_utils.HAS_DALI:
             logger.error("NVIDIA DALI is not found. Cannot proceed with GPU-accelerated data generation.")
             logger.error("Please install NVIDIA DALI to use this feature. Exiting.")
@@ -883,7 +1048,7 @@ def run_pipeline():
         with open(dali_file_list_path, 'w') as f:
             for line in images_to_process_dali:
                 f.write(f"{line}\n")
-    
+
         total_images_to_process_dali = len(images_to_process_dali)
         total_dali_batches = math.ceil(total_images_to_process_dali / CONFIG['dali_batch_size']) if CONFIG['dali_batch_size'] > 0 else 0
         logger.info(f"Starting DALI-accelerated data generation for {total_images_to_process_dali} images across {total_dali_batches} batches.")
@@ -891,9 +1056,9 @@ def run_pipeline():
         logger.info(f"DALI pipeline will attempt to use GPU: {CONFIG['yolo_device'] == 'cuda' and torch.cuda.is_available()}")
         logger.info(f"Detected CUDA availability: {torch.cuda.is_available()}")
         logger.info(f"Configured DALI device_id: {0 if CONFIG['yolo_device'] == 'cuda' and torch.cuda.is_available() else -1}")
-        
+
         device_id = 0 if CONFIG['yolo_device'] == 'cuda' and torch.cuda.is_available() else -1
-        
+
         try:
             dali_pipeline = my_data_utils.BongardDaliPipeline(
                 file_root=dali_file_list_path.parent,
@@ -911,7 +1076,7 @@ def run_pipeline():
         try:
             from tqdm import tqdm # Import tqdm here for local use
             dali_iterator = DALIGenericIterator(
-                dali_pipeline, 
+                dali_pipeline,
                 ['images', 'yolo_labels', 'annotations_json', 'difficulty_score'],
                 auto_reset=True,
                 last_batch_policy=LastBatchPolicy.PARTIAL
@@ -919,7 +1084,7 @@ def run_pipeline():
             processed_count_current_run = 0
             all_generated_temp_paths_for_split = []
             all_difficulty_scores = []
-            
+
             with open(dali_processed_stems_tracker, 'a+') as stems_f:
                 for i, data in enumerate(tqdm(dali_iterator, total=total_dali_batches, desc="DALI Data Generation Progress")):
                     if i % 10 == 0 or i == total_dali_batches - 1:
@@ -929,45 +1094,45 @@ def run_pipeline():
                         yolo_labels_batch = data[0]['yolo_labels']
                         annotations_json_batch = data[0]['annotations_json']
                         difficulty_score_batch = data[0]['difficulty_score']
-                        
+
                         for j in range(images_batch.shape[0]):
                             try:
                                 img_tensor = images_batch[j]
                                 yolo_labels_np = yolo_labels_batch[j]
                                 annotations_json_str = annotations_json_batch[j].item()
                                 difficulty_score_val = difficulty_score_batch[j].item()
-                                
+
                                 img_np = (img_tensor.permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
                                 img_np = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
-                                
-                                variant_stem = f"dali_aug_{processed_count_current_run + len(processed_stems)}" 
-                                
+
+                                variant_stem = f"dali_aug_{processed_count_current_run + len(processed_stems)}"
+
                                 temp_images_split_dir = temp_generated_data_dir / 'images' / 'temp'
                                 temp_labels_split_dir = temp_generated_data_dir / 'labels' / 'temp'
                                 temp_annotations_split_dir = temp_generated_data_dir / 'annotations' / 'temp'
-                                
+
                                 temp_images_split_dir.mkdir(parents=True, exist_ok=True)
                                 temp_labels_split_dir.mkdir(parents=True, exist_ok=True)
                                 temp_annotations_split_dir.mkdir(parents=True, exist_ok=True)
-                                
+
                                 variant_img_path = temp_images_split_dir / f"{variant_stem}.png"
                                 variant_label_path = temp_labels_split_dir / f"{variant_stem}.txt"
                                 variant_anno_path = temp_annotations_split_dir / f"{variant_stem}.json"
-                                
+
                                 cv2.imwrite(str(variant_img_path), img_np)
-                                
+
                                 with open(variant_label_path, 'w') as f:
                                     for label_row in yolo_labels_np:
                                         f.write(f"{int(label_row[0])} {label_row[1]:.6f} {label_row[2]:.6f} {label_row[3]:.6f} {label_row[4]:.6f}\n")
-                                
+
                                 with open(variant_anno_path, 'w') as f:
                                     anno_dict = json.loads(annotations_json_str)
                                     anno_dict['filename'] = str(variant_img_path.relative_to(temp_generated_data_dir))
                                     anno_dict['difficulty_score'] = float(difficulty_score_val)
                                     json.dump(anno_dict, f, indent=4)
-                                
+
                                 all_difficulty_scores.append({
-                                    'filename': str(variant_img_path.relative_to(temp_generated_data_dir)), 
+                                    'filename': str(variant_img_path.relative_to(temp_generated_data_dir)),
                                     'split': 'temp',
                                     'difficulty_score': float(difficulty_score_val)
                                 })
@@ -975,19 +1140,19 @@ def run_pipeline():
                                 processed_count_current_run += 1
                                 stems_f.write(f"{variant_stem}\n")
                                 stems_f.flush()
-                                logger.debug(f"  Processed image {processed_count_current_run} ({variant_stem}) in batch {i+1}.")
+                                logger.debug(f"     Processed image {processed_count_current_run} ({variant_stem}) in batch {i+1}.")
                             except Exception as e:
                                 logger.error(f"Error processing image {j} in DALI batch {i}: {e}", exc_info=True)
                                 continue
                     except Exception as e:
                         logger.error(f"Error processing DALI batch {i}: {e}", exc_info=True)
                         continue
-            
+
             logger.info(f"Finished DALI-accelerated data generation. Processed {processed_count_current_run} new images (total: {processed_count_current_run + len(processed_stems)}).")
             dali_pipeline.empty()
             del dali_pipeline
             del dali_iterator
-        
+
         except Exception as e:
             logger.error(f"An error occurred during DALI data iteration: {e}", exc_info=True)
             logger.error("DALI data generation failed. You can restart, and it will resume from the last successfully processed image.")
@@ -995,7 +1160,7 @@ def run_pipeline():
 
         # --- Stratified Splits + Challenge Subset ---
         logger.info("Splitting generated data into train, val, test, and challenge_val sets...")
-        
+
         generated_image_class_ids = {}
         for img_path in all_generated_temp_paths_for_split:
             anno_path = temp_generated_data_dir / 'annotations' / 'temp' / (img_path.stem + '.json')
@@ -1028,12 +1193,12 @@ def run_pipeline():
             # First, split into train and (val+test+challenge_val)
             train_size_ratio = CONFIG['splits']['train']
             val_test_challenge_ratio = CONFIG['splits']['val'] + CONFIG['splits']['test'] + CONFIG['splits']['challenge_val']
-            
-            t_paths, val_test_challenge_paths = train_test_split(valid_generated_imgs, 
+
+            t_paths, val_test_challenge_paths = train_test_split(valid_generated_imgs,
                                                                  train_size=train_size_ratio,
-                                                                 stratify=labels_for_strat_gen, 
+                                                                 stratify=labels_for_strat_gen,
                                                                  random_state=CONFIG['seed'])
-            
+
             # Now split val_test_challenge_paths into val, test, and challenge_val
             labels_val_test_challenge = [generated_image_class_ids[str(p)] for p in val_test_challenge_paths]
             total_remaining = len(val_test_challenge_paths)
@@ -1060,53 +1225,53 @@ def run_pipeline():
                     if val_size >= test_size and val_size >= challenge_size: val_size = max(0, val_size + diff)
                     elif test_size >= val_size and test_size >= challenge_size: test_size = max(0, test_size + diff)
                     else: challenge_size = max(0, challenge_size + diff)
-            
+
             # Perform splits sequentially
             if total_remaining > 0:
                 # Split off challenge_val first
-                val_test_rem_paths, challenge_val_paths = train_test_split(val_test_challenge_paths, 
-                                                                            test_size=challenge_size, 
-                                                                            stratify=[generated_image_class_ids[str(p)] for p in val_test_challenge_paths], 
+                val_test_rem_paths, challenge_val_paths = train_test_split(val_test_challenge_paths,
+                                                                            test_size=challenge_size,
+                                                                            stratify=[generated_image_class_ids[str(p)] for p in val_test_challenge_paths],
                                                                             random_state=CONFIG['seed'])
                 # Then split remaining into val and test
                 labels_val_test_rem = [generated_image_class_ids[str(p)] for p in val_test_rem_paths]
-                val_paths, test_paths = train_test_split(val_test_rem_paths, 
-                                                          test_size=test_size, 
-                                                          stratify=labels_val_test_rem, 
+                val_paths, test_paths = train_test_split(val_test_rem_paths,
+                                                          test_size=test_size,
+                                                          stratify=labels_val_test_rem,
                                                           random_state=CONFIG['seed'])
             else:
                 val_paths, test_paths, challenge_val_paths = [], [], []
-            
+
             splits = {'train': t_paths, 'val': val_paths, 'test': test_paths, 'challenge_val': challenge_val_paths}
-        
+
         logger.info(f"Generated dataset split: Train={len(splits['train'])}, Val={len(splits['val'])}, Test={len(splits['test'])}, Challenge_Val={len(splits['challenge_val'])}")
-        
+
         logger.info("Moving generated data to final split directories...")
         temp_stem_to_final_split = {}
         for split_name, paths_list in splits.items():
             for p in paths_list:
                 temp_stem_to_final_split[p.stem] = split_name
-        
+
         for split_name, image_paths_list in splits.items():
             target_img_dir = Path(CONFIG['output_root']) / 'images' / split_name
             target_label_dir = Path(CONFIG['output_root']) / 'labels' / split_name
             target_anno_dir = Path(CONFIG['output_root']) / 'annotations' / split_name
-            
+
             target_img_dir.mkdir(parents=True, exist_ok=True)
             target_label_dir.mkdir(parents=True, exist_ok=True)
             target_anno_dir.mkdir(parents=True, exist_ok=True)
-            
+
             from tqdm import tqdm # Import tqdm here for local use
             for img_path_temp in tqdm(image_paths_list, desc=f"Moving {split_name} data"):
                 stem = img_path_temp.stem
-                
+
                 temp_label_path = temp_generated_data_dir / 'labels' / 'temp' / f"{stem}.txt"
                 temp_anno_path = temp_generated_data_dir / 'annotations' / 'temp' / f"{stem}.json"
-                
+
                 final_img_path = target_img_dir / f"{stem}.png"
                 final_label_path = target_label_dir / f"{stem}.txt"
                 final_anno_path = target_anno_dir / f"{stem}.json"
-                
+
                 try:
                     if img_path_temp.exists():
                         shutil.move(img_path_temp, final_img_path)
@@ -1117,23 +1282,23 @@ def run_pipeline():
                 except Exception as e:
                     logger.error(f"Error moving file {img_path_temp.name} to {split_name} split: {e}", exc_info=True)
                     continue
-        
+
         logger.info("Finished moving data to final split directories.")
-        
+
         for entry in all_difficulty_scores:
             temp_filename_path_relative = Path(entry['filename'])
             final_split = temp_stem_to_final_split.get(temp_filename_path_relative.stem)
-            
+
             if final_split:
                 entry['split'] = final_split
                 entry['filename'] = str(Path('images') / final_split / temp_filename_path_relative.name)
             else:
                 logger.warning(f"Could not determine final split for temp file: {entry['filename']}. Skipping path update.")
-        
+
         logger.info(f"Cleaning up temporary generated data directory: {temp_generated_data_dir}")
         if temp_generated_data_dir.exists():
             shutil.rmtree(temp_generated_data_dir)
-        
+
         data_generated_flag_file.parent.mkdir(parents=True, exist_ok=True)
         data_generated_flag_file.touch()
         logger.info(f"Created data generation completion flag file: {data_generated_flag_file}")
@@ -1173,12 +1338,11 @@ def run_pipeline():
         # Mine hard examples from the validation set
         hard_examples_val = yolo_fine_tuning.mine_hard_examples(
             model_path=str(trained_model.ckpt_path), # Use the path to the best model
-            data_root=CONFIG['output_root'], 
+            data_root=CONFIG['output_root'],
             split='val', # Mine from validation set
             output_dir=CONFIG['hard_examples_dir'],
             conf_thresh=CONFIG['hard_mining_conf_thresh']
         )
-
         # Filter by difficulty score (D.2)
         if hard_examples_val:
             logger.info(f"Filtering {len(hard_examples_val)} hard examples by difficulty score...")
@@ -1205,18 +1369,19 @@ def run_pipeline():
             hard_final = []
             logger.info("No hard examples found after initial mining.")
 
-
         # Retrain on hard examples
         if hard_final:
             yolo_fine_tuning.retrain_on_hard_examples(trained_model, hard_final, CONFIG)
             logger.info("Hard example retraining completed. Final evaluation on validation set after retraining.")
+
             # Re-evaluate after hard example retraining
             final_model_path_after_retrain = Path(CONFIG['model_save_dir'] + '_hard_retrain') / 'weights' / 'best.pt'
             if final_model_path_after_retrain.exists():
+                from ultralytics import YOLO # Import YOLO here for evaluation
                 retrained_model = YOLO(str(final_model_path_after_retrain))
                 retrained_model.to(CONFIG['yolo_device'])
                 logger.info(f"Loaded best model after hard example retraining: {final_model_path_after_retrain}")
-                
+
                 metrics_after_retrain = retrained_model.val(
                     data=str(data_yaml_path),
                     imgsz=CONFIG['yolo_img_size'][-1],
@@ -1236,6 +1401,7 @@ def run_pipeline():
             logger.info("No hard examples found for retraining after difficulty filtering.")
     else:
         logger.error("YOLO model was not successfully fine-tuned. Skipping hard example mining and retraining.")
+
     logger.info("\nFull YOLO Pipeline execution completed successfully!")
 
 def main():
@@ -1243,7 +1409,7 @@ def main():
         torch.multiprocessing.set_start_method('spawn', force=True)
     except RuntimeError as e:
         logger.warning(f"Could not set multiprocessing start method (might already be set): {e}")
-    
+
     run_pipeline()
 
 if __name__ == "__main__":
