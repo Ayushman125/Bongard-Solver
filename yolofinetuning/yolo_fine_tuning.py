@@ -11,8 +11,10 @@ import random
 import shutil
 import json  # Import json for difficulty score filtering
 import yaml  # Import yaml for data.yaml creation
+
 # Import CONFIG from main.py for global access
 from main import CONFIG
+
 # Import new modules/stubs
 from .stubs import (
     SAM,  # Stub for SAM optimizer
@@ -37,8 +39,19 @@ from .stubs import (
 )
 # Import losses
 from .stubs import DynamicFocalCIoULoss  # Assuming DynamicFocalCIoULoss is in stubs or losses.py
+
+# Import new data pipeline components
+from .data_pipeline import (
+    get_dali_loader,
+    get_ffcv_loader,
+    prefetch_loader,
+    HAS_DALI, # Import flags to check availability
+    HAS_FFCV
+)
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
 # --- Checkpoint Helpers ---
 def save_checkpoint(model, optimizer, epoch, path=None):
     """
@@ -63,6 +76,7 @@ def save_checkpoint(model, optimizer, epoch, path=None):
         'epoch':       epoch
     }, final_path)
     logger.info(f"Checkpoint saved: {final_path}")
+
 def load_checkpoint(model, optimizer, resume_path):
     """
     Loads model and optimizer states from a checkpoint file.
@@ -87,6 +101,7 @@ def load_checkpoint(model, optimizer, resume_path):
     except Exception as e:
         logger.error(f"Error loading checkpoint from {resume_path}: {e}. Starting from scratch.", exc_info=True)
         return 0  # Start from epoch 0 on error
+
 def mine_hard_examples(model_path, data_root, split='val', output_dir=None, conf_thresh=0.05):
     """
     Mines hard examples from a dataset split using a trained YOLO model.
@@ -137,6 +152,7 @@ def mine_hard_examples(model_path, data_root, split='val', output_dir=None, conf
             
     logger.info(f"Finished hard example mining. Found {len(hard_example_paths)} hard examples in {output_hard_dir}.")
     return hard_example_paths
+
 def plot_predictions(model, num_samples, save_dir, class_names, img_paths_to_visualize=None, config=None):
     """
     Visualizes model predictions on a few samples.
@@ -180,6 +196,7 @@ def plot_predictions(model, num_samples, save_dir, class_names, img_paths_to_vis
                 logger.error(f"Error visualizing prediction for {img_path}: {e}. Skipping.")
                 continue
     logger.info(f"Finished saving {count} sample predictions.")
+
 def build_model():
     """
     Builds the YOLOv8 model, optionally integrating custom backbone, attention, and mask head.
@@ -244,6 +261,7 @@ def build_model():
         logger.info("NAS-searchable neck enabled (conceptual). Requires a custom YOLOv8 implementation.")
         logger.warning("NAS-searchable neck is a conceptual feature. Requires a custom YOLOv8 model definition.")
     return model
+
 def fine_tune_yolo_model(config):
     """
     Performs two-stage fine-tuning of a YOLOv8 model with a manual training loop,
@@ -349,7 +367,135 @@ def fine_tune_yolo_model(config):
             logger.warning(f"Teacher model not found at {teacher_model_path}. Disabling distillation/semi-supervised features.")
             CONFIG['distillation']['enabled'] = False
             CONFIG['semi_supervised']['enabled'] = False
-     # Dummy DataLoader for demonstration (replace with actual DALI iterator or PyTorch DataLoader)
+    
+    # --- DataLoader Setup (DALI, FFCV, or PyTorch DataLoader) ---
+    dp_cfg = CONFIG['data_pipeline']
+    train_loader = None
+    val_loader = None
+
+    if dp_cfg['type'] == 'dali':
+        if HAS_DALI:
+            # Note: The DALI loader in data_pipeline.py currently only returns images.
+            # For labels and masks, you would need to extend that DALI pipeline
+            # or load them separately.
+            train_loader = get_dali_loader(CONFIG, 'train')
+            val_loader = get_dali_loader(CONFIG, 'val')
+            if train_loader is None or val_loader is None:
+                logger.error("DALI loaders could not be created. Falling back to dummy loaders.")
+                # Fallback to DummyDataLoader if DALI fails or is not found
+                # This DummyDataLoader is defined below for demonstration
+                train_loader = DummyDataLoader(
+                    num_batches=CONFIG['yolo_epochs'] * 10,
+                    img_size=config['yolo_img_size'],
+                    num_classes=config['num_classes'],
+                    data_root=config['output_root'],
+                    split='train',
+                    batch_size=config['yolo_batch_size']
+                )
+                val_loader = DummyDataLoader(
+                    num_batches=CONFIG['yolo_epochs'] * 2,
+                    img_size=config['yolo_img_size'],
+                    num_classes=config['num_classes'],
+                    data_root=config['output_root'],
+                    split='val',
+                    batch_size=config['yolo_batch_size']
+                )
+        else:
+            logger.error("DALI selected but not installed. Falling back to dummy loaders.")
+            # Fallback to DummyDataLoader
+            train_loader = DummyDataLoader(
+                num_batches=CONFIG['yolo_epochs'] * 10,
+                img_size=config['yolo_img_size'],
+                num_classes=config['num_classes'],
+                data_root=config['output_root'],
+                split='train',
+                batch_size=config['yolo_batch_size']
+            )
+            val_loader = DummyDataLoader(
+                num_batches=CONFIG['yolo_epochs'] * 2,
+                img_size=config['yolo_img_size'],
+                num_classes=config['num_classes'],
+                data_root=config['output_root'],
+                split='val',
+                batch_size=config['yolo_batch_size']
+            )
+    elif dp_cfg['type'] == 'ffcv':
+        if HAS_FFCV:
+            # You might need to run `convert_to_ffcv(CONFIG)` once before this.
+            # Note: The FFCV loader in data_pipeline.py currently outputs (image, single_label).
+            # It does not provide YOLO bounding box formats or masks by default.
+            logger.warning("FFCV loader is configured but currently only provides image and a single integer label. "
+                           "YOLO training requires bounding box labels. Please extend FFCV conversion/loader "
+                           "to handle full YOLO label format.")
+            train_loader = get_ffcv_loader(CONFIG, 'train')
+            val_loader = get_ffcv_loader(CONFIG, 'val')
+            if train_loader is None or val_loader is None:
+                logger.error("FFCV loaders could not be created. Falling back to dummy loaders.")
+                # Fallback to DummyDataLoader
+                train_loader = DummyDataLoader(
+                    num_batches=CONFIG['yolo_epochs'] * 10,
+                    img_size=config['yolo_img_size'],
+                    num_classes=config['num_classes'],
+                    data_root=config['output_root'],
+                    split='train',
+                    batch_size=config['yolo_batch_size']
+                )
+                val_loader = DummyDataLoader(
+                    num_batches=CONFIG['yolo_epochs'] * 2,
+                    img_size=config['yolo_img_size'],
+                    num_classes=config['num_classes'],
+                    data_root=config['output_root'],
+                    split='val',
+                    batch_size=config['yolo_batch_size']
+                )
+        else:
+            logger.error("FFCV selected but not installed. Falling back to dummy loaders.")
+            # Fallback to DummyDataLoader
+            train_loader = DummyDataLoader(
+                num_batches=CONFIG['yolo_epochs'] * 10,
+                img_size=config['yolo_img_size'],
+                num_classes=config['num_classes'],
+                data_root=config['output_root'],
+                split='train',
+                batch_size=config['yolo_batch_size']
+            )
+            val_loader = DummyDataLoader(
+                num_batches=CONFIG['yolo_epochs'] * 2,
+                img_size=config['yolo_img_size'],
+                num_classes=config['num_classes'],
+                data_root=config['output_root'],
+                split='val',
+                batch_size=config['yolo_batch_size']
+            )
+    else: # Fallback to a standard PyTorch DataLoader (or DummyDataLoader)
+        logger.info("Using standard PyTorch DataLoader (or DummyDataLoader) as per config or fallback.")
+        # You would typically define a standard PyTorch Dataset and DataLoader here
+        # For now, we'll use the DummyDataLoader as a generic fallback.
+        train_loader = DummyDataLoader(
+            num_batches=CONFIG['yolo_epochs'] * 10,
+            img_size=config['yolo_img_size'],
+            num_classes=config['num_classes'],
+            data_root=config['output_root'],
+            split='train',
+            batch_size=config['yolo_batch_size']
+        )
+        val_loader = DummyDataLoader(
+            num_batches=CONFIG['yolo_epochs'] * 2,
+            img_size=config['yolo_img_size'],
+            num_classes=config['num_classes'],
+            data_root=config['output_root'],
+            split='val',
+            batch_size=config['yolo_batch_size']
+        )
+
+    if dp_cfg.get('prefetch', False) and torch.cuda.is_available():
+        logger.info("Applying GPU prefetch to DataLoaders.")
+        train_loader = prefetch_loader(train_loader)
+        val_loader = prefetch_loader(val_loader)
+    elif dp_cfg.get('prefetch', False) and not torch.cuda.is_available():
+        logger.warning("Prefetching requested but CUDA is not available. Skipping prefetch.")
+
+    # Dummy DataLoader definition (kept for fallback/demonstration)
     class DummyDataLoader:
         def __init__(self, num_batches, img_size, num_classes, data_root, split, batch_size):
              self .num_batches = num_batches
@@ -431,22 +577,7 @@ def fine_tune_yolo_model(config):
                 imgs_tensor = torch.stack(imgs_batch).to(device)
                 masks_tensor = torch.stack(masks_batch).to(device) if CONFIG['mask_head']['enabled'] else None
                 yield imgs_tensor, targets_tensor, masks_tensor
-    train_loader = DummyDataLoader(
-        num_batches=CONFIG['yolo_epochs'] * 10,
-        img_size=config['yolo_img_size'],
-        num_classes=config['num_classes'],
-        data_root=config['output_root'],
-        split='train',
-        batch_size=config['yolo_batch_size']
-    )
-    val_loader = DummyDataLoader(
-        num_batches=CONFIG['yolo_epochs'] * 2,
-        img_size=config['yolo_img_size'],
-        num_classes=config['num_classes'],
-        data_root=config['output_root'],
-        split='val',
-        batch_size=config['yolo_batch_size']
-    )
+
     # --- Checkpoint Resume Logic (uses CONFIG['train']) ---
     start_epoch  = 0
     resume_path  = CONFIG['train'].get('resume_from')
@@ -486,12 +617,36 @@ def fine_tune_yolo_model(config):
         model.train() # Set model to training mode
         total_loss = 0.0
         # wrap DataLoader with per-epoch tqdm bar
-        for imgs, targets, gt_masks in tqdm(
+        for batch_idx, batch in enumerate(tqdm(
             train_loader,
             desc=f"Epoch {epoch+1}/{total_epochs}",
             leave=False,
             total=len(train_loader)
-        ):
+        )):
+            # Adjust batch unpacking based on loader type
+            if dp_cfg['type'] == 'dali':
+                imgs = batch['images']
+                # For DALI, if labels/masks are not part of the pipeline output,
+                # you'd need to load them here or they will be dummy/None.
+                # Assuming DummyDataLoader's behavior for targets/gt_masks if using DALI.
+                # In a real scenario, you'd extend the DALI pipeline in data_pipeline.py
+                # to output labels and masks.
+                targets = torch.empty(0, 6, dtype=torch.float32).to(device) # Placeholder
+                gt_masks = None # Placeholder
+                # If you need real labels/masks from DALI, ensure your DALI pipeline in data_pipeline.py
+                # is modified to output them, e.g., `return self.norm, self.labels, self.masks`
+                # and then `imgs, targets, gt_masks = batch['images'], batch['labels'], batch['masks']`
+            elif dp_cfg['type'] == 'ffcv':
+                imgs, targets_ffcv = batch # FFCV yields (images, labels)
+                # FFCV labels are currently single integers. Convert to YOLO format.
+                # This is a placeholder and needs proper implementation for real YOLO training.
+                targets = torch.empty(imgs.shape[0], 6, dtype=torch.float32).to(device) # Placeholder
+                # Example: targets[:, 0] = targets_ffcv.squeeze() # class_id
+                # targets[:, 1:] = 0.5 # dummy bbox
+                gt_masks = None # FFCV as defined doesn't provide masks
+            else: # DummyDataLoader or standard PyTorch DataLoader
+                imgs, targets, gt_masks = batch
+
             imgs, targets = imgs.to(device), targets.to(device)
             if gt_masks is not None:
                 gt_masks = gt_masks.to(device)
@@ -704,6 +859,7 @@ def fine_tune_yolo_model(config):
                 logger.error(f"Retraining in active learning cycle {cycle + 1} failed.")
                 break
         logger.info("Active Learning Cycle completed.")
+
 def mine_uncertain_examples(model, unlabeled_data_dir, entropy_threshold):
     """
     Predicts on unlabeled data and identifies uncertain examples based on prediction entropy.
@@ -722,6 +878,7 @@ def mine_uncertain_examples(model, unlabeled_data_dir, entropy_threshold):
     
     logger.info(f"Simulated identification of {len(uncertain_paths)} uncertain examples.")
     return uncertain_paths
+
 def simulate_labeling(uncertain_examples_paths, config):
     """
     Simulates the labeling process by moving uncertain examples to the main dataset
@@ -765,6 +922,7 @@ def simulate_labeling(uncertain_examples_paths, config):
             logger.error(f"Error simulating labeling for {img_path.name}: {e}")
     logger.info(f"Finished simulating labeling. {len(newly_labeled_paths)} examples processed.")
     return newly_labeled_paths
+
 def validate(model, val_loader, device):
     """
     Performs validation on the model using a DataLoader.
@@ -779,7 +937,20 @@ def validate(model, val_loader, device):
      # Placeholder for metric accumulation
     total_val_loss = 0.0
     
-    for imgs, targets, gt_masks in tqdm(val_loader, desc="Validation"):
+    for batch in tqdm(val_loader, desc="Validation"):
+        # Adjust batch unpacking based on loader type
+        dp_cfg = CONFIG['data_pipeline']
+        if dp_cfg['type'] == 'dali':
+            imgs = batch['images']
+            targets = torch.empty(0, 6, dtype=torch.float32).to(device) # Placeholder
+            gt_masks = None # Placeholder
+        elif dp_cfg['type'] == 'ffcv':
+            imgs, targets_ffcv = batch # FFCV yields (images, labels)
+            targets = torch.empty(imgs.shape[0], 6, dtype=torch.float32).to(device) # Placeholder
+            gt_masks = None # FFCV as defined doesn't provide masks
+        else: # DummyDataLoader or standard PyTorch DataLoader
+            imgs, targets, gt_masks = batch
+
         imgs, targets = imgs.to(device), targets.to(device)
         if gt_masks is not None:
             gt_masks = gt_masks.to(device)
@@ -809,5 +980,5 @@ def validate(model, val_loader, device):
             
     avg_val_loss = total_val_loss / len(val_loader)
     logger.info(f"Validation finished. Average Loss: {avg_val_loss:.4f}")
-     # In a real scenario, return actual metrics here
+     # In a scenario, return actual metrics here
     return {"avg_loss": avg_val_loss}

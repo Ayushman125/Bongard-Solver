@@ -307,6 +307,11 @@ CONFIG = {
         'checkpoint_dir': 'checkpoints',         # where to write .pt files
         'save_every': 5                          # save a checkpoint every N epochs
     },
+    # Data Pipeline Configuration (newly added)
+    'data_pipeline': {
+        'type': 'dali', # Options: 'dali', 'ffcv', 'pytorch' (for DummyDataLoader fallback)
+        'prefetch': True # Whether to use prefetch_loader for PyTorch/FFCV loaders
+    }
 }
 
 # --- LOGGING ──────────────────────────────────────────────────────────────────
@@ -591,7 +596,7 @@ def generate_gan_images(n_images=100, output_dir=None, img_size=(224, 224)):
             img_np = ((generated_image_tensor[0].numpy() + 1) / 2 * 255).astype(np.uint8)
             img_np = np.transpose(img_np, (1, 2, 0))
             if img_np.shape[0] != img_size[0] or img_np.shape[1] != img_size[1]:
-                img_np = cv2.resize(img_np, (img_size[1], img_size[0]), interpolation=cv2.INTERP_LINEAR)
+                img_np = cv2.resize(img_np, (img_size[1], img_size[0]), interpolation=cv2.INTER_LINEAR)
             cv2.imwrite(str(filename), cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR))
             generated_count += 1
     logger.info(f"Finished generating {generated_count} synthetic images to {output_path}.")
