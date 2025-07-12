@@ -5,23 +5,60 @@ import logging
 import numpy as np
 from pathlib import Path
 from collections import Counter
-import math  # For math.ceil
+import math # For math.ceil
 import cv2
 import yaml
 import torch
 from perlin_noise import PerlinNoise
-from PIL import Image, ImageDraw  # For PIL shape generation
-from shapely.geometry import Polygon  # For boolean operations
+from PIL import Image, ImageDraw # For PIL shape generation
+from shapely.geometry import Polygon # For boolean operations
 # Import CONFIG from main.py for global access
 from main import CONFIG
 # Import stubs for external modules
-from .stubs import SimGANGenerator, CycleGANGenerator, nn  # nn for torch.nn
+from .stubs import SimGANGenerator, CycleGANGenerator, nn # nn for torch.nn
+from .simgan_refiner import SimGANRefiner # Corrected import path
+from yolofinetuning.albumentations_augmix import AugMix
+from albumentations.pytorch import ToTensorV2
+
+# Initialize once
+simgan_refiner = SimGANRefiner().cuda()
+
+def apply_simgan(img_tensor):
+    """
+    Applies the SimGAN refiner to a given image tensor.
+    Args:
+        img_tensor (torch.Tensor): Input image tensor (HWC or CHW, float32).
+                                   Expected to be in range [0, 255] or [0, 1].
+                                   This function will convert it to [0, 1] and add batch dimension.
+    Returns:
+        torch.Tensor: Refined image tensor, same shape as input, on CPU.
+    """
+    # Ensure the input is a PyTorch tensor and move to CUDA if not already
+    if not isinstance(img_tensor, torch.Tensor):
+        img_tensor = torch.from_numpy(img_tensor).float()
+
+    # If HWC, permute to CHW for model input
+    if img_tensor.shape[2] == 3: # Assuming HWC format
+        img_tensor = img_tensor.permute(2, 0, 1) # Convert to CHW
+
+    # Normalize to [0, 1] if not already (assuming input is [0, 255] or similar)
+    if img_tensor.max() > 1.0:
+        img_tensor = img_tensor / 255.0
+
+    img_tensor = img_tensor.unsqueeze(0).cuda()  # add batch dim and move to GPU
+
+    with torch.no_grad():
+        refined = simgan_refiner(img_tensor)
+
+    # Convert back to [0, 255] and remove batch dim, move to CPU
+    return (refined.squeeze(0).cpu() * 255.0).permute(1, 2, 0) # Convert back to HWC for DALI/NumPy
+
 # --- DALI Imports ---
 try:
     from nvidia.dali.pipeline import Pipeline
     import nvidia.dali.fn as fn
     import nvidia.dali.types as types
-    import nvidia.dali.backend as backend  # Import DALI backend for memory allocation
+    import nvidia.dali.backend as backend # Import DALI backend for memory allocation
     from nvidia.dali.plugin.pytorch import DALIGenericIterator, LastBatchPolicy
     HAS_DALI = True
     dali_logger = logging.getLogger("dali_logger")
@@ -51,8 +88,17 @@ DIFFICULTY_WEIGHTS = {
     'num_relations': 0.3,
 }
 # --- Initialize translators once (using CONFIG from main) ---
-simgan_gen = SimGANGenerator(CONFIG['simgan']['path']) if CONFIG.get('simgan', {}).get('enabled') else None
-cyclegan_gen = CycleGANGenerator(CONFIG['cyclegan']['path']) if CONFIG.get('cyclegan', {}).get('enabled') else None
+# simgan_gen = SimGANGenerator(CONFIG['simgan']['path']) if CONFIG.get('simgan', {}).get('enabled') else None
+# cyclegan_gen = CycleGANGenerator(CONFIG['cyclegan']['path']) if CONFIG.get('cyclegan', {}).get('enabled') else None
+# These are now handled by the apply_simgan and apply_cyclegan functions,
+# and the models themselves are initialized once globally if needed.
+# For now, we'll keep the stubs for SimGANGenerator/CycleGANGenerator if they are used elsewhere.
+# If they are only used for apply_simgan/apply_cyclegan, they can be removed.
+# Assuming SimGANGenerator and CycleGANGenerator are still needed for other parts of the pipeline,
+# but their direct usage for translation will be replaced by apply_simgan/apply_cyclegan.
+# For the purpose of this task, we will comment out the initialization of simgan_gen and cyclegan_gen
+# as apply_simgan function will be used directly.
+
 # --- Helper Functions (Full Implementations) ---
 def detect_contours(image_gray, block_size, C, min_area, max_contours_to_find, morphological_ops=None):
     """
@@ -86,6 +132,7 @@ def detect_contours(image_gray, block_size, C, min_area, max_contours_to_find, m
     filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) >= min_area]
     filtered_contours = sorted(filtered_contours, key=cv2.contourArea, reverse=True)[:max_contours_to_find]
     return filtered_contours
+
 def cnt_to_yolo(contour, img_width, img_height, class_id, min_contour_area=0):
     """
     Converts an OpenCV contour to YOLO bounding box format (class_id center_x center_y width height).
@@ -108,6 +155,7 @@ def cnt_to_yolo(contour, img_width, img_height, class_id, min_contour_area=0):
     if not (0 <= center_x <= 1 and 0 <= center_y <= 1 and 0 <= norm_width <= 1 and 0 <= norm_height <= 1):
         return None
     return (class_id, center_x, center_y, norm_width, norm_height)
+
 def extract_attrs(contour, image_color, img_size_categories=(0.01, 0.05, 0.15)):
     """
     Extracts attributes from a contour, including shape type, size category, and orientation.
@@ -172,13 +220,13 @@ def extract_attrs(contour, image_color, img_size_categories=(0.01, 0.05, 0.15)):
         elif 0.5 <= attrs['aspect_ratio'] <= 2.0:
             attrs['shape_type'] = 'rectangle'
         else:
-            attrs['shape_type'] = 'polygon'  # Fallback for irregular quadrilaterals
+            attrs['shape_type'] = 'polygon' # Fallback for irregular quadrilaterals
     elif num_vertices > 4 and attrs['circularity'] > 0.8:
         attrs['shape_type'] = 'circle'
     elif num_vertices > 4:
         attrs['shape_type'] = 'polygon'
     else:
-        attrs['shape_type'] = 'other'  # For complex or irregular shapes
+        attrs['shape_type'] = 'other' # For complex or irregular shapes
     if relative_area < img_size_categories[0]:
         attrs['size_category'] = 'tiny'
     elif relative_area < img_size_categories[1]:
@@ -197,6 +245,7 @@ def extract_attrs(contour, image_color, img_size_categories=(0.01, 0.05, 0.15)):
     else:
         attrs['complexity'] = 0.0
     return attrs
+
 def compute_relations(attributes_list):
     """
     Computes simple spatial relations between detected objects, including overlaps and contains.
@@ -248,6 +297,7 @@ def compute_relations(attributes_list):
                     elif x2 <= x1 and y2 <= y1 and (x2 + w2) >= (x1 + w1) and (y2 + h2) >= (y1 + h1):
                         relations.append({'type': 'contains', 'object1_idx': j, 'object2_idx': i})
     return relations
+
 def random_bg(img_np, bg_paths):
     """
     Applies a random background image to the foreground objects in img_np.
@@ -274,7 +324,7 @@ def random_bg(img_np, bg_paths):
             bg = cv2.cvtColor(bg, cv2.COLOR_GRAY2BGR)
         
         # Ensure both are 3-channel for bitwise operations
-        if img_np.ndim == 2:  # if grayscale, convert to BGR
+        if img_np.ndim == 2: # if grayscale, convert to BGR
             img_np = cv2.cvtColor(img_np, cv2.COLOR_GRAY2BGR)
         
         # Create a mask from the foreground (assuming white background)
@@ -282,8 +332,8 @@ def random_bg(img_np, bg_paths):
         gray_fg = cv2.cvtColor(img_np, cv2.COLOR_BGR2GRAY)
         # Invert the mask if the foreground is black on white, or vice versa
         # Assuming objects are dark on a light background, threshold to get objects as white
-        _, mask = cv2.threshold(gray_fg, 240, 255, cv2.THRESH_BINARY_INV)  # Objects are > 0, background is 0
-        mask_inv = cv2.bitwise_not(mask)  # Invert mask for background region
+        _, mask = cv2.threshold(gray_fg, 240, 255, cv2.THRESH_BINARY_INV) # Objects are > 0, background is 0
+        mask_inv = cv2.bitwise_not(mask) # Invert mask for background region
         # Extract foreground and background parts
         img_fg = cv2.bitwise_and(img_np, img_np, mask=mask)
         bg_part = cv2.bitwise_and(bg, bg, mask=mask_inv)
@@ -293,6 +343,7 @@ def random_bg(img_np, bg_paths):
     except Exception as e:
         logger.error(f"Error applying random background from {bg_path}: {e}. Returning original image.")
         return img_np
+
 def occlude(img, occlude_p, occlude_max_factor):
     """
     Applies random rectangular occlusion to an image.
@@ -314,6 +365,7 @@ def occlude(img, occlude_p, occlude_max_factor):
     occluded_img = img.copy()
     occluded_img[y:y+ph, x:x+pw] = np.random.randint(0, 255, (ph, pw, 3), dtype=np.uint8)
     return occluded_img
+
 def add_clutter(img, num_clutter_patches, clutter_max_factor):
     """
     Adds random clutter (rectangles or circles) to an image.
@@ -332,11 +384,11 @@ def add_clutter(img, num_clutter_patches, clutter_max_factor):
         if patch_h <= 0 or patch_w <= 0:
             continue
         y = random.randint(0, h - patch_h) if h - patch_h > 0 else 0
-        x = random.randint(0, w - patch_w) if w - patch_w > 0 else 0
+        x = random.randint(0, w - patch_w) if w - pw > 0 else 0
         
-        if random.random() < 0.5:  # Random color block
-            cluttered_img[y:y+patch_h, x:x+patch_w] = np.random.randint(0, 255, (patch_h, patch_w, 3), dtype=np.uint8)
-        else:  # Random basic shape
+        if random.random() < 0.5: # Random color block
+            cluttered_img[y:y+patch_h, x:x+pw] = np.random.randint(0, 255, (ph, pw, 3), dtype=np.uint8)
+        else: # Random basic shape
             shape_type = random.choice(['circle', 'rectangle'])
             color = (random.randint(0,255), random.randint(0,255), random.randint(0,255))
             
@@ -347,6 +399,7 @@ def add_clutter(img, num_clutter_patches, clutter_max_factor):
             else:
                 cv2.rectangle(cluttered_img, (x, y), (x + patch_w, y + patch_h), color, -1)
     return cluttered_img
+
 def get_cached_fractal(fractal_type, cache_dir, size, noise_params):
     seed_key = noise_params.get('seed', 0)
     level_key = noise_params.get('level', 0)
@@ -395,6 +448,7 @@ def get_cached_fractal(fractal_type, cache_dir, size, noise_params):
     else:
         logger.error(f"Failed to generate {fractal_type} image.")
         return np.zeros((size[0], size[1], 3), dtype=np.uint8)
+
 def draw_sierpinski(img_size=(224, 224), level=4, color=(255, 255, 255)):
     img = np.zeros((img_size[0], img_size[1], 3), dtype=np.uint8)
     points = np.array([
@@ -411,12 +465,13 @@ def draw_sierpinski(img_size=(224, 224), level=4, color=(255, 255, 255)):
         mid23 = ((p2[0] + p3[0]) // 2, (p2[1] + p3[1]) // 2)
         mid31 = ((p3[0] + p1[0]) // 2, (p3[1] + p1[1]) // 2)
         inverted_triangle_points = np.array([mid12, mid23, mid31], np.int32)
-        cv2.fillPoly(img, [inverted_triangle_points], (0, 0, 0))  # Fill with black to "remove"
+        cv2.fillPoly(img, [inverted_triangle_points], (0, 0, 0)) # Fill with black to "remove"
         _draw_recursive(p1, mid12, mid31, level_left - 1)
         _draw_recursive(mid12, p2, mid23, level_left - 1)
         _draw_recursive(mid31, mid23, p3, level_left - 1)
     _draw_recursive(points[0], points[1], points[2], level)
     return img
+
 def draw_koch(img_size=(224, 224), level=3, color=(255, 255, 255)):
     img = np.zeros((img_size[0], img_size[1], 3), dtype=np.uint8)
     side_length = min(img_size) * 0.7
@@ -459,6 +514,7 @@ def draw_koch(img_size=(224, 224), level=3, color=(255, 255, 255)):
     cv2.fillPoly(img, [snowflake_points_np], color)
     return img
 # --- End of Helper Functions ---
+
 # --- Python function for clamping and casting to UINT8 ---
 def clamp_to_uint8(x: np.ndarray):
     """
@@ -466,10 +522,11 @@ def clamp_to_uint8(x: np.ndarray):
     This is used as a Python function hook in DALI.
     """
     return np.clip(x, 0.0, 255.0).astype(np.uint8)
+
 # --- Python function for JPEG compression/decompression using OpenCV ---
 def jpeg_np(x: np.ndarray, quality_range: tuple):
     """
-    Performs JPEG compression and decompression using OpenCV.
+    Perform JPEG compression and decompression using OpenCV.
     Args:
         x (np.ndarray): Input image (HWC, uint8).
         quality_range (tuple): A tuple (min_quality, max_quality) for random selection.
@@ -479,6 +536,7 @@ def jpeg_np(x: np.ndarray, quality_range: tuple):
     q = int(np.random.uniform(*quality_range))
     _, buf = cv2.imencode('.jpg', x, [cv2.IMWRITE_JPEG_QUALITY, q])
     return cv2.imdecode(buf, cv2.IMREAD_COLOR)
+
 # --- MixUp / CutMix Helper Functions (for DALI Python Function) ---
 def mixup_np(img1, labels1, img2, labels2, alpha):
     """
@@ -496,6 +554,7 @@ def mixup_np(img1, labels1, img2, labels2, alpha):
     mixed_img = (lam * img1 + (1 - lam) * img2).astype(np.uint8)
     mixed_labels = np.concatenate((labels1, labels2), axis=0)
     return mixed_img, mixed_labels
+
 def cutmix_np(img1, labels1, img2, labels2, alpha):
     """
     Applies CutMix augmentation to two images and their labels.
@@ -527,16 +586,10 @@ def cutmix_np(img1, labels1, img2, labels2, alpha):
     # and labels from img2 that are inside the cut-out.
     labels1_px = labels1.copy()
     if labels1_px.shape[0] > 0:
-        labels1_px[:, 1] = labels1_px[:, 1] * W  # cx
-        labels1_px[:, 2] = labels1_px[:, 2] * H  # cy
-        labels1_px[:, 3] = labels1_px[:, 3] * W  # w
-        labels1_px[:, 4] = labels1_px[:, 4] * H  # h
-    labels2_px = labels2.copy()
-    if labels2_px.shape[0] > 0:
-        labels2_px[:, 1] = labels2_px[:, 1] * W  # cx
-        labels2_px[:, 2] = labels2_px[:, 2] * H  # cy
-        labels2_px[:, 3] = labels2_px[:, 3] * W  # w
-        labels2_px[:, 4] = labels2_px[:, 4] * H  # h
+        labels1_px[:, 1] = labels1_px[:, 1] * W # cx
+        labels1_px[:, 2] = labels1_px[:, 2] * H # cy
+        labels1_px[:, 3] = labels1_px[:, 3] * W # w
+        labels1_px[:, 4] = labels1_px[:, 4] * H # h
     filtered_labels1 = []
     for label in labels1_px:
         _, cx, cy, w_box, h_box = label
@@ -546,6 +599,12 @@ def cutmix_np(img1, labels1, img2, labels2, alpha):
         if not (box_x2 > x1 and box_x1 < x2 and box_y2 > y1 and box_y1 < y2):
             filtered_labels1.append(label)
     
+    labels2_px = labels2.copy()
+    if labels2_px.shape[0] > 0:
+        labels2_px[:, 1] = labels2_px[:, 1] * W # cx
+        labels2_px[:, 2] = labels2_px[:, 2] * H # cy
+        labels2_px[:, 3] = labels2_px[:, 3] * W # w
+        labels2_px[:, 4] = labels2_px[:, 4] * H # h
     filtered_labels2 = []
     for label in labels2_px:
         _, cx, cy, w_box, h_box = label
@@ -561,6 +620,7 @@ def cutmix_np(img1, labels1, img2, labels2, alpha):
         combined_labels_px[:, 4] = combined_labels_px[:, 4] / H
     
     return cutmixed_img, combined_labels_px
+
 # --- Integrated DALI Python Function for Annotation and Difficulty ---
 def _process_image_and_annotate_dali(image_np, config_dict, class_id_map, yolo_classes_list, difficulty_weights):
     """
@@ -614,7 +674,7 @@ def _process_image_and_annotate_dali(image_np, config_dict, class_id_map, yolo_c
     
     max_possible_difficulty = (
         difficulty_weights.get('num_objects', 0) * config_dict['max_cnt'] +
-        difficulty_weights.get('avg_complexity', 0) * 100 +  # Assuming max complexity is around 100
+        difficulty_weights.get('avg_complexity', 0) * 100 + # Assuming max complexity is around 100
         difficulty_weights.get('num_relations', 0) * (config_dict['max_cnt'] * (config_dict['max_cnt'] - 1) / 2)
     )
     difficulty_score = difficulty_score / max_possible_difficulty if max_possible_difficulty > 0 else 0.0
@@ -627,6 +687,7 @@ def _process_image_and_annotate_dali(image_np, config_dict, class_id_map, yolo_c
     }
     annotations_json_string = json.dumps(annotations_dict)
     return yolo_labels_np, np.array(annotations_json_string, dtype=object), np.array(difficulty_score, dtype=np.float32)
+
 # --- DALI Pipeline Definition (UPDATED FOR NEW AUGMENTATIONS & MIXUP/CUTMIX) ---
 if HAS_DALI:
     class BongardDaliPipeline(Pipeline):
@@ -715,7 +776,7 @@ if HAS_DALI:
                             imgs_augmented, alpha=(self.config['elastic']['alpha'], self.config['elastic']['alpha']),
                             sigma=(self.config['elastic']['sigma'], self.config['elastic']['sigma']),
                             interp_type=types.INTERP_LINEAR, device=self.dali_op_device)
-                    else:  # Fallback to affine if elastic_transform not available
+                    else: # Fallback to affine if elastic_transform not available
                         angle = fn.random.uniform(range=(-5.0, 5.0))
                         affine_matrix = fn.transforms.rotation(angle=angle, device="cpu")
                         e_transformed = fn.warp_affine(imgs_augmented, matrix=affine_matrix,
@@ -753,8 +814,7 @@ if HAS_DALI:
                 # DALI's deformable_transform is for flow fields, for simple translation, use affine or crop.
                 # Using `crop` with random anchor for a simple translation effect.
                 # A more precise DALI translation would involve `fn.transforms.translation` or `fn.warp_affine`.
-                # For this implementation, let's use `fn.transforms.translation` and `fn.warp_affine` for clarity.
-                coin_trans = fn.random.coin_flip(probability=self.config['dali_translation_p']) # Define coin_trans
+                coin_trans = fn.random.coin_flip(probability=self.config['dali_translation_p'])  # Define coin_trans
                 tx = fn.random.uniform(range=(-self.config['dali_translation_range'][0], self.config['dali_translation_range'][0])) * self.config['image_size'][1]
                 ty = fn.random.uniform(range=(-self.config['dali_translation_range'][1], self.config['dali_translation_range'][1])) * self.config['image_size'][0]
                 translation_matrix = fn.transforms.translation(offset=(tx, ty), device="cpu")
@@ -813,12 +873,22 @@ if HAS_DALI:
                 # Assuming simgan_gen and cyclegan_gen are initialized globally in my_data_utils.py
                 # and are callable with a numpy array, returning a numpy array.
                 if CONFIG.get('simgan', {}).get('enabled'):
-                    imgs_augmented_cpu_uint8_for_simgan = fn.python_function(fn.copy(imgs_augmented, device="cpu"), function=clamp_to_uint8, device="cpu", num_outputs=1)
-                    simgan_translated = fn.python_function(imgs_augmented_cpu_uint8_for_simgan, function=lambda x: simgan_gen.translate(x), device="cpu", num_outputs=1)
+                    # Convert to torch tensor, apply SimGAN, convert back to numpy
+                    # The apply_simgan function expects HWC numpy array and returns HWC torch tensor.
+                    # We need to ensure the DALI python_function receives and returns numpy arrays.
+                    # The apply_simgan function is updated to handle the conversion to/from torch.Tensor
+                    # and move to/from GPU internally.
+                    simgan_translated_np = fn.python_function(
+                        imgs_augmented,
+                        function=lambda x: apply_simgan(x).numpy(), # apply_simgan now returns HWC numpy
+                        device="cpu", # This python function runs on CPU
+                        num_outputs=1
+                    )
                     if self.dali_op_device == "gpu":
-                        simgan_translated = fn.copy(simgan_translated, device="gpu")
-                    imgs_augmented = fn.cast(simgan_translated, types.FLOAT)
+                        simgan_translated_np = fn.copy(simgan_translated_np, device="gpu")
+                    imgs_augmented = simgan_translated_np # Update imgs_augmented with the refined image
                     logger.debug("Applied SimGAN translation in DALI pipeline.")
+
                 if CONFIG.get('cyclegan', {}).get('enabled'):
                     imgs_augmented_cpu_uint8_for_cyclegan = fn.python_function(fn.copy(imgs_augmented, device="cpu"), function=clamp_to_uint8, device="cpu", num_outputs=1)
                     cyclegan_translated = fn.python_function(imgs_augmented_cpu_uint8_for_cyclegan, function=lambda x: cyclegan_gen.translate(x), device="cpu", num_outputs=1)
@@ -835,7 +905,7 @@ if HAS_DALI:
             # This function will be called with the image path string (label from reader)
             # and return the YOLO labels and annotation JSON string.
             def _load_precomputed_annotations_np(image_path_str, raw_annotations_dir_str, class_id_map):
-                image_stem = Path(image_path_str.decode('utf-8')).stem  # Decode bytes string
+                image_stem = Path(image_path_str.decode('utf-8')).stem # Decode bytes string
                 anno_path = Path(raw_annotations_dir_str.decode('utf-8')) / (image_stem + '.json')
                 
                 if not anno_path.exists():
@@ -853,15 +923,15 @@ if HAS_DALI:
                     return np.zeros((0,5), dtype=np.float32), json.dumps({})
             # Get labels and annotations for first image stream
             yolo_labels1_precomputed, annotations_json_string1_precomputed = fn.python_function(
-                jpegs,  # Pass the image path string from the reader
+                jpegs, # Pass the image path string from the reader
                 function=lambda path_str: _load_precomputed_annotations_np(
                     path_str,
-                    str(self.config['raw_annotations_dir']).encode('utf-8'),  # Pass as bytes
+                    str(self.config['raw_annotations_dir']).encode('utf-8'), # Pass as bytes
                     CLASS_ID
                 ),
                 num_outputs=2,
                 device="cpu",
-                output_layouts=["F", "F"]  # Flat array for labels, Flat for JSON string
+                output_layouts=["F", "F"] # Flat array for labels, Flat for JSON string
             )
             # To implement MixUp/CutMix, we need a second image and its labels.
             # We'll use a second reader to get an independent sample.
@@ -869,7 +939,7 @@ if HAS_DALI:
                 file_root=self.file_root,
                 file_list=self.file_list,
                 random_shuffle=self.is_training,
-                name="Reader2",  # Unique name for the second reader
+                name="Reader2", # Unique name for the second reader
                 labels=True
             )
             decoded_images2 = fn.decoders.image(jpegs2, device=self.decode_device, output_type=types.RGB)
@@ -972,12 +1042,17 @@ if HAS_DALI:
                 imgs_augmented2 = fn.cast(coin_clutter2, types.FLOAT) * fn.cast(cluttered2, types.FLOAT) + imgs_augmented2 * (1 - fn.cast(coin_clutter2, types.FLOAT))
                 # --- SimGAN / CycleGAN Integration for second stream ---
                 if CONFIG.get('simgan', {}).get('enabled'):
-                    imgs_augmented_cpu_uint8_for_simgan2 = fn.python_function(fn.copy(imgs_augmented2, device="cpu"), function=clamp_to_uint8, device="cpu", num_outputs=1)
-                    simgan_translated2 = fn.python_function(imgs_augmented_cpu_uint8_for_simgan2, function=lambda x: simgan_gen.translate(x), device="cpu", num_outputs=1)
+                    simgan_translated_np2 = fn.python_function(
+                        imgs_augmented2,
+                        function=lambda x: apply_simgan(x).numpy(),
+                        device="cpu",
+                        num_outputs=1
+                    )
                     if self.dali_op_device == "gpu":
-                        simgan_translated2 = fn.copy(simgan_translated2, device="gpu")
-                    imgs_augmented2 = fn.cast(simgan_translated2, types.FLOAT)
+                        simgan_translated_np2 = fn.copy(simgan_translated_np2, device="gpu")
+                    imgs_augmented2 = simgan_translated_np2
                     logger.debug("Applied SimGAN translation to second stream in DALI pipeline.")
+
                 if CONFIG.get('cyclegan', {}).get('enabled'):
                     imgs_augmented_cpu_uint8_for_cyclegan2 = fn.python_function(fn.copy(imgs_augmented2, device="cpu"), function=clamp_to_uint8, device="cpu", num_outputs=1)
                     cyclegan_translated2 = fn.python_function(imgs_augmented_cpu_uint8_for_cyclegan2, function=lambda x: cyclegan_gen.translate(x), device="cpu", num_outputs=1)
@@ -987,7 +1062,7 @@ if HAS_DALI:
                     logger.debug("Applied CycleGAN translation to second stream in DALI pipeline.")
             # Generate lambda for MixUp/CutMix
             mix_lam = fn.random.uniform(range=(self.config['mixup_alpha'], 1.0 - self.config['mixup_alpha']))
-            mix_type_choice = fn.random.coin_flip(probability=0.5)  # 0 for MixUp, 1 for CutMix
+            mix_type_choice = fn.random.coin_flip(probability=0.5) # 0 for MixUp, 1 for CutMix
             # Apply MixUp/CutMix using a python function
             # This function will take two images, two sets of labels, and the lambda.
             # It will return the mixed image and the merged labels.
@@ -1002,7 +1077,7 @@ if HAS_DALI:
                     mixup_np(img1, labels1, img2, labels2, lam_val) if mix_type_choice_val == 0 else cutmix_np(img1, labels1, img2, labels2, lam_val),
                 num_outputs=2,
                 device="cpu",
-                output_layouts=["HWC", "F"]  # HWC for image, F for flat array of labels
+                output_layouts=["HWC", "F"] # HWC for image, F for flat array of labels
             )
             
             if self.dali_op_device == "gpu":

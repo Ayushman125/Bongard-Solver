@@ -498,18 +498,18 @@ def fine_tune_yolo_model(config):
     # Dummy DataLoader definition (kept for fallback/demonstration)
     class DummyDataLoader:
         def __init__(self, num_batches, img_size, num_classes, data_root, split, batch_size):
-             self .num_batches = num_batches
-             self .img_size = img_size
-             self .num_classes = num_classes
-             self .data_root = Path(data_root)
-             self .split = split
-             self .batch_size = batch_size
+            self .num_batches = num_batches
+            self .img_size = img_size
+            self .num_classes = num_classes
+            self .data_root = Path(data_root)
+            self .split = split
+            self .batch_size = batch_size
             
-             self .image_paths = list(( self .data_root / 'images' /  self .split).rglob('*.png'))
-             random.shuffle( self .image_paths)  # Shuffle for training
+            self .image_paths = list(( self .data_root / 'images' /  self .split).rglob('*.png'))
+            random.shuffle( self .image_paths)  # Shuffle for training
             
-             self .all_labels = {}
-             self .all_annotations = {}
+            self .all_labels = {}
+            self .all_annotations = {}
             for img_path in  self .image_paths:
                 stem = img_path.stem
                 label_path =  self .data_root / 'labels' /  self .split / f"{stem}.txt"
@@ -520,12 +520,12 @@ def fine_tune_yolo_model(config):
                     with open(label_path, 'r') as f:
                         for line in f:
                             labels.append(list(map(float, line.strip().split())))
-                 self .all_labels[stem] = torch.tensor(labels, dtype=torch.float32) if labels else torch.empty(0, 5, dtype=torch.float32)
+                self .all_labels[stem] = torch.tensor(labels, dtype=torch.float32) if labels else torch.empty(0, 5, dtype=torch.float32)
                 annotation_data = {}
                 if anno_path.exists():
                     with open(anno_path, 'r') as f:
                         annotation_data = json.load(f)
-                 self .all_annotations[stem] = annotation_data
+                self .all_annotations[stem] = annotation_data
         def __len__(self):
             return (len( self .image_paths) +  self .batch_size - 1) //  self .batch_size
         def __iter__(self):
