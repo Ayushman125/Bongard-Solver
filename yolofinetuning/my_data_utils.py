@@ -2,91 +2,160 @@ import os
 import random
 import json
 import logging
-import numpy as np
+import math
 from pathlib import Path
 from collections import Counter
-import math # For math.ceil
+
 import cv2
 import yaml
+import numpy as np
 import torch
+import torch.nn as nn
+
+from PIL import Image, ImageDraw
+from shapely.geometry import Polygon
 from perlin_noise import PerlinNoise
-from PIL import Image, ImageDraw # For PIL shape generation
-from shapely.geometry import Polygon # For boolean operations
-# Import CONFIG from main.py for global access
-from main import CONFIG
-# Import stubs for external modules
-from .stubs import SimGANGenerator, CycleGANGenerator, nn # nn for torch.nn
-from .simgan_refiner import SimGANRefiner # Corrected import path
-from yolofinetuning.albumentations_augmix import AugMix
+
+import albumentations as A
 from albumentations.pytorch import ToTensorV2
+from torchvision.transforms import AugMix
 
-# Initialize once
-simgan_refiner = SimGANRefiner().cuda()
+from .config_loader import CONFIG
+from .simgan_refiner import SimGANRefiner
+from timm.data.auto_augment import rand_augment_transform
 
-def apply_simgan(img_tensor):
+ra_transform = rand_augment_transform(
+    config_str='rand-m9-mstd0.5-inc1', # example policy
+    hparams=None
+)
+# apply `ra_transform(image=img_np)['image']` before ToTensorV2
+
+# ----------------- LOGGER SETUP -----------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# ------------- SIMGAN REFINER INIT --------------
+device = CONFIG.get("device", "cuda" if torch.cuda.is_available() else "cpu")
+simgan_refiner = SimGANRefiner().to(device)
+logger.info(f"SimGAN Refiner initialized on {device}")
+
+# --- Augmentation Pipeline ---
+_alb_pipeline = A.Compose([
+  A.Resize(640,640),
+  A.RandomBrightnessContrast(p=0.5),
+  A.MotionBlur(blur_limit=7, p=0.3),
+  A.GaussianNoise(var_limit=(10,50), p=0.3),
+  A.HueSaturationValue(p=0.3),
+  A.RandomShadow(p=0.3),
+  A.RandomSnow(p=0.2),
+  ToTensorV2(),
+])
+
+
+
+# 2) TorchVision’s AugMix
+_torch_augmix = AugMix(
+    severity=CONFIG.get("augmix_severity", 3),
+    mixture_width=CONFIG.get("augmix_mixture_width", 3),
+    chain_depth=CONFIG.get("augmix_chain_depth", -1),
+    alpha=CONFIG.get("augmix_alpha", 1.0),
+    all_ops=True
+)
+
+def transform_image(image_np: np.ndarray) -> torch.Tensor:
     """
-    Applies the SimGAN refiner to a given image tensor.
-    Args:
-        img_tensor (torch.Tensor): Input image tensor (HWC or CHW, float32).
-                                   Expected to be in range [0, 255] or [0, 1].
-                                   This function will convert it to [0, 1] and add batch dimension.
-    Returns:
-        torch.Tensor: Refined image tensor, same shape as input, on CPU.
+    Applies Albumentations → ToTensorV2 → TorchVision AugMix.
+    Input: H×W×C uint8 image array
+    Output: C×H×W float tensor normalized [0,1]
     """
-    # Ensure the input is a PyTorch tensor and move to CUDA if not already
-    if not isinstance(img_tensor, torch.Tensor):
-        img_tensor = torch.from_numpy(img_tensor).float()
+    # Albumentations: returns {'image': Tensor[C,H,W]}
+    result = _alb_pipeline(image=image_np)
+    img = result["image"]
 
-    # If HWC, permute to CHW for model input
-    if img_tensor.shape[2] == 3: # Assuming HWC format
-        img_tensor = img_tensor.permute(2, 0, 1) # Convert to CHW
+    # AugMix: in-place on Tensor
+    img = _torch_augmix(img)
+    return img
 
-    # Normalize to [0, 1] if not already (assuming input is [0, 255] or similar)
-    if img_tensor.max() > 1.0:
-        img_tensor = img_tensor / 255.0
-
-    img_tensor = img_tensor.unsqueeze(0).cuda()  # add batch dim and move to GPU
-
+# -------------- SimGAN REFINING -----------------
+def apply_simgan(image: np.ndarray) -> np.ndarray:
+    """
+    Refine a NumPy H×W×C image via SimGAN.
+    Returns a refined H×W×C uint8 array.
+    """
+    # To float tensor [B=1,C,H,W] in [0,1]
+    tensor = torch.from_numpy(image.astype(np.float32) / 255.0).permute(2, 0, 1).unsqueeze(0)
+    tensor = tensor.to(device)
     with torch.no_grad():
-        refined = simgan_refiner(img_tensor)
+        refined = simgan_refiner(tensor)
+    refined = refined.squeeze(0).permute(1, 2, 0).clamp(0, 1).cpu().numpy()
+    return (refined * 255).astype(np.uint8)
 
-    # Convert back to [0, 255] and remove batch dim, move to CPU
-    return (refined.squeeze(0).cpu() * 255.0).permute(1, 2, 0) # Convert back to HWC for DALI/NumPy
-
-# --- DALI Imports ---
+# ---------------- NVIDIA DALI --------------------
 try:
     from nvidia.dali.pipeline import Pipeline
     import nvidia.dali.fn as fn
     import nvidia.dali.types as types
-    import nvidia.dali.backend as backend # Import DALI backend for memory allocation
     from nvidia.dali.plugin.pytorch import DALIGenericIterator, LastBatchPolicy
+
     HAS_DALI = True
-    dali_logger = logging.getLogger("dali_logger")
+    dali_logger = logging.getLogger("dali")
     dali_logger.setLevel(logging.ERROR)
-    if not dali_logger.handlers:
-        dali_logger.addHandler(logging.StreamHandler())
-    dali_logger.info("NVIDIA DALI found and imported.")
+    dali_logger.addHandler(logging.StreamHandler())
+    dali_logger.info("NVIDIA DALI is available")
+
 except ImportError:
     HAS_DALI = False
-    dali_logger = logging.getLogger("dali_logger")
-    dali_logger.setLevel(logging.WARNING)
-    if not dali_logger.handlers:
-        dali_logger.addHandler(logging.StreamHandler())
-    dali_logger.warning("NVIDIA DALI not found. Falling back to PyTorch DataLoader only if implemented.")
-# --------------------
-# Configure main logger for my_data_utils
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-# --- YOLO Classes and IDs (UPDATED FOR PER-PRIMITIVE CLASSES) ---
-YOLO_CLASSES_LIST = ['circle', 'square', 'triangle', 'line', 'polygon', 'dot']
-CLASS_ID = {name: idx for idx, name in enumerate(YOLO_CLASSES_LIST)}
-# --- Difficulty Weights (must match CONFIG in main script) ---
-DIFFICULTY_WEIGHTS = {
-    'num_objects': 0.4,
-    'avg_complexity': 0.3,
-    'num_relations': 0.3,
-}
+    logging.getLogger("dali").warning("NVIDIA DALI not found; fallback to PyTorch DataLoader")
+
+# Example: build a simple DALI pipeline (customize per your data)
+def build_dali_pipeline(batch_size, num_threads, device_id, data_dir, img_size):
+    assert HAS_DALI, "DALI not installed"
+    pipe = Pipeline(batch_size, num_threads, device_id)
+    with pipe:
+        jpegs, labels = fn.readers.file(
+            file_root=data_dir,
+            random_shuffle=True,
+            name="Reader"
+        )
+        images = fn.decoders.image(jpegs, device="mixed")
+        images = fn.resize(images, resize_x=img_size, resize_y=img_size)
+        pipe.set_outputs(images, labels)
+    return pipe
+
+# --------------- PyTorch DataLoader ---------------
+from torch.utils.data import Dataset, DataLoader
+
+class BongardDataset(Dataset):
+    def __init__(self, image_dir, transform=None):
+        self.files = sorted(
+            [os.path.join(image_dir, f) for f in os.listdir(image_dir) if f.endswith(".jpg")]
+        )
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.files)
+
+    def __getitem__(self, idx):
+        img = Image.open(self.files[idx]).convert("RGB")
+        img_np = np.array(img)
+        if self.transform:
+            return self.transform(img_np)
+        return torch.from_numpy(img_np).permute(2, 0, 1).float() / 255.0
+
+def get_pytorch_loader(image_dir, batch_size, shuffle=True, num_workers=4):
+    ds = BongardDataset(image_dir, transform=transform_image)
+    return DataLoader(
+        ds,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers,
+        pin_memory=True
+    )
+
 # --- Initialize translators once (using CONFIG from main) ---
 # simgan_gen = SimGANGenerator(CONFIG['simgan']['path']) if CONFIG.get('simgan', {}).get('enabled') else None
 # cyclegan_gen = CycleGANGenerator(CONFIG['cyclegan']['path']) if CONFIG.get('cyclegan', {}).get('enabled') else None
