@@ -1,13 +1,284 @@
 
 
 # --- DALI pipeline with OWL-ViT integration and logging/metrics ---
+
 import os
 import logging
+import random
+import yaml
+import numpy as np
+import torch
+import torch.backends.cudnn as cudnn
+import cv2
 from pathlib import Path
 from PIL import Image
+from collections import Counter
+import glob
+import shutil
+import pandas as pd
 from logger import log_detection
 from embedding_model import EmbedDetector
 from metrics import Evaluator
+
+# --- Config loading and seed setting ---
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'config.yaml')
+if os.path.exists(CONFIG_PATH):
+    with open(CONFIG_PATH) as f:
+        cfg = yaml.safe_load(f)
+    seed = cfg.get('seed', 42)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    cudnn.deterministic = True
+    cudnn.benchmark = False
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    def init_device_threads():
+        if 'resources' in cfg:
+            torch.set_num_threads(cfg['resources'].get('max_threads', 4))
+            torch.set_num_interop_threads(cfg['resources'].get('max_threads', 4))
+    init_device_threads()
+else:
+    cfg = None
+
+# --- Data validation and statistics ---
+def check_bbox_integrity(img_w, img_h, x_center, y_center, w, h):
+    if w <= 0 or h <= 0:
+        return False
+    x1 = (x_center - w/2) * img_w
+    y1 = (y_center - h/2) * img_h
+    x2 = (x_center + w/2) * img_w
+    y2 = (y_center + h/2) * img_h
+    return 0 <= x1 < x2 <= img_w and 0 <= y1 < y2 <= img_h
+
+def validate_image_and_labels(img_path, lbl_path):
+    img = cv2.imread(img_path)
+    if img is None:
+        return False
+    h, w = img.shape[:2]
+    try:
+        with open(lbl_path) as f:
+            lines = f.read().strip().splitlines()
+        if not lines:
+            return False
+        for line in lines:
+            cls, *coords = line.split()
+            x, y, bw, bh = map(float, coords)
+            if not check_bbox_integrity(w, h, x, y, bw, bh):
+                return False
+        return True
+    except Exception:
+        return False
+
+def filter_valid_samples(images, labels):
+    valid_imgs = []
+    valid_lbls = []
+    for img, lbl in zip(images, labels):
+        if validate_image_and_labels(img, lbl):
+            valid_imgs.append(img)
+            valid_lbls.append(lbl)
+    return valid_imgs, valid_lbls
+
+def compute_class_balance(lbl_paths, n_classes):
+    counts = Counter()
+    for lp in lbl_paths:
+        for line in open(lp):
+            cls = int(line.split()[0])
+            counts[cls] += 1
+    total = sum(counts.values())
+    balance = {c: counts[c]/total for c in range(n_classes)}
+    return balance
+
+def compute_mean_std(image_paths, num_samples=500):
+    sampled = random.sample(image_paths, min(num_samples, len(image_paths)))
+    mean = np.zeros(3)
+    std = np.zeros(3)
+    for p in sampled:
+        img = cv2.imread(p).astype(np.float32)/255.0
+        mean += img.mean(axis=(0,1))
+        std += img.std(axis=(0,1))
+    mean /= len(sampled)
+    std /= len(sampled)
+    return mean.tolist(), std.tolist()
+
+# --- Stratified split ---
+def stratified_split(img_paths, lbl_paths, n_splits, seed=42):
+    from sklearn.model_selection import StratifiedKFold
+    y = [int(open(lbl).read().split()[0]) for lbl in lbl_paths]
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    for train_idx, val_idx in skf.split(img_paths, y):
+        train_imgs = [img_paths[i] for i in train_idx]
+        train_lbls = [lbl_paths[i] for i in train_idx]
+        val_imgs   = [img_paths[i] for i in val_idx]
+        val_lbls   = [lbl_paths[i] for i in val_idx]
+        break
+    return train_imgs, train_lbls, val_imgs, val_lbls
+
+def simple_split(img_paths, lbl_paths, train_size):
+    paired = list(zip(img_paths, lbl_paths))
+    random.shuffle(paired)
+    cut = int(len(paired)*train_size)
+    train, val = paired[:cut], paired[cut:]
+    return zip(*train), zip(*val)
+
+# --- Albumentations transforms ---
+def get_train_transforms():
+    import albumentations as A
+    from albumentations.pytorch import ToTensorV2
+    aug = []
+    if cfg and cfg["augment"]["mosaic"]:
+        pass  # Mosaic handled in loader
+    aug += [
+        A.RandomBrightnessContrast(p=0.5),
+        A.HueSaturationValue(
+            hue_shift_limit=int(255*cfg["augment"]["hsv"]["hue"]),
+            sat_shift_limit=int(255*cfg["augment"]["hsv"]["sat"]),
+            val_shift_limit=int(255*cfg["augment"]["hsv"]["val"]),
+            p=0.5
+        ),
+        A.HorizontalFlip(p=cfg["augment"]["flip_p"]),
+        A.VerticalFlip(p=cfg["augment"]["flip_p"]/2),
+        A.RandomScale(scale_limit=0.5, p=0.5),
+    ]
+    if cfg and cfg["augment"]["mixup"]:
+        try:
+            aug.append(A.MixUp(p=0.5))
+        except Exception:
+            pass
+    if cfg and cfg["augment"]["cutmix"]:
+        try:
+            aug.append(A.CutMix(p=0.5))
+        except Exception:
+            pass
+    if cfg and cfg["resize"]["multiscale"]:
+        aug.append(A.RandomChoice([
+            A.Resize(s, s) for s in cfg["resize"]["scales"]
+        ]))
+    else:
+        aug.append(A.Resize(cfg["resize"]["base_size"], cfg["resize"]["base_size"]))
+    aug.append(ToTensorV2())
+    return A.Compose(aug, bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels']))
+
+def get_val_transforms():
+    import albumentations as A
+    from albumentations.pytorch import ToTensorV2
+    return A.Compose([
+        A.Resize(cfg["resize"]["base_size"], cfg["resize"]["base_size"]),
+        ToTensorV2()
+    ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels']))
+
+# --- Mosaic Dataset (PyTorch) ---
+class MosaicDataset(torch.utils.data.Dataset):
+    def __init__(self, img_paths, lbl_paths, img_size=640, transforms=None):
+        self.img_paths, self.lbl_paths = img_paths, lbl_paths
+        self.img_size, self.transforms = img_size, transforms
+
+    def __len__(self):
+        return len(self.img_paths)
+
+    def __getitem__(self, index):
+        indices = [index] + random.choices(range(len(self.img_paths)), k=3)
+        mosaic_img = np.full((self.img_size * 2, self.img_size * 2, 3), 114, dtype=np.uint8)
+        mosaic_bboxes, mosaic_labels = [], []
+        xc = int(random.uniform(self.img_size * 0.5, self.img_size * 1.5))
+        yc = int(random.uniform(self.img_size * 0.5, self.img_size * 1.5))
+        for i, idx in enumerate(indices):
+            img = cv2.imread(self.img_paths[idx])
+            h0, w0 = img.shape[:2]
+            bboxes = []
+            for line in open(self.lbl_paths[idx]):
+                cls, x, y, w, h = map(float, line.split())
+                x1 = int((x - w/2) * w0); y1 = int((y - h/2) * h0)
+                x2 = int((x + w/2) * w0); y2 = int((y + h/2) * h0)
+                bboxes.append([x1, y1, x2, y2, int(cls)])
+            scale = self.img_size / max(h0, w0)
+            img_resized = cv2.resize(img, (int(w0*scale), int(h0*scale)))
+            h, w = img_resized.shape[:2]
+            if i == 0:
+                x1a, y1a = max(xc - w, 0), max(yc - h, 0)
+            elif i == 1:
+                x1a, y1a = xc, max(yc - h, 0)
+            elif i == 2:
+                x1a, y1a = max(xc - w, 0), yc
+            else:
+                x1a, y1a = xc, yc
+            x2a, y2a = x1a + w, y1a + h
+            mosaic_img[y1a:y2a, x1a:x2a] = img_resized
+            for x1, y1, x2, y2, cls in bboxes:
+                x1n = x1 * scale + x1a
+                y1n = y1 * scale + y1a
+                x2n = x2 * scale + x1a
+                y2n = y2 * scale + y1a
+                mosaic_bboxes.append([x1n, y1n, x2n, y2n, cls])
+        # IoU filtering
+        def iou(box1, box2):
+            xi1 = max(box1[0], box2[0]); yi1 = max(box1[1], box2[1])
+            xi2 = min(box1[2], box2[2]); yi2 = min(box1[3], box2[3])
+            inter = max(0, xi2 - xi1) * max(0, yi2 - yi1)
+            area1 = (box1[2] - box1[0])*(box1[3] - box1[1])
+            area2 = (box2[2] - box2[0])*(box2[3] - box2[1])
+            return inter / (area1 + area2 - inter + 1e-9)
+        def filter_by_iou(bboxes, threshold=0.2):
+            filtered = []
+            img_box = [0, 0, 2*self.img_size, 2*self.img_size]
+            for box in bboxes:
+                x1, y1, x2, y2, _ = box
+                if iou(img_box, [x1, y1, x2, y2]) >= threshold:
+                    filtered.append(box)
+            return filtered
+        mosaic_bboxes = filter_by_iou(mosaic_bboxes)
+        final_bboxes, final_labels = [], []
+        for x1, y1, x2, y2, cls in mosaic_bboxes:
+            x1c, y1c = max(0, x1), max(0, y1)
+            x2c, y2c = min(2*self.img_size, x2), min(2*self.img_size, y2)
+            if x2c - x1c > 5 and y2c - y1c > 5:
+                cx = ((x1c + x2c) / 2) / (2*self.img_size)
+                cy = ((y1c + y2c) / 2) / (2*self.img_size)
+                bw = (x2c - x1c) / (2*self.img_size)
+                bh = (y2c - y1c) / (2*self.img_size)
+                final_bboxes.append([cx, cy, bw, bh])
+                final_labels.append(int(cls))
+        if self.transforms:
+            data = self.transforms(
+                image=mosaic_img, bboxes=final_bboxes, class_labels=final_labels
+            )
+            mosaic_img = data["image"]
+            final_bboxes = data["bboxes"]
+            final_labels = data["class_labels"]
+        return mosaic_img, {"boxes": final_bboxes, "labels": final_labels}
+
+# --- Save dataset utility ---
+def save_dataset(imgs, lbls, out_dir, transforms=None):
+    os.makedirs(os.path.join(out_dir, "images"), exist_ok=True)
+    os.makedirs(os.path.join(out_dir, "labels"), exist_ok=True)
+    for img_path, lbl_path in zip(imgs, lbls):
+        img = cv2.imread(img_path)
+        h, w = img.shape[:2]
+        if transforms:
+            data = transforms(image=img, bboxes=[l.split()[1:] for l in open(lbl_path)], class_labels=[int(l.split()[0]) for l in open(lbl_path)])
+            img = data["image"]
+            new_bboxes = data["bboxes"]
+            new_labels = data["class_labels"]
+        else:
+            new_bboxes = [l.split()[1:] for l in open(lbl_path)]
+            new_labels = [int(l.split()[0]) for l in open(lbl_path)]
+        fname = os.path.basename(img_path)
+        cv2.imwrite(os.path.join(out_dir, "images", fname), img)
+        lines = [f"{lab} {' '.join(map(str, bb))}\n" for lab, bb in zip(new_labels, new_bboxes)]
+        with open(os.path.join(out_dir, "labels", fname.replace(".jpg", ".txt")), "w") as f:
+            f.writelines(lines)
+
+# --- Export YOLO data.yaml ---
+def export_yolo_yaml(cfg):
+    data_cfg = {
+        "train": cfg["paths"]["out_train"] + "/images",
+        "val":   cfg["paths"]["out_val"]   + "/images",
+        "nc":    len(open(cfg["paths"]["classes_file"]).read().splitlines()),
+        "names": open(cfg["paths"]["classes_file"]).read().splitlines()
+    }
+    with open("data.yaml", "w") as f:
+        yaml.dump(data_cfg, f, sort_keys=False)
 
 def prepare_dataset(data_cfg, detector: EmbedDetector, evaluator: Evaluator):
     images_dir = Path(data_cfg['images_dir'])
@@ -28,7 +299,9 @@ def prepare_dataset(data_cfg, detector: EmbedDetector, evaluator: Evaluator):
                 # convert to relative xywh
                 cx, cy = (x0 + x1)/2/width, (y0 + y1)/2/height
                 w, h = (x1 - x0)/width, (y1 - y0)/height
-                f.write(f"{label} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}\n")
+                # Optionally: filter by bbox integrity
+                if check_bbox_integrity(width, height, cx, cy, w, h):
+                    f.write(f"{label} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}\n")
 
         # Log each detection
         for idx, (b, s, lb, emb) in enumerate(zip(boxes, scores, labels, embeddings)):
@@ -44,6 +317,37 @@ def prepare_dataset(data_cfg, detector: EmbedDetector, evaluator: Evaluator):
         evaluator.update(gt_boxes=None, pred_boxes=boxes, scores=scores)
     # Finalize and print mAP, IoU, precision, recall
     evaluator.finalize()
+
+def run_full_dataset_preparation():
+    if not cfg:
+        print("No config.yaml found, skipping advanced dataset prep.")
+        return
+    # 1. Gather all images/labels
+    img_paths = sorted(glob.glob(cfg["paths"]["raw_images"] + "/*.jpg"))
+    lbl_paths = sorted(glob.glob(cfg["paths"]["raw_labels"] + "/*.txt"))
+    # 2. Validate
+    img_paths, lbl_paths = filter_valid_samples(img_paths, lbl_paths)
+    # 3. Stats
+    classes = open(cfg["paths"]["classes_file"]).read().splitlines()
+    balance = compute_class_balance(lbl_paths, len(classes))
+    mean, std = compute_mean_std(img_paths)
+    print("Class balance:", balance)
+    print("Dataset mean:", mean, "std:", std)
+    # 4. Split
+    if cfg["split"]["n_splits"] > 1:
+        tr_imgs, tr_lbls, v_imgs, v_lbls = stratified_split(
+            img_paths, lbl_paths, cfg["split"]["n_splits"], seed=cfg["seed"]
+        )
+    else:
+        (tr_imgs, tr_lbls), (v_imgs, v_lbls) = simple_split(
+            img_paths, lbl_paths, cfg["split"]["train_size"]
+        )
+    # 5. Save
+    save_dataset(tr_imgs, tr_lbls, cfg["paths"]["out_train"], transforms=get_train_transforms())
+    save_dataset(v_imgs, v_lbls, cfg["paths"]["out_val"], transforms=get_val_transforms())
+    # 6. Export YOLO yaml
+    export_yolo_yaml(cfg)
+    print("[INFO] Dataset preparation complete. Train/val splits and data.yaml written.")
 
 # YOLO format pipeline
 @pipeline_def(batch_size=dp["batch_size"], num_threads=dp["num_threads"], device_id=0)
@@ -243,6 +547,9 @@ if __name__ == "__main__":
     print("-" * 50)
 
     try:
+        # --- Advanced full dataset prep (config-driven) ---
+        run_full_dataset_preparation()
+
         # 1. Split dataset
         print("Splitting dataset...")
         split_dataset(args.lbl_dir)
