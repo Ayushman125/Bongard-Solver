@@ -1,64 +1,49 @@
 
-import argparse
-import nvidia.dali.fn as fn
-import nvidia.dali.types as types
-from nvidia.dali import pipeline_def
 
-# Pipeline parameters for dynamic configuration
-dp = {
-    "batch_size": 16,
-    "num_threads": 4,
-    "device_id": 0
-}
+# --- DALI pipeline with OWL-ViT integration and logging/metrics ---
+import os
+import logging
+from pathlib import Path
+from PIL import Image
+from logger import log_detection
+from embedding_model import EmbedDetector
+from metrics import Evaluator
 
-@pipeline_def(batch_size=16, num_threads=4, device_id=0)
-def dali_augment_pipeline(img_dir):
-    imgs = fn.readers.file(file_root=img_dir,
-                          random_shuffle=True,
-                          name="Reader")
-    images = fn.decoders.image(imgs, device="mixed")
-    images = fn.rotate(images, angle=fn.random.uniform(range=(0.0, 360.0)))
-    images = fn.crop_mirror_normalize(images,
-                                      crop=(320, 320),
-                                      mean=[0.485*255, 0.456*255, 0.406*255],
-                                      std=[0.229*255, 0.224*255, 0.225*255])
-    # DALI file reader does not return bboxes/labels unless using COCO/YOLO reader
-    # For simple image pipeline, just return images
-    return images
+def prepare_dataset(data_cfg, detector: EmbedDetector, evaluator: Evaluator):
+    images_dir = Path(data_cfg['images_dir'])
+    output_dir = Path(data_cfg['output_dir'])
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-def dali_augment(image_paths, labels):
-    pipe = dali_augment_pipeline(image_paths)
-    pipe.build()
-    for _ in range(pipe.epoch_size("Reader") // pipe.batch_size):
-        imgs = pipe.run()[0]
-        # Convert to CPU numpy
-        yield imgs.as_cpu().as_array()
+    for img_path in images_dir.glob("*.jpg"):
+        image = Image.open(img_path).convert("RGB")
+        prompts = ["object"]  # replace with your class prompts
+        boxes, scores, labels, embeddings = detector.detect(image, prompts)
 
-def main():
-    parser = argparse.ArgumentParser(description="DALI pipeline for dataset preparation")
-    parser.add_argument("--mode", type=str, default="simple", help="Mode of operation")
-    parser.add_argument("--img_dir", type=str, required=True, help="Directory of images")
-    parser.add_argument("--lbl_dir", type=str, required=True, help="Directory of labels")
-    parser.add_argument("--iters", type=int, default=1, help="Number of iterations")
-    args = parser.parse_args()
+        # Write YOLO-format label file
+        label_file = output_dir / f"{img_path.stem}.txt"
+        with open(label_file, 'w') as f:
+            for box, score, label in zip(boxes, scores, labels):
+                x0,y0,x1,y1 = box
+                width, height = image.size
+                # convert to relative xywh
+                cx, cy = (x0 + x1)/2/width, (y0 + y1)/2/height
+                w, h = (x1 - x0)/width, (y1 - y0)/height
+                f.write(f"{label} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}\n")
 
-    # For now, only simple mode is supported
-    print("[INFO] Starting DALI pipeline...")
-    # Recursively collect all PNG images from img_dir
-    import os, glob
-    image_paths = [y for x in os.walk(args.img_dir) for y in glob.glob(os.path.join(x[0], '*.png'))]
-    print(f"Found {len(image_paths)} PNG images in {args.img_dir}")
-    gen = dali_augment(args.img_dir, None)
-    for i in range(args.iters):
-        try:
-            imgs = next(gen)
-        except StopIteration:
-            print("No more images to process.")
-            break
-        print(f"[DALI OUTPUT] Iteration {i+1}")
-        print(f"  Images shape: {imgs.shape}")
-        if imgs.shape[0] > 0:
-            print(f"  Images sample: {imgs[0]}")
+        # Log each detection
+        for idx, (b, s, lb, emb) in enumerate(zip(boxes, scores, labels, embeddings)):
+            log_detection(
+                image_path=str(img_path),
+                box=b.tolist(),
+                score=float(s),
+                label=int(lb),
+                embedding=emb.tolist()
+            )
+
+        # Update evaluation metrics
+        evaluator.update(gt_boxes=None, pred_boxes=boxes, scores=scores)
+    # Finalize and print mAP, IoU, precision, recall
+    evaluator.finalize()
 
 # YOLO format pipeline
 @pipeline_def(batch_size=dp["batch_size"], num_threads=dp["num_threads"], device_id=0)
