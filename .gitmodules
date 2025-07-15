@@ -1,3 +1,0 @@
-[submodule "yolofinetuning/detectron2"]
-	path = yolofinetuning/detectron2
-	url = https://github.com/facebookresearch/detectron2.git
