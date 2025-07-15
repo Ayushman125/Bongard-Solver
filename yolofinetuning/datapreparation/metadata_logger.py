@@ -11,6 +11,13 @@ def compute_metadata(image_id, labels):
         'max_bbox_area': float(np.max(areas) if areas else 0)
     }
 
+
 def log_metadata(meta, path='metadata_log.jsonl'):
     with open(path, 'a') as f:
         f.write(json.dumps(meta) + "\n")
+    # MLflow logging
+    try:
+        import mlflow
+        mlflow.log_dict(meta, artifact_file="metadata.json")
+    except ImportError:
+        pass

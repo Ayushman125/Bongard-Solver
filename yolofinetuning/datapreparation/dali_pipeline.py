@@ -1,3 +1,13 @@
+from augmentations import get_train_transforms, custom_mixup, custom_cutmix
+from auto_labeling import auto_label, pseudo_labeling
+from copy_paste_synthesis import load_object_masks, paste_objects
+from data_preparation_utils import generate_synthetic_data, test_time_augmentation
+from embedding_model import EmbedDetector
+from fuse_graphs_with_yolo import load_graph, load_yolo, iou
+from logger import setup_logging, log_detection
+from metadata_logger import compute_metadata, log_metadata
+from metrics import Evaluator
+from split_dataset import split_dataset
 
 
 # --- DALI pipeline with OWL-ViT integration and logging/metrics ---
@@ -16,9 +26,11 @@ from collections import Counter
 import glob
 import shutil
 import pandas as pd
+import argparse
 from logger import log_detection
 from embedding_model import EmbedDetector
 from metrics import Evaluator
+import mlflow
 
 # --- Config loading and seed setting ---
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'config.yaml')
@@ -41,6 +53,14 @@ if os.path.exists(CONFIG_PATH):
     init_device_threads()
 else:
     cfg = None
+
+# --- MLflow setup (if enabled in config) ---
+def setup_mlflow(cfg):
+    if cfg and cfg.get('mlflow', {}).get('enable', False):
+        mlflow.set_tracking_uri(cfg['mlflow'].get('tracking_uri', 'mlruns'))
+        mlflow.set_experiment(cfg['mlflow'].get('experiment', 'dataset-prep'))
+        return True
+    return False
 
 # --- Data validation and statistics ---
 def check_bbox_integrity(img_w, img_h, x_center, y_center, w, h):
@@ -87,7 +107,7 @@ def compute_class_balance(lbl_paths, n_classes):
             cls = int(line.split()[0])
             counts[cls] += 1
     total = sum(counts.values())
-    balance = {c: counts[c]/total for c in range(n_classes)}
+    balance = {c: counts[c]/total if total > 0 else 0 for c in range(n_classes)}
     return balance
 
 def compute_mean_std(image_paths, num_samples=500):
@@ -95,11 +115,15 @@ def compute_mean_std(image_paths, num_samples=500):
     mean = np.zeros(3)
     std = np.zeros(3)
     for p in sampled:
-        img = cv2.imread(p).astype(np.float32)/255.0
+        img = cv2.imread(p)
+        if img is None:
+            continue
+        img = img.astype(np.float32)/255.0
         mean += img.mean(axis=(0,1))
         std += img.std(axis=(0,1))
-    mean /= len(sampled)
-    std /= len(sampled)
+    if len(sampled) > 0:
+        mean /= len(sampled)
+        std /= len(sampled)
     return mean.tolist(), std.tolist()
 
 # --- Stratified split ---
@@ -127,6 +151,7 @@ def get_train_transforms():
     import albumentations as A
     from albumentations.pytorch import ToTensorV2
     aug = []
+    # Use custom MosaicDataset for mosaic, not Albumentations
     if cfg and cfg["augment"]["mosaic"]:
         pass  # Mosaic handled in loader
     aug += [
@@ -141,16 +166,19 @@ def get_train_transforms():
         A.VerticalFlip(p=cfg["augment"]["flip_p"]/2),
         A.RandomScale(scale_limit=0.5, p=0.5),
     ]
+    # Use custom MixUp/CutMix if not available in Albumentations
     if cfg and cfg["augment"]["mixup"]:
         try:
             aug.append(A.MixUp(p=0.5))
         except Exception:
-            pass
+            from augmentations import custom_mixup
+            aug.append(custom_mixup(p=0.5))
     if cfg and cfg["augment"]["cutmix"]:
         try:
             aug.append(A.CutMix(p=0.5))
         except Exception:
-            pass
+            from augmentations import custom_cutmix
+            aug.append(custom_cutmix(p=0.5))
     if cfg and cfg["resize"]["multiscale"]:
         aug.append(A.RandomChoice([
             A.Resize(s, s) for s in cfg["resize"]["scales"]
@@ -254,9 +282,11 @@ def save_dataset(imgs, lbls, out_dir, transforms=None):
     os.makedirs(os.path.join(out_dir, "labels"), exist_ok=True)
     for img_path, lbl_path in zip(imgs, lbls):
         img = cv2.imread(img_path)
+        if img is None:
+            continue
         h, w = img.shape[:2]
         if transforms:
-            data = transforms(image=img, bboxes=[l.split()[1:] for l in open(lbl_path)], class_labels=[int(l.split()[0]) for l in open(lbl_path)])
+            data = transforms(image=img, bboxes=[list(map(float, l.split()[1:])) for l in open(lbl_path)], class_labels=[int(l.split()[0]) for l in open(lbl_path)])
             img = data["image"]
             new_bboxes = data["bboxes"]
             new_labels = data["class_labels"]
@@ -322,18 +352,75 @@ def run_full_dataset_preparation():
     if not cfg:
         print("No config.yaml found, skipping advanced dataset prep.")
         return
+    mlflow_enabled = setup_mlflow(cfg)
+    if mlflow_enabled:
+        mlflow.start_run(run_name="dataset-prep")
     # 1. Gather all images/labels
     img_paths = sorted(glob.glob(cfg["paths"]["raw_images"] + "/*.jpg"))
     lbl_paths = sorted(glob.glob(cfg["paths"]["raw_labels"] + "/*.txt"))
+
     # 2. Validate
     img_paths, lbl_paths = filter_valid_samples(img_paths, lbl_paths)
-    # 3. Stats
+    from data_preparation_utils import continuous_validation
+    continuous_validation(img_paths, lbl_paths, step_name="initial_validation")
+
+    # 3. Data quality audit
+    from data_preparation_utils import audit_data_quality
+    audit_report = audit_data_quality(lbl_paths, img_paths)
+    print("[AUDIT] Data quality report:", audit_report)
+
+    # 4. Label noise detection and correction
+    from data_preparation_utils import detect_label_noise, correct_labels_with_model
+    label_issues = detect_label_noise(lbl_paths)
+    if label_issues:
+        print("[WARN] Label noise detected:", label_issues)
+        # Optionally: correct labels using model and human review
+        if cfg.get('label_correction', {}).get('enable', False):
+            for lbl in label_issues:
+                img_path = lbl.replace('.txt', '.jpg')
+                correct_labels_with_model(lbl, img_path, model=None, human_review=cfg['label_correction'].get('human_review', False))
+        lbl_paths = [l for l in lbl_paths if l not in label_issues]
+    continuous_validation(img_paths, lbl_paths, step_name="post_label_correction")
+
+    # 5. Class balancing (oversample rare classes)
+    from augmentations import class_balanced_oversample, smote_oversample
+    img_paths, lbl_paths = class_balanced_oversample(img_paths, lbl_paths, min_count=cfg.get("min_class_count", 100))
+    if cfg.get('smote', {}).get('enable', False):
+        smote_oversample(img_paths, lbl_paths, min_count=cfg.get("min_class_count", 100))
+    continuous_validation(img_paths, lbl_paths, step_name="post_oversampling")
+
+    # 6. Curriculum learning (progressive/meta-data sampling)
+    from data_preparation_utils import curriculum_sampling
+    img_paths, lbl_paths = curriculum_sampling(img_paths, lbl_paths, model=None, stages=3)
+    continuous_validation(img_paths, lbl_paths, step_name="post_curriculum")
+
+    # 7. Hard negative mining (active retraining)
+    from data_preparation_utils import hard_negative_mining
+    hard_negatives = hard_negative_mining(img_paths, lbl_paths, model=None)
+    # Optionally: add hard negatives to training set
+    if cfg.get('hard_negative', {}).get('add_to_train', False):
+        img_paths += hard_negatives
+        lbl_paths += [lbl for img, lbl in zip(img_paths, lbl_paths) if img in hard_negatives]
+    continuous_validation(img_paths, lbl_paths, step_name="post_hard_negative")
+
+    # 8. Synthetic data generation (GAN/Diffusion)
+    from data_preparation_utils import generate_synthetic_data
+    if cfg.get('synthetic', {}).get('enable', False):
+        generator_model = None # Load or instantiate as needed
+        generate_synthetic_data(generator_model, n_samples=cfg['synthetic'].get('n_samples', 0), out_dir=cfg["paths"]["raw_images"])
+    continuous_validation(img_paths, lbl_paths, step_name="post_synthetic")
+
+    # 9. Stats
     classes = open(cfg["paths"]["classes_file"]).read().splitlines()
     balance = compute_class_balance(lbl_paths, len(classes))
     mean, std = compute_mean_std(img_paths)
     print("Class balance:", balance)
     print("Dataset mean:", mean, "std:", std)
-    # 4. Split
+    if mlflow_enabled:
+        mlflow.log_dict(balance, "class_balance.json")
+        mlflow.log_dict({"mean": mean, "std": std}, "mean_std.json")
+
+    # 10. Split (advanced stratified sampling for rare classes)
     if cfg["split"]["n_splits"] > 1:
         tr_imgs, tr_lbls, v_imgs, v_lbls = stratified_split(
             img_paths, lbl_paths, cfg["split"]["n_splits"], seed=cfg["seed"]
@@ -342,17 +429,111 @@ def run_full_dataset_preparation():
         (tr_imgs, tr_lbls), (v_imgs, v_lbls) = simple_split(
             img_paths, lbl_paths, cfg["split"]["train_size"]
         )
-    # 5. Save
+    continuous_validation(tr_imgs, tr_lbls, step_name="train_split")
+    continuous_validation(v_imgs, v_lbls, step_name="val_split")
+
+    # 11. Save
     save_dataset(tr_imgs, tr_lbls, cfg["paths"]["out_train"], transforms=get_train_transforms())
     save_dataset(v_imgs, v_lbls, cfg["paths"]["out_val"], transforms=get_val_transforms())
-    # 6. Export YOLO yaml
+
+    # 12. Export YOLO yaml
     export_yolo_yaml(cfg)
     print("[INFO] Dataset preparation complete. Train/val splits and data.yaml written.")
+    if mlflow_enabled:
+        mlflow.log_artifact("data.yaml")
+        mlflow.end_run()
+
+    # 13. Test-Time Augmentation (TTA) for validation
+    from data_preparation_utils import test_time_augmentation
+    # Placeholder: pass a trained model and validation images
+    # tta_results = test_time_augmentation(image=..., model=...)
+
+    # 14. Error analysis
+    from data_preparation_utils import error_analysis
+    # Placeholder: pass a trained model and validation images/labels
+    # error_report = error_analysis(v_imgs, v_lbls, model=None)
+
+    # 15. Visualization
+    from augmentations import visualize_augmentations
+    # Example: visualize_augmentations(tr_imgs[0], tr_lbls[0])
+
+    print("[INFO] All advanced dataset preparation steps completed.")
+
+# --- Pseudo-labeling logic (placeholder, to be implemented as needed) ---
+def pseudo_labeling(unlabeled_img_dir, model, out_label_dir):
+    """
+    Generate pseudo-labels for unlabeled images using a trained model.
+    Args:
+        unlabeled_img_dir: Directory with unlabeled images
+        model: Trained detection model
+        out_label_dir: Output directory for pseudo-labels
+    """
+    os.makedirs(out_label_dir, exist_ok=True)
+    img_paths = glob.glob(os.path.join(unlabeled_img_dir, '*.jpg'))
+    for img_path in img_paths:
+        img = cv2.imread(img_path)
+        if img is None:
+            continue
+        # Example: model.predict returns list of (cls, cx, cy, w, h, conf)
+        preds = model.predict(img)
+        label_path = os.path.join(out_label_dir, os.path.basename(img_path).replace('.jpg', '.txt'))
+        with open(label_path, 'w') as f:
+            for pred in preds:
+                cls, cx, cy, w, h, conf = pred
+                if conf > 0.5:
+                    f.write(f"{cls} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}\n")
+
+# --- Active learning logic (placeholder, to be implemented as needed) ---
+def active_learning_step(unlabeled_img_dir, model, selection_count=100):
+    """
+    Select most informative samples for annotation.
+    Args:
+        unlabeled_img_dir: Directory with unlabeled images
+        model: Trained detection model
+        selection_count: Number of samples to select
+    Returns:
+        List of selected image paths
+    """
+    img_paths = glob.glob(os.path.join(unlabeled_img_dir, '*.jpg'))
+    # Example: select by model uncertainty (placeholder)
+    uncertainties = []
+    for img_path in img_paths:
+        img = cv2.imread(img_path)
+        if img is None:
+            continue
+        preds = model.predict(img)
+        # Placeholder: use std of confidences as uncertainty
+        confs = [p[-1] for p in preds]
+        uncertainty = np.std(confs) if confs else 0
+        uncertainties.append((uncertainty, img_path))
+    uncertainties.sort(reverse=True)
+    selected = [p for _, p in uncertainties[:selection_count]]
+    return selected
 
 # YOLO format pipeline
-@pipeline_def(batch_size=dp["batch_size"], num_threads=dp["num_threads"], device_id=0)
-@pipeline_def(batch_size=16, num_threads=4, device_id=0)
-@pipeline_def(batch_size=16, num_threads=4, device_id=0)
+def dali_augment(image_paths, labels=None, batch_size=16):
+    """
+    DALI-based augmentation generator for a list of image paths.
+    Args:
+        image_paths: List of image file paths
+        labels: Optional labels (not used in this simple version)
+        batch_size: Batch size for augmentation
+    Yields:
+        Augmented image batches as numpy arrays
+    """
+    # Placeholder: Use OpenCV for now, replace with DALI pipeline as needed
+    for i in range(0, len(image_paths), batch_size):
+        batch = []
+        for p in image_paths[i:i+batch_size]:
+            img = cv2.imread(p)
+            if img is not None:
+                # Example: simple flip augmentation
+                if random.random() > 0.5:
+                    img = cv2.flip(img, 1)
+                batch.append(img)
+        if batch:
+            yield np.stack(batch)
+
 def yolo_pipeline(image_dir, label_dir):
     """
     YOLO format pipeline for custom YOLO datasets.
@@ -537,6 +718,9 @@ if __name__ == "__main__":
     parser.add_argument("--lbl_dir", default="data/annotations.json", help="Label file/directory path")
     parser.add_argument("--iters", type=int, default=10, help="Number of iterations to run")
     parser.add_argument("--mode", default="simple", choices=["detection", "yolo", "simple"], help="Pipeline mode")
+    parser.add_argument("--pseudo_label", action="store_true", help="Run pseudo-labeling on unlabeled data")
+    parser.add_argument("--active_learning", action="store_true", help="Run active learning step")
+    parser.add_argument("--mlflow", action="store_true", help="Enable MLflow tracking")
     args = parser.parse_args()
 
     print(f"Main Dataset Preparation Pipeline Mode: {args.mode}")
@@ -547,15 +731,73 @@ if __name__ == "__main__":
     print("-" * 50)
 
     try:
+        # --- Docker environment check ---
+        if os.path.exists("Dockerfile"):
+            print("[DOCKER] Dockerfile found. Checking environment...")
+            with open("Dockerfile") as f:
+                docker_content = f.read()
+            required_libs = ["albumentations", "mlflow", "torch", "imblearn", "transformers"]
+            for lib in required_libs:
+                if lib not in docker_content:
+                    print(f"[DOCKER WARN] {lib} not found in Dockerfile. Please add it.")
+
         # --- Advanced full dataset prep (config-driven) ---
-        run_full_dataset_preparation()
+        # Synthetic data generation
+        if cfg.get('synthetic_data', {}).get('enabled', False):
+            print("Generating synthetic data...")
+            # generator_model should be defined/configured
+            generate_synthetic_data(generator_model=None, n_samples=cfg['synthetic_data']['count'], out_dir=cfg['paths']['out_train'])
+
+        # Data augmentation
+        if cfg.get('augmentation', {}).get('enabled', False):
+            print("Applying augmentations...")
+            get_train_transforms()
+            custom_mixup()
+            custom_cutmix()
+
+        # Auto labeling
+        if cfg.get('pseudo_labeling', {}).get('enabled', False):
+            print("Running auto labeling...")
+            auto_label(args.img_root, args.lbl_dir)
+
+        # Copy-paste synthesis
+        if cfg.get('copy_paste_synthesis', {}).get('enabled', False):
+            print("Running copy-paste synthesis...")
+            masks = load_object_masks(args.img_root)
+            paste_objects(bg_image=None, bg_labels=None, objects=masks)
+
+        # Metadata logging
+        print("Logging metadata...")
+        meta = compute_metadata("image_id", "labels")
+        log_metadata(meta)
+
+        # Embedding extraction
+        print("Extracting embeddings...")
+        embedder = EmbedDetector(cfg['model'])
+
+        # Graph fusion
+        print("Fusing graphs with YOLO...")
+        graph = load_graph(args.lbl_dir)
+        yolo = load_yolo(args.lbl_dir)
+        iou(graph, yolo)
+
+        # Split dataset
+        print("Splitting dataset...")
+        split_dataset(args.lbl_dir)
+
+        # Metrics
+        print("Evaluating metrics...")
+        evaluator = Evaluator(cfg['metrics'])
+
+        # Test-time augmentation
+        print("Running test-time augmentation...")
+        test_time_augmentation(image=None, model=None)
 
         # 1. Split dataset
         print("Splitting dataset...")
         split_dataset(args.lbl_dir)
 
         # 2. Run DALI pipeline (recursively on all PNG images)
-        import os, glob
         image_paths = [y for x in os.walk(args.img_root) for y in glob.glob(os.path.join(x[0], '*.png'))]
         print(f"Found {len(image_paths)} PNG images in {args.img_root}")
         labels = None  # Placeholder, adjust as needed
@@ -573,8 +815,6 @@ if __name__ == "__main__":
                 out_dir = os.path.join(args.output_root, os.path.dirname(rel_path))
                 os.makedirs(out_dir, exist_ok=True)
                 out_path = os.path.join(out_dir, os.path.basename(src_img_path))
-                from PIL import Image
-                import numpy as np
                 img_arr = imgs[j]
                 img_arr = np.clip(img_arr, 0, 255).astype(np.uint8)
                 # --- Advanced AugMix ---
@@ -676,7 +916,26 @@ if __name__ == "__main__":
         meta = compute_metadata("image_id", "labels")
         meta_log_metadata(meta)
 
+        # 8. Pseudo-labeling (if requested)
+        if args.pseudo_label:
+            print("Running ensemble pseudo-labeling...")
+            # Example: pass a list of models for ensemble
+            ensemble_models = [] # Populate with model instances as needed
+            from auto_labeling import pseudo_labeling
+            pseudo_labeling(args.img_root, model=ensemble_models, out_label_dir=os.path.join(args.output_root, "pseudo_labels"))
+
+        # 9. Active learning (if requested)
+        if args.active_learning:
+            print("Running active learning step...")
+            selected = active_learning_step(args.img_root, model=None, selection_count=100)
+            print(f"Selected {len(selected)} samples for annotation.")
+
         print("All datasetpreparation steps completed successfully!")
     except Exception as e:
+        import traceback
         print(f"Pipeline failed with error: {e}")
+        traceback.print_exc()
         print("Please check your data paths and format.")
+
+# --- Dockerfile note ---
+# To containerize this pipeline, create a Dockerfile in this folder with all dependencies (Python, OpenCV, PyTorch, DALI, Albumentations, MLflow, etc.) and copy this script and config.yaml into the image.

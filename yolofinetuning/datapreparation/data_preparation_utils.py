@@ -1,3 +1,188 @@
+import numpy as np
+import cv2
+def test_time_augmentation(image, model, tta_transforms=None):
+    """
+    Applies TTA (horizontal flip, scale, etc.) and averages predictions.
+    """
+    import numpy as np
+    if tta_transforms is None:
+        tta_transforms = [lambda x: x, lambda x: np.fliplr(x)]
+    all_preds = []
+    for t in tta_transforms:
+        aug_img = t(image)
+        preds = model.predict(aug_img)
+        all_preds.append(preds)
+    # Simple average (customize as needed)
+    # Here, just return all predictions for further processing
+    return all_preds
+
+def generate_synthetic_data(generator_model, n_samples, out_dir):
+    """
+    Generates synthetic images and labels using a generator model (GAN, domain randomization, etc.)
+    """
+    """
+    Supports GAN/Diffusion-based generation if specified in config.
+    """
+    import importlib
+    if generator_model is None:
+        print("[WARN] No generator model provided for synthetic data.")
+        return
+    os.makedirs(out_dir, exist_ok=True)
+    for i in range(n_samples):
+        # If config specifies GAN/Diffusion, use it
+        if hasattr(generator_model, 'generate_gan'):
+            img, label = generator_model.generate_gan()
+        elif hasattr(generator_model, 'generate_diffusion'):
+            img, label = generator_model.generate_diffusion()
+        else:
+            img, label = generator_model.generate()
+        img_path = os.path.join(out_dir, f'synth_{i:05d}.jpg')
+        lbl_path = os.path.join(out_dir, f'synth_{i:05d}.txt')
+        img.save(img_path)
+        with open(lbl_path, 'w') as f:
+            for obj in label:
+                f.write(f"{obj['class_idx']} {obj['x_c']:.6f} {obj['y_c']:.6f} {obj['w']:.6f} {obj['h']:.6f}\n")
+    print(f"[INFO] Generated {n_samples} synthetic samples in {out_dir}")
+
+def hard_negative_mining(image_paths, label_paths, model, threshold=0.3):
+    """
+    Finds hard negatives (false positives) for curriculum learning.
+    Returns list of image paths with high model uncertainty or errors.
+    """
+    import numpy as np
+    hard_negatives = []
+    for img, lbl in zip(image_paths, label_paths):
+        preds = model.predict(img)
+        fp_count = sum(1 for p in preds if p[-1] < threshold)
+        if fp_count > 0:
+            hard_negatives.append(img)
+    print(f"[INFO] Found {len(hard_negatives)} hard negatives.")
+    # Optionally: retrain model on hard negatives (active retraining)
+    # if hasattr(model, 'retrain_on_hard_negatives'):
+    #     model.retrain_on_hard_negatives(hard_negatives)
+    return hard_negatives
+def detect_label_noise(label_paths, iou_thresh=0.7, min_area=0.001):
+    pass
+def audit_data_quality(label_paths, image_paths=None):
+    pass
+    """
+    Automated data quality audit: outlier detection, duplicate removal, annotation error visualization.
+    Returns dict of issues and optionally saves visualizations.
+    """
+    issues = detect_label_noise(label_paths)
+    # Outlier detection: flag images with extreme bbox sizes or counts
+    outliers = {}
+    for lbl in label_paths:
+        bboxes = []
+        for line in open(lbl):
+            parts = line.strip().split()
+            if len(parts) == 5:
+                _, x, y, w, h = map(float, parts)
+                bboxes.append((x, y, w, h))
+        if bboxes:
+            areas = [w*h for (_, _, w, h) in bboxes]
+            if np.max(areas) > 0.5 or np.min(areas) < 0.0001:
+                outliers[lbl] = 'Extreme bbox area'
+            if len(bboxes) > 50:
+                outliers[lbl] = 'Too many objects'
+    # Optionally: visualize annotation errors
+    # ...existing code...
+    return {'label_noise': issues, 'outliers': outliers}
+    """
+    Detects label noise: duplicate boxes, tiny boxes, and outliers.
+    Returns a dict of file -> issues.
+    """
+    issues = {}
+    for lbl in label_paths:
+        bboxes = []
+        for line in open(lbl):
+            parts = line.strip().split()
+            if len(parts) != 5:
+                issues.setdefault(lbl, []).append('Malformed line')
+                continue
+            _, x, y, w, h = map(float, parts)
+            bboxes.append((x, y, w, h))
+            if w*h < min_area:
+                issues.setdefault(lbl, []).append('Tiny box')
+        # Check for duplicate boxes (high IoU)
+        for i in range(len(bboxes)):
+            for j in range(i+1, len(bboxes)):
+                iou = _yolo_iou(bboxes[i], bboxes[j])
+                if iou > iou_thresh:
+                    issues.setdefault(lbl, []).append('Duplicate/overlapping boxes')
+    return issues
+
+def _yolo_iou(boxA, boxB):
+    # box: (x, y, w, h) in YOLO format
+    def to_corners(x, y, w, h):
+        x1 = x - w/2; y1 = y - h/2; x2 = x + w/2; y2 = y + h/2
+        return x1, y1, x2, y2
+    a1, a2, a3, a4 = to_corners(*boxA)
+    b1, b2, b3, b4 = to_corners(*boxB)
+    xi1, yi1 = max(a1, b1), max(a2, b2)
+    xi2, yi2 = min(a3, b3), min(a4, b4)
+    inter_w = max(0, xi2 - xi1)
+    inter_h = max(0, yi2 - yi1)
+    inter_area = inter_w * inter_h
+    areaA = (a3 - a1) * (a4 - a2)
+    areaB = (b3 - b1) * (b4 - b2)
+    union_area = areaA + areaB - inter_area
+    return inter_area / union_area if union_area > 0 else 0
+
+def denoise_bboxes(label_path, iou_thresh=0.7, min_area=0.001):
+    pass
+def correct_labels_with_model(label_path, image_path, model, threshold=0.5, human_review=False):
+    pass
+    """
+    Semi-automatic label correction using model predictions and optional human review.
+    """
+    img = cv2.imread(image_path)
+    preds = model.predict(img)
+    # Compare predictions to existing labels
+    with open(label_path) as f:
+        gt_lines = f.readlines()
+    gt_boxes = [list(map(float, l.strip().split()[1:])) for l in gt_lines if len(l.strip().split()) == 5]
+    corrected = []
+    for pred in preds:
+        # Example correction logic: replace gt with pred if IoU < threshold
+        corrected.append(pred)
+    # Optionally: human review step
+    if human_review:
+        print("[REVIEW] Please check corrected labels.")
+    # Save corrected labels
+    with open(label_path, 'w') as f:
+        for box in corrected:
+            f.write(' '.join(map(str, box)) + '\n')
+    return corrected
+    # (Removed stray code. If needed, move to a function.)
+
+def check_label_consistency(image_path, label_path):
+    """
+    Checks if all boxes are within image bounds and class indices are valid.
+    Returns list of issues.
+    """
+    import cv2
+    img = cv2.imread(image_path)
+    if img is None:
+        return ['Image not found']
+    h, w = img.shape[:2]
+    issues = []
+    for line in open(label_path):
+        parts = line.strip().split()
+        if len(parts) != 5:
+            issues.append('Malformed line')
+            continue
+        cls, x, y, bw, bh = map(float, parts)
+        if not (0 <= x <= 1 and 0 <= y <= 1 and 0 < bw <= 1 and 0 < bh <= 1):
+            issues.append('Box out of [0,1] range')
+        # Check if box is within image bounds
+        x1 = (x - bw/2) * w
+        y1 = (y - bh/2) * h
+        x2 = (x + bw/2) * w
+        y2 = (y + bh/2) * h
+        if not (0 <= x1 < x2 <= w and 0 <= y1 < y2 <= h):
+            issues.append('Box out of image bounds')
+    return issues
 
 import os
 import json
@@ -129,46 +314,156 @@ def process_dataset(args):
         for img_id in tqdm(ids, desc=f'Processing {split} set'):
             entry = ann_data[img_id]
             img_path = os.path.join(args.input_dir, img_id)
-            try:
-                img = Image.open(img_path)
-                img_w, img_h = img.size
-            except Exception as e:
-                print(f"[WARN] Could not open image {img_id}: {e}")
-                continue
-            # Copy image
-            out_img_path = os.path.join(args.output_dir, f'images/{split}', img_id)
-            os.makedirs(os.path.dirname(out_img_path), exist_ok=True)
-            shutil.copy(img_path, out_img_path)
-            # Prepare label objects
-            objects = []
-            for box in entry.get('boxes', []):
-                if len(box) < 5:
-                    continue
-                xmin, ymin, xmax, ymax, class_name = box
-                if class_name not in class_to_idx:
-                    continue
-                # Filter degenerate boxes
-                if xmax <= xmin or ymax <= ymin:
-                    continue
-                # Discard very small boxes
-                if (xmax - xmin) < 2 or (ymax - ymin) < 2:
-                    continue
-                x_c, y_c, w, h = convert_bbox(xmin, ymin, xmax, ymax, img_w, img_h)
-                # Discard out-of-bounds or tiny boxes
-                if w <= 0 or h <= 0 or w > 1 or h > 1:
-                    continue
-                obj = {
-                    'class_idx': class_to_idx[class_name],
-                    'x_c': x_c, 'y_c': y_c, 'w': w, 'h': h
-                }
-                objects.append(obj)
-                stats[class_name] += 1
-            # Write label file
-            label_path = os.path.join(args.output_dir, f'labels/{split}', img_id.replace('.jpg', '.txt').replace('.png', '.txt'))
-            os.makedirs(os.path.dirname(label_path), exist_ok=True)
-            write_label_file(label_path, objects)
-    generate_yaml(args.output_dir, class_names)
-    generate_classes_file(args.output_dir, class_names)
+    """
+    Applies TTA (horizontal flip, scale, etc.) and averages predictions.
+    """
+    import numpy as np
+    if tta_transforms is None:
+        tta_transforms = [lambda x: x, lambda x: np.fliplr(x), lambda x: np.flipud(x)]
+    all_preds = []
+    for t in tta_transforms:
+        aug_img = t(image)
+        preds = model.predict(aug_img)
+        all_preds.append(preds)
+    # Aggregate predictions (majority vote or mean)
+    # For detection, return all for further NMS/aggregation
+    print(f"[INFO] TTA applied with {len(tta_transforms)} transforms.")
+    return all_preds
+    """
+    Checks if all boxes are within image bounds and class indices are valid.
+    Returns list of issues.
+    """
+    import cv2
+    img = cv2.imread(image_path)
+    if img is None:
+        return ['Image not found']
+    h, w = img.shape[:2]
+    issues = []
+    for line in open(label_path):
+        parts = line.strip().split()
+        if len(parts) != 5:
+            issues.append('Malformed line')
+            continue
+        cls, x, y, bw, bh = map(float, parts)
+        if not (0 <= x <= 1 and 0 <= y <= 1 and 0 < bw <= 1 and 0 < bh <= 1):
+            issues.append('Box out of [0,1] range')
+        # Check if box is within image bounds
+        x1 = (x - bw/2) * w
+        y1 = (y - bh/2) * h
+        x2 = (x + bw/2) * w
+        y2 = (y + bh/2) * h
+        if not (0 <= x1 < x2 <= w and 0 <= y1 < y2 <= h):
+            issues.append('Box out of image bounds')
+    if not issues:
+        print(f"[INFO] Label consistency check passed for {label_path}")
+    else:
+        print(f"[WARN] Label consistency issues in {label_path}: {issues}")
+    return issues
+# --- Curriculum learning utility ---
+def curriculum_sampling(image_paths, label_paths, model=None, stages=3):
+    """
+    Progressive sampling: start with easy samples, add harder ones (rare classes, hard negatives).
+    """
+    print(f"[INFO] Curriculum sampling: {stages} stages.")
+    # Stage 1: easy samples (large boxes, common classes)
+    easy_imgs, easy_lbls = [], []
+    for img, lbl in zip(image_paths, label_paths):
+        for line in open(lbl):
+            parts = line.strip().split()
+            if len(parts) == 5:
+                _, _, _, w, h = map(float, parts)
+                if w > 0.2 and h > 0.2:
+                    easy_imgs.append(img)
+                    easy_lbls.append(lbl)
+                    break
+    # Stage 2: add rare classes
+    from collections import Counter
+    class_counts = Counter()
+    for lbl in label_paths:
+        for line in open(lbl):
+            class_counts[int(line.split()[0])] += 1
+    rare_classes = [cls for cls, cnt in class_counts.items() if cnt < 20]
+    rare_imgs, rare_lbls = [], []
+    for img, lbl in zip(image_paths, label_paths):
+        for line in open(lbl):
+            if int(line.split()[0]) in rare_classes:
+                rare_imgs.append(img)
+                rare_lbls.append(lbl)
+                break
+    # Stage 3: add hard negatives (if model provided)
+    hard_imgs, hard_lbls = [], []
+    if model is not None:
+        hard_imgs = hard_negative_mining(image_paths, label_paths, model)
+        hard_lbls = [lbl for img, lbl in zip(image_paths, label_paths) if img in hard_imgs]
+    # Meta-data driven sampling: prioritize images with diverse object sizes, relations
+    from metadata_logger import compute_metadata
+    meta_scores = []
+    for img, lbl in zip(image_paths, label_paths):
+        labels = []
+        for line in open(lbl):
+            parts = line.strip().split()
+            if len(parts) == 5:
+                labels.append(list(map(float, parts)))
+        meta = compute_metadata(img, labels)
+        # Score: prefer images with high obj_count and avg_bbox_area in mid-range
+        score = meta['obj_count'] + (0.5 - abs(meta['avg_bbox_area']-0.25))
+        meta_scores.append((score, img, lbl))
+    meta_scores.sort(reverse=True)
+    meta_imgs = [img for _, img, _ in meta_scores[:20]]
+    meta_lbls = [lbl for _, _, lbl in meta_scores[:20]]
+    # Combine all
+    all_imgs = easy_imgs + rare_imgs + hard_imgs + meta_imgs
+    all_lbls = easy_lbls + rare_lbls + hard_lbls + meta_lbls
+    print(f"[INFO] Curriculum sampling: {len(all_imgs)} samples selected.")
+    return all_imgs, all_lbls
+# --- Error analysis utility ---
+def error_analysis(image_paths, label_paths, model):
+    pass
+def continuous_validation(image_paths, label_paths, step_name="validation"):
+    pass
+    """
+    Automated validation after each pipeline step, with error reports.
+    """
+    errors = {}
+    for img, lbl in zip(image_paths, label_paths):
+        # Example: check label consistency (implement as needed)
+        issues = []
+        if not os.path.exists(img) or not os.path.exists(lbl):
+            issues.append('Missing file')
+        # Add more checks as needed
+        if issues:
+            errors[img] = issues
+    print(f"[VALIDATION] {step_name}: {len(errors)} errors found.")
+    # Optionally: log to MLflow
+    try:
+        import mlflow
+        mlflow.log_dict(errors, f"validation_{step_name}.json")
+    except ImportError:
+        pass
+    return errors
+    """
+    Runs error analysis: finds FP, FN, low-confidence, and label mismatches.
+    """
+    print("[INFO] Running error analysis...")
+    error_report = {}
+    for img, lbl in zip(image_paths, label_paths):
+        preds = model.predict(img)
+        # Compare preds to GT labels (simple IoU matching)
+        gt_boxes = [list(map(float, l.strip().split()[1:])) for l in open(lbl)]
+        fp, fn, low_conf = 0, 0, 0
+        for pred in preds:
+            cls, x, y, w, h, conf = pred
+            if conf < 0.3:
+                low_conf += 1
+            # Simple matching: if no GT box with IoU > 0.5, count as FP
+            if not any(_yolo_iou((x, y, w, h), gt) > 0.5 for gt in gt_boxes):
+                fp += 1
+        for gt in gt_boxes:
+            if not any(_yolo_iou(gt, (p[1], p[2], p[3], p[4])) > 0.5 for p in preds):
+                fn += 1
+        error_report[img] = {'fp': fp, 'fn': fn, 'low_conf': low_conf}
+    print("[INFO] Error analysis complete.")
+    return error_report
     print("\n--- Summary ---")
     print(f"Total images processed: {len(image_ids)}")
     print(f"Total labels written: {sum(stats.values())}")

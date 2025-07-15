@@ -5,6 +5,10 @@ import numpy as np
 from random import choice, randint
 
 def load_object_masks(mask_dir):
+    """
+    Loads object masks from a directory.
+    Returns list of (class_name, mask_array).
+    """
     objects = []
     for fname in os.listdir(mask_dir):
         if fname.endswith('.png'):
@@ -13,6 +17,10 @@ def load_object_masks(mask_dir):
     return objects
 
 def paste_objects(bg_image, bg_labels, objects, max_pastes=3):
+    """
+    Paste random objects onto a background image.
+    Returns new image and updated labels.
+    """
     h, w, _ = bg_image.shape
     new_labels = bg_labels.copy()
     result = bg_image.copy()
@@ -33,3 +41,23 @@ def paste_objects(bg_image, bg_labels, objects, max_pastes=3):
         y_c = (ty + (y1-y0)/2) / h
         new_labels.append([int(name), x_c, y_c, (x1-x0)/w, (y1-y0)/h])
     return result, new_labels
+
+# --- CLI entry point ---
+if __name__ == "__main__":
+    import argparse
+    import cv2
+    parser = argparse.ArgumentParser(description="Copy-paste synthesis utility")
+    parser.add_argument('--bg', required=True, help='Background image path')
+    parser.add_argument('--lbl', required=True, help='Background label txt')
+    parser.add_argument('--mask_dir', required=True, help='Object mask directory')
+    parser.add_argument('--out_img', required=True, help='Output image path')
+    parser.add_argument('--out_lbl', required=True, help='Output label txt')
+    args = parser.parse_args()
+    bg_img = cv2.imread(args.bg)
+    bg_lbls = [list(map(float, l.strip().split())) for l in open(args.lbl)]
+    objects = load_object_masks(args.mask_dir)
+    out_img, out_lbls = paste_objects(bg_img, bg_lbls, objects)
+    cv2.imwrite(args.out_img, out_img)
+    with open(args.out_lbl, 'w') as f:
+        for l in out_lbls:
+            f.write(' '.join(map(str, l))+'\n')

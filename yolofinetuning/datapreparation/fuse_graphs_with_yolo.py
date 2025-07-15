@@ -101,6 +101,7 @@ def label_quality(preds, confs=None, iou_thresh=0.5):
             outliers.append(p)
     return filtered, outliers
 
+
 def log_metadata(image_id, preds, violations, stats, out_path):
     """Log metadata for analysis and curriculum sampling."""
     meta = {
@@ -113,6 +114,12 @@ def log_metadata(image_id, preds, violations, stats, out_path):
     }
     with open(out_path, 'a') as f:
         f.write(json.dumps(meta) + '\n')
+    # MLflow logging
+    try:
+        import mlflow
+        mlflow.log_dict(meta, artifact_file="curriculum_metadata.json")
+    except ImportError:
+        pass
 
 if __name__ == '__main__':
     # Example usage
