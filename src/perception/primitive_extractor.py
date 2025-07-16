@@ -121,9 +121,9 @@ preprocess_transform = T.Compose([
 ])
 
 
-# Expose MODEL for external use
-from core_models.training_args import Config
-config = Config()
+
+# --- PHASE 1 HARNESS: Expose MODEL, single_inference, and TTA extract_cnn_feature ---
+from core_models.training_args import config
 import torch
 MODEL = BongardPerceptionModel().to(config.device)
 import os
@@ -131,10 +131,10 @@ if os.path.exists(config.best_model_path):
     MODEL.load_state_dict(torch.load(config.best_model_path, map_location=config.device))
 MODEL.eval()
 
-def single_inference(img):
-    """Run single image inference and return (class_name, confidence)."""
+def single_inference(img: Image.Image):
+    """Run the CNN on one preprocessed crop."""
     preprocess = T.Compose([
-        T.Resize(tuple(config.data.image_size)),
+        T.Resize((config.img_size, config.img_size)),
         T.ToTensor(),
         T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
@@ -145,6 +145,33 @@ def single_inference(img):
     idx = int(probs.argmax().item())
     class_names = getattr(MODEL, 'class_names', [str(i) for i in range(probs.shape[0])])
     return class_names[idx], float(probs[idx])
+
+def extract_cnn_feature(img: Image.Image):
+    # Test-Time Augmentation: original + one augment
+    crops = [img]
+    try:
+        from utils.augment import augment_image
+        aug = augment_image(img)
+        if isinstance(aug, torch.Tensor):
+            # Denormalize and convert to PIL
+            mean = torch.tensor([0.485, 0.456, 0.406]).view(3,1,1)
+            std = torch.tensor([0.229, 0.224, 0.225]).view(3,1,1)
+            aug = aug * std + mean
+            aug = torch.clamp(aug * 255, 0, 255).byte()
+            aug_img = Image.fromarray(aug.permute(1,2,0).cpu().numpy())
+            crops.append(aug_img)
+        elif isinstance(aug, Image.Image):
+            crops.append(aug)
+    except Exception:
+        pass
+    votes, confs = [], []
+    for c in crops:
+        v, c_conf = single_inference(c)
+        votes.append(v); confs.append(c_conf)
+    from collections import Counter
+    val = Counter(votes).most_common(1)[0][0]
+    avg_conf = sum(c for v,c in zip(votes,confs) if v==val) / votes.count(val)
+    return val, avg_conf
 
 def _load_cnn_model():
     """Loads the CNN model once."""

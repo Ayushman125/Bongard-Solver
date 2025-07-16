@@ -1,85 +1,91 @@
+
 #!/usr/bin/env python3
-import os, glob, time
+import os, time, glob
 from pathlib import Path
 from PIL import Image
 import numpy as np
 import matplotlib.pyplot as plt
-
 from tqdm import tqdm
 from sklearn.metrics import accuracy_score, calibration_curve
-from torchvision import transforms
 
 import torch
 from torchvision.transforms.functional import to_tensor
 
-
 from src.data.generator import LogoGenerator
 from src.perception.primitive_extractor import extract_cnn_feature, MODEL
-from src.data.bongardlogo_dataset import BongardLogoDataset
-from core_models.training_args import Config
+from core_models.training import fine_tune_perception
+from core_models.training_args import config
 
-# Load config
-config = Config()
-
-# Create checkpoints dir if missing
-Path(config.debug.save_model_checkpoints).mkdir(exist_ok=True, parents=True)
-
-# Load latest/best model
-ckpt = os.path.join(config.debug.save_model_checkpoints, 'best_perception_model.pt')
-if not os.path.exists(ckpt):
-    ckpt = os.path.join(config.debug.save_model_checkpoints, 'bongard_perception_last.pth')
+# Ensure checkpoints exist
+Path(config.checkpoint_dir).mkdir(parents=True, exist_ok=True)
+ckpt = config.best_model_path if os.path.exists(config.best_model_path) else config.last_model_path
 MODEL.load_state_dict(torch.load(ckpt, map_location=config.device))
-MODEL.eval()
 
+def build_synth_holdout(n=config.synth_holdout_count):
+    gen = LogoGenerator(size=config.img_size, bg_textures_dir=config.textures_dir)
+    imgs, labels = [], []
+    for _ in range(n):
+        feat, val = gen.sample_rule()
+        pos, neg, _ = gen.sample(feat, val)
+        for img in pos + neg:
+            imgs.append(img)
+            labels.append(MODEL.class_names.index(val))
+    return imgs, labels
 
-# --- Real Bongard-LOGO Validation: Per-Type Accuracy ---
-def get_split_type_from_path(path):
-    # path: .../ShapeBongard_V2/{hd,bd,ff}/.../images/{0,1}/img.png
-    parts = path.replace('\\', '/').split('/')
-    if 'ShapeBongard_V2' in parts:
-        idx = parts.index('ShapeBongard_V2')
-        if idx+1 < len(parts):
-            return parts[idx+1]
-    return 'unknown'
+def load_real_holdout(root=config.real_holdout_root):
+    imgs, labels = [], []
+    for prob in sorted(os.listdir(root)):
+        for lbl_folder in ["0","1"]:
+            for fn in glob.glob(f"{root}/{prob}/images/{lbl_folder}/*"):
+                img = Image.open(fn).convert("L")
+                imgs.append(img)
+                labels.append(int(lbl_folder))
+    return imgs, labels
 
-def validate_real_bongardlogo():
-    print("\n--- Validating on real Bongard-LOGO images (ShapeBongard_V2) ---")
-    dataset = BongardLogoDataset(root_dir='data/Bongard-LOGO', img_size=128)
-    loader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=False)
-    results_by_type = {'hd': [], 'bd': [], 'ff': []}
-    all_preds, all_labels = [], []
-    for batch_imgs, batch_labels in tqdm(loader, desc="Bongard-LOGO Eval"):
-        for i in range(batch_imgs.size(0)):
-            img = batch_imgs[i]
-            label = int(batch_labels[i].item())
-            # Find split type for this sample
-            path, _ = dataset.samples[i]
-            split_type = get_split_type_from_path(path)
-            # Run perception model (extract_cnn_feature expects PIL Image)
-            pil_img = transforms.ToPILImage()(img.cpu()).convert('L')
-            pred = None
-            try:
-                feats = extract_cnn_feature(pil_img)
-                # Use shape or fill or whatever is most relevant; here just use shape if present
-                if 'shape' in feats:
-                    pred = feats['shape'][0]
-                else:
-                    pred = -1
-            except Exception as e:
-                print(f"Error extracting features: {e}")
-                pred = -1
-            results_by_type.setdefault(split_type, []).append((pred, label))
-            all_preds.append(pred)
-            all_labels.append(label)
-    # Compute per-type accuracy
-    for split_type in ['hd', 'bd', 'ff']:
-        preds, labels = zip(*results_by_type[split_type]) if results_by_type[split_type] else ([],[])
-        if preds:
-            acc = accuracy_score(labels, preds)
-            print(f"Accuracy for {split_type}: {acc:.3f} ({len(preds)} samples)")
-        else:
-            print(f"No samples for {split_type}.")
-    print("Overall accuracy:", accuracy_score(all_labels, all_preds))
+def eval_set(imgs, labels):
+    preds, confs = [], []
+    for img in tqdm(imgs, desc="Inferencing"):
+        v, c = extract_cnn_feature(img)
+        preds.append(MODEL.class_names.index(v))
+        confs.append(c)
+    acc = accuracy_score(labels, preds)
+    prob_true, prob_pred = calibration_curve(
+        [int(p==t) for p,t in zip(preds, labels)],
+        confs, n_bins=config.validate_bins
+    )
+    return acc, prob_pred, prob_true
+
+def plot_calibration(x, y, title):
+    plt.plot(x, y, "o-")
+    plt.plot([0,1],[0,1],"--", color="gray")
+    plt.title(title); plt.xlabel("Predicted Confidence"); plt.ylabel("Empirical Accuracy")
+    plt.show()
+
+def online_finetune_test(imgs, labels):
+    from core_models.replay_buffer import ReplayBuffer
+    buffer = ReplayBuffer(capacity=len(imgs))
+    for img, lbl in zip(imgs, labels):
+        buffer.push(to_tensor(img), lbl)
+    pre_acc, *_ = eval_set(imgs, labels)
+    start = time.time()
+    fine_tune_perception(MODEL, buffer, config)
+    dur = time.time() - start
+    post_acc, *_ = eval_set(imgs, labels)
+    return pre_acc, post_acc, dur
 
 if __name__ == "__main__":
-    validate_real_bongardlogo()
+    # Synthetic
+    s_imgs, s_lbls = build_synth_holdout()
+    s_acc, s_pp, s_pt = eval_set(s_imgs, s_lbls)
+    print(f"Synth Acc: {s_acc:.4f}")
+    plot_calibration(s_pp, s_pt, "Synthetic Calibration")
+
+    # Real
+    r_imgs, r_lbls = load_real_holdout()
+    r_acc, r_pp, r_pt = eval_set(r_imgs, r_lbls)
+    print(f"Real Acc: {r_acc:.4f}")
+    plot_calibration(r_pp, r_pt, "Real Calibration")
+
+    # Online fine-tune
+    pre, post, t = online_finetune_test(s_imgs[:100], s_lbls[:100])
+    print(f"Online FT: Pre {pre:.4f}  Post {post:.4f} in {t:.1f}s")
