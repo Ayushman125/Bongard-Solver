@@ -1,10 +1,10 @@
-# Folder: bongard_solver/
+# Folder: bongard_solver/core_models/
 # File: replay_buffer.py
 import numpy as np
 import random
 import logging
-from typing import List, Tuple, Optional, Any # Added Any for config type
-import torch # Added for torch.from_numpy
+from typing import List, Tuple, Optional, Any
+import torch
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +30,8 @@ class SumTree:
         """Retrieves a leaf node index based on a sampled value 's'."""
         left_child = 2 * idx + 1
         right_child = left_child + 1
-
         if left_child >= len(self.tree):
             return idx  # Reached a leaf node
-
         if s <= self.tree[left_child]:
             return self._retrieve(left_child, s)
         else:
@@ -82,7 +80,7 @@ class KnowledgeReplayBuffer:
         self.beta_increment_per_sampling = 0.001  # How much beta increases per sample operation
         self.epsilon = 1e-6  # Small epsilon to prevent zero priority
         self.max_priority = 1.0  # Initial max priority
-        self.epoch = 0 # Track epochs for annealing
+        self.epoch = 0  # Track epochs for annealing
         
         # Store batch-specific info for retrieval by collate_fn or training loop
         self._current_batch_original_indices = []
@@ -92,10 +90,9 @@ class KnowledgeReplayBuffer:
 
     def add(self, data_index: int, priority: float):
         """Adds a new data index with its priority."""
-        # Add a small epsilon to priority to avoid zero priority
         priority = (priority + self.epsilon) ** self.alpha
         self.sum_tree.add(priority, data_index)
-        self.max_priority = max(self.max_priority, priority)  # Update max priority
+        self.max_priority = max(self.max_priority, priority)
 
     def sample(self, batch_size: int) -> Tuple[List[int], List[int], List[float]]:
         """
@@ -105,39 +102,44 @@ class KnowledgeReplayBuffer:
         original_data_indices = []
         tree_indices = []
         is_weights = []
-        segment = self.sum_tree.total_priority() / batch_size
         
-        # Anneal beta (moved to update method for epoch-based annealing)
-        # self.beta = min(1.0, self.beta + self.beta_increment_per_sampling)
+        # Handle case where sum_tree might be empty
+        total_priority = self.sum_tree.total_priority()
+        if total_priority == 0:
+            logger.warning("Attempted to sample from an empty replay buffer. Returning empty lists.")
+            return [], [], []
 
+        segment = total_priority / batch_size
+        
         for i in range(batch_size):
             a = segment * i
             b = segment * (i + 1)
-            s = random.uniform(a, b)  # Sample a value within the segment
+            s = random.uniform(a, b)
             (tree_idx, priority, data_idx) = self.sum_tree.get(s)
             
-            # Calculate importance sampling (IS) weight
-            # P(i) = priority_i / total_priority
-            sampling_probability = priority / self.sum_tree.total_priority()
-            is_weight = (self.capacity * sampling_probability) ** (-self.beta)  # (N * P(i))^-beta
-            is_weight = is_weight / self.max_priority  # Normalize by max_priority for stability
-
+            sampling_probability = priority / total_priority
+            # Ensure sampling_probability is not zero to avoid division by zero
+            if sampling_probability == 0:
+                is_weight = 0.0
+            else:
+                is_weight = (self.capacity * sampling_probability) ** (-self.beta)
+            
+            # Normalize by max_priority for stability, but only if max_priority is not zero
+            if self.max_priority > 0:
+                is_weight = is_weight / self.max_priority
+            else:
+                is_weight = 0.0 # Should not happen if priorities are added correctly
+            
             original_data_indices.append(data_idx)
             tree_indices.append(tree_idx)
             is_weights.append(is_weight)
             
-            # Update priority for the sampled experience (e.g., to a very low value initially)
-            # This is typically done *after* the loss calculation, so we don't update here.
-            # The `update_priorities` method will handle this.
-        
-        # Store for retrieval by collate_fn or training loop
         self._current_batch_original_indices = original_data_indices
         self._current_batch_tree_indices = tree_indices
         self._current_batch_is_weights = is_weights
         return original_data_indices, tree_indices, is_weights
 
-    # 6.1 Annealing via Config
-    def update(self, losses: List[float], cfg: Dict[str, Any]): # Pass cfg here
+    def update(self, losses: List[float], cfg: Dict[str, Any]):
         """
         Updates priorities of sampled experiences based on their new losses.
         Also handles annealing of alpha and beta based on epoch.
@@ -145,33 +147,31 @@ class KnowledgeReplayBuffer:
             losses (List[float]): New losses for the sampled experiences.
             cfg (Dict[str, Any]): Configuration dictionary containing replay buffer annealing settings.
         """
-        if len(self.sum_tree.data_pointer) != len(losses): # Check against actual number of elements in tree
-            logger.error(f"Mismatch in lengths: tree_indices ({len(self.sum_tree.data_pointer)}) vs losses ({len(losses)})")
+        # Corrected check: compare length of losses with the stored tree_indices from the last sample
+        if len(self._current_batch_tree_indices) != len(losses):
+            logger.error(f"Mismatch in lengths: _current_batch_tree_indices ({len(self._current_batch_tree_indices)}) vs losses ({len(losses)})")
             return
-
-        # Anneal alpha and beta based on current epoch
-        anneal_epochs = cfg['replay'].get('anneal_epochs', 1) # Default to 1 to avoid division by zero
         
-        # Ensure ep does not exceed anneal_epochs
-        ep = min(self.epoch, anneal_epochs) 
+        anneal_epochs = cfg['replay'].get('anneal_epochs', 1)
+        if anneal_epochs <= 0: # Prevent division by zero if anneal_epochs is 0 or negative
+            anneal_epochs = 1
+            logger.warning("replay.anneal_epochs is zero or negative, setting to 1 to prevent division by zero.")
 
-        # Linear annealing for alpha (priority exponent)
+        ep = min(self.epoch, anneal_epochs)
+        
         alpha_start = cfg['replay'].get('alpha_start', 0.6)
-        alpha_end = cfg['replay'].get('alpha_end', 0.0) # Anneal towards less prioritization
+        alpha_end = cfg['replay'].get('alpha_end', 0.0)
         self.alpha = alpha_start + ep * (alpha_end - alpha_start) / anneal_epochs
-
-        # Linear annealing for beta (importance sampling exponent)
+        
         beta_start = cfg['replay'].get('beta_start', 0.4)
-        beta_end = cfg['replay'].get('beta_end', 1.0) # Anneal towards full importance sampling
+        beta_end = cfg['replay'].get('beta_end', 1.0)
         self.beta = beta_start + ep * (beta_end - beta_start) / anneal_epochs
-
-        # Update priorities in the SumTree
-        for tree_idx, loss in zip(self._current_batch_tree_indices, losses): # Use _current_batch_tree_indices
-            new_priority = (abs(loss) + self.epsilon) ** self.alpha  # Use absolute loss for priority
+        
+        for tree_idx, loss in zip(self._current_batch_tree_indices, losses):
+            new_priority = (abs(loss) + self.epsilon) ** self.alpha
             self.sum_tree.update(tree_idx, new_priority)
-            self.max_priority = max(self.max_priority, new_priority)  # Update max priority
-
-        # Increment epoch counter for annealing
+            self.max_priority = max(self.max_priority, new_priority)
+        
         self.epoch += 1
         logger.debug(f"Replay buffer updated. Epoch: {self.epoch}, Alpha: {self.alpha:.4f}, Beta: {self.beta:.4f}")
 
@@ -192,11 +192,8 @@ class KnowledgeReplayBuffer:
         This method is called by the Dataset's __getitem__ when PER is active.
         """
         try:
-            # Find the position of original_index in the last sampled batch
             pos_in_batch = self._current_batch_original_indices.index(original_index)
             return self._current_batch_tree_indices[pos_in_batch], self._current_batch_is_weights[pos_in_batch]
         except ValueError:
-            # This should ideally not happen if the sampler is working correctly
             logger.warning(f"Original index {original_index} not found in current sampled batch info. Returning None for PER info.")
             return None, None
-

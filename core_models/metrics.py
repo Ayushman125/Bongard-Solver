@@ -1,4 +1,5 @@
-# Folder: bongard_solver/
+# Folder: bongard_solver/core_models/
+# File: metrics.py
 import numpy as np
 from sklearn.metrics import (
     accuracy_score, precision_recall_fscore_support, roc_auc_score, brier_score_loss,
@@ -7,7 +8,7 @@ from sklearn.metrics import (
 import matplotlib.pyplot as plt
 import logging
 from typing import List, Dict, Any, Tuple, Optional, Union
-import os # Added for saving plots
+import os
 
 # 12.1 mAP for Object Detection
 try:
@@ -72,7 +73,7 @@ def calculate_roc_auc(probabilities: np.ndarray, labels: np.ndarray) -> float:
     """
     if len(probabilities) == 0 or len(np.unique(labels)) < 2:
         logger.warning("Insufficient data or only one class present for ROC AUC calculation. Returning 0.5.")
-        return 0.5  # Default for random classifier
+        return 0.5
     try:
         roc_auc = roc_auc_score(labels, probabilities)
         logger.debug(f"ROC AUC: {roc_auc:.4f}")
@@ -124,7 +125,6 @@ def calculate_expected_calibration_error(
         lower_bound = bins[i]
         upper_bound = bins[i+1]
         
-        # Find samples whose probabilities fall into this bin
         in_bin = (probabilities > lower_bound) & (probabilities <= upper_bound)
         
         if np.sum(in_bin) > 0:
@@ -195,7 +195,6 @@ def plot_reliability_diagram(
         plt.show()
     plt.close()
 
-# 12.1 mAP for Object Detection
 def detection_map(pred_boxes: torch.Tensor, pred_scores: torch.Tensor, gt_boxes: torch.Tensor, iou_thresh: float = 0.5) -> float:
     """
     Computes Average Precision (AP) for object detection.
@@ -213,35 +212,28 @@ def detection_map(pred_boxes: torch.Tensor, pred_scores: torch.Tensor, gt_boxes:
     if not HAS_TORCHVISION_OPS:
         logger.warning("torchvision.ops not available. Cannot compute detection mAP. Returning 0.0.")
         return 0.0
-
     if pred_boxes.numel() == 0 and gt_boxes.numel() == 0:
-        return 1.0 # Perfect score if no predictions and no ground truths
+        return 1.0
     if pred_boxes.numel() == 0 and gt_boxes.numel() > 0:
-        return 0.0 # No predictions but ground truths exist
+        return 0.0
     if pred_boxes.numel() > 0 and gt_boxes.numel() == 0:
-        return 0.0 # Predictions exist but no ground truths
-
-    # Sort predictions by score in descending order
+        return 0.0
+    
     sorted_indices = torch.argsort(pred_scores, descending=True)
     pred_boxes = pred_boxes[sorted_indices]
     pred_scores = pred_scores[sorted_indices]
-
     num_preds = pred_boxes.shape[0]
     num_gts = gt_boxes.shape[0]
-
-    # Keep track of matched ground truths to avoid double counting
+    
     matched_gts = torch.zeros(num_gts, dtype=torch.bool)
     
     true_positives = torch.zeros(num_preds, dtype=torch.bool)
     false_positives = torch.zeros(num_preds, dtype=torch.bool)
-
     for i in range(num_preds):
-        pred_box = pred_boxes[i].unsqueeze(0) # Add batch dim for box_iou
+        pred_box = pred_boxes[i].unsqueeze(0)
         
-        # Calculate IoU with all ground truth boxes
-        ious = box_iou(pred_box, gt_boxes).squeeze(0) # Remove batch dim
+        ious = box_iou(pred_box, gt_boxes).squeeze(0)
         
-        # Find the best matching ground truth box
         if ious.numel() > 0:
             best_iou, best_gt_idx = ious.max(dim=0)
             
@@ -251,32 +243,21 @@ def detection_map(pred_boxes: torch.Tensor, pred_scores: torch.Tensor, gt_boxes:
             else:
                 false_positives[i] = True
         else:
-            false_positives[i] = True # No ground truths to match against
-
-    # Calculate cumulative true positives and false positives
+            false_positives[i] = True
+    
     tp_cumsum = torch.cumsum(true_positives, dim=0)
     fp_cumsum = torch.cumsum(false_positives, dim=0)
-
-    # Calculate precision and recall
-    recall = tp_cumsum / (num_gts + 1e-6) # Add epsilon to avoid division by zero
-    precision = tp_cumsum / (tp_cumsum + fp_cumsum + 1e-6)
-
-    # Compute Average Precision using the 11-point interpolation method (or all-points)
-    # For simplicity, we'll use the all-points method (area under PR curve)
-    # This requires interpolating precision for recall values.
-    # A more robust implementation would use VOC/COCO AP calculation.
     
-    # Append (0,0) and (1,0) to precision-recall curve
+    recall = tp_cumsum / (num_gts + 1e-6)
+    precision = tp_cumsum / (tp_cumsum + fp_cumsum + 1e-6)
+    
     precision = torch.cat((torch.tensor([1.0]), precision))
     recall = torch.cat((torch.tensor([0.0]), recall))
-
-    # Compute the area under the curve using numerical integration (trapezoidal rule)
+    
     average_precision = torch.trapz(precision, recall).item()
-
     logger.debug(f"Detection mAP (IoU={iou_thresh}): {average_precision:.4f}")
     return average_precision
 
-# 12.2 Confusion Matrix Logging
 def plot_cm(cm: np.ndarray, class_names: Optional[List[str]] = None) -> np.ndarray:
     """
     Plots a confusion matrix and returns it as a numpy array (image).
@@ -298,12 +279,10 @@ def plot_cm(cm: np.ndarray, class_names: Optional[List[str]] = None) -> np.ndarr
     else:
         plt.xticks(tick_marks, tick_marks)
         plt.yticks(tick_marks, tick_marks)
-
     plt.ylabel('True label')
     plt.xlabel('Predicted label')
     plt.tight_layout()
-
-    # Add text annotations
+    
     thresh = cm.max() / 2.
     for i in range(num_classes):
         for j in range(num_classes):
@@ -311,12 +290,11 @@ def plot_cm(cm: np.ndarray, class_names: Optional[List[str]] = None) -> np.ndarr
                      ha="center", va="center",
                      color="white" if cm[i, j] > thresh else "black")
     
-    # Convert plot to image array
     fig = plt.gcf()
     fig.canvas.draw()
     img_array = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
     img_array = img_array.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-    plt.close(fig) # Close the figure to free memory
+    plt.close(fig)
     return img_array
 
 def log_confusion(preds: np.ndarray, targets: np.ndarray, writer: Any, epoch: int, class_names: Optional[List[str]] = None):
@@ -335,7 +313,5 @@ def log_confusion(preds: np.ndarray, targets: np.ndarray, writer: Any, epoch: in
     
     cm = confusion_matrix(targets, preds)
     cm_image = plot_cm(cm, class_names)
-    # TensorBoard expects NCHW for images, so permute HWC to CHW
     writer.add_image('ConfusionMatrix', cm_image.transpose(2, 0, 1), epoch)
     logger.info(f"Confusion matrix logged for epoch {epoch}.")
-

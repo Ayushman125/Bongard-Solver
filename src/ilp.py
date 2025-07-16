@@ -17,11 +17,12 @@ except ImportError:
             self.arity = arity
         def __repr__(self): return self.name
     class BongardRule:
-        def __init__(self, name, description, program_ast, logical_facts):
+        def __init__(self, name, description, program_ast, logical_facts, is_positive_rule=True):
             self.name = name
             self.description = description
             self.program_ast = program_ast
             self.logical_facts = logical_facts
+            self.is_positive_rule = is_positive_rule
         def __repr__(self): return self.name
     ALL_RULE_ATOMS = {
         "SHAPE": RuleAtom("SHAPE", arity=2), "COLOR": RuleAtom("COLOR", arity=2),
@@ -29,7 +30,12 @@ except ImportError:
         "AND": RuleAtom("AND", arity=-1), "OR": RuleAtom("OR", arity=-1), "NOT": RuleAtom("NOT", arity=1),
         "FORALL": RuleAtom("FORALL", arity=2), "EXISTS": RuleAtom("EXISTS", arity=2),
         "object_variable": RuleAtom("object_variable", is_value=True),
-        "IMPLIES": RuleAtom("IMPLIES", arity=2)
+        "IMPLIES": RuleAtom("IMPLIES", arity=2),
+        "GT": RuleAtom("GT", arity=2), "LT": RuleAtom("LT", arity=2), "EQ": RuleAtom("EQ", arity=2),
+        "COUNT": RuleAtom("COUNT", arity=2),
+        "INT_1": RuleAtom("INT_1", 0, is_value=True), "INT_2": RuleAtom("INT_2", 0, is_value=True),
+        "INT_3": RuleAtom("INT_3", 0, is_value=True), "INT_4": RuleAtom("INT_4", 0, is_value=True),
+        "INT_5": RuleAtom("INT_5", 0, is_value=True),
     }
 
 # Import DSL components for AST construction and fact conversion
@@ -69,8 +75,7 @@ class RuleInducer:
         self.primitive_map = {p.name: p for p in DSL_VALUES + DSL_FUNCTIONS}
         logger.info("RuleInducer initialized.")
 
-    @classmethod
-    def generate(cls, facts: List[str]) -> List[BongardRule]:
+    def generate(self, facts: List[str]) -> List[BongardRule]:
         """
         Generates a list of candidate Bongard rules based on the provided DSL facts.
         This is a heuristic rule generation process, not a full-fledged ILP solver.
@@ -84,7 +89,6 @@ class RuleInducer:
         candidate_rules: List[BongardRule] = []
 
         # Parse facts to extract attributes and relations
-        # Example fact format: "SHAPE(obj_0,circle)" or "LEFT_OF(obj_0,obj_1)"
         parsed_facts = []
         for fact_str in facts:
             try:
@@ -98,11 +102,12 @@ class RuleInducer:
                 continue
 
         # Heuristic 1: Look for common attributes across objects
-        # Example: "All objects are circles" or "All objects are red"
         attribute_counts = collections.defaultdict(lambda: collections.defaultdict(int)) # attr_type -> value -> count
         object_ids = set()
         for fact in parsed_facts:
-            if len(fact['args']) == 2 and fact['args'][0].startswith('obj_'): # Attribute fact
+            # Check for attribute facts: e.g., SHAPE(obj_0,circle)
+            # Ensure the object ID is correctly extracted (e.g., 'obj_0')
+            if len(fact['args']) == 2 and fact['args'][0].startswith('obj_'): 
                 attr_type = fact['op']
                 obj_id = fact['args'][0]
                 attr_value = fact['args'][1]
@@ -116,24 +121,33 @@ class RuleInducer:
         for attr_type, values_count in attribute_counts.items():
             for value, count in values_count.items():
                 if count >= num_objects * 0.8 and num_objects > 0: # If most objects have this attribute
-                    # Propose a FORALL rule
+                    # Propose a FORALL rule: FORALL(O, attr_type(O, value))
                     try:
                         # Construct AST for FORALL(O, attr_type(O, value))
-                        obj_var_node = ASTNode(cls().primitive_map["object_variable"], value="O")
-                        value_node = ASTNode(cls().primitive_map[value], value=value)
+                        obj_var_node = ASTNode(self.primitive_map["object_variable"], value="O")
                         
+                        # Ensure value exists in primitive_map, if not, use its raw string as value
+                        value_primitive = self.primitive_map.get(value)
+                        if value_primitive:
+                            value_node = ASTNode(value_primitive, value=value)
+                        else:
+                            # Fallback for values not explicitly in DSL_VALUES (e.g., if a new value type appears)
+                            value_node = ASTNode(Primitive(value, value, "unknown_type", is_terminal=True), value=value)
+                            logger.warning(f"ILP: Value '{value}' not found in DSL primitives. Using raw string as terminal.")
+
                         # Ensure attribute_type exists in primitive_map
-                        if attr_type not in cls().primitive_map:
+                        attr_primitive = self.primitive_map.get(attr_type.lower()) # Convert to lowercase for lookup
+                        if not attr_primitive:
                             logger.warning(f"ILP: Attribute type '{attr_type}' not found in primitive map. Skipping rule.")
                             continue
 
-                        predicate_node = ASTNode(cls().primitive_map[attr_type], 
+                        predicate_node = ASTNode(attr_primitive, 
                                                  children=[obj_var_node, value_node])
-                        root_node = ASTNode(cls().primitive_map["FORALL"], 
+                        root_node = ASTNode(self.primitive_map["FORALL"], 
                                             children=[obj_var_node, predicate_node])
                         
                         program = DSLProgram(root_node)
-                        logical_facts = cls().transducer.convert(program)
+                        logical_facts = self.transducer.convert(program)
                         
                         rule_name = f"FORALL_{attr_type}_{value}"
                         rule_desc = f"All objects have {attr_type.lower()} {value.lower()}"
@@ -142,40 +156,42 @@ class RuleInducer:
                     except KeyError as e:
                         logger.warning(f"ILP: Missing primitive for rule construction: {e}. Fact: {attr_type}(O,{value})")
                     except Exception as e:
-                        logger.error(f"ILP: Error constructing FORALL rule for {attr_type}(O,{value}): {e}")
+                        logger.error(f"ILP: Error constructing FORALL rule for {attr_type}(O,{value}): {e}", exc_info=True)
 
         # Heuristic 2: Look for common relations between objects (if multiple objects exist)
-        # Example: "All objects are left_of another object" (simplified)
         if num_objects > 1:
             relation_counts = collections.defaultdict(int) # relation_type -> count
             for fact in parsed_facts:
-                if len(fact['args']) == 2 and fact['args'][0].startswith('obj_') and fact['args'][1].startswith('obj_'): # Relational fact
+                # Check for relational facts: e.g., LEFT_OF(obj_0,obj_1)
+                if len(fact['args']) == 2 and fact['args'][0].startswith('obj_') and fact['args'][1].startswith('obj_'): 
                     relation_type = fact['op']
                     relation_counts[relation_type] += 1
             
             for rel_type, count in relation_counts.items():
                 # If a relation appears frequently, propose an EXISTS rule (simplified)
-                if count >= num_objects * (num_objects - 1) * 0.2: # If a significant portion of possible pairs have this relation
+                # Threshold: at least 20% of all possible pairs (N*(N-1)) have this relation
+                if num_objects * (num_objects - 1) > 0 and count >= num_objects * (num_objects - 1) * 0.2: 
                     try:
                         # Propose EXISTS(O1, EXISTS(O2, rel_type(O1, O2))) - very simplified
-                        obj_var1_node = ASTNode(cls().primitive_map["object_variable"], value="O1")
-                        obj_var2_node = ASTNode(cls().primitive_map["object_variable"], value="O2")
+                        obj_var1_node = ASTNode(self.primitive_map["object_variable"], value="O1")
+                        obj_var2_node = ASTNode(self.primitive_map["object_variable"], value="O2")
 
-                        if rel_type not in cls().primitive_map:
+                        rel_primitive = self.primitive_map.get(rel_type.lower())
+                        if not rel_primitive:
                             logger.warning(f"ILP: Relation type '{rel_type}' not found in primitive map. Skipping rule.")
                             continue
 
-                        rel_predicate_node = ASTNode(cls().primitive_map[rel_type], 
+                        rel_predicate_node = ASTNode(rel_primitive, 
                                                      children=[obj_var1_node, obj_var2_node])
                         
-                        exists_o2_node = ASTNode(cls().primitive_map["EXISTS"], 
+                        exists_o2_node = ASTNode(self.primitive_map["EXISTS"], 
                                                  children=[obj_var2_node, rel_predicate_node])
                         
-                        root_node = ASTNode(cls().primitive_map["EXISTS"], 
+                        root_node = ASTNode(self.primitive_map["EXISTS"], 
                                             children=[obj_var1_node, exists_o2_node])
                         
                         program = DSLProgram(root_node)
-                        logical_facts = cls().transducer.convert(program)
+                        logical_facts = self.transducer.convert(program)
 
                         rule_name = f"EXISTS_REL_{rel_type}"
                         rule_desc = f"There exists a pair of objects with relation {rel_type.lower()}"
@@ -184,19 +200,19 @@ class RuleInducer:
                     except KeyError as e:
                         logger.warning(f"ILP: Missing primitive for rule construction: {e}. Relation: {rel_type}")
                     except Exception as e:
-                        logger.error(f"ILP: Error constructing EXISTS relation rule for {rel_type}: {e}")
+                        logger.error(f"ILP: Error constructing EXISTS relation rule for {rel_type}: {e}", exc_info=True)
 
         # Fallback: if no specific rules are found, propose a very generic rule
         if not candidate_rules:
             logger.info("ILP: No specific rules generated. Proposing a generic rule.")
             # Example: A simple rule like "EXISTS(O, SHAPE(O, circle))"
             try:
-                obj_var_node = ASTNode(cls().primitive_map["object_variable"], value="O")
-                circle_node = ASTNode(cls().primitive_map["circle"], value="circle")
-                shape_predicate_node = ASTNode(cls().primitive_map["SHAPE"], children=[obj_var_node, circle_node])
-                root_node = ASTNode(cls().primitive_map["EXISTS"], children=[obj_var_node, shape_predicate_node])
+                obj_var_node = ASTNode(self.primitive_map["object_variable"], value="O")
+                circle_node = ASTNode(self.primitive_map["circle"], value="circle")
+                shape_predicate_node = ASTNode(self.primitive_map["shape"], children=[obj_var_node, circle_node])
+                root_node = ASTNode(self.primitive_map["EXISTS"], children=[obj_var_node, shape_predicate_node])
                 program = DSLProgram(root_node)
-                logical_facts = cls().transducer.convert(program)
+                logical_facts = self.transducer.convert(program)
                 candidate_rules.append(BongardRule(
                     "Generic_Exists_Circle", 
                     "There exists at least one circle.", 
@@ -204,7 +220,7 @@ class RuleInducer:
                     logical_facts
                 ))
             except Exception as e:
-                logger.error(f"ILP: Error constructing generic rule: {e}")
+                logger.error(f"ILP: Error constructing generic rule: {e}", exc_info=True)
 
         logger.info(f"ILP: Generated {len(candidate_rules)} candidate rules.")
         return candidate_rules

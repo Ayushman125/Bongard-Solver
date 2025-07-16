@@ -8,32 +8,20 @@ import os
 import logging
 from PIL import Image
 from typing import Dict, Any, Optional, Union, List, Tuple
-import argparse # Added for command-line arguments
-from pathlib import Path # Added for path manipulation
+import argparse
+from pathlib import Path
 
 # Assuming these imports are available in your project structure
-from config import load_config, DEVICE
-from models import PerceptionModule, LitBongard  # Your model classes
-from data import get_dataloader, build_dali_image_processor  # For data loading and preprocessing
-from data import BongardSyntheticDataset, RealBongardDataset, BongardGenerator
-from bongard_rules import ALL_BONGARD_RULES
-# Import XAI functions
-from xai import generate_grad_cam, rollout_attention  # Updated import to rollout_attention
+from config import load_config, DEVICE, IMAGENET_MEAN, IMAGENET_STD # Import IMAGENET_MEAN/STD from config
+from core_models.models import PerceptionModule, LitBongard # Updated import path
+from src.data import get_dataloader # Only get_dataloader is needed here, others are for training
+from src.bongard_rules import ALL_BONGARD_RULES # Updated import path
+from src.xai import generate_grad_cam, rollout_attention # Updated import path
+from src.utils import _calculate_iou # For IoU calculation
+from src.sam_utils import get_masked_crop # For object cropping
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-
-# Define ImageNet normalization parameters (assuming your model was trained with these)
-IMAGENET_MEAN = [0.485, 0.456, 0.406]
-IMAGENET_STD = [0.229, 0.224, 0.225]
-
-# Define a preprocessing transform for inference
-# This will be dynamically created in preprocess_image for flexible image_size
-# preprocess_transform = T.Compose([
-#     T.Resize((224, 224)),  # Resize to model's expected input size
-#     T.ToTensor(),
-#     T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
-# ])
 
 # Placeholder for TensorRT imports. TensorRT needs to be installed.
 try:
@@ -51,7 +39,6 @@ except ImportError:
     HAS_CAPTUM = False
     logger.warning("Captum not found. GNN XAI functionality will be unavailable.")
 
-
 def load_model_for_inference(cfg: Dict[str, Any], checkpoint_path: str) -> nn.Module:
     """
     Loads a trained model for inference.
@@ -61,16 +48,21 @@ def load_model_for_inference(cfg: Dict[str, Any], checkpoint_path: str) -> nn.Mo
     Returns:
         nn.Module: The loaded model in evaluation mode.
     """
+    # Initialize PerceptionModule, as LitBongard wraps it
     model = PerceptionModule(cfg).to(DEVICE)
     if os.path.exists(checkpoint_path):
         try:
             checkpoint = torch.load(checkpoint_path, map_location=DEVICE)
             if 'state_dict' in checkpoint:
                 # Remove 'perception_module.' prefix if loading into bare PerceptionModule
-                model_state_dict = {k.replace('perception_module.', ''): v for k, v in checkpoint['state_dict'].items() if k.startswith('perception_module.')}
+                # And handle 'model.' prefix from LightningModule if present
+                model_state_dict = {k.replace('perception_module.', '').replace('model.', ''): v 
+                                    for k, v in checkpoint['state_dict'].items() 
+                                    if k.startswith('perception_module.') or k.startswith('model.')}
                 model.load_state_dict(model_state_dict)
                 logger.info(f"Loaded PerceptionModule state_dict from Lightning checkpoint: {checkpoint_path}")
             else:
+                # If it's a raw PerceptionModule state dict
                 model.load_state_dict(checkpoint)
                 logger.info(f"Loaded raw model state_dict from: {checkpoint_path}")
             model.eval()  # Set to eval mode
@@ -80,100 +72,102 @@ def load_model_for_inference(cfg: Dict[str, Any], checkpoint_path: str) -> nn.Mo
         logger.warning(f"Model checkpoint not found at {checkpoint_path}. Returning uninitialized model.")
     return model
 
-def preprocess_image(image_path: str, image_size: Tuple[int, int] = (224, 224)) -> torch.Tensor:
+def preprocess_image(image_path: str, image_size: Tuple[int, int] = (224, 224)) -> Tuple[torch.Tensor, np.ndarray]:
     """
     Loads and preprocesses a single image for model inference.
+    Returns the preprocessed tensor and the original image as a NumPy array.
     Args:
         image_path (str): Path to the image file.
         image_size (Tuple[int, int]): Target size for resizing (height, width).
     Returns:
-        torch.Tensor: Preprocessed image tensor (1, C, H, W).
+        Tuple[torch.Tensor, np.ndarray]: Preprocessed image tensor (1, C, H, W) and original image as NumPy array (H, W, C).
     """
     try:
         image = Image.open(image_path).convert("RGB")
+        original_image_np = np.array(image) # Keep original for scene graph building
         
-        # Create a dynamic preprocess transform based on the desired image_size
         dynamic_preprocess_transform = T.Compose([
             T.Resize(image_size),
             T.ToTensor(),
             T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
         ])
-        input_tensor = dynamic_preprocess_transform(image).unsqueeze(0).to(DEVICE)  # Add batch dimension and move to device
-        return input_tensor
+        input_tensor = dynamic_preprocess_transform(image).unsqueeze(0).to(DEVICE)
+        return input_tensor, original_image_np
     except FileNotFoundError:
         logger.error(f"Image not found at {image_path}")
-        return None
+        return None, None
     except Exception as e:
         logger.error(f"Error preprocessing image {image_path}: {e}")
-        return None
+        return None, None
 
 def predict_bongard_problem(model: nn.Module, cfg: Dict[str, Any], problem_data: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Performs inference on a single Bongard problem.
+    Performs inference on a single Bongard problem using the PerceptionModule.
     Args:
-        model (nn.Module): The loaded Bongard solver model.
+        model (nn.Module): The loaded Bongard solver model (PerceptionModule).
         cfg (Dict[str, Any]): Configuration dictionary.
         problem_data (Dict[str, Any]): Dictionary containing paths to positive and negative images.
                                         e.g., {'positive': ['pos1.png', 'pos2.png'], 'negative': ['neg1.png', 'neg2.png']}
     Returns:
         Dict[str, Any]: Prediction results, including logits and predicted class.
     """
-    model.eval()  # Ensure model is in evaluation mode
-    positive_tensors = []
-    for img_path in problem_data['positive']:
-        tensor = preprocess_image(img_path, image_size=(cfg['data']['image_size'], cfg['data']['image_size']))
-        if tensor is not None:
-            positive_tensors.append(tensor)
+    model.eval() # Ensure model is in evaluation mode
+
+    # Prepare query images (positive and negative examples are treated as query images here)
+    query_tensors = []
+    query_original_nps = []
+    query_gts_json_strings = [] # Dummy GTs for inference
     
-    negative_tensors = []
-    for img_path in problem_data['negative']:
-        tensor = preprocess_image(img_path, image_size=(cfg['data']['image_size'], cfg['data']['image_size']))
-        if tensor is not None:
-            negative_tensors.append(tensor)
-    
-    if not positive_tensors or not negative_tensors:
-        logger.error("Failed to load all images for the Bongard problem.")
-        return {"error": "Failed to load images"}
-    
-    # Concatenate all positive and negative images into single tensors for batch processing
-    # Assuming your model expects a batch of positive and a batch of negative images
-    positive_batch = torch.cat(positive_tensors, dim=0)  # [num_pos, C, H, W]
-    negative_batch = torch.cat(negative_tensors, dim=0)  # [num_neg, C, H, W]
-    
-    with torch.no_grad():
-        # The model's forward pass for a Bongard problem should accept these batches
-        # and return logits for the Bongard problem (e.g., 2 classes: True/False)
-        # Adjust this call based on your LitBongard or PerceptionModule's forward method
-        # For LitBongard, you might call model.forward_inference(positive_batch, negative_batch)
-        # For PerceptionModule, you might process images separately and then combine features.
-        
-        # Example for a LitBongard-like model:
-        if isinstance(model, LitBongard):
-            output = model.forward_inference(positive_batch, negative_batch)
-            logits = output['bongard_logits'] if isinstance(output, dict) else output  # Assuming logits are directly returned or in a dict
-        elif isinstance(model, PerceptionModule):
-            # If PerceptionModule, you'd process images to get features then combine them
-            # This is a simplified example; actual logic depends on your model's architecture
-            pos_features = model(positive_batch)
-            neg_features = model(negative_batch)
-            # Then combine features and pass through a final classification head
-            # For demonstration, let's assume a simple mean pooling and a linear layer
-            combined_features = torch.cat([pos_features.mean(dim=0), neg_features.mean(dim=0)], dim=0).unsqueeze(0)
-            # You'll need a classification head here, or integrate this into your PerceptionModule
-            # For now, let's just return dummy logits
-            logits = torch.randn(1, 2).to(DEVICE)  # Dummy logits
-            logger.warning("PerceptionModule inference path needs a proper classification head implementation.")
+    for img_path in problem_data['positive'] + problem_data['negative']:
+        tensor, original_np = preprocess_image(img_path, image_size=(cfg['data']['image_size'], cfg['data']['image_size']))
+        if tensor is not None and original_np is not None:
+            query_tensors.append(tensor)
+            query_original_nps.append(original_np)
+            query_gts_json_strings.append(b'{}') # Dummy GT for inference
         else:
-            logger.error("Model type not supported for Bongard problem inference.")
-            return {"error": "Unsupported model type"}
-        
-        probabilities = F.softmax(logits, dim=-1)
-        predicted_class = torch.argmax(probabilities, dim=-1).item()
+            logger.error(f"Failed to load image {img_path} for Bongard problem.")
+            return {"error": "Failed to load images"}
     
+    if not query_tensors:
+        logger.error("No query images loaded for the Bongard problem.")
+        return {"error": "No query images"}
+
+    query_batch = torch.cat(query_tensors, dim=0) # [num_query_imgs, C, H, W]
+
+    # Dummy detected bboxes and masks for inference.
+    # In a real application, you would run an object detector/segmenter here.
+    dummy_detected_bboxes_batch = [[] for _ in range(query_batch.shape[0])]
+    dummy_detected_masks_batch = [[] for _ in range(query_batch.shape[0])]
+
+    # Dummy support images and labels for inference (if few-shot is enabled in model)
+    # The PerceptionModule expects these, even if empty.
+    num_support_per_problem = cfg['data']['synthetic_data_config'].get('max_support_images_per_problem', 0)
+    dummy_support_images = torch.zeros(query_batch.shape[0], num_support_per_problem, 3, cfg['data']['image_size'], cfg['data']['image_size']).to(DEVICE)
+    dummy_support_labels = torch.zeros(query_batch.shape[0], num_support_per_problem, dtype=torch.long).to(DEVICE)
+
+    with torch.no_grad():
+        # The PerceptionModule's forward method is designed for a batch of query images
+        # and potentially a batch of support images.
+        outputs = model(
+            images=query_batch,
+            ground_truth_json_strings=query_gts_json_strings,
+            detected_bboxes_batch=dummy_detected_bboxes_batch,
+            detected_masks_batch=dummy_detected_masks_batch,
+            support_images=dummy_support_images,
+            support_labels_flat=dummy_support_labels
+        )
+        
+        bongard_logits = outputs['bongard_logits']
+        # The BongardHead in PerceptionModule already outputs 2 classes (True/False for problem)
+        # So, the logits are already for the overall problem.
+        
+        probabilities = F.softmax(bongard_logits, dim=-1)
+        predicted_class = torch.argmax(probabilities, dim=-1).item() # This will be 0 or 1 for the problem itself
+
     return {
-        "logits": logits.cpu().numpy().tolist(),
+        "logits": bongard_logits.cpu().numpy().tolist(),
         "probabilities": probabilities.cpu().numpy().tolist(),
-        "predicted_class": predicted_class  # 0 or 1, representing negative or positive Bongard solution
+        "predicted_class": predicted_class # 0 or 1, representing negative or positive Bongard solution
     }
 
 def visualize_attention_heatmap(
@@ -200,26 +194,29 @@ def visualize_attention_heatmap(
     model.eval()
     with torch.no_grad():
         attn_weights = []
-        if hasattr(model, 'get_attention_weights') and callable(model.get_attention_weights):
+        # Check if the PerceptionModule's backbone (e.g., AttributeClassifier)
+        # or another part of the model has attention weights.
+        # This part might need to be more specific to your model's internal structure.
+        if hasattr(model, 'attribute_model') and hasattr(model.attribute_model.feature_extractor, 'get_attention_weights') and callable(model.attribute_model.feature_extractor.get_attention_weights):
+            attn_weights = model.attribute_model.feature_extractor.get_attention_weights(input_tensor)
+        elif hasattr(model, 'get_attention_weights') and callable(model.get_attention_weights):
             attn_weights = model.get_attention_weights(input_tensor)
         else:
-            logger.warning("Model does not have 'get_attention_weights' method. Cannot perform attention rollout.")
+            logger.warning("Model or its attribute_model.feature_extractor does not have 'get_attention_weights' method. Cannot perform attention rollout.")
             return
         
         if not attn_weights:
             logger.warning("No attention weights obtained from the model. Skipping attention rollout visualization.")
             return
         
-        # Ensure rollout_attention is imported or defined
-        # from xai import rollout_attention # This import is already at the top
-        rollout_matrix = rollout_attention(attn_weights, discard_ratio=discard_ratio)  # [B, N, N]
+        rollout_matrix = rollout_attention(attn_weights, discard_ratio=discard_ratio) # [B, N, N]
         
         if rollout_matrix.numel() == 0:
             logger.warning("Attention rollout matrix is empty. Skipping visualization.")
             return
         
-        if rollout_matrix.shape[1] > 1:  # Ensure there are patches beyond CLS token
-            attention_to_patches = rollout_matrix[0, 0, 1:]  # [num_patches]
+        if rollout_matrix.shape[1] > 1: # Ensure there are patches beyond CLS token
+            attention_to_patches = rollout_matrix[0, 0, 1:] # [num_patches]
             
             num_patches = attention_to_patches.shape[0]
             grid_size = int(np.sqrt(num_patches))
@@ -229,7 +226,7 @@ def visualize_attention_heatmap(
             heatmap = attention_to_patches.reshape(grid_size, grid_size).cpu().numpy()
             
             original_image = Image.open(image_path).convert("RGB")
-            original_size = original_image.size  # (width, height)
+            original_size = original_image.size # (width, height)
             
             from skimage.transform import resize
             heatmap_resized = resize(heatmap, original_size, anti_aliasing=True)
@@ -238,13 +235,13 @@ def visualize_attention_heatmap(
             
             import matplotlib.cm as cm
             cmap = cm.get_cmap('jet')
-            heatmap_colored = cmap(heatmap_resized)[:, :, :3]  # Take RGB channels
+            heatmap_colored = cmap(heatmap_resized)[:, :, :3] # Take RGB channels
             
-            original_image_np = np.array(original_image) / 255.0  # Normalize to [0, 1]
+            original_image_np = np.array(original_image) / 255.0 # Normalize to [0, 1]
             
-            alpha = 0.5  # Transparency of the heatmap
+            alpha = 0.5 # Transparency of the heatmap
             overlay_image = (original_image_np * (1 - alpha)) + (heatmap_colored * alpha)
-            overlay_image = (overlay_image * 255).astype(np.uint8)  # Convert back to 0-255 range
+            overlay_image = (overlay_image * 255).astype(np.uint8) # Convert back to 0-255 range
             
             os.makedirs(save_dir, exist_ok=True)
             base_filename = os.path.basename(image_path).replace('.png', '').replace('.jpg', '')
@@ -266,10 +263,47 @@ def export_onnx(model: nn.Module, dummy_input: torch.Tensor, out_path: str):
     import torch.onnx
     logger.info(f"Exporting model to ONNX at: {out_path}")
     try:
-        torch.onnx.export(model, dummy_input, out_path,
-                          input_names=['input'], output_names=['logits'],
-                          dynamic_axes={'input':{0:'batch'}, 'logits':{0:'batch'}},
-                          opset_version=11)  # Specify opset version for broader compatibility
+        # The dummy input should match the expected input to PerceptionModule.forward
+        # which is (images, gt_json_strings, detected_bboxes_batch, detected_masks_batch, support_images, support_labels_flat)
+        # ONNX export typically only handles tensor inputs.
+        # You might need to create a wrapper model that only takes image tensors
+        # or modify the PerceptionModule.forward for ONNX export.
+        # For now, let's assume dummy_input is just the image tensor.
+        # If your PerceptionModule has a simpler forward for inference, use that.
+        
+        # Create dummy inputs for non-image arguments
+        dummy_gt_json_strings = [b'{}'] * dummy_input.shape[0]
+        dummy_bboxes_batch = [[] for _ in range(dummy_input.shape[0])]
+        dummy_masks_batch = [[] for _ in range(dummy_input.shape[0])]
+        dummy_support_images = torch.zeros(dummy_input.shape[0], 0, 3, dummy_input.shape[2], dummy_input.shape[3]).to(DEVICE)
+        dummy_support_labels = torch.zeros(dummy_input.shape[0], 0, dtype=torch.long).to(DEVICE)
+
+        # Wrap the model for ONNX export if its forward signature is complex
+        class ONNXExportWrapper(nn.Module):
+            def __init__(self, model):
+                super().__init__()
+                self.model = model
+            def forward(self, images):
+                # This simplified forward is for ONNX export
+                # It assumes the model can handle dummy bboxes/masks/support internally or they are not used for this path
+                # Or, if these are dynamically generated, they won't be part of the ONNX graph.
+                # You might need to adjust this based on how your PerceptionModule handles these inputs during inference.
+                outputs = self.model(
+                    images=images,
+                    ground_truth_json_strings=[b'{}'] * images.shape[0], # Dummy
+                    detected_bboxes_batch=[[] for _ in range(images.shape[0])], # Dummy
+                    detected_masks_batch=[[] for _ in range(images.shape[0])], # Dummy
+                    support_images=torch.zeros(images.shape[0], 0, 3, images.shape[2], images.shape[3]).to(images.device), # Dummy
+                    support_labels_flat=torch.zeros(images.shape[0], 0, dtype=torch.long).to(images.device) # Dummy
+                )
+                return outputs['bongard_logits'] # Export only the final logits
+        
+        wrapped_model = ONNXExportWrapper(model).to(DEVICE)
+        
+        torch.onnx.export(wrapped_model, dummy_input, out_path,
+                          input_names=['input_images'], output_names=['bongard_logits'],
+                          dynamic_axes={'input_images':{0:'batch'}, 'bongard_logits':{0:'batch'}},
+                          opset_version=11) # Specify opset version for broader compatibility
         logger.info("Model successfully exported to ONNX.")
     except Exception as e:
         logger.error(f"Error exporting model to ONNX: {e}")
@@ -285,11 +319,9 @@ def export_tensorrt(onnx_path, engine_path):
     if not HAS_TENSORRT:
         logger.error("TensorRT is not installed. Cannot perform ONNX to TensorRT conversion.")
         return
-
     if not Path(onnx_path).exists():
         logger.error(f"ONNX model not found at: {onnx_path}")
         return
-
     logger.info(f"Converting ONNX model '{onnx_path}' to TensorRT engine '{engine_path}'...")
     TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
     
@@ -303,21 +335,17 @@ def export_tensorrt(onnx_path, engine_path):
                     for error in range(parser.num_errors):
                         logger.error(parser.get_error(error))
                     return
-
             # Configure the builder
             config = builder.create_builder_config()
-            config.max_workspace_size = 1 << 30  # 1GB workspace
+            config.max_workspace_size = 1 << 30 # 1GB workspace
             # You might need to set precision (e.g., FP16) based on your needs
             # config.set_flag(trt.BuilderFlag.FP16)
-
             # Build the engine
             logger.info("Building TensorRT engine...")
             engine = builder.build_engine(network, config)
-
             if engine is None:
                 logger.error("Failed to build TensorRT engine.")
                 return
-
             # Serialize and save the engine
             engine_path_obj = Path(engine_path)
             engine_path_obj.parent.mkdir(parents=True, exist_ok=True)
@@ -374,7 +402,7 @@ def run_inference(cfg: Dict[str, Any], model_path: str, problem_data_path: str, 
         model_path (str): Path to the trained model checkpoint.
         problem_data_path (str): Path to a JSON file defining Bongard problems for inference.
                                  Format: {'problem_id': {'positive': [...], 'negative': [...]}}
-        visualize_xai (bool): If True, generate Grad-CAM and Attention Rollout visualizations.
+        visualize_xai (bool): If True, generate XAI visualizations (Grad-CAM, Attention Rollout).
         export_onnx_model (bool): If True, export the model to ONNX format.
         export_tensorrt_engine (Optional[str]): If provided, path to save the TensorRT engine.
         xai_gnn_enabled (bool): If True, enable GNN XAI (Integrated Gradients).
@@ -394,7 +422,7 @@ def run_inference(cfg: Dict[str, Any], model_path: str, problem_data_path: str, 
     if export_onnx_model:
         # Create a dummy input based on expected image size and channels
         dummy_input = torch.randn(1, 3, cfg['data']['image_size'], cfg['data']['image_size']).to(DEVICE)
-        onnx_output_path = cfg['onnx']['path']  # Assuming 'onnx' and 'path' are in config
+        onnx_output_path = cfg['onnx']['path'] # Assuming 'onnx' and 'path' are in config
         os.makedirs(os.path.dirname(onnx_output_path) or './', exist_ok=True)
         export_onnx(model, dummy_input, onnx_output_path)
     
@@ -417,7 +445,6 @@ def run_inference(cfg: Dict[str, Any], model_path: str, problem_data_path: str, 
                 # Example: gnn_model = torch.load(gnn_model_path)
                 # node_feats = torch.from_numpy(np.load(node_features_path))
                 # edge_index = torch.from_numpy(np.load(edge_index_path))
-
                 # For demonstration, creating a dummy GNN model and data
                 class DummyGNN(nn.Module):
                     def forward(self, node_feats, edge_index):
@@ -426,14 +453,11 @@ def run_inference(cfg: Dict[str, Any], model_path: str, problem_data_path: str, 
                 dummy_gnn_model = DummyGNN()
                 dummy_node_feats = torch.randn(10, 5, requires_grad=True) # 10 nodes, 5 features
                 dummy_edge_index = torch.tensor([[0, 1, 2, 3], [1, 0, 3, 2]], dtype=torch.long) # Dummy edge index
-
                 attributions = explain_gnn(dummy_gnn_model, dummy_node_feats, dummy_edge_index, target_edge)
                 if attributions is not None:
                     logger.info(f"GNN Attributions: {attributions}")
-
             except Exception as e:
                 logger.error(f"Error preparing for GNN XAI: {e}", exc_info=True)
-
 
     try:
         with open(problem_data_path, 'r') as f:
@@ -463,20 +487,22 @@ def run_inference(cfg: Dict[str, Any], model_path: str, problem_data_path: str, 
             # Let's pick the first positive image for Grad-CAM example.
             if problem_data['positive']:
                 sample_image_path = problem_data['positive'][0]
-                input_tensor = preprocess_image(sample_image_path, image_size=(cfg['data']['image_size'], cfg['data']['image_size']))
+                input_tensor, _ = preprocess_image(sample_image_path, image_size=(cfg['data']['image_size'], cfg['data']['image_size']))
                 if input_tensor is not None:
                     # Find a suitable target layer for Grad-CAM
                     target_layer = None
-                    if hasattr(model, 'perception_module') and isinstance(model.perception_module, nn.Module):
-                        for name, module in model.perception_module.named_modules():
+                    if hasattr(model, 'attribute_model') and isinstance(model.attribute_model, nn.Module):
+                        # Try to find a conv layer in the backbone of attribute_model
+                        for name, module in model.attribute_model.feature_extractor.named_modules():
                             if isinstance(module, (nn.Conv2d, nn.Linear)) and not list(module.children()):
                                 target_layer = module
-                        if target_layer is None:
-                            logger.warning("Could not find a suitable target layer for Grad-CAM in perception_module. Trying top-level model.")
-                            for name, module in model.named_modules():
-                                if isinstance(module, (nn.Conv2d, nn.Linear)) and not list(module.children()):
-                                    target_layer = module
-                                    break
+                                break
+                    if target_layer is None:
+                        logger.warning("Could not find a suitable target layer for Grad-CAM in attribute_model. Trying top-level model.")
+                        for name, module in model.named_modules():
+                            if isinstance(module, (nn.Conv2d, nn.Linear)) and not list(module.children()):
+                                target_layer = module
+                                break
                     if target_layer:
                         generate_grad_cam(
                             model=model,
@@ -495,7 +521,7 @@ def run_inference(cfg: Dict[str, Any], model_path: str, problem_data_path: str, 
             if cfg['model'].get('use_transformer', False):
                 if problem_data['positive']:
                     sample_image_path = problem_data['positive'][0]
-                    input_tensor = preprocess_image(sample_image_path, image_size=(cfg['data']['image_size'], cfg['data']['image_size']))
+                    input_tensor, _ = preprocess_image(sample_image_path, image_size=(cfg['data']['image_size'], cfg['data']['image_size']))
                     if input_tensor is not None:
                         visualize_attention_heatmap(
                             model=model,
@@ -533,31 +559,17 @@ if __name__ == "__main__":
     parser.add_argument("--export_tensorrt", type=str, default=None,
                         help="Path to save the TensorRT engine. Requires --export_onnx to generate ONNX first.")
     parser.add_argument('--xai-gnn', action='store_true', help='Enable GNN XAI (Integrated Gradients).')
-    parser.add_argument('--gnn-model-path', type=str, default=None, help='Path to the GNN model for XAI (dummy used if not provided).')
-    parser.add_argument('--node-features-path', type=str, default=None, help='Path to node features (dummy used if not provided).')
-    parser.add_argument('--edge-index-path', type=str, default=None, help='Path to edge index (dummy used if not provided).')
+    parser.add_argument('--gnn-model-path', type=str, default=None, help='Path to the GNN model for XAI.')
+    parser.add_argument('--node-features-path', type=str, default=None, help='Path to node features.')
+    parser.add_argument('--edge-index-path', type=str, default=None, help='Path to edge index.')
     parser.add_argument('--target-edge', type=int, nargs=2, default=None, help='Target edge for GNN XAI (e.g., 0 1).')
-
     args = parser.parse_args()
     
-    # Example usage:
-    # python inference.py --config config.yaml --model_path ./checkpoints/optimized_bongard_model.pth --problem_data_path ./data/sample_problems.json --visualize_xai --export_onnx --export_tensorrt ./tensorrt_engines/bongard_solver.engine --xai-gnn --target-edge 0 1
-    # Ensure your config.yaml has:
-    # data:
-    #   image_size: 224
-    # model:
-    #   use_transformer: True # Set to True if your model uses a Transformer and you want attention rollout
-    #   # ... other model specific configs
-    # debug:
-    #   save_model_checkpoints: "./checkpoints" # Ensure this path exists
-    # onnx:
-    #   path: "./onnx_models/bongard_solver.onnx" # Added for ONNX export
-
     # Create dummy directories if they don't exist for testing
     os.makedirs("./xai_outputs/grad_cam", exist_ok=True)
     os.makedirs("./xai_outputs/attention_rollout", exist_ok=True)
-    os.makedirs(os.path.dirname(args.model_path) or './', exist_ok=True)  # Ensure model dir exists
-
+    os.makedirs(os.path.dirname(args.model_path) or './', exist_ok=True) # Ensure model dir exists
+    
     # Create a dummy problem_data.json for testing if it doesn't exist
     if not os.path.exists(args.problem_data_path):
         logger.warning(f"Dummy problem data file not found at {args.problem_data_path}. Creating a sample.")
@@ -578,7 +590,7 @@ if __name__ == "__main__":
                 for img_path in img_list:
                     if not os.path.exists(img_path):
                         try:
-                            dummy_img = Image.new('RGB', (224, 224), color = 'red')
+                            dummy_img = Image.new('RGB', (cfg['data']['image_size'], cfg['data']['image_size']), color = 'red')
                             os.makedirs(os.path.dirname(img_path), exist_ok=True)
                             dummy_img.save(img_path)
                             logger.info(f"Created dummy image: {img_path}")

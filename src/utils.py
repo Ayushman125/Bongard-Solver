@@ -1,5 +1,5 @@
-# src/utils.py
-
+# Folder: bongard_solver/src/
+# File: utils.py
 import torch
 import numpy as np
 import random
@@ -7,10 +7,10 @@ import os
 import logging
 import sys
 import json
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Optional, TYPE_CHECKING
 from numba import njit
 from functools import lru_cache
-import torch.nn as nn # Added for cross_attend
+import torch.nn as nn
 
 # Conditional import for torch_geometric.nn.global_mean_pool
 try:
@@ -21,7 +21,7 @@ try:
 except ImportError:
     HAS_PYG_POOL = False
     logger = logging.getLogger(__name__)
-    logger.warning("torch_geometric not found. global_mean_pool will be a dummy function.")
+    logger.warning("PyTorch Geometric not found. global_mean_pool will be a dummy function.")
     # Dummy global_mean_pool if PyG is not available
     def global_mean_pool(node_embeds: torch.Tensor, batch: torch.Tensor) -> torch.Tensor:
         """
@@ -29,8 +29,8 @@ except ImportError:
         Performs mean pooling per graph based on the batch index.
         """
         if node_embeds.numel() == 0:
+            # Return an empty tensor with the correct feature dimension if no nodes
             return torch.empty(0, node_embeds.shape[-1], device=node_embeds.device)
-
         unique_batches = torch.unique(batch)
         pooled_embeddings = []
         for b_id in unique_batches:
@@ -42,8 +42,11 @@ except ImportError:
                 pooled_embeddings.append(torch.zeros(1, node_embeds.shape[-1], device=node_embeds.device))
         return torch.cat(pooled_embeddings, dim=0) if pooled_embeddings else torch.empty(0, node_embeds.shape[-1], device=node_embeds.device)
 
-
 logger = logging.getLogger(__name__)
+
+# Forward declaration for type hinting if Workspace is in another file
+if TYPE_CHECKING:
+    from .symbolic_engine import Workspace # Assuming Workspace is in symbolic_engine.py
 
 # --- Logging Setup ---
 def setup_logging(log_level: str = 'INFO', log_file: Optional[str] = None):
@@ -54,33 +57,33 @@ def setup_logging(log_level: str = 'INFO', log_file: Optional[str] = None):
         log_file (Optional[str]): Path to a file where logs should also be written.
                                    If None, logs only to console.
     """
-    # Ensure the root logger is configured only once
-    if not logging.root.handlers:
-        numeric_level = getattr(logging, log_level.upper(), None)
-        if not isinstance(numeric_level, int):
-            raise ValueError(f"Invalid log level: {log_level}")
-        
-        # Create a formatter
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        
-        # Console handler
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setFormatter(formatter)
-        console_handler.setLevel(numeric_level)
-        logging.root.addHandler(console_handler)
-        
-        # File handler (optional)
-        if log_file:
-            os.makedirs(os.path.dirname(log_file), exist_ok=True)
-            file_handler = logging.FileHandler(log_file)
-            file_handler.setFormatter(formatter)
-            file_handler.setLevel(numeric_level)
-            logging.root.addHandler(file_handler)
-        
-        logging.root.setLevel(numeric_level)
-        logger.info(f"Logging configured with level: {log_level} and file: {log_file}")
-    else:
-        logger.debug("Logging already configured. Skipping setup.")
+    # Remove all existing handlers to prevent duplicate logs if called multiple times
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+
+    numeric_level = getattr(logging, log_level.upper(), None)
+    if not isinstance(numeric_level, int):
+        raise ValueError(f"Invalid log level: {log_level}")
+    
+    # Create a formatter
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    
+    # Console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(formatter)
+    console_handler.setLevel(numeric_level)
+    logging.root.addHandler(console_handler)
+    
+    # File handler (optional)
+    if log_file:
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(formatter)
+        file_handler.setLevel(numeric_level)
+        logging.root.addHandler(file_handler)
+    
+    logging.root.setLevel(numeric_level)
+    logger.info(f"Logging configured with level: {log_level} and file: {log_file}")
 
 # --- Random Seed Setting ---
 def set_seed(seed: int):
@@ -103,7 +106,7 @@ def load_config(config_path: str) -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: The loaded configuration dictionary.
     """
-    import yaml   # Import yaml here to avoid circular dependency if config.py imports utils
+    import yaml  # Import yaml here to avoid circular dependency if config.py imports utils
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     logger.info(f"Configuration loaded from {config_path}")
@@ -161,9 +164,10 @@ def get_symbolic_embedding_dims(config: Dict[str, Any]) -> Dict[str, int]:
     # Import config attributes locally to avoid circular imports if config.py imports utils
     # Assuming these are defined in a config module that is accessible
     try:
-        from config import ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_FILL_MAP, \
-                           ATTRIBUTE_SIZE_MAP, ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_TEXTURE_MAP, \
-                           RELATION_MAP
+        # Relative import from the project root's config.py
+        from ..config import ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_FILL_MAP, \
+                             ATTRIBUTE_SIZE_MAP, ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_TEXTURE_MAP, \
+                             RELATION_MAP
     except ImportError:
         logger.warning("Could not import attribute/relation maps from config. Using dummy values.")
         ATTRIBUTE_SHAPE_MAP = {'circle':0, 'square':1}
@@ -173,8 +177,6 @@ def get_symbolic_embedding_dims(config: Dict[str, Any]) -> Dict[str, int]:
         ATTRIBUTE_ORIENTATION_MAP = {'horizontal':0}
         ATTRIBUTE_TEXTURE_MAP = {'smooth':0}
         RELATION_MAP = {'left_of':0, 'above':1}
-
-
     dims = {
         'shape_dim': len(ATTRIBUTE_SHAPE_MAP),
         'color_dim': len(ATTRIBUTE_COLOR_MAP),
@@ -187,7 +189,7 @@ def get_symbolic_embedding_dims(config: Dict[str, Any]) -> Dict[str, int]:
     logger.debug(f"Symbolic embedding dimensions: {dims}")
     return dims
 
-@lru_cache(maxsize=128)   # Cache the mapping for common max_objects values
+@lru_cache(maxsize=128)
 def make_edge_index_map(num_objects: int) -> Dict[Tuple[int, int], int]:
     """
     Creates a consistent mapping from (subject_id, object_id) pairs to a linear edge index.
@@ -213,11 +215,11 @@ def get_predicted_relation(
     relations: List[Dict[str, Any]],
     image_width: int,
     image_height: int,
-    bbox_iou_threshold: float = 0.1,      # For 'overlapping' and 'touching'
-    spatial_tolerance_ratio: float = 0.1      # For 'above', 'below', 'left_of', 'right_of'
+    bbox_iou_threshold: float = 0.1,
+    spatial_tolerance_ratio: float = 0.1
 ) -> List[Dict[str, Any]]:
     """
-    Infers relations between objects based on their attributes and spatial positions.
+    Infere relations between objects based on their attributes and spatial positions.
     This is a conceptual function and needs robust implementation based on your
     definition of relations and how they are derived from object properties.
     Args:
@@ -230,7 +232,7 @@ def get_predicted_relation(
         image_height (int): Height of the image.
         bbox_iou_threshold (float): IoU threshold to consider objects overlapping/touching.
         spatial_tolerance_ratio (float): Tolerance for spatial relations (e.g., how close
-                                         Y-coords must be for 'above' to be true).
+                                        Y-coords must be for 'above' to be true).
     Returns:
         List[Dict[str, Any]]: A list of inferred or validated relations.
     """
@@ -345,38 +347,30 @@ def cross_attend(query: torch.Tensor, context: torch.Tensor, embed_dim: int, num
         query = query.unsqueeze(0)
     if context.dim() == 1:    # Handle single context
         context = context.unsqueeze(0)
-    # Ensure query and context have a sequence length dimension (L, N, E) for MultiheadAttention
-    # Here, L=1 for both query and context as we're treating them as single vectors per batch item.
+    
     query_seq = query.unsqueeze(1)      # (B, 1, Query_dim)
     context_seq = context.unsqueeze(1)  # (B, 1, Context_dim)
-    # MultiheadAttention expects embed_dim to be the dimension of the query, key, and value.
-    # If query_dim != embed_dim, we might need a projection layer before attention.
-    # For simplicity, we assume query_dim == embed_dim here.
-    # If context_dim != embed_dim, MultiheadAttention's kdim and vdim should be set.
-    
-    # We will use the query's dimension as the embed_dim for MultiheadAttention
-    # and specify kdim/vdim for the context.
     
     attn = nn.MultiheadAttention(
-        embed_dim=query.shape[-1],    # Query_dim
+        embed_dim=query.shape[-1],      # Query_dim
         num_heads=num_heads,
-        kdim=context.shape[-1],       # Context_dim
-        vdim=context.shape[-1],       # Context_dim
-        batch_first=True              # Input/output tensors are (batch, seq_len, feature)
-    ).to(query.device)    # Ensure attention module is on the same device as inputs
-    # attn_output: (B, 1, Query_dim)
+        kdim=context.shape[-1],         # Context_dim
+        vdim=context.shape[-1],         # Context_dim
+        batch_first=True                # Input/output tensors are (batch, seq_len, feature)
+    ).to(query.device)
+    
     attn_output, _ = attn(
         query=query_seq,
         key=context_seq,
         value=context_seq
     )
     
-    return attn_output.squeeze(1)    # Remove sequence length dimension: (B, Query_dim)
+    return attn_output.squeeze(1)
 
 # --- Dummy Forward Feature-Dim Inference ---
 def infer_feature_dim(model: nn.Module, img_size: int, device: torch.device) -> int:
     """
-    Infers the output feature dimension of a model by performing a dummy forward pass.
+    Infere the output feature dimension of a model by performing a dummy forward pass.
     This is useful for dynamically setting input dimensions for subsequent layers.
     Args:
         model (nn.Module): The model whose feature dimension needs to be inferred.
@@ -385,33 +379,20 @@ def infer_feature_dim(model: nn.Module, img_size: int, device: torch.device) -> 
     Returns:
         int: The flattened output feature dimension of the model.
     """
-    # Create a dummy input tensor (Batch_size=1, Channels=3, Height=img_size, Width=img_size)
     x = torch.zeros(1, 3, img_size, img_size, device=device)
     
     with torch.no_grad():
-        # Perform a forward pass. Some feature extractors (e.g., timm with features_only=True)
-        # might return a list of feature maps. We take the last one.
         fmap_or_list = model(x)
         
         if isinstance(fmap_or_list, list):
-            fmap = fmap_or_list[-1]    # Take the last feature map
+            fmap = fmap_or_list[-1]
         else:
             fmap = fmap_or_list
         
-        # Flatten the feature map to get the dimension
-        # If fmap is (B, C, H, W), flatten to (B, C*H*W)
-        # If fmap is (B, N_tokens, D), flatten to (B, N_tokens*D) or take CLS token
-        
-        # If it's a 4D tensor (CNN output):
         if fmap.ndim == 4:
             return fmap.view(fmap.size(0), -1).size(1)
-        # If it's a 3D tensor (e.g., ViT tokens):
         elif fmap.ndim == 3:
-            # If it has a CLS token (often the first token), use its dimension
-            # Otherwise, flatten all tokens or take mean.
-            # For inferring feature_dim, flattening all tokens is safer.
             return fmap.view(fmap.size(0), -1).size(1)
-        # If it's already a 2D tensor (B, D):
         elif fmap.ndim == 2:
             return fmap.size(1)
         else:
@@ -430,9 +411,6 @@ def graph_pool(node_embeds: torch.Tensor, batch_idx: torch.Tensor) -> torch.Tens
     """
     if not HAS_PYG_POOL:
         logger.warning("PyTorch Geometric global_mean_pool not available. Using dummy mean pooling.")
-        # Dummy behavior for global_mean_pool if PyG is not installed
-        # This assumes `batch_idx` correctly groups nodes for averaging.
-        # This is a very basic mean pooling per graph.
         unique_batches = torch.unique(batch_idx)
         pooled_embeddings = []
         for b_id in unique_batches:
@@ -440,15 +418,12 @@ def graph_pool(node_embeds: torch.Tensor, batch_idx: torch.Tensor) -> torch.Tens
             if node_embeds[mask].numel() > 0:
                 pooled_embeddings.append(torch.mean(node_embeds[mask], dim=0, keepdim=True))
             else:
-                # Handle empty graphs if necessary, e.g., return zeros
                 pooled_embeddings.append(torch.zeros(1, node_embeds.shape[-1], device=node_embeds.device))
         return torch.cat(pooled_embeddings, dim=0) if pooled_embeddings else torch.empty(0, node_embeds.shape[-1], device=node_embeds.device)
     
     return global_mean_pool(node_embeds, batch_idx)
 
 # --- New: Temperature Utility ---
-# This function requires the Workspace object, so it's placed in utils.py
-# as it's a general utility that can be imported by main.py
 def compute_temperature(ws: 'Workspace', alpha: float = 0.7, beta: float = 0.3) -> float:
     """
     Computes the system temperature based on concept network activation and
@@ -463,23 +438,14 @@ def compute_temperature(ws: 'Workspace', alpha: float = 0.7, beta: float = 0.3) 
     if not ws.concept_net.nodes:
         logger.warning("Concept network has no nodes. Returning default temperature 1.0.")
         return 1.0
-
-    # Calculate average activation across all concept nodes
+    
     total_activation = sum(n.activation for n in ws.concept_net.nodes.values())
     avg_act = total_activation / len(ws.concept_net.nodes)
     
-    # Get structure coherence from the workspace
     coh = ws.structure_coherence()
     
-    # Temperature formula: higher average activation and higher coherence lead to lower temperature
-    # (1 - avg_act) means if avg_act is high (e.g., 0.9), this term is low (0.1)
-    # (1 - coh) means if coherence is high (e.g., 0.9), this term is low (0.1)
-    # So, high activation and high coherence lead to a lower temperature, promoting exploitation.
-    # Low activation and low coherence lead to a higher temperature, promoting exploration.
     temp = alpha * (1 - avg_act) + beta * (1 - coh)
     
-    # Ensure temperature is within [0, 1] bounds
     temp = max(0.0, min(1.0, temp))
     logger.debug(f"Computed temperature: {temp:.4f} (avg_act: {avg_act:.4f}, coherence: {coh:.4f})")
     return temp
-

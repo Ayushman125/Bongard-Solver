@@ -1,18 +1,18 @@
-# Folder: bongard_solver/
+# Folder: bongard_solver/core_models/
 # File: optimizers.py
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import _LRScheduler, OneCycleLR, ReduceLROnPlateau, CosineAnnealingLR
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts # Added for 7.1
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 import logging
-import math  # Import math for SophiaG placeholder
+import math
 from typing import Dict, Any, Optional, Union
 
-# Import from config (for conditional imports)
-from config import HAS_TIMM_OPTIM  # Assuming this exists in config.py
+# Import from config (assuming config.py is in the project root, so relative path from core_models)
+from ..config import HAS_TIMM_OPTIM
 
-# Added for 7.1
+# Added for Gradual Warmup
 try:
     from warmup_scheduler import GradualWarmupScheduler
     HAS_GRADUAL_WARMUP = True
@@ -21,11 +21,12 @@ except ImportError:
     HAS_GRADUAL_WARMUP = False
     logging.getLogger(__name__).warning("warmup_scheduler not found. Gradual Warmup functionality will be disabled.")
 
-
 logger = logging.getLogger(__name__)
 
 # Conditional imports for specific optimizers
 # Prioritize timm.optim if HAS_TIMM_OPTIM is True
+Lion = None
+MADGRAD = None
 if HAS_TIMM_OPTIM:
     try:
         from timm.optim import Lion as TimmLion, MADGRAD as TimmMADGRAD
@@ -34,7 +35,7 @@ if HAS_TIMM_OPTIM:
         logger.info("Using Lion/MADGRAD from timm.optim.")
     except ImportError:
         logger.warning("timm.optim not found. Lion/MADGRAD from timm will be disabled. Checking torch_optimizer as fallback.")
-        HAS_TIMM_OPTIM = False  # Disable timm.optim if import fails
+        HAS_TIMM_OPTIM = False # Disable timm.optim if import fails
         try:
             from torch_optimizer import Lion as TorchOptimizerLion, MADGRAD as TorchOptimizerMADGRAD
             Lion = TorchOptimizerLion
@@ -57,12 +58,13 @@ else:
         MADGRAD = None
 
 # --- Import Local SAM and SophiaG Implementations ---
-# Assuming your actual sam.py and sophia.py files are in the same project directory.
+# Assuming your actual sam.py and sophia.py files are in the same core_models directory.
+SAM = None # Initialize to None
 try:
-    from sam import SAM
-    logger.info("Successfully imported local SAM optimizer from sam.py.")
+    from .sam import SAM
+    logger.info("Successfully imported local SAM optimizer from .sam.py.")
 except ImportError:
-    logger.error("Could not import SAM from sam.py. Please ensure sam.py is in the project directory.")
+    logger.error("Could not import SAM from .sam.py. Please ensure sam.py is in the core_models directory.")
     # Define a dummy SAM to prevent NameError if import fails
     class SAM(optim.Optimizer):
         def __init__(self, params, base_optimizer, rho=0.05, adaptive=False, **kwargs):
@@ -71,14 +73,15 @@ except ImportError:
             logger.warning("Using dummy SAM optimizer due to import failure.")
         def first_step(self, zero_grad=False): pass
         def second_step(self, zero_grad=False): pass
-        def _grad_norm(self): return torch.tensor(1.0)  # Dummy norm
+        def _grad_norm(self): return torch.tensor(1.0) # Dummy norm
         def load_state_dict(self, state_dict): pass
 
+SophiaG = None # Initialize to None
 try:
-    from sophia import SophiaG
-    logger.info("Successfully imported local SophiaG optimizer from sophia.py.")
+    from .sophia import SophiaG
+    logger.info("Successfully imported local SophiaG optimizer from .sophia.py.")
 except ImportError:
-    logger.error("Could not import SophiaG from sophia.py. Please ensure sophia.py is in the project directory.")
+    logger.error("Could not import SophiaG from .sophia.py. Please ensure sophia.py is in the core_models directory.")
     # Define a dummy SophiaG to prevent NameError if import fails
     class SophiaG(optim.Optimizer):
         def __init__(self, params, lr=1e-3, betas=(0.965, 0.995), rho=0.04, weight_decay=1e-1,
@@ -89,24 +92,20 @@ except ImportError:
         def step(self, closure=None): return None
 
 # --- Conditional imports for Performer and Nystromformer Attention ---
+HAS_PERFORMER = False
 try:
     from performer_pytorch import SelfAttention as PerformerSelfAttention
     HAS_PERFORMER = True
-    logger = logging.getLogger(__name__)
     logger.info("PerformerSelfAttention found and enabled.")
 except ImportError:
-    HAS_PERFORMER = False
-    logger = logging.getLogger(__name__)
     logger.warning("performer_pytorch not found. Performer attention will be disabled.")
 
+HAS_NYSTROM = False
 try:
     from nystrom_attention import NystromAttention
     HAS_NYSTROM = True
-    logger = logging.getLogger(__name__)
     logger.info("NystromAttention found and enabled.")
 except ImportError:
-    HAS_NYSTROM = False
-    logger = logging.getLogger(__name__)
     logger.warning("nystrom_attention not found. Nystrom attention will be disabled.")
 
 # --- Optimizer Functions ---
@@ -121,39 +120,43 @@ def get_optimizer(model: nn.Module, config: Dict[str, Any]) -> optim.Optimizer:
     """
     optimizer_name = config['optimizer']
     learning_rate = config['learning_rate']
+    weight_decay = config.get('weight_decay', 0.0) # Added weight decay from config
     
+    optimizer = None # Initialize optimizer to None
+
     if optimizer_name == 'AdamW':
-        optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
+        optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     elif optimizer_name == 'SGD':
-        optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9)
-    elif optimizer_name == 'SophiaG':  # Now directly refers to the local class
+        optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=weight_decay)
+    elif optimizer_name == 'SophiaG':
         if SophiaG is not None:
-            optimizer = SophiaG(model.parameters(), lr=learning_rate)
+            optimizer = SophiaG(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
         else:
             logger.warning("SophiaG is not available. Falling back to AdamW.")
-            optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
+            optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     elif optimizer_name == 'Lion':
         if Lion is not None:
-            optimizer = Lion(model.parameters(), lr=learning_rate)
+            optimizer = Lion(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
         else:
             logger.warning("Lion optimizer is not available. Falling back to AdamW.")
-            optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
+            optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     elif optimizer_name == 'MADGRAD':
         if MADGRAD is not None:
-            optimizer = MADGRAD(model.parameters(), lr=learning_rate)
+            optimizer = MADGRAD(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
         else:
             logger.warning("MADGRAD optimizer is not available. Falling back to AdamW.")
-            optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
-    elif optimizer_name == 'SAM':  # Now directly refers to the local class
+            optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    elif optimizer_name == 'SAM':
         if SAM is not None:
-            base_optimizer = optim.AdamW(model.parameters(), lr=learning_rate)  # SAM wraps a base optimizer
-            optimizer = SAM(model.parameters(), base_optimizer, rho=config['sam_rho'])
+            # SAM wraps a base optimizer, pass weight_decay to base_optimizer
+            base_optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+            optimizer = SAM(model.parameters(), base_optimizer, rho=config.get('sam_rho', 0.05))
         else:
             logger.warning("SAM optimizer is not available. Falling back to AdamW.")
-            optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
+            optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     else:
         logger.warning(f"Optimizer '{optimizer_name}' not found or supported. Falling back to AdamW.")
-        optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
+        optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     
     logger.info(f"Initialized optimizer: {optimizer_name}")
     return optimizer
@@ -179,32 +182,32 @@ def get_scheduler(optimizer: optim.Optimizer, config: Dict[str, Any], total_step
                                max_lr=scheduler_config['OneCycleLR']['max_lr'],
                                total_steps=total_steps,
                                pct_start=scheduler_config['OneCycleLR']['pct_start'],
-                               anneal_strategy=scheduler_config['OneCycleLR']['anneal_strategy'])
+                               anneal_strategy=scheduler_config['OneCycleLR'].get('anneal_strategy', 'cos')) # Default to 'cos'
+        logger.info("Using OneCycleLR scheduler.")
     elif scheduler_name == 'ReduceLROnPlateau':
         scheduler = ReduceLROnPlateau(optimizer, **scheduler_config['ReduceLROnPlateau'])
+        logger.info("Using ReduceLROnPlateau scheduler.")
     elif scheduler_name == 'CosineAnnealingLR':
-        # T_max can be total_epochs or total_steps depending on desired annealing
-        # Here, assuming T_max refers to epochs for simplicity
-        scheduler = CosineAnnealingLR(optimizer, T_max=config['epochs'])
-    # 7.1 Gradual Warmup + Cosine Restarts
+        scheduler = CosineAnnealingLR(optimizer, T_max=config['epochs'], eta_min=scheduler_config['CosineAnnealingLR'].get('eta_min', 1e-6))
+        logger.info("Using CosineAnnealingLR scheduler.")
     elif scheduler_name == 'warmup_cosine':
         if HAS_GRADUAL_WARMUP:
             scheduler_cos = CosineAnnealingWarmRestarts(
                 optimizer, 
-                T_0=scheduler_config['warmup_cosine'].get('T_0', 10), # First restart period
-                T_mult=scheduler_config['warmup_cosine'].get('T_mult', 2), # Multiplier for T_0
-                eta_min=scheduler_config['warmup_cosine'].get('eta_min', 1e-6) # Minimum learning rate
+                T_0=scheduler_config['warmup_cosine'].get('T_0', 10),
+                T_mult=scheduler_config['warmup_cosine'].get('T_mult', 2),
+                eta_min=scheduler_config['warmup_cosine'].get('eta_min', 1e-6)
             )
             scheduler = GradualWarmupScheduler(
                 optimizer, 
-                multiplier=scheduler_config['warmup_cosine'].get('multiplier', 1.0), # Multiplier for learning rate
-                total_epoch=scheduler_config['warmup_cosine'].get('warmup_epochs', 5), # Number of warmup epochs
+                multiplier=scheduler_config['warmup_cosine'].get('multiplier', 1.0),
+                total_epoch=scheduler_config['warmup_cosine'].get('warmup_epochs', 5),
                 after_scheduler=scheduler_cos
             )
             logger.info(f"Initialized warmup_cosine scheduler with warmup_epochs={scheduler_config['warmup_cosine'].get('warmup_epochs', 5)}, T_0={scheduler_config['warmup_cosine'].get('T_0', 10)}.")
         else:
             logger.warning("warmup_cosine scheduler requested but GradualWarmupScheduler not found. Falling back to CosineAnnealingLR.")
-            scheduler = CosineAnnealingLR(optimizer, T_max=config['epochs']) # Fallback
+            scheduler = CosineAnnealingLR(optimizer, T_max=config['epochs'])
     elif scheduler_name != 'None':
         logger.warning(f"Scheduler '{scheduler_name}' not found or supported. No scheduler will be used.")
     
@@ -227,7 +230,15 @@ def get_attention_layer(cfg: Dict[str, Any]) -> nn.Module:
         ValueError: If an unsupported attention type is specified.
     """
     attn_type = cfg['attn'].get('type', 'multihead')
-    feat_dim = cfg['model']['feat_dim']  # Feature dimension for attention input
+    
+    # Ensure 'feature_dim' is available in the config, potentially from model inference
+    # Or, if this function is called before model is fully built, it might need to be passed.
+    # For now, assume it's set in config['model'] by PerceptionModule or similar.
+    feat_dim = cfg['model'].get('feature_dim')
+    if feat_dim is None:
+        logger.error("Feature dimension (cfg['model']['feature_dim']) not found for attention layer. Using dummy 512.")
+        feat_dim = 512 # Fallback
+    
     heads = cfg['attn'].get('heads', 8)
 
     if attn_type == 'performer':
@@ -236,11 +247,11 @@ def get_attention_layer(cfg: Dict[str, Any]) -> nn.Module:
             return PerformerSelfAttention(
                 dim=feat_dim,
                 heads=heads,
-                causal=cfg['attn'].get('causal', False)  # Causal attention (e.g., for sequences)
+                causal=cfg['attn'].get('causal', False)
             )
         else:
             logger.warning("Performer attention requested but library not found. Falling back to MultiheadAttention.")
-            return nn.MultiheadAttention(feat_dim, heads, batch_first=True)  # batch_first=True for consistency
+            return nn.MultiheadAttention(feat_dim, heads, batch_first=True)
     elif attn_type == 'nystrom':
         if HAS_NYSTROM:
             num_landmarks = cfg['attn'].get('landmarks', 64)
@@ -248,18 +259,17 @@ def get_attention_layer(cfg: Dict[str, Any]) -> nn.Module:
             return NystromAttention(
                 dim=feat_dim,
                 num_landmarks=num_landmarks,
-                heads=heads  # NystromAttention also takes heads
+                heads=heads
             )
         else:
             logger.warning("Nystrom attention requested but library not found. Falling back to MultiheadAttention.")
-            return nn.MultiheadAttention(feat_dim, heads, batch_first=True)  # batch_first=True for consistency
+            return nn.MultiheadAttention(feat_dim, heads, batch_first=True)
     elif attn_type == 'multihead':
         logger.info(f"Using standard MultiheadAttention with embed_dim={feat_dim}, num_heads={heads}.")
         return nn.MultiheadAttention(
             embed_dim=feat_dim,
             num_heads=heads,
-            batch_first=True  # Use batch_first for easier integration with (B, S, D) tensors
+            batch_first=True
         )
     else:
         raise ValueError(f"Unsupported attention type: {attn_type}")
-
