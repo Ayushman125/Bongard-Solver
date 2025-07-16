@@ -1,12 +1,11 @@
 # Folder: bongard_solver/core_models/
 # File: losses.py
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional, Dict, Any, List, Tuple, Union
 import logging
-import random  # For dummy SymbolicEngine
+import random # For dummy SymbolicEngine
 import json # For parsing ground truth scene graphs
 
 logger = logging.getLogger(__name__)
@@ -28,7 +27,7 @@ except ImportError:
             # Dummy evaluation: always consistent for positive, inconsistent for negative
             if isinstance(rule, BongardRule) and rule.name.startswith("dummy_pos"): return True
             if isinstance(rule, BongardRule) and rule.name.startswith("dummy_neg"): return False
-            return random.random() > 0.5  # Random for other rules
+            return random.random() > 0.5 # Random for other rules
     class BongardRule:
         def __init__(self, name: str = "dummy_rule", description: str = "A dummy rule", program_ast: List = [], logical_facts: List = [], is_positive_rule: bool = True):
             self.name = name
@@ -88,7 +87,7 @@ class GradNorm(nn.Module):
             losses (Dict[str, torch.Tensor]): A dictionary of scalar loss values for each task.
                                              These should be the *unweighted* losses from the current iteration.
             shared_parameters (List[torch.Tensor]): A list of parameters from the shared layers
-                                                     (e.g., backbone) of the model.
+                                                    (e.g., backbone) of the model.
         """
         if not self.training:
             logger.warning("GradNorm.update_weights called when not in training mode. Skipping weight update.")
@@ -340,9 +339,9 @@ class SymbolicConsistencyLoss(nn.Module):
             
             # Calculate BCE loss for each view
             loss_view1 = self.bce_loss(logit_view1, target_tensor_view1)
-            loss_view2 = self.bce_loss(logit_view2, target_tensor_view2)
+            f_loss_view2 = self.bce_loss(logit_view2, target_tensor_view2)
             
-            total_symbolic_loss += (loss_view1 + loss_view2) / 2.0 # Average loss for the problem
+            total_symbolic_loss += (loss_view1 + f_loss_view2) / 2.0 # Average loss for the problem
             num_evaluated_problems += 1
         
         if num_evaluated_problems > 0:
@@ -458,7 +457,7 @@ class NTXentLoss(nn.Module):
         z_j = F.normalize(z_j, dim=1)
         
         # Concatenate z_i and z_j to form a 2N batch
-        representations = torch.cat([z_i, z_j], dim=0)    # (2N, D)
+        representations = torch.cat([z_i, z_j], dim=0) # (2N, D)
         
         # Compute similarity matrix for the 2N batch
         # (2N, D) @ (D, 2N) -> (2N, 2N)
@@ -504,7 +503,7 @@ class ContrastiveLoss(nn.Module):
         """
         euclidean_distance = F.pairwise_distance(output1, output2, keepdim=True)
         loss_contrastive = torch.mean(label * torch.pow(euclidean_distance, 2) +
-                                      (1 - label) * torch.pow(torch.clamp(self.margin - euclidean_distance, min=0.0), 2))
+                                     (1 - label) * torch.pow(torch.clamp(self.margin - euclidean_distance, min=0.0), 2))
         return loss_contrastive
 
 class TripletLoss(nn.Module):
@@ -532,7 +531,7 @@ class TripletLoss(nn.Module):
         losses = F.relu(distance_positive - distance_negative + self.margin)
         return losses.mean()
 
-class CrossEntropyWithConf(nn.Module):
+class CrossEntropyWithConfidence(nn.Module): # Renamed from CrossEntropyWithConf
     """
     Cross-Entropy Loss that can incorporate a confidence score for each sample.
     Higher confidence samples contribute more to the loss.
@@ -548,7 +547,7 @@ class CrossEntropyWithConf(nn.Module):
             inputs (torch.Tensor): Logits (N, C).
             targets (torch.Tensor): Ground truth labels (N).
             confidences (Optional[torch.Tensor]): Confidence scores for each sample (N,).
-                                                  If None, behaves like standard CrossEntropyLoss.
+                                                 If None, behaves like standard CrossEntropyLoss.
         Returns:
             torch.Tensor: Scalar loss.
         """
@@ -591,4 +590,3 @@ class MixupCutmix(nn.Module):
         """
         logger.debug("Dummy MixupCutmix forward pass. Returning inputs and targets unchanged.")
         return inputs, targets
-

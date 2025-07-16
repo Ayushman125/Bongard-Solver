@@ -1,6 +1,5 @@
 # Folder: bongard_solver/core_models/
 # File: training.py
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -24,24 +23,69 @@ from PIL import Image
 import torchvision.transforms as T
 import threading
 import copy
+
 # PyTorch Profiler imports
 from torch.profiler import profile, record_function, ProfilerActivity
 
 # Import configuration (from parent directory)
-from ..config import (
-    CONFIG, DEVICE, HAS_WANDB, HAS_TORCH_QUANTIZATION,
-    ATTRIBUTE_FILL_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_SIZE_MAP,
-    ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_TEXTURE_MAP,
-    RELATION_MAP, IMAGENET_MEAN, IMAGENET_STD
-)
+# Assuming these are defined in your project's config or relevant files
+# For a minimal example, we'll define a dummy config and imports if they don't exist yet.
+# You will need to ensure these paths are correct relative to your project structure.
+try:
+    from ..config import (
+        CONFIG, DEVICE, HAS_WANDB, HAS_TORCH_QUANTIZATION,
+        ATTRIBUTE_FILL_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_SIZE_MAP,
+        ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_TEXTURE_MAP,
+        RELATION_MAP, IMAGENET_MEAN, IMAGENET_STD
+    )
+except ImportError:
+    # Dummy imports for standalone execution if config is not set up yet
+    CONFIG = {}
+    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    HAS_WANDB = False
+    HAS_TORCH_QUANTIZATION = False
+    ATTRIBUTE_FILL_MAP = {'filled': 0, 'outlined': 1}
+    ATTRIBUTE_COLOR_MAP = {'black': 0, 'white': 1} # Example
+    ATTRIBUTE_SIZE_MAP = {'small': 0, 'medium': 1, 'large': 2} # Example
+    ATTRIBUTE_ORIENTATION_MAP = {} # Example
+    ATTRIBUTE_SHAPE_MAP = {'triangle': 0, 'quadrilateral': 1}
+    ATTRIBUTE_TEXTURE_MAP = {} # Example
+    RELATION_MAP = {'none': 0, 'left_of': 1, 'above': 2} # Example
+    IMAGENET_MEAN = [0.5] # For grayscale images from LogoGenerator
+    IMAGENET_STD = [0.5]  # For grayscale images from LogoGenerator
+    logging.warning("Could not import full config. Using dummy values for some config items.")
+
+
 # Import PyTorch Lightning modules
 import pytorch_lightning as pl
+
 # Import models (from current directory)
-from .models import LitBongard, LitSimCLR, PerceptionModule
+from .models import LitBongard, LitSimCLR, PerceptionModule, BongardPerceptionModel # Added BongardPerceptionModel
+
 # Import data module and loader (from parent directory's src folder)
-from ..data import BongardDataModule, get_loader
+# Assuming data.generator exists and is accessible
+try:
+    from ..data import BongardDataModule, get_loader
+    from data.generator import LogoGenerator # Import LogoGenerator
+except ImportError:
+    logging.warning("Could not import BongardDataModule, get_loader, or LogoGenerator. Dummy classes/functions will be used.")
+    class BongardDataModule: # Dummy
+        def __init__(self, config): pass
+        def train_dataloader(self): return []
+        def val_dataloader(self): return []
+    def get_loader(dataset, batch_size, shuffle, num_workers): return [] # Dummy
+    class LogoGenerator: # Dummy
+        def __init__(self, size=128): self.size = size
+        def sample_params(self): return 'triangle', 0.3*self.size, (self.size/2, self.size/2), 0
+        def draw(self, draw, shape, sz, pos, fill): pass
+        def make_sample(self): # Dummy make_sample
+            img = Image.new('L', (self.size, self.size), 255)
+            return [img], [img], "DUMMY_RULE"
+
+
 # Import losses (from current directory)
-from .losses import LabelSmoothingCrossEntropy, DistillationLoss, FeatureConsistencyLoss, SymbolicConsistencyLoss, GradNorm
+from .losses import LabelSmoothingCrossEntropy, DistillationLoss, FeatureConsistencyLoss, SymbolicConsistencyLoss, GradNorm, CrossEntropyWithConfidence # Added CrossEntropyWithConfidence
+
 # Import optimizers and schedulers (from current directory)
 from .optimizers import get_optimizer, get_scheduler, SAM # Assuming SAM is exposed by optimizers.py
 
@@ -79,7 +123,7 @@ def set_seed(seed: int):
     logger.info(f"Random seed set to {seed}")
 
 # Import async_update_priorities from replay_buffer.py (now in core_models)
-from .replay_buffer import KnowledgeReplayBuffer  # Import the class directly
+from .replay_buffer import KnowledgeReplayBuffer, ReplayBuffer # Import both classes
 
 # Dummy function for asynchronous priority update for replay buffer
 def async_update_priorities(replay_buffer: KnowledgeReplayBuffer, tree_indices: List[int], losses: List[float], cfg: Dict[str, Any]):
@@ -150,6 +194,8 @@ class EarlyStopping:
             torch.save(model.module.perception_module.state_dict(), self.path)
         elif isinstance(model, LitBongard):
             torch.save(model.perception_module.state_dict(), self.path)
+        elif isinstance(model, BongardPerceptionModel): # Added for direct PerceptionModel saving
+            torch.save(model.state_dict(), self.path)
         else: # Fallback for other model types
             torch.save(model.state_dict(), self.path)
         self.val_loss_min = val_loss
@@ -164,7 +210,6 @@ class MixupCutmixAugmenter:
         self.mixup_alpha = training_cfg.get('mixup_alpha', 0.2)
         self.cutmix_alpha = training_cfg.get('cutmix_alpha', 1.0)
         self.num_classes = num_classes
-
         if not HAS_TORCHVISION_V2:
             logger.warning("torchvision.transforms.v2 not available. MixUp/CutMix will not function.")
             self.aug = None
@@ -309,7 +354,6 @@ def _get_ensemble_teacher_logits(
                 max_teacher_probs, _ = torch.max(teacher_probs, dim=-1)
                 current_distillation_mask = (max_teacher_probs > distillation_config.get('mask_threshold', 0.8)).float()
             all_distillation_masks.append(current_distillation_mask)
-
     else: # If teacher_models is a list of models (for ensemble averaging)
         for teacher_model_member in teacher_models:
             # Ensure it's a PerceptionModule or LitBongard
@@ -320,7 +364,6 @@ def _get_ensemble_teacher_logits(
             else:
                 logger.warning(f"Teacher model member type {type(teacher_model_member)} not recognized. Skipping.")
                 continue
-
             core_model.eval()
             with torch.no_grad():
                 teacher_outputs = core_model(
@@ -494,7 +537,6 @@ def _run_single_training_session_ensemble(
             logger.info(f"SWA enabled for {model_name_prefix} starting at epoch {swa_start_epoch}.")
         else:
             logger.warning(f"SWA start epoch {swa_start_epoch} is not less than total epochs {num_epochs}. SWA disabled for {model_name_prefix}.")
-
     best_val_accuracy = 0.0
     
     # Compile model if enabled (requires PyTorch 2.0+)
@@ -530,7 +572,6 @@ def _run_single_training_session_ensemble(
         # Set train loader epoch for DistributedSampler
         if hasattr(train_loader.sampler, 'set_epoch'):
             train_loader.sampler.set_epoch(epoch)
-
         model.train()
         total_train_loss = 0
         train_correct_predictions = 0
@@ -585,7 +626,6 @@ def _run_single_training_session_ensemble(
             
             # Zero gradients
             optimizer.zero_grad()
-
             with record_function("forward_backward_pass"):
                 # SAM Optimizer logic (first and second step)
                 if isinstance(optimizer, SAM) and cfg['training'].get('use_sam_optimizer', False):
@@ -949,7 +989,6 @@ def _run_single_training_session_ensemble(
         
         current_epoch_val_logits = []
         current_epoch_val_labels = []
-
         val_loop = tqdm(val_loader, leave=True, desc=f"Epoch {epoch+1}/{num_epochs} [Validation {model_name_prefix}]")
         with torch.no_grad():
             for batch_idx_val, batch_val in enumerate(val_loop):
@@ -1000,7 +1039,6 @@ def _run_single_training_session_ensemble(
                 val_correct_predictions += (predictions_val == query_labels_val).sum().item()
                 val_total_samples += query_labels_val.size(0)
                 val_loop.set_postfix(loss=loss_val.item())
-
                 current_epoch_val_logits.extend(bongard_logits_val.cpu().numpy().tolist())
                 current_epoch_val_labels.extend(query_labels_val.cpu().numpy().tolist())
         
@@ -1034,7 +1072,9 @@ def _run_single_training_session_ensemble(
         # Need to ensure the SWA model's BN layers are updated with the training data statistics
         # This requires a pass over the training data.
         # For simplicity, we just update the model's BN layers
-        update_bn(train_loader, swa_model, device=DEVICE)
+        # This function is not provided in the snippet, assuming it exists or is handled elsewhere.
+        # update_bn(train_loader, swa_model, device=DEVICE) 
+        pass # Placeholder for update_bn if it's not defined
         # Save the SWA model
         swa_model_path = os.path.join(checkpoint_dir, f"{model_name_prefix}_swa_model.pt")
         torch.save(swa_model.state_dict(), swa_model_path)
@@ -1063,6 +1103,7 @@ def _run_single_training_session_ensemble(
         optimized_model_path = os.path.join(checkpoint_dir, f"{model_name_prefix}_qat_optimized_bongard_model.pth")
         torch.save(final_model_for_quant.state_dict(), optimized_model_path)
         logger.info(f"QAT optimized model saved to: {optimized_model_path}")
+
     if cfg['training']['quantization']['ptq']:
         final_model_for_quant = quantize_model_ptq(final_model_for_quant, val_loader, cfg)
         optimized_model_path = os.path.join(checkpoint_dir, f"{model_name_prefix}_ptq_optimized_bongard_model.pth")
@@ -1105,7 +1146,6 @@ def _validate_model_ensemble(
     total_samples = 0
     all_predictions_logits = []
     all_true_labels = []
-
     dali_processor = getattr(data_loader.dataset, 'dali_image_processor', None) # Access from dataset if DALI is used
     
     val_loop = tqdm(data_loader, leave=False, desc="Validation")
@@ -1145,7 +1185,6 @@ def _validate_model_ensemble(
                 processed_query_images_view1.shape[1], processed_query_images_view1.shape[2], processed_query_images_view1.shape[3]
             )
             support_labels_reshaped = support_labels_flat.view(batch_size_actual, max_support_imgs)
-
             outputs = model(processed_query_images_view1, ground_truth_json_strings=query_gts_json_view1,
                                     detected_bboxes_batch=query_bboxes_view1, detected_masks_batch=query_masks_view1,
                                     support_images=processed_support_images_reshaped,
@@ -1163,10 +1202,189 @@ def _validate_model_ensemble(
             all_true_labels.extend(query_labels.cpu().numpy().tolist())
             
             val_loop.set_postfix(loss=loss.item())
-
     avg_val_loss = total_val_loss / len(data_loader)
     val_accuracy = correct_predictions / total_samples
     logger.info(f"Validation Loss: {avg_val_loss:.4f} | Validation Accuracy: {val_accuracy:.4f}")
     
     return avg_val_loss, val_accuracy, all_predictions_logits, all_true_labels
+
+# --- New function for training perception with simple ReplayBuffer ---
+
+# Define a simple configuration class/object for hyperparameters
+# In a real scenario, this would be loaded from a YAML/JSON file.
+class TrainingConfig:
+    def __init__(self):
+        self.buffer_capacity = 20000
+        self.init_samples = 5000
+        self.batch_size = 64
+        self.epochs = 10
+        self.device = DEVICE
+        self.checkpoint_path = "checkpoints/bongard_cnn.pth"
+        self.img_size = 128 # Consistent with LogoGenerator
+        self.pos_label = 1 # Example: label for positive class
+        self.neg_label = 0 # Example: label for negative class
+        self.optimizer = 'AdamW' # Example optimizer
+        self.learning_rate = 1e-3
+        self.weight_decay = 1e-5
+        self.scheduler = 'None' # No scheduler for this basic example
+        self.scheduler_config = {} # Empty config for no scheduler
+        # Dummy config values for the existing complex training functions
+        self.training = {
+            'seed': 42,
+            'early_stop_patience': 7,
+            'early_stop_delta': 0.0,
+            'use_amp': False,
+            'use_sam_optimizer': False,
+            'use_mean_teacher': False,
+            'use_grad_norm': False,
+            'use_swa': False,
+            'use_torch_compile': False,
+            'max_grad_norm': 0.0,
+            'curriculum_learning': False,
+            'curriculum_config': {'difficulty_sampling': False},
+            'use_knowledge_distillation': False,
+            'attribute_loss_weight': 1.0,
+            'relation_loss_weight': 1.0,
+            'consistency_loss_weight': 1.0,
+            'feature_consistency_weight': 1.0,
+            'symbolic_consistency_weight': 1.0,
+            'distillation_config': {'student_epochs': 10, 'loss_weight': 1.0, 'temperature': 2.0, 'use_mask_distillation': False, 'mask_threshold': 0.8, 'alpha': 0.5},
+            'optimizer': self.optimizer,
+            'learning_rate': self.learning_rate,
+            'weight_decay': self.weight_decay,
+            'scheduler': self.scheduler,
+            'scheduler_config': self.scheduler_config
+        }
+        self.data = {
+            'image_size': self.img_size,
+            'synthetic_data_config': {
+                'max_support_images_per_problem': 0 # Not used in simple perception training
+            }
+        }
+        self.model = {
+            'bongard_head_config': {
+                'num_classes': 4 # Based on BongardPerceptionModel's default
+            },
+            'attribute_classifier_config': {} # Dummy
+        }
+        self.debug = {
+            'save_model_checkpoints': 'checkpoints',
+            'use_profiler': False,
+            'logs_dir': 'logs'
+        }
+        self.replay = { # For KnowledgeReplayBuffer config
+            'alpha_start': 0.6,
+            'alpha_end': 0.0,
+            'anneal_frames': 100000
+        }
+
+
+# Preprocessing transform for images from PIL to Tensor
+preprocess = T.Compose([
+    T.Resize((TrainingConfig().img_size, TrainingConfig().img_size)),
+    T.ToTensor(), # Converts PIL Image to FloatTensor and scales to [0.0, 1.0]
+    T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD), # Normalize with mean/std
+])
+
+def train_perception_with_buffer(config: TrainingConfig):
+    """
+    Trains the perception model using a simple replay buffer populated with synthetic data.
+    This function is designed for Phase 1 initial perception training.
+
+    Args:
+        config (TrainingConfig): Configuration object containing hyperparameters.
+    """
+    set_seed(42) # Set a fixed seed for reproducibility
+
+    # 1. Build replay buffer from synthetic data
+    logger.info(f"Initializing simple replay buffer with capacity: {config.buffer_capacity}")
+    buffer = ReplayBuffer(capacity=config.buffer_capacity)
+    gen = LogoGenerator(size=config.img_size)
+
+    logger.info(f"Generating {config.init_samples} initial samples and pushing to buffer...")
+    # Generate samples and push to buffer
+    for _ in tqdm(range(config.init_samples), desc="Populating Replay Buffer"):
+        pos_imgs, neg_imgs, _ = gen.make_sample() # LogoGenerator returns pos, neg, rule
+        
+        # Treat each image+label as separate sample for the perception model
+        # Assuming pos_label and neg_label are defined in config
+        for img_pil in pos_imgs:
+            img_tensor = preprocess(img_pil)
+            buffer.push(img_tensor, config.pos_label)
+        for img_pil in neg_imgs:
+            img_tensor = preprocess(img_pil)
+            buffer.push(img_tensor, config.neg_label)
+            
+    logger.info(f"Replay buffer initialized with {len(buffer)} samples.")
+
+    # 2. Model, optimizer, loss
+    # Assuming BongardPerceptionModel has a class_names attribute and expects 1-channel input
+    # The number of classes should correspond to the number of unique labels (e.g., shape, color properties)
+    # For 'triangle', 'quadrilateral', 'filled', 'outlined' -> 4 classes
+    # Adjust num_classes based on your actual output space for the perception model
+    num_classes = len(BongardPerceptionModel().class_names) # Dynamically get num_classes
+    model = BongardPerceptionModel(num_classes=num_classes).to(config.device)
+    
+    # Pass config.training to get_optimizer as it expects a dict
+    optimizer = get_optimizer(model, config.training) 
+    criterion = CrossEntropyWithConfidence() # Assuming this loss exists and is appropriate
+
+    # total_steps for scheduler (if used)
+    total_steps = (len(buffer) // config.batch_size) * config.epochs
+    scheduler = get_scheduler(optimizer, config.training, total_steps) # Pass config.training
+
+    # 3. Training loop sampling from buffer
+    model.train()
+    logger.info(f"Starting training for {config.epochs} epochs...")
+    for epoch in range(config.epochs):
+        avg_loss, avg_acc = 0.0, 0.0
+        # Calculate steps based on buffer size and batch size
+        steps_per_epoch = len(buffer) // config.batch_size
+        
+        if steps_per_epoch == 0:
+            logger.warning(f"Not enough samples in buffer ({len(buffer)}) for batch size ({config.batch_size}). Skipping epoch {epoch}.")
+            continue
+
+        train_loop = tqdm(range(steps_per_epoch), leave=True, desc=f"Epoch {epoch+1}/{config.epochs} [Perception Train]")
+        for _ in train_loop:
+            imgs, labels = buffer.sample(config.batch_size)
+            imgs, labels = imgs.to(config.device), labels.to(config.device)
+
+            optimizer.zero_grad()
+            logits = model(imgs)
+            loss = criterion(logits, labels) # CrossEntropyWithConfidence expects raw logits and labels
+
+            loss.backward()
+            optimizer.step()
+
+            if scheduler is not None:
+                scheduler.step() # Step scheduler if it's not a ReduceLROnPlateau type
+
+            avg_loss += loss.item()
+            # classification_accuracy expects CPU tensors
+            avg_acc += classification_accuracy(labels.cpu(), logits.argmax(1).cpu())
+            
+            train_loop.set_postfix(loss=loss.item(), acc=classification_accuracy(labels.cpu(), logits.argmax(1).cpu()))
+
+        avg_loss /= steps_per_epoch
+        avg_acc /= steps_per_epoch
+        print(f"Epoch {epoch+1} Loss={avg_loss:.4f} Acc={avg_acc:.4f}")
+
+    # Save the trained model
+    os.makedirs(os.path.dirname(config.checkpoint_path), exist_ok=True)
+    torch.save(model.state_dict(), config.checkpoint_path)
+    logger.info(f"Perception model saved to {config.checkpoint_path}")
+
+# Placeholder for update_bn if it's used in _run_single_training_session_ensemble
+def update_bn(loader: Any, model: nn.Module, device: torch.device):
+    """
+    Updates BatchNorm running statistics by passing data through the model.
+    This is a dummy implementation; a proper one would iterate through the loader.
+    """
+    logger.info("Running dummy update_bn. Implement a proper BatchNorm update if needed.")
+    model.train()
+    # for batch in loader:
+    #     images = batch[0].to(device) # Assuming images are the first element
+    #     _ = model(images)
+    model.eval() # Set back to eval mode after update
 

@@ -1,9 +1,9 @@
 # Folder: bongard_solver/src/utils/
 # File: augment.py
-
 import logging
 import numpy as np
 import random # For conditional augmentations if needed
+import cv2 # Required by Albumentations for some transforms
 
 # Import Albumentations
 try:
@@ -22,6 +22,11 @@ logger.setLevel(logging.INFO)
 # For now, using a general set of augmentations as described.
 # It expects a numpy array (H, W, C) and returns a PyTorch tensor (C, H, W).
 if HAS_ALBUMENTATIONS:
+    # Assuming ImageNet mean/std for normalization if not specified in config
+    # You might want to load these from a global config if available.
+    IMAGENET_MEAN = [0.485, 0.456, 0.406]
+    IMAGENET_STD = [0.229, 0.224, 0.225]
+
     augmenter = A.Compose([
         A.OneOf([
             A.GaussNoise(var_limit=(10.0, 50.0), p=0.5),
@@ -38,7 +43,7 @@ if HAS_ALBUMENTATIONS:
         A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5),
         A.HueSaturationValue(hue_shift_limit=20, sat_shift_limit=30, val_shift_limit=20, p=0.5),
         A.CoarseDropout(max_holes=8, max_height=8, max_width=8, fill_value=(255,255,255), p=0.5), # Simulate occlusion
-        A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]), # ImageNet normalization
+        A.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD), # ImageNet normalization
         ToTensorV2() # Converts numpy array (H, W, C) to PyTorch tensor (C, H, W)
     ])
 else:
@@ -79,15 +84,12 @@ if __name__ == '__main__':
     draw = ImageDraw.Draw(dummy_img_pil)
     draw.ellipse((50, 50, 200, 200), fill=(0, 0, 0)) # Black circle
     dummy_img_np = np.array(dummy_img_pil)
-
     logger.info(f"Original image shape: {dummy_img_np.shape}, dtype: {dummy_img_np.dtype}")
-
     # Apply augmentation
     augmented_tensor = augment_image(dummy_img_np)
-
     logger.info(f"Augmented tensor shape: {augmented_tensor.shape}, dtype: {augmented_tensor.dtype}")
     logger.info(f"Augmented tensor min value: {augmented_tensor.min():.4f}, max value: {augmented_tensor.max():.4f}")
-
+    
     # To visualize, you'd need to denormalize and convert back to numpy
     # (This logic would typically be in xai.py or a visualization utility)
     # For a quick check:
@@ -102,4 +104,3 @@ if __name__ == '__main__':
     #     logger.info("Saved augmented_example.png (might not be perfectly visible due to normalization).")
     # except Exception as e:
     #     logger.error(f"Error saving augmented image: {e}")
-

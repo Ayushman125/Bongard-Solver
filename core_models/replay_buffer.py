@@ -1,10 +1,10 @@
-# Folder: bongard_solver/core_models/
-# File: replay_buffer.py
+# coremodels/replay_buffer.py
 
 import numpy as np
 import random
 import logging
-from typing import List, Tuple, Optional, Any
+from collections import deque
+from typing import List, Tuple, Optional, Any, Union, Dict
 import torch
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ class SumTree:
         # Data stores the actual data (in this case, original dataset indices)
         self.data = np.zeros(capacity, dtype=object)  # Stores actual data indices
         self.data_pointer = 0  # Pointer to the next available data leaf
-        self.current_size = 0 # Tracks the number of elements currently in the buffer
+        self.current_size = 0  # Tracks the number of elements currently in the buffer
 
     def _propagate(self, idx: int, change: float):
         """Propagates priority change up the tree."""
@@ -34,11 +34,9 @@ class SumTree:
         """Retrieves a leaf node index based on a sampled value 's'."""
         left_child = 2 * idx + 1
         right_child = left_child + 1
-
         # If we are at a leaf node (or beyond the tree's extent for children)
         if left_child >= len(self.tree):
             return idx  # Reached a leaf node
-
         # Traverse down based on 's'
         if s <= self.tree[left_child]:
             return self._retrieve(left_child, s)
@@ -65,7 +63,7 @@ class SumTree:
         if self.data_pointer >= self.capacity:
             self.data_pointer = 0  # Wrap around if capacity is reached
         
-        self.current_size = min(self.current_size + 1, self.capacity) # Update current size
+        self.current_size = min(self.current_size + 1, self.capacity)  # Update current size
 
     def update(self, tree_idx: int, priority: float):
         """Updates the priority of an existing data item."""
@@ -100,7 +98,7 @@ class KnowledgeReplayBuffer:
         self.capacity = capacity
         self.alpha = alpha_start  # Controls how much prioritization is used (0 = uniform, 1 = full)
         self.beta = beta_start    # Controls importance sampling (IS) weight compensation
-        self.beta_increment_per_sampling = (1.0 - beta_start) / beta_frames if beta_frames > 0 else 0.0 # How much beta increases per sample operation
+        self.beta_increment_per_sampling = (1.0 - beta_start) / beta_frames if beta_frames > 0 else 0.0  # How much beta increases per sample operation
         self.epsilon = 1e-6       # Small epsilon to prevent zero priority
         self.max_priority = 1.0   # Initial max priority (used for normalizing IS weights)
         self.frame = 0            # Total frames/steps processed, for annealing beta
@@ -122,7 +120,7 @@ class KnowledgeReplayBuffer:
         # Transform priority using alpha
         transformed_priority = (abs(priority) + self.epsilon) ** self.alpha
         self.sum_tree.add(transformed_priority, data_index)
-        self.max_priority = max(self.max_priority, transformed_priority) # Update max priority seen
+        self.max_priority = max(self.max_priority, transformed_priority)  # Update max priority seen
 
     def sample(self, batch_size: int) -> Tuple[List[int], List[int], List[float]]:
         """
@@ -150,7 +148,7 @@ class KnowledgeReplayBuffer:
         for i in range(batch_size):
             a = segment * i
             b = segment * (i + 1)
-            s = random.uniform(a, b) # Sample a value uniformly from each segment
+            s = random.uniform(a, b)  # Sample a value uniformly from each segment
             
             (tree_idx, priority, data_idx) = self.sum_tree.get(s)
             
@@ -158,13 +156,13 @@ class KnowledgeReplayBuffer:
             
             # Calculate Importance Sampling weight
             if sampling_probability == 0:
-                is_weight = 0.0 # Should not happen if epsilon is used
+                is_weight = 0.0  # Should not happen if epsilon is used
             else:
                 is_weight = (self.sum_tree.current_size * sampling_probability) ** (-self.beta)
             
             # Normalize IS weights by the maximum weight in the current batch or buffer
             # Normalizing by max_priority in the buffer is common.
-            if self.max_priority > 0: # Avoid division by zero
+            if self.max_priority > 0:  # Avoid division by zero
                 is_weight = is_weight / self.max_priority
             else:
                 is_weight = 0.0
@@ -178,7 +176,7 @@ class KnowledgeReplayBuffer:
         self._current_batch_tree_indices = tree_indices
         self._current_batch_is_weights = is_weights
         
-        self.frame += batch_size # Increment frame count
+        self.frame += batch_size  # Increment frame count
         return original_data_indices, tree_indices, is_weights
 
     def update_priorities(self, tree_indices: List[int], losses: List[float], cfg: Dict[str, Any]):
@@ -197,15 +195,15 @@ class KnowledgeReplayBuffer:
         # Anneal alpha (prioritization exponent)
         alpha_start = cfg['replay'].get('alpha_start', 0.6)
         alpha_end = cfg['replay'].get('alpha_end', 0.0)
-        anneal_frames = cfg['replay'].get('anneal_frames', 100000) # Number of frames over which alpha anneals
+        anneal_frames = cfg['replay'].get('anneal_frames', 100000)  # Number of frames over which alpha anneals
         
         if anneal_frames <= 0:
-            anneal_frames = 1 # Prevent division by zero
+            anneal_frames = 1  # Prevent division by zero
             logger.warning("replay.anneal_frames is zero or negative, setting to 1 to prevent division by zero.")
-        
+            
         # Linear annealing of alpha
         self.alpha = alpha_start + self.frame * (alpha_end - alpha_start) / anneal_frames
-        self.alpha = max(alpha_end, min(alpha_start, self.alpha)) # Clamp alpha within bounds
+        self.alpha = max(alpha_end, min(alpha_start, self.alpha))  # Clamp alpha within bounds
         
         new_max_priority = 0.0
         for tree_idx, loss in zip(tree_indices, losses):
@@ -242,4 +240,66 @@ class KnowledgeReplayBuffer:
         except ValueError:
             logger.warning(f"Original index {original_index} not found in current sampled batch info. Returning None for PER info.")
             return None, None
+
+# --- New simple ReplayBuffer for perception module training ---
+class ReplayBuffer:
+    """
+    A simple FIFO (First-In, First-Out) Replay Buffer for storing experiences.
+    Used for general perception module training (e.g., Phase 1 initial training).
+    """
+    def __init__(self, capacity: int = 10000):
+        """
+        Initializes the ReplayBuffer.
+
+        Args:
+            capacity (int): The maximum number of experiences the buffer can hold.
+        """
+        self.buffer = deque(maxlen=capacity)
+
+    def push(self, state: torch.Tensor, label: Union[int, torch.Tensor]):
+        """
+        Adds a new experience (state, label) to the buffer.
+
+        Args:
+            state (torch.Tensor): The input state (e.g., image tensor [C, H, W]).
+            label (Union[int, torch.Tensor]): The corresponding label (e.g., int or one-hot tensor).
+        """
+        self.buffer.append((state, label))
+
+    def sample(self, batch_size: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Samples a batch of experiences uniformly from the buffer.
+
+        Args:
+            batch_size (int): The number of samples to retrieve.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: A tuple containing:
+                - states (torch.Tensor): A batch of state tensors.
+                - labels (torch.Tensor): A batch of label tensors.
+        """
+        if len(self.buffer) < batch_size:
+            raise ValueError(f"Replay buffer has only {len(self.buffer)} samples, but {batch_size} requested.")
+            
+        samples = random.sample(self.buffer, batch_size)
+        states, labels = zip(*samples)
+        
+        # Ensure labels are converted to a tensor if they are integers
+        # If labels are already tensors (e.g., one-hot), torch.stack will handle it.
+        if isinstance(labels[0], int):
+            return torch.stack(states), torch.tensor(labels)
+        else: # Assume labels are already tensors (e.g., one-hot)
+            return torch.stack(states), torch.stack(labels)
+
+    def __len__(self) -> int:
+        """
+        Returns the current number of experiences in the buffer.
+        """
+        return len(self.buffer)
+
+    def is_ready(self, batch_size: int) -> bool:
+        """
+        Checks if the buffer has enough samples to form a batch.
+        """
+        return len(self.buffer) >= batch_size
 

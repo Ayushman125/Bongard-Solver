@@ -1,6 +1,5 @@
 # Folder: bongard_solver/core_models/
 # File: metrics.py
-
 import numpy as np
 from sklearn.metrics import (
     accuracy_score, precision_recall_fscore_support, roc_auc_score, brier_score_loss,
@@ -63,11 +62,9 @@ def calculate_precision_recall_f1(
     if predictions.shape != labels.shape:
         logger.error(f"Shape mismatch: predictions {predictions.shape} vs labels {labels.shape}. Cannot calculate precision/recall/f1.")
         return {'precision': 0.0, 'recall': 0.0, 'f1_score': 0.0}
-
     # Handle cases where there's only one class present in labels or predictions
     unique_labels = np.unique(labels)
     unique_preds = np.unique(predictions)
-
     if len(unique_labels) < 2 and len(unique_preds) < 2:
         logger.warning("Only one class present in labels and predictions for precision/recall/f1. Metrics might be ill-defined.")
         # If all predictions match all labels and there's only one class, P/R/F1 can be 1.0
@@ -83,7 +80,6 @@ def calculate_precision_recall_f1(
         metrics = {'precision': float(precision), 'recall': float(recall), 'f1_score': float(f1)}
         logger.debug(f"Precision: {precision:.4f}, Recall: {recall:.4f}, F1-score: {f1:.4f} (average={average})")
         return metrics
-
     precision, recall, f1, _ = precision_recall_fscore_support(
         labels, predictions, average=average, zero_division=0
     )
@@ -107,7 +103,6 @@ def calculate_roc_auc(probabilities: np.ndarray, labels: np.ndarray) -> float:
     if probabilities.shape[0] != labels.shape[0]:
         logger.error(f"Shape mismatch: probabilities {probabilities.shape} vs labels {labels.shape}. Cannot calculate ROC AUC.")
         return 0.5
-
     # Check if there are at least two unique labels for ROC AUC
     if len(np.unique(labels)) < 2:
         logger.warning("Only one class present in true labels for ROC AUC calculation. Returning 0.5.")
@@ -161,12 +156,10 @@ def calculate_expected_calibration_error(
     if probabilities.shape[0] != labels.shape[0]:
         logger.error(f"Shape mismatch: probabilities {probabilities.shape} vs labels {labels.shape}. Cannot calculate ECE.")
         return {'ece': 0.0, 'mce': 0.0}
-
     bins = np.linspace(0, 1, num_bins + 1)
     bin_accuracies = np.zeros(num_bins)
     bin_confidences = np.zeros(num_bins)
     bin_counts = np.zeros(num_bins)
-
     for i in range(num_bins):
         lower_bound = bins[i]
         upper_bound = bins[i+1]
@@ -178,14 +171,11 @@ def calculate_expected_calibration_error(
             bin_accuracies[i] = np.mean(labels[in_bin])
             bin_confidences[i] = np.mean(probabilities[in_bin])
             bin_counts[i] = np.sum(in_bin)
-
     ece = 0.0
     mce = 0.0
     total_samples = len(probabilities)
-
     if total_samples == 0: # Avoid division by zero if no samples
         return {'ece': 0.0, 'mce': 0.0}
-
     for i in range(num_bins):
         if bin_counts[i] > 0:
             ece += (bin_counts[i] / total_samples) * np.abs(bin_accuracies[i] - bin_confidences[i])
@@ -217,12 +207,10 @@ def plot_reliability_diagram(
     if probabilities.shape[0] != labels.shape[0]:
         logger.error(f"Shape mismatch: probabilities {probabilities.shape} vs labels {labels.shape}. Cannot plot reliability diagram.")
         return
-
     bins = np.linspace(0, 1, num_bins + 1)
     bin_accuracies = np.zeros(num_bins)
     bin_confidences = np.zeros(num_bins)
     bin_counts = np.zeros(num_bins)
-
     for i in range(num_bins):
         lower_bound = bins[i]
         upper_bound = bins[i+1]
@@ -232,7 +220,7 @@ def plot_reliability_diagram(
             bin_accuracies[i] = np.mean(labels[in_bin])
             bin_confidences[i] = np.mean(probabilities[in_bin])
             bin_counts[i] = np.sum(in_bin)
-
+    
     plt.figure(figsize=(8, 8))
     plt.plot([0, 1], [0, 1], linestyle='--', color='gray', label='Perfectly Calibrated')
     
@@ -288,7 +276,6 @@ def detection_map(pred_boxes: torch.Tensor, pred_scores: torch.Tensor, gt_boxes:
     sorted_indices = torch.argsort(pred_scores, descending=True)
     pred_boxes = pred_boxes[sorted_indices]
     pred_scores = pred_scores[sorted_indices]
-
     num_preds = pred_boxes.shape[0]
     num_gts = gt_boxes.shape[0]
     
@@ -297,7 +284,6 @@ def detection_map(pred_boxes: torch.Tensor, pred_scores: torch.Tensor, gt_boxes:
     
     true_positives = torch.zeros(num_preds, dtype=torch.bool, device=pred_boxes.device)
     false_positives = torch.zeros(num_preds, dtype=torch.bool, device=pred_boxes.device)
-
     for i in range(num_preds):
         pred_box = pred_boxes[i].unsqueeze(0) # Make it (1, 4)
         
@@ -438,7 +424,6 @@ def rule_match_f1(
     # Create a binary matching matrix
     # match_matrix[i][j] = 1 if predicted_rules[i] matches ground_truth_rules[j]
     match_matrix = np.zeros((len(predicted_rules), len(ground_truth_rules)), dtype=np.bool_)
-
     for i, pred_rule in enumerate(predicted_rules):
         for j, gt_rule in enumerate(ground_truth_rules):
             if _rule_similarity(pred_rule, gt_rule) >= match_threshold:
@@ -451,15 +436,12 @@ def rule_match_f1(
     # Each predicted rule should match at most one GT rule for a clean count.
     # For simplicity, if a predicted rule matches multiple GTs, we count it as 1 TP.
     # And if a GT rule is matched by multiple predictions, it's still 1 covered GT.
-
     # True Positives: number of ground truth rules that are correctly matched by at least one predicted rule
     # (i.e., columns in match_matrix that have at least one True)
     tp = np.sum(np.any(match_matrix, axis=0))
-
     # False Positives: number of predicted rules that do not match any ground truth rule
     # (i.e., rows in match_matrix that are all False)
     fp = np.sum(np.all(~match_matrix, axis=1))
-
     # False Negatives: number of ground truth rules that are not matched by any predicted rule
     # (i.e., columns in match_matrix that are all False)
     fn = np.sum(np.all(~match_matrix, axis=0))
@@ -477,4 +459,3 @@ def rule_match_f1(
     }
     logger.debug(f"Rule Match F1: Precision={precision:.4f}, Recall={recall:.4f}, F1-score={f1:.4f}")
     return metrics
-

@@ -1,6 +1,5 @@
 # Folder: bongard_solver/core_models/
 # File: optimizers.py
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -11,7 +10,12 @@ import math
 from typing import Dict, Any, Optional, Union
 
 # Import from config (assuming config.py is in the project root, so relative path from core_models)
-from ..config import HAS_TIMM_OPTIM # Check if timm.optim is preferred
+try:
+    from ..config import HAS_TIMM_OPTIM  # Check if timm.optim is preferred
+except ImportError:
+    HAS_TIMM_OPTIM = False
+    logging.getLogger(__name__).warning("Could not import HAS_TIMM_OPTIM from config. Defaulting to False.")
+
 
 # Added for Gradual Warmup
 HAS_GRADUAL_WARMUP = False
@@ -111,54 +115,58 @@ except ImportError:
 
 
 # --- Optimizer Functions ---
-def get_optimizer(model: nn.Module, config: Dict[str, Any]) -> optim.Optimizer:
+def get_optimizer(model_or_params: Union[nn.Module, Any], config: Dict[str, Any]) -> optim.Optimizer:
     """
     Initializes and returns the specified optimizer.
     Args:
-        model (nn.Module): The model whose parameters are to be optimized.
+        model_or_params (Union[nn.Module, Any]): The model whose parameters are to be optimized,
+                                                  or an iterable of parameters.
         config (Dict[str, Any]): The training configuration dictionary.
+                                 Expected keys: 'optimizer', 'learning_rate', 'weight_decay', 'sam_rho' (if SAM).
     Returns:
         torch.optim.Optimizer: The initialized optimizer.
     """
+    # Extract parameters from model if a model is passed
+    params = model_or_params.parameters() if isinstance(model_or_params, nn.Module) else model_or_params
+
     optimizer_name = config['optimizer']
     learning_rate = config['learning_rate']
-    weight_decay = config.get('weight_decay', 0.0)  # Added weight decay from config
+    weight_decay = config.get('weight_decay', 0.0)
     
-    optimizer = None  # Initialize optimizer to None
-
+    optimizer = None
     if optimizer_name == 'AdamW':
-        optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+        optimizer = optim.AdamW(params, lr=learning_rate, weight_decay=weight_decay)
     elif optimizer_name == 'SGD':
-        optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=weight_decay)
+        optimizer = optim.SGD(params, lr=learning_rate, momentum=0.9, weight_decay=weight_decay)
     elif optimizer_name == 'SophiaG':
         if SophiaG is not None:
-            optimizer = SophiaG(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+            optimizer = SophiaG(params, lr=learning_rate, weight_decay=weight_decay)
         else:
             logger.warning("SophiaG is not available. Falling back to AdamW.")
-            optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+            optimizer = optim.AdamW(params, lr=learning_rate, weight_decay=weight_decay)
     elif optimizer_name == 'Lion':
         if Lion is not None:
-            optimizer = Lion(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+            optimizer = Lion(params, lr=learning_rate, weight_decay=weight_decay)
         else:
             logger.warning("Lion optimizer is not available. Falling back to AdamW.")
-            optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+            optimizer = optim.AdamW(params, lr=learning_rate, weight_decay=weight_decay)
     elif optimizer_name == 'MADGRAD':
         if MADGRAD is not None:
-            optimizer = MADGRAD(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+            optimizer = MADGRAD(params, lr=learning_rate, weight_decay=weight_decay)
         else:
             logger.warning("MADGRAD optimizer is not available. Falling back to AdamW.")
-            optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+            optimizer = optim.AdamW(params, lr=learning_rate, weight_decay=weight_decay)
     elif optimizer_name == 'SAM':
         if SAM is not None:
             # SAM wraps a base optimizer, pass weight_decay to base_optimizer
-            base_optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-            optimizer = SAM(model.parameters(), base_optimizer, rho=config.get('sam_rho', 0.05))
+            base_optimizer = optim.AdamW(params, lr=learning_rate, weight_decay=weight_decay)
+            optimizer = SAM(params, base_optimizer, rho=config.get('sam_rho', 0.05))
         else:
             logger.warning("SAM optimizer is not available. Falling back to AdamW.")
-            optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+            optimizer = optim.AdamW(params, lr=learning_rate, weight_decay=weight_decay)
     else:
         logger.warning(f"Optimizer '{optimizer_name}' not found or supported. Falling back to AdamW.")
-        optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+        optimizer = optim.AdamW(params, lr=learning_rate, weight_decay=weight_decay)
     
     logger.info(f"Initialized optimizer: {optimizer_name}")
     return optimizer
@@ -170,13 +178,14 @@ def get_scheduler(optimizer: optim.Optimizer, config: Dict[str, Any], total_step
     Args:
         optimizer (torch.optim.Optimizer): The optimizer to schedule.
         config (Dict[str, Any]): The training configuration dictionary.
+                                 Expected keys: 'scheduler', 'scheduler_config', 'epochs'.
         total_steps (int): Total number of training steps (epochs * batches_per_epoch),
                            required for OneCycleLR.
     Returns:
         Optional[torch.optim.lr_scheduler._LRScheduler]: The initialized scheduler, or None if no scheduler.
     """
-    scheduler_name = config['scheduler']
-    scheduler_config = config['scheduler_config']
+    scheduler_name = config.get('scheduler', 'None')
+    scheduler_config = config.get('scheduler_config', {})
     
     scheduler = None
     if scheduler_name == 'OneCycleLR':
@@ -184,7 +193,7 @@ def get_scheduler(optimizer: optim.Optimizer, config: Dict[str, Any], total_step
                                max_lr=scheduler_config['OneCycleLR']['max_lr'],
                                total_steps=total_steps,
                                pct_start=scheduler_config['OneCycleLR']['pct_start'],
-                               anneal_strategy=scheduler_config['OneCycleLR'].get('anneal_strategy', 'cos'))  # Default to 'cos'
+                               anneal_strategy=scheduler_config['OneCycleLR'].get('anneal_strategy', 'cos'))
         logger.info("Using OneCycleLR scheduler.")
     elif scheduler_name == 'ReduceLROnPlateau':
         scheduler = ReduceLROnPlateau(optimizer, **scheduler_config['ReduceLROnPlateau'])
@@ -242,7 +251,6 @@ def get_attention_layer(cfg: Dict[str, Any]) -> nn.Module:
         feat_dim = 512  # Fallback
     
     heads = cfg['attn'].get('heads', 8)
-
     if attn_type == 'performer':
         if HAS_PERFORMER:
             logger.info(f"Using PerformerSelfAttention with dim={feat_dim}, heads={heads}.")

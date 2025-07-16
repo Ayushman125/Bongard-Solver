@@ -1,14 +1,30 @@
 # Folder: bongard_solver/src/emergent/
 # File: workspace_ext.py
-
 import heapq
 import logging
 from typing import List, Dict, Any, Tuple, Set, Optional
 import collections # For defaultdict
+from PIL import Image # For dummy image in case of no image data
+import random # For dummy feature extraction
 
-# Import emergent modules
-from src.emergent.codelets import Scout, StrengthTester, Builder, Breaker, Codelet, GroupScout, RuleTester, RuleBuilder # Import new codelets
-from src.emergent.concept_net import ConceptNetwork
+# Import emergent modules (assuming these exist or are dummy)
+try:
+    from src.emergent.codelets import Scout, StrengthTester, Builder, Breaker, Codelet, GroupScout, RuleTester, RuleBuilder # Import new codelets
+    from src.emergent.concept_net import ConceptNetwork
+except ImportError:
+    logging.warning("Could not import emergent modules. Using dummy classes.")
+    class Scout: pass
+    class StrengthTester: pass
+    class Builder: pass
+    class Breaker: pass
+    class Codelet: pass
+    class GroupScout: pass
+    class RuleTester: pass
+    class RuleBuilder: pass
+    class ConceptNetwork:
+        def __init__(self, *args, **kwargs): pass
+        def get_active_nodes(self, threshold): return {}
+        def activate_concept(self, concept_name, degree): pass
 
 # Import primitive_extractor for feature extraction with confidence
 try:
@@ -19,7 +35,7 @@ except ImportError:
     HAS_PRIMITIVE_EXTRACTOR = False
     def extract_shape_conf(img): return "dummy_shape", 0.5
     def extract_fill_conf(img): return "dummy_fill", 0.5
-    def extract_cnn_features(img): return {"shape": ("dummy_cnn_shape", 0.6), "color": ("dummy_cnn_color", 0.7)}
+    def extract_cnn_features(img): return {"shape": ("dummy_cnn_shape", 0.6), "color": ("dummy_cnn_color", 0.7), "size": ("dummy_cnn_size", 0.5), "fill": ("dummy_cnn_fill", 0.6), "orientation": ("dummy_cnn_orientation", 0.5), "texture": ("dummy_cnn_texture", 0.5)}
 
 # Import SceneGraphBuilder
 try:
@@ -38,7 +54,7 @@ except ImportError:
             self.images = images
             # Mock object IDs based on images, or a default if no images
             self.objects = [f"obj_{i}" for i in range(len(images))] if images else ["obj_0"]
-            self._solution_found = False  # For problem_solved()
+            self._solution_found = False # For problem_solved()
             self._solution = None
             self.config = config if config is not None else {} # Store config for dummy
         def extract_feature(self, obj_id: str, feat_type: str) -> Tuple[Any, float]:
@@ -72,27 +88,32 @@ except ImportError:
             self._solution = solution
             self._solution_found = True
             logger.info(f"Dummy SceneGraphBuilder: Solution marked: {solution}")
+
         def get_solution(self) -> Optional[Any]:
             """Mocks getting the solution."""
             return self._solution
+
         def get_object_image(self, obj_id: str) -> Optional[Any]:
             """Dummy: Returns a dummy image for an object."""
             return Image.new('RGB', (50, 50), color=(random.randint(0,255), random.randint(0,255), random.randint(0,255)))
-        def build_scene_graph(self, image_np: np.ndarray, **kwargs) -> List[Dict[str, Any]]:
+
+        def build_scene_graph(self, image_np: np.ndarray, **kwargs) -> Dict[str, Any]:
             """Dummy build_scene_graph for mock data generation."""
             # Create a simple mock scene graph for a single image
             mock_objects = []
-            if image_np is not None:  # Ensure image_np is not None
-                obj_id = f"obj_{random.randint(0, 99)}"  # Random ID
+            if image_np is not None: # Ensure image_np is not None
+                obj_id = f"obj_{random.randint(0, 99)}" # Random ID
                 # Mock some attributes based on random choices
                 shape = random.choice(['circle', 'square', 'triangle'])
                 color = random.choice(['red', 'blue', 'green'])
                 size = random.choice(['small', 'medium', 'large'])
                 mock_objects.append({
                     'id': obj_id,
-                    'attributes': {'shape': shape, 'color': color, 'size': size}
+                    'attributes': {'shape': shape, 'color': color, 'size': size},
+                    'bbox_xyxy': [0,0,10,10], # Dummy bbox
+                    'centroid': [5,5] # Dummy centroid
                 })
-            return mock_objects
+            return {'objects': mock_objects, 'relations': []}
 
 
 logger = logging.getLogger(__name__)
@@ -108,14 +129,25 @@ class Workspace:
         Initializes the Workspace.
         Args:
             images (List[Any]): A list of image data (e.g., file paths, numpy arrays)
-                                 that the SceneGraphBuilder will process.
+                                that the SceneGraphBuilder will process.
             config (Dict[str, Any]): The configuration dictionary.
         """
         self.config = config
         # Pass images to SceneGraphBuilder. It will handle initial object detection
         # and provide the list of object IDs.
         self.sg = SceneGraphBuilder(images, config) # Pass config to SceneGraphBuilder
-        self.objects: List[str] = self.sg.objects   # List of object IDs from SceneGraphBuilder
+        
+        # Build initial scene graphs for all images in the problem
+        self.scene_graphs: List[Dict[str, Any]] = []
+        self.object_ids_per_image: List[List[str]] = [] # Store object IDs per image
+        for i, img_data in enumerate(images):
+            # Assuming img_data is a numpy array
+            sg_for_image = self.sg.build_scene_graph(img_data)
+            self.scene_graphs.append(sg_for_image)
+            self.object_ids_per_image.append([obj['id'] for obj in sg_for_image['objects']])
+
+        # Flatten list of all object IDs across all images for general access
+        self.objects: List[str] = [obj_id for sublist in self.object_ids_per_image for obj_id in sublist]
         
         # Stores confirmed features: obj_id -> {feat_type: (value, confidence)}
         self.features: Dict[str, Dict[str, Tuple[Any, float]]] = collections.defaultdict(dict)
@@ -139,8 +171,8 @@ class Workspace:
         
         # Workspace state for logging/visualization
         self.workspace = {
-            'query_scene_graph_view1': None, # Placeholder for scene graph of query image 1
-            'query_scene_graph_view2': None, # Placeholder for scene graph of query image 2
+            'query_scene_graph_view1': self.scene_graphs[0] if self.scene_graphs else None, # First image's SG
+            'query_scene_graph_view2': self.scene_graphs[1] if len(self.scene_graphs) > 1 else None, # Second image's SG
             'current_rule_fragments': [],
             'active_concepts': {},
             'step': 0,
@@ -148,7 +180,6 @@ class Workspace:
             'built_features_count': 0,
             'proposed_features_count': 0,
         }
-
         logger.info("Workspace initialized.")
         logger.debug(f"Initial objects in workspace: {self.objects}")
 
@@ -204,7 +235,7 @@ class Workspace:
             logger.warning(f"No image available for object {obj_id}. Using dummy feature extraction.")
             # Fallback to dummy extraction if no image is available
             return self.sg.extract_feature(obj_id, feat_type) # Use dummy SG extractor
-
+        
         val, conf = "unknown", 0.0
         if HAS_PRIMITIVE_EXTRACTOR:
             # Use CNN-based features if configured, otherwise classical CV
@@ -216,6 +247,10 @@ class Workspace:
                     logger.warning(f"CNN features for {feat_type} not available. Falling back to CV.")
                     if feat_type == 'shape': val, conf = extract_shape_conf(obj_image)
                     elif feat_type == 'fill': val, conf = extract_fill_conf(obj_image)
+                    # Add more CV-based feature extractions as needed
+                    else:
+                        logger.warning(f"Unsupported feature type '{feat_type}' for classical CV. Using dummy.")
+                        val, conf = self.sg.extract_feature(obj_id, feat_type) # Fallback to dummy SG extractor
             else: # Use classical CV features
                 if feat_type == 'shape': val, conf = extract_shape_conf(obj_image)
                 elif feat_type == 'fill': val, conf = extract_fill_conf(obj_image)
@@ -246,9 +281,9 @@ class Workspace:
         # Re-extract the feature to ensure consistency or get an updated confidence.
         obj_image = self.sg.get_object_image(obj_id)
         if obj_image is None:
-            logger.warning(f"No image available for object {obj_id}. Cannot re-confirm feature.")
+            logger.warning(f"No image available for object {obj_id}. Cannot re-confirm feature. Returning 0.0.")
             return 0.0
-
+        
         re_extracted_val, re_extracted_conf = "unknown", 0.0
         if HAS_PRIMITIVE_EXTRACTOR:
             if self.config['model'].get('use_cnn_features', True):
@@ -258,25 +293,23 @@ class Workspace:
             else:
                 if feat_type == 'shape': re_extracted_val, re_extracted_conf = extract_shape_conf(obj_image)
                 elif feat_type == 'fill': re_extracted_val, re_extracted_conf = extract_fill_conf(obj_image)
+                # Add more CV-based feature re-extractions
         else:
             re_extracted_val, re_extracted_conf = self.sg.extract_feature(obj_id, feat_type) # Fallback to dummy SG extractor
 
-        # Find the original proposed feature with confidence
+        # Find the original proposed feature value to compare against
+        original_proposed_val = None
         original_proposed_conf = 0.0
         for prop_obj_id, prop_feat_type, prop_val, prop_conf in self.proposed:
-            if prop_obj_id == obj_id and prop_feat_type == feat_type and prop_val == re_extracted_val:
+            if prop_obj_id == obj_id and prop_feat_type == feat_type:
+                original_proposed_val = prop_val
                 original_proposed_conf = prop_conf
                 break
         
-        # Confirmation strength is a combination of re-extracted confidence and consistency
-        # For simplicity, let's use the re-extracted confidence if the value matches.
-        if original_proposed_conf > 0 and re_extracted_val == self.features.get(obj_id, {}).get(feat_type, (None, 0.0))[0]:
-             # If already built and matches, reinforce confidence
-            score = max(original_proposed_conf, re_extracted_conf)
-        elif original_proposed_conf > 0 and re_extracted_val == original_proposed_conf: # If matches a proposed value
-            score = re_extracted_conf
-        else: # If value mismatch or not previously proposed, low score
-            score = 0.0
+        # Confirmation strength is based on matching value and re-extracted confidence
+        score = 0.0
+        if original_proposed_val is not None and re_extracted_val == original_proposed_val:
+            score = re_extracted_conf # Use the re-extracted confidence if values match
         
         logger.debug(f"Feature confirmed: obj={obj_id}, feat={feat_type}, re-extracted_val={re_extracted_val}, score={score:.4f}")
         return score
@@ -319,7 +352,7 @@ class Workspace:
                 if existing_val != new_val and new_conf > existing_conf + threshold: # New is different and significantly more confident
                     logger.warning(f"Conflict detected: obj {obj_id}, feat {feat_type}. Existing: {existing_val} ({existing_conf:.2f}), New: {new_val} ({new_conf:.2f})")
                     return True
-        # More complex conflict detection logic would go here
+        # More complex conflict detection logic would go here, e.g., for relations
         return False
 
     def remove_structure(self, struct_id: Any):
@@ -336,7 +369,7 @@ class Workspace:
                 obj_id, feat_type, _, _ = struct_id
                 if obj_id in self.features and feat_type in self.features[obj_id]:
                     del self.features[obj_id][feat_type]
-                    if not self.features[obj_id]:  # Remove object if no features left
+                    if not self.features[obj_id]: # Remove object entry if no features left
                         del self.features[obj_id]
             self.workspace['built_features_count'] = len(self.built) # Update workspace state
             logger.info(f"Removed conflicting structure: {struct_id}. Total built: {len(self.built)}")
@@ -351,15 +384,13 @@ class Workspace:
             float: A coherence score (e.g., ratio of built to proposed features).
         """
         if not self.proposed:
-            return 1.0 if not self.built else 0.0  # If nothing proposed, and nothing built, coherence is perfect. If something built without proposal, 0.
+            return 1.0 if not self.built else 0.0 # If nothing proposed, and nothing built, coherence is perfect. If something built without proposal, 0.
         
         # Calculate weighted coherence based on confidence
         total_proposed_confidence = sum(conf for _, _, _, conf in self.proposed)
         total_built_confidence = sum(conf for _, _, _, conf in self.built)
-
         if total_proposed_confidence == 0:
             return 1.0 if total_built_confidence == 0 else 0.0
-
         coherence = total_built_confidence / total_proposed_confidence
         logger.debug(f"Structure coherence: {coherence:.4f} (Built conf: {total_built_confidence:.2f}, Proposed conf: {total_proposed_confidence:.2f})")
         return coherence
@@ -367,13 +398,14 @@ class Workspace:
     def get_workspace_snapshot(self) -> Dict[str, Any]:
         """Returns a snapshot of the current workspace state for logging/visualization."""
         # Update dynamic parts of the workspace snapshot
+        # Filter rule fragments by a confidence threshold
         self.workspace['current_rule_fragments'] = [
             rf for rf in self.current_rule_fragments
-            if rf.get('confidence', 0.0) > self.config['slipnet_config'].get('activation_threshold', 0.1) # Example threshold
+            if rf.get('confidence', 0.0) > self.config.get('slipnet_config', {}).get('activation_threshold', 0.1) # Example threshold
         ]
         # Log active concepts in the workspace for dashboard visualization
         self.workspace['active_concepts'] = self.concept_net.get_active_nodes(
-            threshold=self.config['slipnet_config']['activation_threshold']
+            threshold=self.config.get('slipnet_config', {}).get('activation_threshold', 0.1)
         )
         self.workspace['coderack_size'] = len(self.coderack)
         self.workspace['built_features_count'] = len(self.built)
@@ -383,4 +415,3 @@ class Workspace:
         logger.debug(f"SymbolicEngine: Current rule fragments: {len(self.workspace['current_rule_fragments'])}")
         
         return self.workspace
-

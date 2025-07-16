@@ -1,6 +1,5 @@
 # Folder: bongard_solver/core_models/
 # File: models.py
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -13,6 +12,7 @@ import collections
 import numpy as np
 import random
 import copy
+
 # Import torchvision.transforms as T for image processing within PerceptionModule
 import torchvision.transforms as T
 
@@ -107,9 +107,24 @@ except ImportError:
             return output
 
 # Import from config (assuming config.py is in the project root)
-from config import CONFIG, DEVICE, RELATION_MAP, IMAGENET_MEAN, IMAGENET_STD, \
-                   ATTRIBUTE_FILL_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_SIZE_MAP, \
-                   ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_TEXTURE_MAP
+# Dummy CONFIG, DEVICE, etc. if not found for standalone execution
+try:
+    from config import CONFIG, DEVICE, RELATION_MAP, IMAGENET_MEAN, IMAGENET_STD, \
+                       ATTRIBUTE_FILL_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_SIZE_MAP, \
+                       ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_TEXTURE_MAP
+except ImportError:
+    logger.warning("Could not import full config. Using dummy values for some config items.")
+    CONFIG = {}
+    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    RELATION_MAP = {'none': 0, 'left_of': 1, 'above': 2} # Example
+    IMAGENET_MEAN = [0.5] # For grayscale images from LogoGenerator
+    IMAGENET_STD = [0.5]  # For grayscale images from LogoGenerator
+    ATTRIBUTE_FILL_MAP = {'filled': 0, 'outlined': 1}
+    ATTRIBUTE_COLOR_MAP = {'black': 0, 'white': 1} # Example
+    ATTRIBUTE_SIZE_MAP = {'small': 0, 'medium': 1, 'large': 2} # Example
+    ATTRIBUTE_ORIENTATION_MAP = {} # Example
+    ATTRIBUTE_SHAPE_MAP = {'triangle': 0, 'quadrilateral': 1}
+    ATTRIBUTE_TEXTURE_MAP = {} # Example
 
 # Import SAM utilities (assuming sam_utils.py is in src/)
 try:
@@ -117,10 +132,28 @@ try:
     logger.info("sam_utils.py found.")
 except ImportError:
     logger.warning("src/sam_utils.py not found. get_masked_crop functionality will be limited.")
-    def get_masked_crop(image_np, mask, bbox): return np.zeros((1,1,3))
+    def get_masked_crop(image_np, mask, bbox): return np.zeros((1,1,3), dtype=np.uint8) # Dummy
 
 # Import from utils (assuming utils.py is in src/)
-from src.utils import _calculate_iou, make_edge_index_map, set_seed, infer_feature_dim
+try:
+    from src.utils import _calculate_iou, make_edge_index_map, set_seed, infer_feature_dim
+except ImportError:
+    logger.warning("src/utils.py not found. Some utility functions will be dummy.")
+    def _calculate_iou(box1, box2): return 0.0 # Dummy
+    def make_edge_index_map(num_objects): return {} # Dummy
+    def set_seed(seed): pass # Dummy
+    def infer_feature_dim(model, input_size, device):
+        # Dummy inference: create a dummy input and pass through the model
+        try:
+            dummy_input = torch.randn(1, 3, input_size, input_size).to(device)
+            with torch.no_grad():
+                output = model(dummy_input)
+            if isinstance(output, list): # For features_only=True
+                output = output[-1]
+            return output.shape[1] if output.ndim == 4 else output.shape[-1] # C or D
+        except Exception as e:
+            logger.warning(f"Failed to infer feature dimension: {e}. Returning default 512.")
+            return 512
 
 # Import Slipnet (assuming slipnet.py is in src/)
 try:
@@ -140,13 +173,12 @@ except ImportError:
 import pytorch_lightning as pl
 
 # Import losses (now from the same core_models folder)
-from .losses import LabelSmoothingCrossEntropy, FeatureConsistencyLoss, SymbolicConsistencyLoss, DistillationLoss, NTXentLoss
+from .losses import LabelSmoothingCrossEntropy, FeatureConsistencyLoss, SymbolicConsistencyLoss, DistillationLoss, NTXentLoss, CrossEntropyWithConfidence # Added CrossEntropyWithConfidence
 
 # Import optimizers and schedulers for LitBongard and LitSimCLR
 from torch.optim.lr_scheduler import OneCycleLR, ReduceLROnPlateau, CosineAnnealingLR
 
-# Conditional imports for advanced optimizers
-# These are now handled by core_models/optimizers.py's get_optimizer
+# Conditional imports for advanced optimizers (handled by core_models/optimizers.py's get_optimizer)
 # We just need to ensure the classes are available if directly referenced.
 HAS_SAM_OPTIMIZER = False
 try:
@@ -187,7 +219,8 @@ except ImportError:
 # Import MoCo builder if use_moco is enabled in config
 HAS_MOCO = False
 try:
-    if CONFIG['model']['simclr_config'].get('use_moco', False):
+    # Check if CONFIG is defined and has the necessary keys
+    if 'model' in globals().get('CONFIG', {}) and 'simclr_config' in CONFIG['model'] and CONFIG['model']['simclr_config'].get('use_moco', False):
         from moco.builder import MoCo
         HAS_MOCO = True
         logger.info("MoCo builder found and enabled.")
@@ -209,7 +242,56 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# --- Model Components ---
+# --- New BongardPerceptionModel for Phase 1 initial training ---
+class BongardPerceptionModel(nn.Module):
+    """
+    A simpler CNN-based perception model for initial Phase 1 training.
+    It takes an image and classifies it into predefined categories (e.g., shape, fill).
+    """
+    def __init__(self, num_classes: int = 4):  # Default for 'triangle', 'quadrilateral', 'filled', 'outlined'
+        super().__init__()
+        # Define a simple convolutional feature extractor
+        self.features = nn.Sequential(
+            nn.Conv2d(1, 32, 3, padding=1), # Input is 1 channel (grayscale Bongard-LOGO)
+            nn.ReLU(),
+            nn.MaxPool2d(2), # Output size / 2
+
+            nn.Conv2d(32, 64, 3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2), # Output size / 4
+
+            nn.Conv2d(64, 128, 3, padding=1),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool2d(1), # Output (B, 128, 1, 1)
+        )
+        
+        # Classifier head
+        self.classifier = nn.Linear(128, num_classes)
+        
+        # Define the class names corresponding to the output classes
+        # This is crucial for interpreting the model's predictions.
+        # Ensure this matches the labels generated by LogoGenerator and used in training.
+        self.class_names = ['triangle', 'quadrilateral', 'filled', 'outlined']
+        
+        if num_classes != len(self.class_names):
+            logger.warning(f"BongardPerceptionModel initialized with num_classes={num_classes}, but default class_names has {len(self.class_names)} entries. Please ensure consistency.")
+
+        logger.info(f"BongardPerceptionModel initialized with {num_classes} classes.")
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass for the BongardPerceptionModel.
+        Args:
+            x (torch.Tensor): Input image tensor (B, 1, H, W).
+        Returns:
+            torch.Tensor: Logits for classification (B, num_classes).
+        """
+        x = self.features(x)
+        x = x.view(x.size(0), -1) # Flatten the features (B, 128)
+        logits = self.classifier(x)
+        return logits
+
+# --- Existing Model Components (from Analyze.docx) ---
 class AttributeClassifier(nn.Module):
     """
     Extracts features from object crops and classifies their attributes.
@@ -707,7 +789,9 @@ class PerceptionModule(nn.Module):
         for i in range(batch_size):
             # Convert image tensor to numpy array for scene_graph_builder (expects HWC, 0-255)
             # Undo normalization: (img * std + mean) * 255
-            image_np = (images[i].permute(1, 2, 0).cpu().numpy() * IMAGENET_STD + IMAGENET_MEAN) * 255
+            # Ensure IMAGENET_STD and IMAGENET_MEAN are tensors or lists with correct dimensions
+            # For 1-channel image, IMAGENET_MEAN/STD should be [0.5]
+            image_np = (images[i].permute(1, 2, 0).cpu().numpy() * np.array(IMAGENET_STD) + np.array(IMAGENET_MEAN)) * 255
             image_np = image_np.astype(np.uint8) 
             
             # Use pre-detected bboxes and masks for the current image in the batch
@@ -718,7 +802,9 @@ class PerceptionModule(nn.Module):
             if not current_image_bboxes or not self.scene_graph_builder:
                 logger.debug(f"No objects detected or SceneGraphBuilder not initialized for query image {i}. Skipping scene graph for this image.")
                 # Append dummy (empty or zero) outputs for this image to maintain batch consistency
-                dummy_attr_logits_shape = (0, list(self.config['model']['attribute_classifier_config'].values())[0]) # Get num_classes for first attribute
+                # Get num_classes for the first attribute head to define dummy logits shape
+                first_attr_head_name = next(iter(self.config['model']['attribute_classifier_config'].keys()))
+                dummy_attr_logits_shape = (0, self.config['model']['attribute_classifier_config'][first_attr_head_name])
                 dummy_relation_logits_shape = (0, self.config['model']['relation_gnn_config']['num_relations'])
                 
                 all_inferred_scene_graphs.append({'objects': [], 'relations': []})
@@ -750,7 +836,7 @@ class PerceptionModule(nn.Module):
                 object_crops_query.append(crop_tensor)
             
             # Stack object crops into a batch for the attribute model
-            object_crops_batch_query = torch.stack(object_crops_query)
+            object_crops_batch_query = torch.stack(object_crops)
             
             # Pass object crops through the attribute classifier
             pooled_object_features_query, attribute_logits_per_object_query = self.attribute_model(object_crops_batch_query)
@@ -826,7 +912,7 @@ class PerceptionModule(nn.Module):
                 if current_problem_support_images.numel() > 0:
                     for s_idx in range(current_num_actual_support):
                         s_img_tensor = current_problem_support_images[s_idx]
-                        s_img_np = (s_img_tensor.permute(1, 2, 0).cpu().numpy() * IMAGENET_STD + IMAGENET_MEAN) * 255
+                        s_img_np = (s_img_tensor.permute(1, 2, 0).cpu().numpy() * np.array(IMAGENET_STD) + np.array(IMAGENET_MEAN)) * 255
                         s_img_np = s_img_np.astype(np.uint8)
                         
                         # Build scene graph for support image (will run detection/segmentation internally)
@@ -1043,8 +1129,8 @@ class LitBongard(pl.LightningModule):
         
         # Apply Mixup/Cutmix if enabled
         # Note: HAS_TORCHVISION_V2 is a placeholder, should be checked against actual torchvision version
-        HAS_TORCHVISION_V2 = True # Assume true for now based on context
-        if self.cfg['training'].get('use_mixup_cutmix', False) and HAS_TRAINING_UTILS: # Check HAS_TRAINING_UTILS for MixupCutmixAugmenter
+        # Assuming HAS_TRAINING_UTILS is true for MixupCutmixAugmenter
+        if self.cfg['training'].get('use_mixup_cutmix', False) and HAS_TRAINING_UTILS:
             num_bongard_classes = self.cfg['model']['bongard_head_config']['num_classes']
             mixup_cutmix_augmenter = MixupCutmixAugmenter(self.cfg['training'], num_bongard_classes)
             images_view1_aug, labels_mixed = mixup_cutmix_augmenter(processed_query_images_view1, query_labels)
@@ -1138,7 +1224,7 @@ class LitBongard(pl.LightningModule):
         
         if num_attribute_losses > 0:
             loss_attribute /= num_attribute_losses
-            total_loss += loss_attribute
+            total_loss += self.cfg['training'].get('attribute_loss_weight', 1.0) * loss_attribute
         self.log("train/attribute_loss", loss_attribute, on_step=True, prog_bar=True, logger=True)
         
         # Relation classification loss
@@ -1234,7 +1320,7 @@ class LitBongard(pl.LightningModule):
                     loss_distillation = (self.cfg['training']['distillation_config']['alpha'] * per_sample_soft_loss + \
                                          (1. - self.cfg['training']['distillation_config']['alpha']) * per_sample_hard_loss).mean()
                 
-                total_loss += loss_distillation
+                total_loss += loss_distillation * self.cfg['training']['distillation_config'].get('loss_weight', 1.0)
             else:
                 logger.warning("No teacher logits generated for distillation in this batch.")
         self.log("train/distillation_loss", loss_distillation, on_step=True, prog_bar=True, logger=True)
@@ -1361,7 +1447,7 @@ class LitBongard(pl.LightningModule):
         
         if num_attribute_losses > 0:
             loss_attribute /= num_attribute_losses
-            total_val_loss += loss_attribute
+            total_val_loss += self.cfg['training'].get('attribute_loss_weight', 1.0) * loss_attribute
         self.log("val/attribute_loss", loss_attribute, on_epoch=True, prog_bar=True, logger=True)
         
         # Relation classification loss (similar to training step)
@@ -1564,5 +1650,4 @@ class LitSimCLR(pl.LightningModule):
             scheduler_interval = 'step'
         
         return [optimizer], ([{'scheduler': scheduler, 'interval': scheduler_interval, 'monitor': 'simclr_train_loss'}] if scheduler else [])
-
 

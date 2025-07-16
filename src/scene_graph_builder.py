@@ -1,14 +1,13 @@
 # Folder: bongard_solver/src/
 # File: scene_graph_builder.py
-
 import numpy as np
 import networkx as nx
 import logging
-import cv2  # For mask processing and contour detection
-from PIL import Image  # For opening images
-import math  # For geometric calculations
+import cv2 # For mask processing and contour detection
+from PIL import Image # For opening images
+import math # For geometric calculations
 from collections import defaultdict
-import json  # For saving/loading symbolic annotations
+import json # For saving/loading symbolic annotations
 from typing import List, Dict, Any, Tuple, Optional
 import torch # For SAM and CNN features
 
@@ -22,7 +21,13 @@ except ImportError:
     logger.error("Could not import CONFIG or YOLO_CLASS_MAP from config.py. SceneGraphBuilder will use default values.")
     CONFIG = {'model': {'yolo_conf_threshold': 0.25, 'yolo_iou_threshold': 0.7, 'object_detector_model_path': 'yolov8n.pt'},
               'segmentation': {'use_sam': False, 'sam_model_type': 'vit_b', 'sam_checkpoint_path': '', 'sam_points_per_side': 32, 'sam_pred_iou_thresh': 0.88},
-              'debug': {'max_fallback_cnt': 5, 'min_contour_area_sam_fallback': 50}}
+              'debug': {'max_fallback_cnt': 5, 'min_contour_area_sam_fallback': 50},
+              'use_cnn_features': True, # Default to True for primitive_extractor
+              'proximity_threshold_ratio': 0.1, # For spatial relations
+              'center_dist_thresh_px': 10.0 # For spatial relations
+             },
+             'data': {'image_size': [224, 224]} # Default image size
+            }
     YOLO_CLASS_MAP = {0: "object"}
 
 # Import primitive_extractor for attribute extraction with confidence
@@ -34,7 +39,7 @@ except ImportError:
     HAS_PRIMITIVE_EXTRACTOR = False
     def extract_shape_conf(img): return "dummy_shape", 0.5
     def extract_fill_conf(img): return "dummy_fill", 0.5
-    def extract_cnn_features(img): return {"shape": ("dummy_cnn_shape", 0.6), "color": ("dummy_cnn_color", 0.7), "size": ("dummy_cnn_size", 0.5)}
+    def extract_cnn_features(img): return {"shape": ("dummy_cnn_shape", 0.6), "color": ("dummy_cnn_color", 0.7), "size": ("dummy_cnn_size", 0.5), "fill": ("dummy_cnn_fill", 0.6), "orientation": ("dummy_cnn_orientation", 0.5), "texture": ("dummy_cnn_texture", 0.5)}
 
 # Import SAM for segmentation
 HAS_SAM_SEG = False
@@ -48,7 +53,7 @@ except ImportError:
 # Import Ultralytics YOLO for object detection
 HAS_ULTRALYTICS = False
 try:
-    from ultralytics import YOLO as RealYOLO  # Import RealYOLO from ultralytics
+    from ultralytics import YOLO as RealYOLO # Import RealYOLO from ultralytics
     HAS_ULTRALYTICS = True
     logger.info("Ultralytics YOLO found and enabled for SceneGraphBuilder.")
 except ImportError:
@@ -78,7 +83,7 @@ def _mask_to_bbox(mask: np.ndarray) -> list:
         return [0, 0, 0, 0]
     ys, xs = np.where(mask > 0)
     if xs.size == 0 or ys.size == 0:
-        return [0, 0, 0, 0]  # Return empty box if no foreground pixels
+        return [0, 0, 0, 0] # Return empty box if no foreground pixels
     xmin, ymin = int(xs.min()), int(ys.min())
     xmax, ymax = int(xs.max()), int(ys.max())
     return [xmin, ymin, xmax, ymax]
@@ -96,7 +101,7 @@ def _mask_centroid(mask: np.ndarray) -> list:
         return [0, 0]
     ys, xs = np.where(mask > 0)
     if xs.size == 0 or ys.size == 0:
-        return [0, 0]  # Return [0,0] if no foreground pixels
+        return [0, 0] # Return [0,0] if no foreground pixels
     return [float(xs.mean()), float(ys.mean())]
 
 def _mask_area(mask: np.ndarray) -> int:
@@ -125,7 +130,7 @@ def _mask_aspect_ratio(mask: np.ndarray) -> float:
     width = xmax - xmin
     height = ymax - ymin
     if height == 0:
-        return 0.0  # Avoid division by zero
+        return 0.0 # Avoid division by zero
     return float(width / height)
 
 def _mask_solidity(mask: np.ndarray) -> float:
@@ -240,7 +245,7 @@ def _cluster_by_proximity(G: nx.Graph, threshold: float = 50.0) -> dict:
         queue = [node]
         current_cluster_nodes = []
         while queue:
-            n = queue.pop(0)  # Use pop(0) for BFS (queue behavior)
+            n = queue.pop(0) # Use pop(0) for BFS (queue behavior)
             if n in visited:
                 continue
             
@@ -253,7 +258,7 @@ def _cluster_by_proximity(G: nx.Graph, threshold: float = 50.0) -> dict:
                 if 'distance' in edge_data and edge_data['distance'] < threshold and nbr not in visited:
                     queue.append(nbr)
         
-        if current_cluster_nodes:  # Increment cluster_id only if a new cluster was found
+        if current_cluster_nodes: # Increment cluster_id only if a new cluster was found
             cluster_id += 1
     
     return clusters
@@ -299,7 +304,7 @@ class ObjectDetector:
             except Exception as e:
                 logger.error(f"Failed to load SAM model: {e}. Disabling SAM segmentation.")
                 self.use_sam = False
-
+        
         # Classical CV fallback parameters
         self.min_contour_area_ratio = self.config['debug'].get('min_contour_area_sam_fallback', 50) / (CONFIG['data']['image_size'][0] * CONFIG['data']['image_size'][1]) # Convert to ratio
         self.max_fallback_cnt = self.config['debug'].get('max_fallback_cnt', 5)
@@ -313,7 +318,7 @@ class ObjectDetector:
         if image_np is None or image_np.size == 0:
             logger.warning("Input image is empty or None for object detection.")
             return []
-
+        
         image_pil = Image.fromarray(image_np)
         detections = []
 
@@ -387,7 +392,6 @@ class ObjectDetector:
         
         # Sort contours by area in descending order and take top N
         contours = sorted(contours, key=cv2.contourArea, reverse=True)[:self.max_fallback_cnt]
-
         image_area = image_np.shape[0] * image_np.shape[1]
         
         for contour in contours:
@@ -406,7 +410,6 @@ class ObjectDetector:
         logger.info(f"Classical CV detected {len(detections)} objects.")
         return detections
 
-
 # --- Main Scene Graph Builder Class ---
 class SceneGraphBuilder:
     """
@@ -419,9 +422,9 @@ class SceneGraphBuilder:
             images (List[Any]): List of image data (e.g., file paths or numpy arrays).
             config (Dict[str, Any]): Configuration dictionary, including perception parameters.
         """
-        self.images = images  # Can be paths or actual image data
+        self.images = images # Can be paths or actual image data
         self.config = config
-        self.object_detector = ObjectDetector(config)  # Use the unified ObjectDetector
+        self.object_detector = ObjectDetector(config) # Use the unified ObjectDetector
         self._solution_found = False
         self._solution = None
         
@@ -458,7 +461,7 @@ class SceneGraphBuilder:
             logger.warning(f"No image available in cache for object {obj_id}. Cannot extract feature {feat_type}. Returning dummy.")
             # Fallback to dummy extraction if no image is available
             return "unknown", 0.1
-
+        
         val, conf = "unknown", 0.0
         if HAS_PRIMITIVE_EXTRACTOR:
             # Use CNN-based features if configured, otherwise classical CV
@@ -540,14 +543,20 @@ class SceneGraphBuilder:
             # Store cropped image in cache for later `extract_feature` calls
             obj_id_str = f"obj_{idx}"
             self._object_image_cache[obj_id_str] = obj_image_pil
+            
+            # Calculate geometric properties
+            area = _mask_area(mask) if mask is not None else (bbox_xyxy[2]-bbox_xyxy[0])*(bbox_xyxy[3]-bbox_xyxy[1])
+            centroid = _mask_centroid(mask) if mask is not None else [(bbox_xyxy[0]+bbox_xyxy[2])/2, (bbox_xyxy[1]+bbox_xyxy[3])/2]
+            aspect_ratio = _mask_aspect_ratio(mask) if mask is not None else (bbox_xyxy[2]-bbox_xyxy[0])/(bbox_xyxy[3]-bbox_xyxy[1] + 1e-6)
+            solidity = _mask_solidity(mask) if mask is not None else 1.0 # Bbox solidity is 1.0
 
             props = {
-                'id': obj_id_str,  # Assign an ID to each object
-                'area': _mask_area(mask) if mask is not None else (bbox_xyxy[2]-bbox_xyxy[0])*(bbox_xyxy[3]-bbox_xyxy[1]),
-                'bbox_xyxy': bbox_xyxy,  # [xmin, ymin, xmax, ymax]
-                'centroid': _mask_centroid(mask) if mask is not None else [(bbox_xyxy[0]+bbox_xyxy[2])/2, (bbox_xyxy[1]+bbox_xyxy[3])/2],
-                'aspect_ratio': _mask_aspect_ratio(mask) if mask is not None else (bbox_xyxy[2]-bbox_xyxy[0])/(bbox_xyxy[3]-bbox_xyxy[1] + 1e-6),
-                'solidity': _mask_solidity(mask) if mask is not None else 1.0, # Bbox solidity is 1.0
+                'id': obj_id_str, # Assign an ID to each object
+                'area': area,
+                'bbox_xyxy': bbox_xyxy, # [xmin, ymin, xmax, ymax]
+                'centroid': centroid,
+                'aspect_ratio': aspect_ratio,
+                'solidity': solidity,
                 'mask': mask.tolist() if mask is not None else [] # Store mask as list for JSON serialization
             }
             
@@ -570,14 +579,14 @@ class SceneGraphBuilder:
         # 3. Build relation graph and infer spatial relations
         G = nx.Graph()
         for i, obj_i in enumerate(objects_data):
-            G.add_node(i, **obj_i)  # Add all object properties as node attributes
+            G.add_node(i, **obj_i) # Add all object properties as node attributes
         
         relations_list = []
         image_height = image_np.shape[0]
         image_width = image_np.shape[1]
         
-        proximity_threshold = image_height * self.config.get('proximity_threshold_ratio', 0.1)  # Configurable threshold
-        center_dist_thresh_px = self.config.get('center_dist_thresh_px', 10.0)
+        proximity_threshold = image_height * self.config['model'].get('proximity_threshold_ratio', 0.1) # Configurable threshold
+        center_dist_thresh_px = self.config['model'].get('center_dist_thresh_px', 10.0)
 
         for i in range(len(objects_data)):
             for j in range(i + 1, len(objects_data)):
@@ -594,28 +603,29 @@ class SceneGraphBuilder:
                 
                 for s_rel in spatial_rels:
                     # Add to NetworkX graph for clustering
-                    G.add_edge(i, j, relation_type=s_rel, distance=float(dist))  # Store distance on edge
+                    G.add_edge(i, j, relation_type=s_rel, distance=float(dist)) # Store distance on edge
                     # Add to the relations list for the scene graph output
                     relations_list.append({
                         'subject_id': objects_data[i]['id'], # Use string IDs
                         'object_id': objects_data[j]['id'], # Use string IDs
                         'type': s_rel,
-                        'confidence': 1.0  # Placeholder confidence, could be learned
+                        'confidence': 1.0 # Placeholder confidence, could be learned
                     })
                     # Also add inverse relation
+                    # Note: You might want to define explicit inverse types (e.g., 'right_of' for 'left_of')
+                    # For simplicity here, just appending '_inverse'
                     relations_list.append({
                         'subject_id': objects_data[j]['id'],
                         'object_id': objects_data[i]['id'],
                         'type': s_rel + '_inverse', # e.g., 'right_of_inverse' for 'left_of'
                         'confidence': 1.0
                     })
-
         logger.info(f"Inferred {len(relations_list)} spatial relations.")
 
         # 4. Grouping logic (e.g., cluster by proximity)
         clusters = _cluster_by_proximity(G, threshold=proximity_threshold)
         for idx, obj_data in enumerate(objects_data):
-            obj_data['group_id'] = clusters.get(idx, -1)  # Assign cluster ID
+            obj_data['group_id'] = clusters.get(idx, -1) # Assign cluster ID
         logger.info(f"Performed object grouping. Found {len(set(clusters.values()))} groups.")
 
         # 5. Construct the final scene graph dictionary
@@ -630,4 +640,3 @@ class SceneGraphBuilder:
         }
         logger.info("Scene graph construction complete.")
         return scene_graph
-
