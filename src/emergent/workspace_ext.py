@@ -26,7 +26,8 @@ except ImportError:
         def __init__(self, images: List[Any]):
             logger.warning("Dummy SceneGraphBuilder initialized. Feature extraction will be mocked.")
             self.images = images
-            self.objects = [f"obj_{i}" for i in range(len(images))] if images else ["obj_0"] # Mock object IDs
+            # Mock object IDs based on images, or a default if no images
+            self.objects = [f"obj_{i}" for i in range(len(images))] if images else ["obj_0"] 
             self._solution_found = False # For problem_solved()
             self._solution = None
 
@@ -44,6 +45,12 @@ except ImportError:
                 return random.choice(['left', 'center_h', 'right']), random.uniform(0.6, 0.8)
             elif feat_type == 'position_v':
                 return random.choice(['top', 'center_v', 'bottom']), random.uniform(0.6, 0.8)
+            elif feat_type == 'fill':
+                return random.choice(['filled', 'outlined']), random.uniform(0.6, 0.8)
+            elif feat_type == 'orientation':
+                return random.choice(['horizontal', 'vertical']), random.uniform(0.6, 0.8)
+            elif feat_type == 'texture':
+                return random.choice(['smooth', 'rough']), random.uniform(0.6, 0.8)
             else:
                 return "unknown", 0.1
 
@@ -76,7 +83,9 @@ class Workspace:
             images (List[Any]): A list of image data (e.g., file paths, numpy arrays)
                                 that the SceneGraphBuilder will process.
         """
-        self.sg = SceneGraphBuilder(images) # Initialize your SceneGraphBuilder
+        # Pass images to SceneGraphBuilder. It will handle initial object detection
+        # and provide the list of object IDs.
+        self.sg = SceneGraphBuilder(images) 
         self.objects: List[str] = self.sg.objects  # List of object IDs from SceneGraphBuilder
         
         # Stores confirmed features: obj_id -> {feat_type: value}

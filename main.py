@@ -28,15 +28,13 @@ from emergent.workspace_ext import Workspace
 from emergent.codelets import Scout # Only Scout is directly seeded, others are posted by codelets
 from utils import compute_temperature, set_seed # Assuming set_seed is in utils now
 
+# --- Import the actual DSL class ---
+from dsl import DSL # Import the real DSL class
+
 # Dummy imports for modules that are part of the existing pipeline but not provided
 # In a real scenario, these would be actual implementations.
-class DummyDSL:
-    def __init__(self):
-        self.facts = []
-    def add_fact(self, fact: str, source: str):
-        self.facts.append(f"({source}) {fact}")
-        logger.debug(f"DSL Fact added: {fact}")
-dsl = DummyDSL()
+# Removed DummyDSL class definition as we are now using the real DSL
+dsl = DSL() # Instantiate the real DSL class (it's a singleton)
 
 class DummyILP:
     def generate(self, facts: List[str]) -> List[str]:
@@ -90,13 +88,14 @@ except ImportError:
 
         def extract_feature(self, obj_id: str, feat_type: str) -> Tuple[Any, float]:
             """Mocks feature extraction for main.py's dummy SceneGraphBuilder."""
-            # This is a simplified mock for the main.py's internal dummy,
-            # the Workspace's dummy SceneGraphBuilder is more detailed.
             if feat_type == 'shape': return "circle", 0.8
             if feat_type == 'color': return "red", 0.7
             if feat_type == 'size': return "small", 0.6
             if feat_type == 'position_h': return "center_h", 0.5
             if feat_type == 'position_v': return "center_v", 0.5
+            if feat_type == 'fill': return "solid", 0.7
+            if feat_type == 'orientation': return "upright", 0.6
+            if feat_type == 'texture': return "none_texture", 0.6
             return "unknown", 0.1
 
         def problem_solved(self) -> bool:
@@ -108,18 +107,6 @@ except ImportError:
 
         def get_solution(self) -> Optional[Any]:
             return self._solution
-
-# Removed sam_utils import as it contained YOLO/SAM specific logic for detection.
-# try:
-#     from sam_utils import load_yolo_and_sam_models, detect_and_segment_image, get_masked_crop, HAS_YOLO, HAS_SAM
-#     logger.info("sam_utils.py found.")
-# except ImportError:
-#     logger.warning("sam_utils.py not found. Object detection and segmentation demonstration will be skipped.")
-#     HAS_YOLO = False
-#     HAS_SAM = False
-#     def load_yolo_and_sam_models(cfg): return None, None
-#     def detect_and_segment_image(image_np, yolo_model, sam_predictor, cfg): return [], [], []
-#     def get_masked_crop(image_np, mask, bbox): return np.zeros((1,1,3))
 
 # Set HAS_YOLO and HAS_SAM to False explicitly since we are not using them
 HAS_YOLO = False
@@ -158,23 +145,17 @@ def main(cfg: DictConfig):
     
     # --- Integration of Emergent System ---
     # Load dummy images for demonstration. In a real scenario, these would be actual image data.
-    # For now, we just pass a list of placeholders to represent images.
-    # The Workspace's internal SceneGraphBuilder will mock object detection.
     dummy_images = [f"image_{i}.png" for i in range(5)] # Example: 5 dummy images
     
     logger.info("Initiating emergent perception and symbolic reasoning loop.")
     solution = solve(dummy_images) # Call the new solve function
     logger.info(f"Emergent system solution: {solution}")
 
-    # Removed YOLO Object Detector Fine-tuning block
-    # if cfg.object_detector.get('fine_tune_yolo', False):
-    #     logger.info("Initiating YOLO fine-tuning.")
-    #     best_yolo_weights_path = "/path/to/dummy_yolo_weights.pt"
-    #     if best_yolo_weights_path:
-    #         cfg.object_detector.yolo_pretrained = best_yolo_weights_path
-    #         logger.info(f"YOLO fine-tuning completed. Using best weights: {best_yolo_weights_path}")
-    #     else:
-    #         logger.error("YOLO fine-tuning failed. Proceeding with original YOLO weights or skipping YOLO.")
+    # The rest of your existing pipeline (HPO, main training, pruning/quantization)
+    # would typically be run *before* the emergent system if they are for model training.
+    # If they are for processing the data that feeds into the emergent system,
+    # they would be integrated into the data loading/preprocessing steps.
+    # For this request, we are focusing on replacing the "old pipeline" with the emergent one for solving.
 
     # 3. Hyperparameter Optimization (HPO) (if enabled)
     if cfg.hpo.get('enabled', False):
@@ -197,63 +178,6 @@ def main(cfg: DictConfig):
         logger.info("Pruning and Quantization pipeline completed (dummy).")
     else:
         logger.info("Pruning and Quantization are disabled in config.")
-    
-    logger.info("--- Bongard Solver Main Pipeline finished. ---")
-    
-    # --- Removed the Scene Graph Building Demonstration that used YOLO/SAM ---
-    # This section was removed because it explicitly relied on HAS_YOLO and HAS_SAM
-    # and their associated loading/detection functions.
-    # If a scene graph building demo is still desired, it should be re-implemented
-    # using only classical CV methods or the emergent system's output.
-    # if HAS_SCENE_GRAPH_BUILDER and HAS_YOLO and HAS_SAM:
-    #     logger.info("\n--- Demonstrating Scene Graph Building with YOLO, SAM, and Persistent Homology ---")
-    #     dummy_image_dir = os.path.join(cfg.paths.data_root, "demo")
-    #     os.makedirs(dummy_image_dir, exist_ok=True)
-    #     dummy_image_path = os.path.join(dummy_image_dir, "demo_image.png")
-    #     demo_image = np.zeros((cfg.data.image_size, cfg.data.image_size, 3), dtype=np.uint8)
-    #     cv2.circle(demo_image, (70, 70), 30, (255, 255, 255), -1)
-    #     cv2.circle(demo_image, (70, 70), 15, (0, 0, 0), -1)
-    #     cv2.rectangle(demo_image, (180, 50), (230, 100), (0, 255, 0), -1)
-    #     cv2.ellipse(demo_image, (128, 180), (60, 30), 0, 0, 360, (255, 0, 0), -1)
-    #     Image.fromarray(demo_image).save(dummy_image_path)
-    #     logger.info(f"Created dummy image at {dummy_image_path}")
-    #     yolo_model, sam_predictor = None, None
-    #     try:
-    #         yolo_model, sam_predictor = load_yolo_and_sam_models(cfg)
-    #         logger.info("YOLO and SAM models loaded for demonstration.")
-    #         detected_bboxes, detected_masks, _ = detect_and_segment_image(
-    #             demo_image, yolo_model, sam_predictor, cfg
-    #         )
-    #         logger.info(f"Detected {len(detected_bboxes)} objects.")
-    #         if detected_bboxes:
-    #             dummy_attribute_logits = {
-    #                 'shape': torch.randn(len(detected_bboxes), 5),
-    #                 'color': torch.randn(len(detected_bboxes), 6),
-    #                 'fill': torch.randn(len(detected_bboxes), 2),
-    #                 'size': torch.randn(len(detected_bboxes), 3),
-    #                 'orientation': torch.randn(len(detected_bboxes), 4),
-    #                 'texture': torch.randn(len(detected_bboxes), 3),
-    #             }
-    #             num_objects = len(detected_bboxes)
-    #             num_edges = num_objects * (num_objects - 1)
-    #             dummy_relation_logits = torch.randn(num_edges, 10)
-    #             scene_graph_builder = SceneGraphBuilder(dummy_images)
-    #             inferred_scene_graph = scene_graph_builder.build_scene_graph(
-    #                 demo_image, detected_bboxes, detected_masks,
-    #                 dummy_attribute_logits, dummy_relation_logits
-    #             )
-    #             logger.info("\n--- Inferred Scene Graph for Demo Image ---")
-    #             logger.info(json.dumps(inferred_scene_graph, indent=2))
-    #         else:
-    #             logger.warning("No objects detected for scene graph building demonstration.")
-    #     except Exception as e:
-    #         logger.error(f"Error during scene graph demonstration: {e}", exc_info=True)
-    #     finally:
-    #         if os.path.exists(dummy_image_path):
-    #             os.remove(dummy_image_path)
-    #             logger.info(f"Cleaned up dummy image: {dummy_image_path}")
-    # else:
-    #     logger.warning("Skipping scene graph demonstration as required components (YOLO, SAM, SceneGraphBuilder) are not available.")
     
     logger.info("--- Bongard Solver Main Pipeline finished. ---")
     
@@ -317,12 +241,13 @@ def solve(images: List[Any]) -> Optional[Any]:
 
         # D. Convert built features into DSL facts
         # Clear previous facts to avoid accumulation if DSL doesn't handle updates
-        dsl.facts.clear() 
+        dsl.clear_facts() # Clear facts at the start of each major iteration
         for obj, ft, val in ws.built:
             # Adapt to your DSL syntax. Example: SHAPE(obj_0,triangle)
             # Ensure feature values are compatible with your DSL's expected types.
             fact = f"{ft.upper()}({obj},{val})" 
-            dsl.add_fact(fact, source='codelet_perception')
+            # Changed source from 'codelet_perception' to 'emergent' as per instructions
+            dsl.add_fact(fact, source='emergent') 
         logger.info(f"Converted {len(ws.built)} built features into DSL facts. Total DSL facts: {len(dsl.facts)}")
 
         # E. Run ILP → causal → RL/MCTS
@@ -354,4 +279,3 @@ if __name__ == "__main__":
     # from a script (especially on Windows).
     mp.set_start_method('spawn', force=True)
     main()
-
