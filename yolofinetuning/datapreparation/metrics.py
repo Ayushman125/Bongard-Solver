@@ -1,196 +1,337 @@
-# Detection metrics: IoU, mAP, precision, recall
 import numpy as np
-from sklearn.metrics import precision_recall_curve, auc
-import logging # Added for logging errors
+import logging
+from collections import defaultdict # For better handling of precision/recall accumulation
 
-def iou_xyxy(boxA, boxB):
+# Configure logging for this module
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+def iou_xyxy(bbox1: list, bbox2: list) -> float:
     """
     Compute Intersection-over-Union (IoU) for two bounding boxes.
     Boxes are expected in [x0, y0, x1, y1] format (top-left, bottom-right corners).
     Args:
-        boxA (list or np.array): Bounding box A.
-        boxB (list or np.array): Bounding box B.
+        bbox1 (list): Bounding box 1 [x0, y0, x1, y1].
+        bbox2 (list): Bounding box 2 [x0, y0, x1, y1].
     Returns:
-        float: IoU value.
+        float: IoU value, or 0.0 if union area is zero.
     """
     # Determine the coordinates of the intersection rectangle
-    xA = max(boxA[0], boxB[0])
-    yA = max(boxA[1], boxB[1])
-    xB = min(boxA[2], boxB[2])
-    yB = min(boxA[3], boxB[3])
+    xA = max(bbox1[0], bbox2[0])
+    yA = max(bbox1[1], bbox2[1])
+    xB = min(bbox1[2], bbox2[2])
+    yB = min(bbox1[3], bbox2[3])
 
     # Compute the area of intersection rectangle
     inter_width = max(0, xB - xA)
     inter_height = max(0, yB - yA)
     inter_area = inter_width * inter_height
 
-    # Compute the area of both the prediction and ground-truth rectangles
-    boxA_area = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
-    boxB_area = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
+    # Compute the area of both bounding boxes
+    bbox1_area = (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1])
+    bbox2_area = (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1])
 
     # Compute the union area
-    union_area = boxA_area + boxB_area - inter_area
+    union_area = bbox1_area + bbox2_area - inter_area
 
-    # Handle case where union_area is zero to avoid division by zero
+    # Return the IoU
     return inter_area / union_area if union_area > 0 else 0.0
+
+def _yolo_to_xyxy(bbox_yolo: list, img_w: int, img_h: int) -> list:
+    """
+    Converts a YOLO format bounding box [cx, cy, w, h] to absolute pixel [x0, y0, x1, y1].
+    Args:
+        bbox_yolo (list): Bounding box in YOLO format [cx, cy, w, h] (normalized).
+        img_w (int): Image width.
+        img_h (int): Image height.
+    Returns:
+        list: Bounding box in [x0, y0, x1, y1] format (absolute pixels).
+    """
+    cx, cy, w, h = bbox_yolo
+    x0 = (cx - w/2) * img_w
+    y0 = (cy - h/2) * img_h
+    x1 = (cx + w/2) * img_w
+    y1 = (cy + h/2) * img_h
+    return [x0, y0, x1, y1]
+
 
 class Evaluator:
     """
-    Evaluator for detection metrics: mAP, IoU, precision, recall.
-    Collects ground-truth and prediction data, then computes metrics.
-    Usage:
-        ev = Evaluator(cfg)
-        ev.update(gt_boxes_for_image, pred_boxes_for_image, scores_for_image)
-        ev.finalize()
+    A class to evaluate object detection metrics such as Mean Average Precision (mAP),
+    Precision, and Recall. This implementation calculates mAP for multiple IoU thresholds
+    and averages them, similar to COCO mAP.
     """
-    def __init__(self, cfg):
+    def __init__(self, num_classes: int, iou_thresholds: list = None):
         """
         Initializes the Evaluator.
         Args:
-            cfg (dict): Configuration dictionary, expected to contain 'iou_thresholds'.
+            num_classes (int): The total number of classes in the dataset.
+            iou_thresholds (list, optional): A list of IoU thresholds for mAP calculation.
+                                             Defaults to [0.5, 0.75] if None.
         """
-        self.iou_thrs = cfg.get('iou_thresholds', [0.5]) # Default to [0.5] if not provided
-        self.gt_all = []    # List of ground-truth boxes for all images (each element is a list of boxes for an image)
-        self.preds_all = [] # List of (boxes, scores) for all images (each element is a tuple for an image)
+        self.num_classes = num_classes
+        self.iou_thresholds = iou_thresholds if iou_thresholds is not None else [0.5, 0.75]
+        
+        # Store all predictions and ground truths for batch processing
+        # Format: {'image_id': {'preds': [{'bbox': [x0,y0,x1,y1], 'score': s, 'class_id': c}],
+        #                       'gts': [{'bbox': [x0,y0,x1,y1], 'class_id': c, 'matched': False}]}}
+        self.data = defaultdict(lambda: {'preds': [], 'gts': []})
+        self.image_dims = {} # Store image dimensions: {'image_id': (width, height)}
+        logging.info(f"Evaluator initialized for {num_classes} classes with IoU thresholds: {self.iou_thresholds}")
 
-    def update(self, gt_boxes, pred_boxes, scores):
+    def add_predictions(self, image_id: str, image_width: int, image_height: int,
+                        predictions: list, ground_truths: list):
         """
-        Updates the evaluator with predictions and ground truth for a single image.
+        Adds predictions and ground truths for a single image.
         Args:
-            gt_boxes (list): List of ground-truth boxes for the current image (e.g., [[x0,y0,x1,y1], ...]).
-                             Can be empty if no GT boxes.
-            pred_boxes (list): List of predicted boxes for the current image (e.g., [[x0,y0,x1,y1], ...]).
-            scores (list): List of confidence scores for predicted boxes.
+            image_id (str): Unique identifier for the image.
+            image_width (int): Width of the image.
+            image_height (int): Height of the image.
+            predictions (list): List of dictionaries for predictions.
+                                Each dict: {'bbox': [x0,y0,x1,y1], 'score': s, 'class_id': c}.
+                                Bboxes are expected in absolute pixel [x0,y0,x1,y1] format.
+            ground_truths (list): List of dictionaries for ground truths.
+                                  Each dict: {'bbox': [cx,cy,w,h], 'class_id': c}.
+                                  Bboxes are expected in normalized YOLO [cx,cy,w,h] format.
         """
-        self.gt_all.append(gt_boxes if gt_boxes is not None else [])
-        self.preds_all.append((pred_boxes if pred_boxes is not None else [], scores if scores is not None else []))
+        self.image_dims[image_id] = (image_width, image_height)
+        self.data[image_id]['preds'].extend(predictions)
+        
+        # Convert ground truths from YOLO to XYXY for consistency
+        converted_gts = []
+        for gt in ground_truths:
+            bbox_xyxy = _yolo_to_xyxy(gt['bbox'], image_width, image_height)
+            converted_gts.append({'bbox': bbox_xyxy, 'class_id': gt['class_id'], 'matched': False})
+        self.data[image_id]['gts'].extend(converted_gts)
+        logging.debug(f"Added {len(predictions)} preds and {len(ground_truths)} GTs for {image_id}")
 
-    def finalize(self):
+    def _compute_ap(self, recall: np.ndarray, precision: np.ndarray) -> float:
         """
-        Computes and prints Average Precision (AP) for each IoU threshold and Mean Average Precision (mAP).
+        Computes Average Precision (AP) for a given Precision-Recall curve.
+        Uses the 11-point interpolation method.
+        Args:
+            recall (np.ndarray): Array of recall values.
+            precision (np.ndarray): Array of precision values.
+        Returns:
+            float: Average Precision.
         """
-        logging.info("Finalizing evaluation and computing metrics...")
-        try:
-            aps = []
-            for thr in self.iou_thrs:
-                all_scores_flat = []
-                all_labels_flat = [] # 1 for TP, 0 for FP
+        # Sort by recall (ascending)
+        order = np.argsort(recall)
+        recall = recall[order]
+        precision = precision[order]
 
-                # Process each image's predictions against its ground truths
-                for (pred_boxes, pred_scores), gt_boxes in zip(self.preds_all, self.gt_all):
-                    # Sort predictions by score in descending order
-                    sorted_indices = np.argsort(pred_scores)[::-1]
-                    pred_boxes_sorted = [pred_boxes[i] for i in sorted_indices]
-                    pred_scores_sorted = [pred_scores[i] for i in sorted_indices]
+        # Pad with (0,0) and (1,0) for interpolation
+        recall = np.concatenate(([0.], recall, [1.]))
+        precision = np.concatenate(([0.], precision, [0.]))
 
-                    # Keep track of which GT boxes have been matched to avoid double counting
-                    matched_gt_flags = [False] * len(gt_boxes)
+        # Interpolate precision values to ensure non-increasing property
+        for i in range(precision.size - 1, 0, -1):
+            precision[i - 1] = np.maximum(precision[i - 1], precision[i])
 
-                    for i, pred_box in enumerate(pred_boxes_sorted):
-                        all_scores_flat.append(pred_scores_sorted[i]) # Add the score
-                        
-                        is_matched_to_gt = False
-                        best_iou = 0.0
-                        best_gt_idx = -1
+        # Compute AP by integrating the PR curve
+        i = np.where(recall[1:] != recall[:-1])[0] # Find unique recall values
+        ap = np.sum((recall[i + 1] - recall[i]) * precision[i + 1])
+        return ap
 
-                        # Find the best matching GT box for the current prediction
-                        for j, gt_box in enumerate(gt_boxes):
-                            if not matched_gt_flags[j]: # Only consider unmatched GTs
-                                current_iou = iou_xyxy(pred_box, gt_box)
-                                if current_iou > best_iou:
-                                    best_iou = current_iou
-                                    best_gt_idx = j
-                        
-                        if best_iou >= thr:
-                            is_matched_to_gt = True
-                            matched_gt_flags[best_gt_idx] = True # Mark GT as matched
-                        
-                        all_labels_flat.append(int(is_matched_to_gt)) # 1 for TP, 0 for FP
+    def evaluate(self) -> dict:
+        """
+        Computes mAP, precision, and recall across all added data.
+        Returns:
+            dict: A dictionary containing 'mAP', 'precision', 'recall', and 'ap_per_class_iou_thr'.
+        """
+        if not self.data:
+            logging.warning("No data added to evaluator. Returning empty metrics.")
+            return {'mAP': 0.0, 'precision': 0.0, 'recall': 0.0, 'ap_per_class_iou_thr': {}}
 
-                if not all_labels_flat: # Handle case with no predictions
-                    logging.warning(f"No predictions found for IoU threshold {thr}. AP will be 0.")
-                    ap = 0.0
-                else:
-                    # Compute Precision-Recall curve
-                    # Note: precision_recall_curve expects actual labels (0 or 1) and prediction scores
-                    p, r, _ = precision_recall_curve(all_labels_flat, all_scores_flat)
-                    ap = auc(r, p)
-                
-                aps.append(ap)
-                print(f"IoU={thr:.2f}: AP={ap:.4f}")
+        all_aps = []
+        ap_per_class_iou_thr = defaultdict(dict) # {class_id: {iou_thr: ap}}
+
+        for iou_thr in self.iou_thresholds:
+            logging.info(f"Evaluating for IoU threshold: {iou_thr}")
             
-            if self.iou_thrs:
-                mAP = np.mean(aps)
-                print(f"mAP@{self.iou_thrs}: {mAP:.4f}")
-            else:
-                print("No IoU thresholds defined for mAP calculation.")
+            # Initialize lists to accumulate true positives, false positives, and ground truths
+            # for PR curve calculation across all classes and images for this IoU threshold
+            all_preds_for_pr = [] # [{'score': s, 'is_tp': True/False, 'class_id': c}]
+            all_gts_count = defaultdict(int) # {class_id: count}
 
-        except Exception as e:
-            logging.error(f"[ERROR] Evaluator finalize failed: {e}")
-            import traceback
-            traceback.print_exc()
+            # Reset matched status for GTs for each IoU threshold evaluation
+            for img_id in self.data:
+                for gt in self.data[img_id]['gts']:
+                    gt['matched'] = False
+                    all_gts_count[gt['class_id']] += 1
 
-# --- CLI entry point ---
+            # Process predictions for each image
+            for img_id, img_data in self.data.items():
+                preds = img_data['preds']
+                gts = img_data['gts'][:] # Create a copy to modify 'matched' status
+
+                # Sort predictions by confidence score in descending order
+                preds.sort(key=lambda x: x['score'], reverse=True)
+
+                for pred in preds:
+                    best_iou = 0.0
+                    best_gt_idx = -1
+
+                    # Find the best matching ground truth for the current prediction
+                    for gt_idx, gt in enumerate(gts):
+                        if gt['class_id'] == pred['class_id'] and not gt['matched']:
+                            current_iou = iou_xyxy(pred['bbox'], gt['bbox'])
+                            if current_iou > best_iou:
+                                best_iou = current_iou
+                                best_gt_idx = gt_idx
+                    
+                    # Determine if it's a True Positive (TP) or False Positive (FP)
+                    if best_iou >= iou_thr:
+                        all_preds_for_pr.append({'score': pred['score'], 'is_tp': True, 'class_id': pred['class_id']})
+                        gts[best_gt_idx]['matched'] = True # Mark GT as matched
+                    else:
+                        all_preds_for_pr.append({'score': pred['score'], 'is_tp': False, 'class_id': pred['class_id']})
+            
+            # Calculate AP for each class at this IoU threshold
+            for class_id in range(self.num_classes):
+                class_preds = [p for p in all_preds_for_pr if p['class_id'] == class_id]
+                class_preds.sort(key=lambda x: x['score'], reverse=True) # Ensure sorted by score
+
+                tp_cumsum = np.cumsum([1 if p['is_tp'] else 0 for p in class_preds])
+                fp_cumsum = np.cumsum([1 if not p['is_tp'] else 0 for p in class_preds])
+
+                num_gts = all_gts_count[class_id]
+                if num_gts == 0:
+                    ap_per_class_iou_thr[class_id][iou_thr] = 0.0
+                    continue
+
+                precision = tp_cumsum / (tp_cumsum + fp_cumsum + np.finfo(float).eps) # Add epsilon to avoid div by zero
+                recall = tp_cumsum / num_gts
+
+                ap = self._compute_ap(recall, precision)
+                ap_per_class_iou_thr[class_id][iou_thr] = ap
+                logging.debug(f"  Class {class_id} @ IoU {iou_thr}: AP = {ap:.4f}")
+                
+                # If we need global precision/recall, we can accumulate here
+                # For mAP, we average APs.
+
+        # Calculate mAP (average over all classes and all IoU thresholds)
+        total_aps_sum = 0.0
+        total_ap_count = 0
+        for class_id in ap_per_class_iou_thr:
+            for iou_thr in ap_per_class_iou_thr[class_id]:
+                total_aps_sum += ap_per_class_iou_thr[class_id][iou_thr]
+                total_ap_count += 1
+        
+        mAP = total_aps_sum / total_ap_count if total_ap_count > 0 else 0.0
+        logging.info(f"Calculated mAP: {mAP:.4f}")
+
+        # For overall precision and recall, we can re-run with a single IoU threshold (e.g., 0.5)
+        # or aggregate all true positives and false positives globally.
+        # This is a simplified overall precision/recall, often calculated at a specific IoU threshold.
+        # Let's calculate overall P/R at IoU=0.5 for simplicity.
+        overall_tp = 0
+        overall_fp = 0
+        overall_fn = 0 # False Negatives = total GTs - total TPs
+
+        # Re-evaluate for a single threshold (e.g., 0.5) to get overall P/R
+        if 0.5 in self.iou_thresholds:
+            iou_for_overall_pr = 0.5
+        else:
+            iou_for_overall_pr = self.iou_thresholds[0] if self.iou_thresholds else 0.5 # Fallback
+
+        # Reset matched status for GTs
+        for img_id in self.data:
+            for gt in self.data[img_id]['gts']:
+                gt['matched'] = False
+        
+        total_gts_overall = sum(len(d['gts']) for d in self.data.values())
+        total_tps_overall = 0
+
+        for img_id, img_data in self.data.items():
+            preds = img_data['preds']
+            gts = img_data['gts'][:] # Copy for this specific P/R calculation
+
+            preds.sort(key=lambda x: x['score'], reverse=True)
+
+            for pred in preds:
+                best_iou = 0.0
+                best_gt_idx = -1
+                for gt_idx, gt in enumerate(gts):
+                    if gt['class_id'] == pred['class_id'] and not gt['matched']:
+                        current_iou = iou_xyxy(pred['bbox'], gt['bbox'])
+                        if current_iou > best_iou:
+                            best_iou = current_iou
+                            best_gt_idx = gt_idx
+                
+                if best_iou >= iou_for_overall_pr:
+                    overall_tp += 1
+                    total_tps_overall += 1
+                    gts[best_gt_idx]['matched'] = True
+                else:
+                    overall_fp += 1
+        
+        overall_fn = total_gts_overall - total_tps_overall
+
+        overall_precision = overall_tp / (overall_tp + overall_fp + np.finfo(float).eps)
+        overall_recall = overall_tp / (total_gts_overall + np.finfo(float).eps)
+
+        logging.info(f"Overall Precision @ IoU={iou_for_overall_pr}: {overall_precision:.4f}")
+        logging.info(f"Overall Recall @ IoU={iou_for_overall_pr}: {overall_recall:.4f}")
+
+        return {
+            'mAP': mAP,
+            'precision': overall_precision,
+            'recall': overall_recall,
+            'ap_per_class_iou_thr': dict(ap_per_class_iou_thr) # Convert defaultdict to dict
+        }
+
+    def reset(self):
+        """Resets the evaluator to clear all accumulated data."""
+        self.data = defaultdict(lambda: {'preds': [], 'gts': []})
+        self.image_dims = {}
+        logging.info("Evaluator reset.")
+
+# Example Usage (for testing this module directly)
 if __name__ == "__main__":
-    import argparse
-    # Configure basic logging for CLI usage
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
-    parser = argparse.ArgumentParser(description="Detection metrics utility")
-    parser.add_argument('--gt', required=True, help='Path to ground truth label file (YOLO format .txt)')
-    parser.add_argument('--pred', required=True, help='Path to prediction label file (YOLO format .txt, with scores)')
-    parser.add_argument('--iou_thresholds', type=float, nargs='+', default=[0.5, 0.75], help='IoU thresholds for AP calculation')
-    args = parser.parse_args()
+    evaluator = Evaluator(num_classes=2, iou_thresholds=[0.5, 0.75])
 
-    # Helper to convert YOLO format (cx, cy, w, h) to xyxy (x0, y0, x1, y1)
-    def yolo_to_xyxy(yolo_box, img_w=1.0, img_h=1.0): # Assuming normalized coordinates, so img_w/h=1.0
-        cx, cy, w, h = yolo_box
-        x0 = (cx - w/2) * img_w
-        y0 = (cy - h/2) * img_h
-        x1 = (cx + w/2) * img_w
-        y1 = (cy + h/2) * img_h
-        return [x0, y0, x1, y1]
+    # Image 1: Simple case
+    img1_id = "img_001"
+    img1_w, img1_h = 640, 480
+    preds1 = [
+        {'bbox': [10, 10, 100, 100], 'score': 0.9, 'class_id': 0}, # TP
+        {'bbox': [150, 150, 250, 250], 'score': 0.8, 'class_id': 1}, # TP
+        {'bbox': [300, 300, 400, 400], 'score': 0.4, 'class_id': 0}, # FP (low score)
+        {'bbox': [500, 500, 600, 600], 'score': 0.7, 'class_id': 1}  # FP (no GT)
+    ]
+    gts1 = [
+        {'bbox': [0.05, 0.05, 0.15, 0.15], 'class_id': 0}, # Corresponds to first pred
+        {'bbox': [0.3, 0.3, 0.2, 0.2], 'class_id': 1}      # Corresponds to second pred
+    ]
+    evaluator.add_predictions(img1_id, img1_w, img1_h, preds1, gts1)
 
-    gt_boxes_yolo = []
-    try:
-        with open(args.gt, 'r') as f:
-            for line in f:
-                parts = line.strip().split()
-                if len(parts) == 5: # class_id cx cy w h
-                    gt_boxes_yolo.append(list(map(float, parts[1:])))
-                else:
-                    logging.warning(f"Skipping malformed GT line: {line.strip()}")
-    except FileNotFoundError:
-        logging.error(f"Ground truth file not found: {args.gt}")
-        exit(1)
-    except Exception as e:
-        logging.error(f"Error reading ground truth file: {e}")
-        exit(1)
+    # Image 2: More complex case with FNs and FPs
+    img2_id = "img_002"
+    img2_w, img2_h = 800, 600
+    preds2 = [
+        {'bbox': [50, 50, 150, 150], 'score': 0.95, 'class_id': 0}, # TP
+        {'bbox': [200, 200, 300, 300], 'score': 0.85, 'class_id': 0}, # FP (no GT)
+        {'bbox': [400, 400, 500, 500], 'score': 0.7, 'class_id': 1}  # TP
+    ]
+    gts2 = [
+        {'bbox': [0.06, 0.06, 0.13, 0.13], 'class_id': 0}, # Corresponds to first pred
+        {'bbox': [0.5, 0.5, 0.1, 0.1], 'class_id': 1},     # FN (no pred)
+        {'bbox': [0.5, 0.5, 0.1, 0.1], 'class_id': 1}      # Corresponds to third pred
+    ]
+    evaluator.add_predictions(img2_id, img2_w, img2_h, preds2, gts2)
 
-    pred_data = [] # List of (box_yolo, score)
-    try:
-        with open(args.pred, 'r') as f:
-            for line in f:
-                parts = line.strip().split()
-                # Assuming prediction file format: class_id cx cy w h score
-                if len(parts) == 6:
-                    pred_data.append((list(map(float, parts[1:5])), float(parts[5])))
-                elif len(parts) == 5: # If scores are not in file, assume 1.0
-                    pred_data.append((list(map(float, parts[1:5])), 1.0))
-                else:
-                    logging.warning(f"Skipping malformed prediction line: {line.strip()}")
-    except FileNotFoundError:
-        logging.error(f"Prediction file not found: {args.pred}")
-        exit(1)
-    except Exception as e:
-        logging.error(f"Error reading prediction file: {e}")
-        exit(1)
 
-    # Convert all boxes to xyxy format for the Evaluator
-    gt_boxes_xyxy = [yolo_to_xyxy(box) for box in gt_boxes_yolo]
-    pred_boxes_xyxy = [yolo_to_xyxy(box_data[0]) for box_data in pred_data]
-    scores = [box_data[1] for box_data in pred_data]
+    results = evaluator.evaluate()
+    print("\n--- Evaluation Results ---")
+    print(f"mAP: {results['mAP']:.4f}")
+    print(f"Overall Precision: {results['precision']:.4f}")
+    print(f"Overall Recall: {results['recall']:.4f}")
+    print("AP per Class and IoU Threshold:")
+    for cls_id, iou_aps in results['ap_per_class_iou_thr'].items():
+        for iou_thr, ap_val in iou_aps.items():
+            print(f"  Class {cls_id} @ IoU {iou_thr}: {ap_val:.4f}")
 
-    ev = Evaluator({'iou_thresholds': args.iou_thresholds})
-    ev.update(gt_boxes_xyxy, pred_boxes_xyxy, scores)
-    ev.finalize()
+    evaluator.reset()
+    print("\nEvaluator reset. Data cleared.")

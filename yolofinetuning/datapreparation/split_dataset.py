@@ -5,10 +5,11 @@ import torch
 import os
 import json
 import random
+import shutil
 from transformers import OwlViTProcessor, OwlViTForObjectDetection
 from torchvision.transforms import functional as TF
 from collections import Counter # Added for class_balanced_oversample
-from metadata_logger import compute_metadata, log_metadata # Added for split_dataset
+from .metadata_logger import compute_metadata, log_metadata # Fixed to relative import for module execution
 
 try:
     import mlflow

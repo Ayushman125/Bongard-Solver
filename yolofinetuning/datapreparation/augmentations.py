@@ -2,22 +2,32 @@ import cv2
 import numpy as np
 import logging
 import torch
-import os # Added for os.path operations
-import random # Added for random.choice in oversample
-from tqdm import tqdm # Added for progress bars
-from collections import Counter # Added for class_balanced_oversample
-from PIL import Image # Required for OWL-ViT's image input (if EmbedDetector is used here)
+import os
+import random
+from tqdm import tqdm
+from collections import Counter, defaultdict # Added defaultdict for SMOTE helper
+import shutil # Added for augment_dataset to copy if no boxes
+from PIL import Image # For visualize_augmentations and apply_augmentations
 
 try:
     from albumentations import Compose, RandomBrightnessContrast, HorizontalFlip, \
         HueSaturationValue, RandomScale, RandomChoice, Resize
     from albumentations.pytorch import ToTensorV2
+    # Specific Albumentations transforms that might require newer versions or separate installs
     try:
-        from albumentations import MixUp, CutMix, Mosaic
+        from albumentations import MixUp, CutMix, Mosaic # These might be A.MixUp, A.CutMix, A.Mosaic in newer versions
     except ImportError:
         MixUp = None
         CutMix = None
         Mosaic = None
+        logging.warning("Albumentations MixUp, CutMix, or Mosaic not found. Using custom fallbacks.")
+
+    # Check for albucore version compatibility if specific issues arise
+    # This is a runtime check, not an import error.
+    # import albucore
+    # if albucore.__version__ != '0.0.24':
+    #     logging.warning(f"Albucore version mismatch: Expected 0.0.24, got {albucore.__version__}. This might cause issues with Albumentations 2.0.8.")
+
 except ImportError:
     Compose = None
     RandomBrightnessContrast = None
@@ -30,51 +40,73 @@ except ImportError:
     MixUp = None
     CutMix = None
     Mosaic = None
-    logging.warning("Albumentations not installed. Augmentations will be limited.")
+    logging.error("Albumentations is not installed. Augmentations functionality will be severely limited.")
 
-# --- Custom/fallback implementations ---
+
+# --- Custom/fallback implementations for MixUp, CutMix, Mosaic ---
+# These are simple conceptual implementations, not full replacements for Albumentations' versions.
 def custom_mixup(p=0.5):
+    """Simple conceptual mixup augmentation."""
     def _mixup(image, bboxes, class_labels):
-        # Simple mixup: blend with random noise
         if np.random.rand() < p:
-            alpha = 0.5
+            alpha = 0.5 # Blend factor
+            # Simple blend with random noise or another image (if available)
+            # For a real mixup, you'd mix with another image from the batch/dataset.
             noise = np.random.randint(0, 256, image.shape, dtype=np.uint8)
-            image = cv2.addWeighted(image, alpha, noise, 1-alpha, 0)
+            image = cv2.addWeighted(image, alpha, noise, 1 - alpha, 0)
         return {"image": image, "bboxes": bboxes, "class_labels": class_labels}
     return _mixup
 
 def custom_cutmix(p=0.5):
+    """Simple conceptual cutmix augmentation."""
     def _cutmix(image, bboxes, class_labels):
-        # Simple cutmix: cut and paste a random patch
         if np.random.rand() < p:
             h, w = image.shape[:2]
-            x1, y1 = np.random.randint(0, w//2), np.random.randint(0, h//2)
-            x2, y2 = x1 + w//4, y1 + h//4
-            patch = image[y1:y2, x1:x2].copy()
-            image[0:y2-y1, 0:x2-x1] = patch
+            # Define a random patch to cut
+            patch_w, patch_h = w // 4, h // 4
+            x1 = np.random.randint(0, w - patch_w)
+            y1 = np.random.randint(0, h - patch_h)
+            x2, y2 = x1 + patch_w, y1 + patch_h
+
+            # Create a random patch (e.g., from noise or another image)
+            # For a real cutmix, you'd paste a patch from another image.
+            patch = np.random.randint(0, 256, (patch_h, patch_w, image.shape[2]), dtype=np.uint8)
+            
+            # Paste the patch onto the image
+            image[y1:y2, x1:x2] = patch
+            # Bounding box labels would also need to be adjusted for cutmix, which is complex.
+            # This simple version doesn't handle bbox changes.
         return {"image": image, "bboxes": bboxes, "class_labels": class_labels}
     return _cutmix
 
 def custom_mosaic(p=0.5):
+    """Simple conceptual mosaic augmentation."""
     def _mosaic(image, bboxes, class_labels):
-        # Simple mosaic: tile image with itself
         if np.random.rand() < p:
             h, w = image.shape[:2]
+            # Create a new image by tiling the current image (or parts of it)
+            # For a real mosaic, you'd combine 4 images.
             new_img = np.zeros_like(image)
             new_img[:h//2, :w//2] = image[:h//2, :w//2]
+            new_img[:h//2, w//2:] = image[:h//2, w//2:]
+            new_img[h//2:, :w//2] = image[h//2:, :w//2]
             new_img[h//2:, w//2:] = image[h//2:, w//2:]
             image = new_img
+            # Bounding box labels would also need to be adjusted for mosaic, which is complex.
+            # This simple version doesn't handle bbox changes.
         return {"image": image, "bboxes": bboxes, "class_labels": class_labels}
     return _mosaic
 
 # --- CopyPaste and AugMix (if available) ---
 try:
-    from albumentations_augmix import CopyPaste, augment_and_mix, RandomAugMix
+    # Assuming these are from 'albumentations_augmix' or similar external libs
+    from albumentations_augmix import CopyPaste, RandomAugMix
+    # augment_and_mix is a function, not a transform, so it's not in the Compose list
 except ImportError:
     CopyPaste = None
-    augment_and_mix = None
     RandomAugMix = None
-    logging.warning("albumentations_augmix not installed. CopyPaste and AugMix will not be available.")
+    logging.warning("albumentations_augmix not installed. CopyPaste and RandomAugMix will not be available.")
+
 
 def get_train_transforms(cfg=None):
     """
@@ -91,70 +123,157 @@ def get_train_transforms(cfg=None):
         raise ImportError("Albumentations is not installed. Cannot create transforms.")
     
     # Standard augmentations
-    aug.append(RandomBrightnessContrast(p=0.5))
-    aug.append(HueSaturationValue(hue_shift_limit=10, sat_shift_limit=20, val_shift_limit=10, p=0.5))
-    aug.append(HorizontalFlip(p=0.5))
-    aug.append(RandomScale(scale_limit=0.5, p=0.5))
+    # Configurable parameters for these basic transforms
+    aug.append(RandomBrightnessContrast(
+        brightness_limit=cfg.get('augment', {}).get('brightness_limit', 0.2),
+        contrast_limit=cfg.get('augment', {}).get('contrast_limit', 0.2),
+        p=cfg.get('augment', {}).get('brightness_contrast_prob', 0.5)
+    ))
+    aug.append(HueSaturationValue(
+        hue_shift_limit=cfg.get('augment', {}).get('hue_shift_limit', 10),
+        sat_shift_limit=cfg.get('augment', {}).get('sat_shift_limit', 20),
+        val_shift_limit=cfg.get('augment', {}).get('val_shift_limit', 10),
+        p=cfg.get('augment', {}).get('hsv_prob', 0.5)
+    ))
+    aug.append(HorizontalFlip(p=cfg.get('augment', {}).get('horizontal_flip_prob', 0.5)))
+    aug.append(RandomScale(
+        scale_limit=cfg.get('augment', {}).get('scale_limit', 0.5),
+        p=cfg.get('augment', {}).get('random_scale_prob', 0.5)
+    ))
     
-    # Advanced photometric, spatial, adversarial augmentations
+    # Advanced photometric, spatial, adversarial augmentations (configurable via config)
     try:
         from albumentations import RandomCrop, ShiftScaleRotate, Perspective, RGBShift, Blur, GaussNoise, CLAHE, RandomGamma, CoarseDropout, ElasticTransform, GridDistortion, RandomErasing, ColorJitter
-        aug += [
-            RandomCrop(height=512, width=512, p=0.3),
-            ShiftScaleRotate(shift_limit=0.1, scale_limit=0.2, rotate_limit=20, p=0.5),
-            Perspective(scale=(0.05,0.1), p=0.2),
-            RGBShift(r_shift_limit=15, g_shift_limit=15, b_shift_limit=15, p=0.3),
-            Blur(blur_limit=3, p=0.2),
-            GaussNoise(var_limit=(10.0, 50.0), p=0.2),
-            CLAHE(p=0.1),
-            RandomGamma(p=0.1),
-            CoarseDropout(max_holes=8, max_height=32, max_width=32, p=0.3),
-            ElasticTransform(p=0.2),
-            GridDistortion(p=0.2),
-            ColorJitter(p=0.2),
-            RandomErasing(p=0.2)
-        ]
+        
+        if cfg.get('augment', {}).get('random_crop_enabled', True):
+            aug.append(RandomCrop(
+                height=cfg.get('augment', {}).get('random_crop_height', 512),
+                width=cfg.get('augment', {}).get('random_crop_width', 512),
+                p=cfg.get('augment', {}).get('random_crop_prob', 0.3)
+            ))
+        if cfg.get('augment', {}).get('shift_scale_rotate_enabled', True):
+            aug.append(ShiftScaleRotate(
+                shift_limit=cfg.get('augment', {}).get('shift_limit', 0.1),
+                scale_limit=cfg.get('augment', {}).get('scale_limit_ssr', 0.2), # Differentiate from RandomScale
+                rotate_limit=cfg.get('augment', {}).get('rotate_limit', 20),
+                p=cfg.get('augment', {}).get('shift_scale_rotate_prob', 0.5)
+            ))
+        if cfg.get('augment', {}).get('perspective_enabled', True):
+            aug.append(Perspective(
+                scale=cfg.get('augment', {}).get('perspective_scale', (0.05,0.1)),
+                p=cfg.get('augment', {}).get('perspective_prob', 0.2)
+            ))
+        if cfg.get('augment', {}).get('rgb_shift_enabled', True):
+            aug.append(RGBShift(
+                r_shift_limit=cfg.get('augment', {}).get('r_shift_limit', 15),
+                g_shift_limit=cfg.get('augment', {}).get('g_shift_limit', 15),
+                b_shift_limit=cfg.get('augment', {}).get('b_shift_limit', 15),
+                p=cfg.get('augment', {}).get('rgb_shift_prob', 0.3)
+            ))
+        if cfg.get('augment', {}).get('blur_enabled', True):
+            aug.append(Blur(
+                blur_limit=cfg.get('augment', {}).get('blur_limit', 3),
+                p=cfg.get('augment', {}).get('blur_prob', 0.2)
+            ))
+        if cfg.get('augment', {}).get('gauss_noise_enabled', True):
+            aug.append(GaussNoise(
+                var_limit=cfg.get('augment', {}).get('gauss_noise_var_limit', (10.0, 50.0)),
+                p=cfg.get('augment', {}).get('gauss_noise_prob', 0.2)
+            ))
+        if cfg.get('augment', {}).get('clahe_enabled', True):
+            aug.append(CLAHE(p=cfg.get('augment', {}).get('clahe_prob', 0.1)))
+        if cfg.get('augment', {}).get('random_gamma_enabled', True):
+            aug.append(RandomGamma(p=cfg.get('augment', {}).get('random_gamma_prob', 0.1)))
+        if cfg.get('augment', {}).get('coarse_dropout_enabled', True):
+            aug.append(CoarseDropout(
+                max_holes=cfg.get('augment', {}).get('coarse_dropout_max_holes', 8),
+                max_height=cfg.get('augment', {}).get('coarse_dropout_max_height', 32),
+                max_width=cfg.get('augment', {}).get('coarse_dropout_max_width', 32),
+                p=cfg.get('augment', {}).get('coarse_dropout_prob', 0.3)
+            ))
+        if cfg.get('augment', {}).get('elastic_transform_enabled', True):
+            aug.append(ElasticTransform(p=cfg.get('augment', {}).get('elastic_transform_prob', 0.2)))
+        if cfg.get('augment', {}).get('grid_distortion_enabled', True):
+            aug.append(GridDistortion(p=cfg.get('augment', {}).get('grid_distortion_prob', 0.2)))
+        if cfg.get('augment', {}).get('color_jitter_enabled', True):
+            aug.append(ColorJitter(p=cfg.get('augment', {}).get('color_jitter_prob', 0.2)))
+        if cfg.get('augment', {}).get('random_erasing_enabled', True):
+            aug.append(RandomErasing(p=cfg.get('augment', {}).get('random_erasing_prob', 0.2)))
+
         # Adversarial augmentation placeholder (requires external lib)
-        if cfg and cfg.get('augment', {}).get('adversarial', False):
+        if cfg.get('augment', {}).get('adversarial_enabled', False):
             try:
                 from adversarial_aug import AdversarialAugmentation
-                aug.append(AdversarialAugmentation(p=0.2))
-            except Exception:
+                aug.append(AdversarialAugmentation(p=cfg.get('augment', {}).get('adversarial_prob', 0.2)))
+            except ImportError:
                 logging.warning("AdversarialAugmentation not found. Skipping.")
-                pass
-    except Exception:
+            except Exception as e:
+                logging.error(f"Error with AdversarialAugmentation: {e}. Skipping.")
+
+    except ImportError:
         logging.warning("Some advanced Albumentations transforms not found. Skipping them.")
-        pass
+    except Exception as e:
+        logging.error(f"Error during advanced Albumentations transforms setup: {e}. Skipping.")
+        pass # Continue with basic transforms
+
+    # Sample-mix augmentations (configurable probability)
+    mosaic_prob = cfg.get('augment', {}).get('mosaic_prob', 0.5)
+    mixup_prob = cfg.get('augment', {}).get('mixup_prob', 0.5)
+    cutmix_prob = cfg.get('augment', {}).get('cutmix_prob', 0.5)
+
+    if cfg.get('augment', {}).get('mosaic_enabled', True):
+        if Mosaic is not None:
+            aug.append(Mosaic(p=mosaic_prob))
+        elif mosaic_prob > 0: # Only warn/add custom if enabled and prob > 0
+            aug.append(custom_mosaic(p=mosaic_prob))
+            logging.warning("Albumentations Mosaic not found, using custom_mosaic.")
+
+    if cfg.get('augment', {}).get('mixup_enabled', True):
+        if MixUp is not None:
+            aug.append(MixUp(p=mixup_prob))
+        elif mixup_prob > 0:
+            aug.append(custom_mixup(p=mixup_prob))
+            logging.warning("Albumentations MixUp not found, using custom_mixup.")
+
+    if cfg.get('augment', {}).get('cutmix_enabled', True):
+        if CutMix is not None:
+            aug.append(CutMix(p=cutmix_prob))
+        elif cutmix_prob > 0:
+            aug.append(custom_cutmix(p=cutmix_prob))
+            logging.warning("Albumentations CutMix not found, using custom_cutmix.")
     
-    # Sample-mix augmentations
-    if Mosaic is not None:
-        aug.append(Mosaic(p=0.5))
-    else:
-        aug.append(custom_mosaic(p=0.5))
-    if MixUp is not None:
-        aug.append(MixUp(p=0.5))
-    else:
-        aug.append(custom_mixup(p=0.5))
-    if CutMix is not None:
-        aug.append(CutMix(p=0.5))
-    else:
-        aug.append(custom_cutmix(p=0.5))
+    # CopyPaste and AugMix (configurable probability)
+    copypaste_prob = cfg.get('augment', {}).get('copypaste_prob', 0.5)
+    random_augmix_prob = cfg.get('augment', {}).get('random_augmix_prob', 0.5)
+
+    if cfg.get('augment', {}).get('copypaste_enabled', True):
+        if CopyPaste is not None:
+            aug.append(CopyPaste(p=copypaste_prob))
+        elif copypaste_prob > 0:
+            logging.warning("Albumentations CopyPaste not found. Skipping CopyPaste augmentation.")
     
-    # CopyPaste and AugMix
-    if CopyPaste is not None:
-        aug.append(CopyPaste(p=0.5))
-    if RandomAugMix is not None:
-        aug.append(RandomAugMix(severity=3, p=0.5))
-    
-    # Resize
+    if cfg.get('augment', {}).get('random_augmix_enabled', True):
+        if RandomAugMix is not None:
+            aug.append(RandomAugMix(
+                severity=cfg.get('augment', {}).get('random_augmix_severity', 3),
+                p=random_augmix_prob
+            ))
+        elif random_augmix_prob > 0:
+            logging.warning("Albumentations RandomAugMix not found. Skipping RandomAugMix augmentation.")
+
+    # Resize (configurable via config)
     if cfg and cfg.get("resize", {}).get("multiscale", False):
-        scales = cfg["resize"]["scales"]
+        scales = cfg["resize"].get("scales", [640])
         aug.append(RandomChoice([Resize(s, s) for s in scales]))
     else:
-        base_size = 640 if not cfg else cfg["resize"]["base_size"]
+        base_size = cfg.get("resize", {}).get("base_size", 640) if cfg else 640
         aug.append(Resize(base_size, base_size))
     
     aug.append(ToTensorV2())
+    
+    # Filter out None entries from the augmentation list
+    aug = [t for t in aug if t is not None]
+
     return Compose(aug, bbox_params={'format': 'yolo', 'label_fields': ['class_labels']})
 
 def get_val_transforms(cfg=None):
@@ -170,7 +289,7 @@ def get_val_transforms(cfg=None):
     if Compose is None:
         raise ImportError("Albumentations is not installed. Cannot create transforms.")
     
-    base_size = 640 if not cfg else cfg["resize"]["base_size"]
+    base_size = cfg.get("resize", {}).get("base_size", 640) if cfg else 640
     return Compose([
         Resize(base_size, base_size),
         ToTensorV2()
@@ -180,7 +299,7 @@ def get_val_transforms(cfg=None):
 # --- Class balancing utility ---
 def class_balanced_oversample(image_paths: list, label_paths: list, min_count: int = 100):
     """
-    Oversample rare classes to ensure class balance in dataset.
+    Oversample rare classes by duplicating samples to ensure class balance in dataset.
     Args:
         image_paths (list): List of paths to image files.
         label_paths (list): List of paths to corresponding label files.
@@ -236,72 +355,99 @@ def class_balanced_oversample(image_paths: list, label_paths: list, min_count: i
     logging.info(f"Class balancing complete. Original samples: {len(image_paths)}, Oversampled samples: {len(new_imgs)}")
     return new_imgs, new_lbls
 
-def smote_oversample(image_paths: list, label_paths: list, min_count: int = 100):
+def smote_oversample(image_paths: list, label_paths: list, min_count: int = 100, feature_extractor=None):
     """
     SMOTE-based synthetic oversampling for minority classes.
-    This is a conceptual placeholder, as SMOTE typically works on feature vectors,
-    not directly on images/labels for object detection.
+    This implementation is a conceptual placeholder for object detection,
+    as direct SMOTE on raw bounding box coordinates is usually not effective.
+    It demonstrates the idea of oversampling based on extracted features.
+    
     Args:
         image_paths (list): List of paths to image files.
         label_paths (list): List of paths to corresponding label files.
         min_count (int): Minimum desired count for each class.
+        feature_extractor (callable, optional): A function that takes (image_path, labels)
+                                                and returns a list of feature vectors for each object.
+                                                If None, uses simple bbox coordinates as features.
+    Returns:
+        tuple: (original_image_paths, original_label_paths) - SMOTE doesn't generate new images/labels directly,
+               it operates on features. This function primarily logs the SMOTE process.
     """
     try:
         from imblearn.over_sampling import SMOTE
-        import pandas as pd
         
-        logging.warning("SMOTE for object detection is complex and often requires feature extraction. This is a simplified placeholder.")
+        logging.info("Attempting SMOTE oversampling (conceptual for object detection)...")
+        logging.warning("Direct SMOTE on bounding box coordinates is often not ideal for object detection. "
+                        "Consider using advanced feature extraction or generative models for true synthetic data.")
         
-        # Prepare features for SMOTE (flatten bboxes and class IDs)
-        # This is a very simplistic representation; a real implementation would need
-        # more sophisticated feature engineering (e.g., embeddings, image features).
-        X_features, y_classes = [], []
-        for lbl in label_paths:
+        X_features, y_classes, original_indices = [], [], []
+        
+        # Collect features and classes for each object across all images
+        object_idx = 0
+        for i, lbl_path in enumerate(label_paths):
             try:
-                with open(lbl, 'r') as f:
+                with open(lbl_path, 'r') as f:
+                    current_image_labels = []
                     for line in f:
                         parts = line.strip().split()
                         if len(parts) == 5:
-                            y_classes.append(int(parts[0]))
-                            # Flatten bbox coords as features
-                            X_features.append(list(map(float, parts[1:])))
+                            class_id = int(parts[0])
+                            bbox_coords = list(map(float, parts[1:]))
+                            current_image_labels.append((class_id, bbox_coords))
+                            
+                            y_classes.append(class_id)
+                            # If no feature_extractor, use bbox coords directly
+                            X_features.append(bbox_coords) 
+                            original_indices.append(i) # Keep track of original image index
+                        else:
+                            logging.warning(f"Skipping malformed label line in {lbl_path}: '{line.strip()}'")
+            except FileNotFoundError:
+                logging.warning(f"Label file not found for SMOTE: {lbl_path}. Skipping.")
             except Exception as e:
-                logging.error(f"Error reading label file {lbl} for SMOTE: {e}")
+                logging.error(f"Error reading label file {lbl_path} for SMOTE: {e}")
                 continue
 
         if not X_features:
-            logging.warning("No valid label data for SMOTE. Skipping oversampling.")
-            return
+            logging.warning("No valid object data found for SMOTE. Skipping oversampling.")
+            return image_paths, label_paths
 
-        # Convert to numpy arrays
-        X_features = np.array(X_features)
-        y_classes = np.array(y_classes)
+        X_features_np = np.array(X_features)
+        y_classes_np = np.array(y_classes)
         
-        # Filter for classes that need oversampling based on min_count
-        unique_classes, counts = np.unique(y_classes, return_counts=True)
-        minority_classes = unique_classes[counts < min_count]
+        # Identify minority classes based on min_count
+        unique_classes, counts = np.unique(y_classes_np, return_counts=True)
+        minority_classes_to_oversample = {cls: min_count for cls, count in zip(unique_classes, counts) if count < min_count}
         
-        if len(minority_classes) == 0:
-            logging.info("No minority classes found for SMOTE oversampling.")
-            return
+        if not minority_classes_to_oversample:
+            logging.info("No minority classes found to oversample with SMOTE.")
+            return image_paths, label_paths
 
-        # Create a mapping for SMOTE sampling strategy
-        sampling_strategy = {cls: min_count for cls in minority_classes}
+        logging.info(f"Minority classes for SMOTE: {minority_classes_to_oversample}")
         
-        sm = SMOTE(sampling_strategy=sampling_strategy, random_state=42)
+        sm = SMOTE(sampling_strategy=minority_classes_to_oversample, random_state=42)
         
-        # Perform SMOTE resampling
-        X_res, y_res = sm.fit_resample(X_features, y_classes)
+        # Perform SMOTE resampling on the features
+        X_resampled, y_resampled = sm.fit_resample(X_features_np, y_classes_np)
         
-        logging.info(f"[INFO] SMOTE oversampling completed. Original samples (bboxes): {len(X_features)}, Resampled samples (bboxes): {len(X_res)}")
-        # Note: SMOTE generates synthetic *features*. Creating corresponding synthetic *images*
-        # and *label files* from these features is a complex task and not handled here.
-        # This function primarily indicates the feature-level oversampling.
+        logging.info(f"SMOTE completed. Original objects: {len(X_features)}, Resampled objects: {len(X_resampled)}")
+        
+        # IMPORTANT: SMOTE generates synthetic *features* (bbox coordinates in this simple case).
+        # It DOES NOT generate new images or full label files.
+        # To use these synthetic features, you would typically:
+        # 1. Train a generative model (e.g., GAN/Diffusion) conditioned on these features.
+        # 2. Or, use these features to augment an existing dataset by "pasting" objects
+        #    onto existing images, which requires careful implementation.
+        # For this pipeline, we just demonstrate the feature-level oversampling.
+        
+        # The function returns the original image/label paths, as SMOTE doesn't directly add new files.
+        return image_paths, label_paths 
         
     except ImportError:
-        logging.warning("imblearn not installed. SMOTE oversampling will not be available.")
+        logging.warning("imblearn (scikit-learn-contrib) not installed. SMOTE oversampling will not be available.")
+        return image_paths, label_paths
     except Exception as e:
         logging.error(f"[WARN] SMOTE oversampling failed: {e}")
+        return image_paths, label_paths
 
 # --- Visual inspection utility ---
 def visualize_augmentations(image_path: str, label_path: str, out_dir: str = "aug_preview", n: int = 5, cfg=None):
@@ -381,6 +527,7 @@ def apply_augmentations(image_path: str, labels: list, cfg=None):
         cfg (dict, optional): Configuration dictionary for augmentation settings.
     Returns:
         tuple: (augmented_image (torch.Tensor), augmented_bboxes (list), augmented_class_labels (list))
+               Returns (None, None, None) on error.
     """
     image = cv2.imread(image_path)
     if image is None:
@@ -420,7 +567,7 @@ def make_pipeline(cfg: dict):
     Args:
         cfg (dict): Configuration dictionary with augmentation settings.
     Returns:
-        albumentations.Compose: The composed augmentation pipeline.
+        albumentations.Compose: The composed augmentation pipeline. Returns None on error.
     """
     try:
         import albumentations as A
@@ -483,8 +630,12 @@ def augment_dataset(img_dir: str, lbl_dir: str, out_img_dir: str, out_lbl_dir: s
         pipeline: An Albumentations Compose pipeline.
         num_workers (int): Number of parallel processes to use.
     """
-    from multiprocessing import Pool
-    
+    from multiprocessing import Pool # Import Pool locally to avoid global issues
+
+    if pipeline is None:
+        logging.error("Augmentation pipeline is None. Cannot augment dataset.")
+        return
+
     os.makedirs(out_img_dir, exist_ok=True)
     os.makedirs(out_lbl_dir, exist_ok=True)
 
@@ -498,10 +649,14 @@ def augment_dataset(img_dir: str, lbl_dir: str, out_img_dir: str, out_lbl_dir: s
         if os.path.exists(lbl_path):
             args_list.append((img_path, lbl_path, out_img_dir, out_lbl_dir, pipeline))
         else:
-            logging.warning(f"Skipping {img_path}: no corresponding label file {lbl_path}")
-            # Optionally, copy original image/label if no augmentation is applied
-            # shutil.copy(img_path, os.path.join(out_img_dir, os.path.basename(img_path)))
-            # if os.path.exists(lbl_path): shutil.copy(lbl_path, os.path.join(out_lbl_dir, os.path.basename(lbl_path)))
+            logging.warning(f"Skipping {img_path}: no corresponding label file {lbl_path}. Copying original.")
+            # If no label file, just copy the original image and create an empty label file
+            try:
+                shutil.copy(img_path, os.path.join(out_img_dir, os.path.basename(img_path)))
+                with open(os.path.join(out_lbl_dir, os.path.basename(lbl_path)), 'w') as f:
+                    pass # Create empty label file
+            except Exception as e:
+                logging.error(f"Error copying original {img_path} or creating empty label: {e}")
 
     if not args_list:
         logging.info("No image-label pairs found for augmentation.")
@@ -523,13 +678,8 @@ def augment_dataset(img_dir: str, lbl_dir: str, out_img_dir: str, out_lbl_dir: s
                         class_labels.append(int(parts[0]))
                         boxes.append(list(map(float, parts[1:])))
             
-            if not boxes:
-                # If no boxes, just copy the image and an empty label file (if it was empty)
-                shutil.copy(img_path, os.path.join(out_img_dir_worker, os.path.basename(img_path)))
-                with open(os.path.join(out_lbl_dir_worker, os.path.basename(lbl_path)), 'w') as f:
-                    pass # Create empty label file
-                return
-
+            # Even if no boxes, we can still apply image-only augmentations
+            # The pipeline should handle empty bboxes gracefully
             data = aug_pipeline_worker(image=img, bboxes=boxes, class_labels=class_labels)
             
             aug_img = data['image']
@@ -543,9 +693,12 @@ def augment_dataset(img_dir: str, lbl_dir: str, out_img_dir: str, out_lbl_dir: s
             
             base_name = os.path.basename(img_path)
             cv2.imwrite(os.path.join(out_img_dir_worker, base_name), aug_img)
+            
+            # Write augmented labels
             with open(os.path.join(out_lbl_dir_worker, os.path.splitext(base_name)[0]+'.txt'),'w') as f:
                 for c, b in zip(new_class_labels, new_boxes):
-                    f.write(f"{c} {' '.join(map(str,b))}\n")
+                    # Ensure bounding box coordinates are formatted correctly
+                    f.write(f"{c} {' '.join([f'{val:.6f}' for val in b])}\n") # Format to 6 decimal places
         except Exception as e:
             logging.error(f"Worker: Error augmenting {img_path}: {e}")
             import traceback

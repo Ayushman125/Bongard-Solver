@@ -9,23 +9,23 @@ import logging
 import json
 from torch.cuda.amp import autocast # New import for mixed precision
 
+logger = logging.getLogger(__name__)
+
 from segment_anything import sam_model_registry, SamPredictor, SamAutomaticMaskGenerator
 
 # Attempt to import Bongard symbolic fusion. This is crucial for symbolic labeling.
 # If bongard.symbolic_fusion is not available, symbolic labeling will be skipped.
 HAS_BONGARD_SYMBOLIC_FUSION = False
 try:
-    # Assuming symbolic_fusion is a function within the bongard library
-    # The exact import path might vary based on your bongard library structure.
-    from bongard import symbolic_fusion
+    from bongard_symbolic_fusion import symbolic_fusion
     HAS_BONGARD_SYMBOLIC_FUSION = True
-    logger.info("Bongard symbolic_fusion found. Symbolic labeling enabled.")
+    logger.info("bongard_symbolic_fusion.symbolic_fusion found. Symbolic labeling enabled.")
 except ImportError:
-    logger.warning("Bongard symbolic_fusion not found. Symbolic labeling will be skipped.")
+    symbolic_fusion = None
+    logger.warning("bongard_symbolic_fusion.symbolic_fusion not found. Symbolic labeling will be skipped.")
 except Exception as e:
-    logger.warning(f"Error importing bongard.symbolic_fusion: {e}. Symbolic labeling will be skipped.")
-
-logger = logging.getLogger(__name__)
+    symbolic_fusion = None
+    logger.warning(f"Error importing bongard_symbolic_fusion.symbolic_fusion: {e}. Symbolic labeling will be skipped.")
 
 def load_sam_model(
     checkpoint_path="weights/sam_vit_h_4b8939.pth",
