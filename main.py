@@ -7,10 +7,10 @@ import os
 import logging
 import random
 import numpy as np
-import yaml # For saving config
-import json # For handling scene graph bytes (if needed for dummy data)
-import cv2 # For creating dummy images in scene graph demo
-from PIL import Image # For saving dummy images
+import yaml  # For saving config
+import json  # For handling scene graph bytes (if needed for dummy data)
+import cv2  # For creating dummy images in scene graph demo
+from PIL import Image  # For saving dummy images
 from typing import List, Dict, Any, Tuple, Optional
 
 # --- Hydra Imports ---
@@ -21,25 +21,25 @@ from omegaconf import DictConfig, OmegaConf
 import sys
 # Add the parent directory of 'emergent' to the Python path
 # Assuming main.py is in src/, and emergent is in src/emergent/
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'src'))) # Add src/
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'src', 'emergent'))) # Add src/emergent/
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'src')))  # Add src/
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'src', 'emergent')))  # Add src/emergent/
 
 from src.emergent.workspace_ext import Workspace
-from src.emergent.codelets import Scout, GroupScout, RuleTester, RuleBuilder # Import new codelets
-from src.utils.compute_temperature import compute_temperature # Now from utils/
-from src.utils.general import set_seed # Assuming set_seed is in utils/general
+from src.emergent.codelets import Scout, GroupScout, RuleTester, RuleBuilder, RuleProposer # Import RuleProposer
+from src.utils.compute_temperature import compute_temperature  # Now from utils/
+from src.utils.general import set_seed  # Assuming set_seed is in utils/general
 
 # --- Import the actual DSL, ILP, Causal, and RL classes ---
-from src.dsl import DSL # Import the real DSL class
-from src.ilp import RuleInducer # Import the real ILP class
-from src.causal import CausalFilter # Import the real CausalFilter class
-from src.rl_module import RLAgent # Import the real RLAgent class
+from src.dsl import DSL  # Import the real DSL class
+from src.ilp import RuleInducer  # Import the real ILP class
+from src.causal import CausalFilter  # Import the real CausalFilter class
+from src.rl_module import RLAgent  # Import the real RLAgent class
 
 # --- Import Core Models Components ---
-from core_models.ensemble import EnsembleSolver, load_trained_model, train_ensemble, train_distilled_student_orchestrator_combined # For ensembling
-from core_models.training import train_perception_with_buffer, _run_single_training_session_ensemble # For main model training
-from core_models.training_moco import main as run_moco_pretraining # For MoCo pretraining
-from core_models.training_args import load_config as load_training_config # For structured config loading
+from core_models.ensemble import EnsembleSolver, load_trained_model, train_ensemble, train_distilled_student_orchestrator_combined  # For ensembling
+from core_models.training import train_perception_with_buffer, _run_single_training_session_ensemble  # For main model training
+from core_models.training_moco import main as run_moco_pretraining_synthetic, train_moco_on_real # Import both MoCo functions
+from core_models.training_args import load_config as load_training_config  # For structured config loading
 
 # from core_models.hpo import run_hpo # Assuming HPO function exists here or in a separate hpo.py
 # from core_models.pruning_quantization import run_pruning_and_quantization # Assuming these functions exist
@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 
 # Import scene_graph_builder for demonstration
 try:
-    from src.scene_graph_builder import SceneGraphBuilder # Import the class
+    from src.scene_graph_builder import SceneGraphBuilder  # Import the class
     HAS_SCENE_GRAPH_BUILDER = True
     logger.info("src/scene_graph_builder.py found.")
 except ImportError:
@@ -67,12 +67,16 @@ except ImportError:
         def __init__(self, images: List[Any], config: Optional[Dict[str, Any]] = None):
             logger.warning("Dummy SceneGraphBuilder initialized for main.py. Problem solving will be mocked.")
             self.images = images
-            self.objects = [f"obj_{i}" for i in range(len(images))] if images else ["obj_0", "obj_1"] # Mock object IDs
+            self.objects = [f"obj_{i}" for i in range(len(images))] if images else ["obj_0", "obj_1"]  # Mock object IDs
             self._solution_found = False
             self._solution = None
-            self.config = config if config is not None else {} # Store config even for dummy
+            self.config = config if config is not None else {}  # Store config even for dummy
+            self.current_scene_graph_data = [] # To store dummy scene graph per image
+
         def extract_feature(self, obj_id: str, feat_type: str) -> Tuple[Any, float]:
             """Mocks feature extraction for main.py's dummy SceneGraphBuilder."""
+            # Return a consistent value for a given obj_id and feat_type for testing
+            # In a real scenario, this would query the extracted features.
             if feat_type == 'shape': return "circle", 0.8
             if feat_type == 'color': return "red", 0.7
             if feat_type == 'size': return "small", 0.6
@@ -82,12 +86,14 @@ except ImportError:
             if feat_type == 'orientation': return "upright", 0.6
             if feat_type == 'texture': return "none_texture", 0.6
             return "unknown", 0.1
+
         def problem_solved(self) -> bool:
             return self._solution_found
         
         def mark_solution(self, solution: Any):
             self._solution = solution
             self._solution_found = True
+        
         def get_solution(self) -> Optional[Any]:
             return self._solution
         
@@ -95,24 +101,44 @@ except ImportError:
             """Dummy build_scene_graph for mock data generation."""
             # Create a simple mock scene graph for a single image
             mock_objects = []
-            if image_np is not None: # Ensure image_np is not None
-                obj_id = f"obj_{random.randint(0, 99)}" # Random ID
-                # Mock some attributes based on random choices
-                shape = random.choice(['circle', 'square', 'triangle'])
-                color = random.choice(['red', 'blue', 'green'])
-                size = random.choice(['small', 'medium', 'large'])
-                mock_objects.append({
-                    'id': obj_id,
-                    'attributes': {'shape': shape, 'color': color, 'size': size},
-                    'bbox_xyxy': [0,0,10,10], # Dummy bbox
-                    'centroid': [5,5] # Dummy centroid
-                })
-            return {'objects': mock_objects, 'relations': []}
+            mock_relations = []
+            if image_np is not None:  # Ensure image_np is not None
+                obj_id_counter = 0
+                # Simulate detecting 1 to 3 objects per image
+                for _ in range(random.randint(1, 3)):
+                    obj_id = f"obj_{obj_id_counter}"
+                    obj_id_counter += 1
+                    # Mock some attributes based on random choices
+                    shape = random.choice(['circle', 'square', 'triangle'])
+                    color = random.choice(['red', 'blue', 'green'])
+                    size = random.choice(['small', 'medium', 'large'])
+                    mock_objects.append({
+                        'id': obj_id,
+                        'attributes': {'shape': shape, 'color': color, 'size': size},
+                        'bbox': [0,0,10,10],  # Dummy bbox
+                        'centroid': [5,5]  # Dummy centroid
+                    })
+                
+                # Simulate some relations if multiple objects
+                if len(mock_objects) > 1:
+                    for i in range(len(mock_objects)):
+                        for j in range(len(mock_objects)):
+                            if i != j and random.random() < 0.3: # 30% chance for a random relation
+                                rel_type = random.choice(['above', 'left_of', 'inside', 'overlapping'])
+                                mock_relations.append({
+                                    'subject_id': mock_objects[i]['id'],
+                                    'object_id': mock_objects[j]['id'],
+                                    'type': rel_type,
+                                    'confidence': random.uniform(0.5, 1.0)
+                                })
+            
+            sg = {'objects': mock_objects, 'relations': mock_relations}
+            self.current_scene_graph_data.append(sg) # Store for RuleProposer
+            return sg
 
         def get_object_image(self, obj_id: str) -> Optional[Any]:
             """Dummy: Returns a dummy image for an object."""
             return Image.new('RGB', (50, 50), color=(random.randint(0,255), random.randint(0,255), random.randint(0,255)))
-
 
 # Main function definition with Hydra
 @hydra.main(config_path="conf", config_name="config", version_base=None) # Added version_base
@@ -149,17 +175,21 @@ def main(cfg: DictConfig):
     set_seed(cfg.debug.seed) # Use cfg.debug.seed
     
     # --- 1. MoCo Self-Supervised Pretraining ---
+    # Synthetic Data Pretraining
     if cfg.model.simclr_config.get('enabled', False):
-        logger.info("Initiating MoCo-V2 self-supervised pretraining.")
-        # The run_moco_pretraining function is now main in training_moco.py
-        # It expects a config object. We need to pass the resolved DictConfig.
-        # For simplicity, if run_moco_pretraining is designed to be called directly,
-        # it might need a similar argparse setup or accept DictConfig directly.
-        # For now, let's assume it can take the DictConfig.
-        run_moco_pretraining(cfg) # Calling the main function from training_moco.py
-        logger.info("MoCo-V2 pretraining completed.")
+        logger.info("Initiating MoCo-V2 self-supervised pretraining on synthetic data.")
+        run_moco_pretraining_synthetic(cfg) # Calling the main function from training_moco.py
+        logger.info("MoCo-V2 synthetic pretraining completed.")
     else:
-        logger.info("MoCo-V2 pretraining is disabled in config.")
+        logger.info("MoCo-V2 synthetic pretraining is disabled in config.")
+
+    # Real Data Pretraining (New)
+    if cfg.model.simclr_config.get('pretrain_on_real', False):
+        logger.info("Initiating MoCo-V2 self-supervised pretraining on real Bongard images.")
+        train_moco_on_real(OmegaConf.to_container(cfg, resolve=True)) # Pass resolved config
+        logger.info("MoCo-V2 real data pretraining completed.")
+    else:
+        logger.info("MoCo-V2 real data pretraining is disabled in config.")
 
     # --- 2. YOLO Object Detector Fine-tuning (if enabled) ---
     if cfg.model.get('fine_tune_yolo', False):
@@ -219,6 +249,7 @@ def main(cfg: DictConfig):
     training_cfg.data.dataloader_workers = cfg.data.dataloader_workers
     training_cfg.data.use_synthetic_data = cfg.data.use_synthetic_data
     training_cfg.data.synthetic_data_config = OmegaConf.to_container(cfg.data.synthetic_data_config, resolve=True)
+    training_cfg.data.real_data_path = cfg.data.real_data_path # Pass real data path to training config
     training_cfg.training.epochs = cfg.training.epochs
     training_cfg.training.batch_size = cfg.training.batch_size
     training_cfg.training.learning_rate = cfg.training.learning_rate
@@ -260,21 +291,25 @@ def main(cfg: DictConfig):
     training_cfg.training.symbolic_consistency_weight = cfg.training.symbolic_consistency_weight
     training_cfg.training.gradient_accumulation_steps = cfg.training.gradient_accumulation_steps
     training_cfg.training.max_grad_norm = cfg.training.max_grad_norm
-
+    training_cfg.training.use_domain_adaptation = cfg.training.use_domain_adaptation # New: Domain Adaptation
+    training_cfg.training.grl_alpha = cfg.training.grl_alpha # New: GRL alpha
+    training_cfg.training.lambda_style = cfg.training.lambda_style # New: Style loss weight
+    training_cfg.training.lr_disc = cfg.training.lr_disc # New: Discriminator learning rate
+    training_cfg.replay = OmegaConf.to_container(cfg.replay, resolve=True) # Replay buffer config
 
     if training_cfg.training.num_ensemble_members > 1 and training_cfg.training.use_knowledge_distillation:
         logger.info(f"Training ensemble of {training_cfg.training.num_ensemble_members} teachers and distilling to a student.")
         # train_distilled_student_orchestrator_combined handles both teacher training/loading and student distillation
         trained_student_model, teacher_ensemble_metrics, student_metrics = train_distilled_student_orchestrator_combined(
             num_ensemble_members=training_cfg.training.num_ensemble_members,
-            train_loader=None, # Will be handled internally by data module
-            val_loader=None, # Will be handled internally by data module
-            student_model_config=training_cfg, # Student uses the main training config
+            train_loader=None,  # Will be handled internally by data module
+            val_loader=None,  # Will be handled internally by data module
+            student_model_config=training_cfg,  # Student uses the main training config
             epochs_student=training_cfg.training.epochs,
             teacher_ensemble_type=training_cfg.training.teacher_ensemble_type,
-            train_members=True, # Always train teachers in this orchestration
+            train_members=True,  # Always train teachers in this orchestration
             cfg=training_cfg,
-            current_rank=0, # Assuming single GPU for now
+            current_rank=0,  # Assuming single GPU for now
             world_size=1,
             is_ddp_initialized=False
         )
@@ -301,7 +336,6 @@ def main(cfg: DictConfig):
         logger.info(f"Best Perception Model saved to: {best_model_path}")
         logger.info(f"Validation Accuracy: {best_metrics.get('val_accuracy', 0.0):.4f}")
 
-
     # --- Optional: Periodic Online Fine-tuning of Perception Model ---
     if cfg.training.get('online_finetuning', False):
         logger.info("Initiating periodic online fine-tuning of the perception model.")
@@ -326,7 +360,7 @@ def main(cfg: DictConfig):
 
         if os.path.exists(perception_model_to_finetune_path):
             logger.info(f"Loading perception model for online fine-tuning from {perception_model_to_finetune_path}")
-            # Load the model using load_trained_model, which returns PerceptionModule
+            # Load the model using load_trained_model, which returns LitBongard
             perception_model, _ = load_trained_model(
                 model_path=perception_model_to_finetune_path,
                 cfg=training_cfg,
@@ -336,14 +370,12 @@ def main(cfg: DictConfig):
             )
             
             # Simulate collecting new data and adding to buffer
-            # In a real scenario, this would involve actual data generation/collection
             logger.info("Simulating collection of new data for online fine-tuning...")
             # This would involve generating a small dataset or sampling from a live source
             # For this placeholder, we'll just log the intent.
             
             # Call a hypothetical fine-tuning function
             # This function would take the loaded model and a small new dataset/buffer
-            # For now, it's a dummy call.
             logger.info("Performing a dummy online fine-tuning step...")
             # hypothetical_online_finetune(perception_model, new_data_buffer, training_cfg)
             logger.info("Dummy online fine-tuning completed.")
@@ -408,17 +440,6 @@ def solve(images: List[Any], cfg: DictConfig) -> Optional[Any]:
     ws = Workspace(images, config=OmegaConf.to_container(cfg, resolve=True)) 
     temperature = 1.0 # Initial temperature
     
-    # 1. Seed bottom-up Scouts and GroupScouts
-    for obj_id_list in ws.object_ids_per_image: # Iterate through objects for each image
-        for obj_id in obj_id_list:
-            for feat in ['shape', 'color', 'size', 'position_h', 'position_v', 'fill', 'orientation', 'texture']:
-                ws.post_codelet(Scout(obj_id, feat, urgency=0.1))
-    logger.info(f"Seeded initial Scout codelets for {len(ws.objects)} objects across all images.")
-    
-    # Seed GroupScouts
-    ws.post_codelet(GroupScout(urgency=0.2)) # Initial GroupScout
-    logger.info("Seeded initial GroupScout codelet.")
-
     # --- Generate "real" (dynamically mocked) support set data ---
     # Select a subset of images for the support set (e.g., first 2-4 images)
     num_support_images = min(len(images), 4) # Use up to 4 images for support set
@@ -468,10 +489,29 @@ def solve(images: List[Any], cfg: DictConfig) -> Optional[Any]:
             current_feature_tensor = current_feature_tensor[:D_FEATURE] # Truncate if too long
         support_set_features.append(current_feature_tensor)
     
+    # Store support set data in workspace for RuleTester access
+    ws.support_set_scene_graphs = support_set_scene_graphs
+    ws.support_set_labels = support_set_labels
+
     # Instantiate RLAgent here, after support_context_dim is determined
     rl_agent = RLAgent(support_context_dim=D_FEATURE)
     logger.info(f"RLAgent instantiated with support_context_dim={D_FEATURE}.")
     # --- End of support set generation ---
+
+    # 1. Seed bottom-up Scouts, GroupScouts, and RuleProposers
+    for obj_id_list in ws.object_ids_per_image: # Iterate through objects for each image
+        for obj_id in obj_id_list:
+            for feat in ['shape', 'color', 'size', 'position_h', 'position_v', 'fill', 'orientation', 'texture']:
+                ws.post_codelet(Scout(obj_id, feat, urgency=0.1))
+    logger.info(f"Seeded initial Scout codelets for {len(ws.objects)} objects across all images.")
+    
+    # Seed GroupScouts
+    ws.post_codelet(GroupScout(urgency=0.2)) # Initial GroupScout
+    logger.info("Seeded initial GroupScout codelet.")
+
+    # Seed initial RuleProposer
+    ws.post_codelet(RuleProposer(urgency=0.3)) # Initial RuleProposer
+    logger.info("Seeded initial RuleProposer codelet.")
 
     # 2. Emergent perception + symbolic loop
     max_solve_iterations = 100 # Prevent infinite loops for demonstration

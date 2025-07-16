@@ -1,22 +1,22 @@
 # Folder: bongard_solver/src/emergent/
 # File: codelets.py
-
 import random
 import logging
 import collections
 from typing import List, Dict, Any, Tuple, Set, Optional
-
 logger = logging.getLogger(__name__)
 
 # Import DSL and ILP components for RuleTester/RuleBuilder
+HAS_DSL_ILP = False
 try:
     from src.dsl import DSL, ASTToFactsTransducer, ASTNode, Primitive, DSLProgram, DSL_VALUES, DSL_FUNCTIONS
     from src.ilp import RuleInducer
-    # from src.rule_evaluator import evaluate_rule_on_support_set # Assuming this exists for RuleTester
+    # Assuming src.rule_evaluator.py exists and has evaluate_rule_on_support_set
+    from src.rule_evaluator import evaluate_rule_on_support_set
+    from src.bongard_rules import BongardRule # Needed for RuleTester/RuleBuilder
     HAS_DSL_ILP = True
-except ImportError:
-    logger.warning("Could not import DSL/ILP components. RuleTester/RuleBuilder will be dummy.")
-    HAS_DSL_ILP = False
+except ImportError as e:
+    logger.warning(f"Could not import DSL/ILP components or rule_evaluator/BongardRule: {e}. Rule-related codelets will be dummy.")
     # Dummy classes/functions if imports fail
     class DSL:
         facts = set()
@@ -26,6 +26,7 @@ except ImportError:
         def convert(self, program): return ["DUMMY_FACT"]
     class ASTNode:
         def __init__(self, primitive, children=None, value=None): self.primitive = primitive; self.children = children or []; self.value = value
+        def to_dict(self): return {'primitive': self.primitive.name, 'value': self.value, 'children': [c.to_dict() for c in self.children]}
     class Primitive:
         def __init__(self, name, func=None, type_signature=None, is_terminal=False): self.name = name; self.func = func; self.type_signature = type_signature; self.is_terminal = is_terminal
     class DSLProgram:
@@ -33,10 +34,16 @@ except ImportError:
     class RuleInducer:
         def generate(self, facts): return []
     # Dummy rule evaluator
-    def evaluate_rule_on_support_set(rule_desc: str, support_set_scene_graphs: List[Dict[str, Any]], support_set_labels: List[int]) -> float:
+    def evaluate_rule_on_support_set(rule_obj: Any, support_set_scene_graphs: List[Dict[str, Any]], support_set_labels: List[int]) -> float:
         logger.warning("Using dummy evaluate_rule_on_support_set. Rule accuracy will be random.")
         return random.random() # Random accuracy for dummy
-
+    class BongardRule:
+        def __init__(self, name: str = "dummy_rule", description: str = "A dummy rule", program_ast: List = [], logical_facts: List = [], is_positive_rule: bool = True):
+            self.name = name
+            self.description = description
+            self.program_ast = program_ast
+            self.logical_facts = logical_facts
+            self.is_positive_rule = is_positive_rule
 
 class Codelet:
     """
@@ -54,7 +61,6 @@ class Codelet:
                              it's more likely to be run.
         """
         self.urgency = urgency
-
     def run(self, workspace: 'Workspace', concept_net: 'ConceptNetwork', temperature: float):
         """
         Executes the logic of the codelet.
@@ -86,7 +92,6 @@ class Scout(Codelet):
         self.obj_id = obj_id
         self.feat_type = feat_type
         logger.debug(f"Scout created for obj {obj_id}, feat {feat_type} with urgency {urgency}")
-
     def run(self, workspace: 'Workspace', concept_net: 'ConceptNetwork', temperature: float):
         """
         Runs the Scout codelet. Proposes a feature and potentially posts a StrengthTester.
@@ -122,39 +127,28 @@ class StrengthTester(Codelet):
             strength (float): The initial strength (urgency) of this tester, often
                               inherited from the proposing Scout.
         """
-        super().__init__(strength)  # Urgency is based on the strength of the proposal
+        super().__init__(strength) # Urgency is based on the strength of the proposal
         self.obj_id = obj_id
         self.feat_type = feat_type
         logger.debug(f"StrengthTester created for obj {obj_id}, feat {feat_type} with strength {strength}")
-
     def run(self, workspace: 'Workspace', concept_net: 'ConceptNetwork', temperature: float):
         """
         Runs the StrengthTester codelet. Confirms a feature and potentially posts a Builder.
         """
         logger.debug(f"Running StrengthTester: obj={self.obj_id}, feat={self.feat_type}")
         # The confirm_feature now returns a score based on confidence and consistency
-        score = workspace.confirm_feature(self.obj_id, self.feat_type)
+        val, score = workspace.confirm_feature(self.obj_id, self.feat_type) # confirm_feature now returns value and score
         
-        # Get the actual value and confidence from the workspace's proposed set
-        # This is a bit indirect, but we need the value for the Builder
-        val_from_proposed = None
-        conf_from_proposed = 0.0
-        for prop_obj_id, prop_feat_type, prop_val, prop_conf in workspace.proposed:
-            if prop_obj_id == self.obj_id and prop_feat_type == self.feat_type:
-                val_from_proposed = prop_val
-                conf_from_proposed = prop_conf
-                break
-
         logger.debug(f"StrengthTester score for {self.obj_id}, {self.feat_type}: {score:.4f}")
         
         # Use a threshold for posting a Builder, and pass the confidence
         if score > workspace.config['slipnet_config'].get('activation_threshold', 0.1): # Use a configurable threshold
-            if val_from_proposed is not None:
+            if val is not None: # val is now returned by confirm_feature
                 logger.debug(f"StrengthTester confirmed feature, posting Builder for {self.obj_id}, {self.feat_type} with score {score:.4f}")
-                # Pass the confidence to the Builder
-                workspace.post_codelet(Builder(self.obj_id, self.feat_type, val_from_proposed, conf_from_proposed, score))
+                # Pass the confidence (which is part of the score) to the Builder
+                workspace.post_codelet(Builder(self.obj_id, self.feat_type, val, score, score)) # Use score as confidence and strength
             else:
-                logger.warning(f"StrengthTester found no value in proposed set for {self.obj_id}, {self.feat_type}. Cannot post Builder.")
+                logger.warning(f"StrengthTester found no value after confirming for {self.obj_id}, {self.feat_type}. Cannot post Builder.")
         else:
             logger.debug(f"StrengthTester did not confirm feature (score too low).")
 
@@ -174,42 +168,38 @@ class Builder(Codelet):
             strength (float): The strength (urgency) of this builder, typically
                               inherited from the StrengthTester's score.
         """
-        super().__init__(strength)  # Urgency is based on the confirmed strength
+        super().__init__(strength) # Urgency is based on the confirmed strength
         self.obj_id = obj_id
         self.feat_type = feat_type
         self.value = value
         self.confidence = confidence
         logger.debug(f"Builder created for obj {obj_id}, feat {feat_type}, val {value}, conf {confidence:.4f} with strength {strength}")
-
     def run(self, workspace: 'Workspace', concept_net: 'ConceptNetwork', temperature: float):
         """
         Runs the Builder codelet. Builds the feature and activates the concept.
         """
         logger.debug(f"Running Builder: obj={self.obj_id}, feat={self.feat_type}, val={self.value}, conf={self.confidence:.4f}")
         # Pass the confidence to build_feature
-        workspace.build_feature(self.obj_id, self.feat_type, self.confidence)
+        workspace.build_feature(self.obj_id, self.feat_type, self.value, self.confidence) # build_feature now takes value
         
         # Activate the concept in the concept network based on this successful build
         # Activate both the feature type and the value concept
         concept_net.activate_node(self.feat_type, self.urgency) # e.g., 'shape'
         concept_net.activate_node(str(self.value), self.urgency) # e.g., 'circle'
         logger.debug(f"Builder built feature {self.feat_type} for {self.obj_id} and activated concepts.")
-
-        # After building a feature, consider posting a GroupScout or RuleTester
-        # if enough features are built or certain concepts are highly active.
-        if len(workspace.built) >= 2: # If at least two features are built, consider grouping or rule testing
+        
+        # After building a feature, consider posting a GroupScout or RuleProposer
+        if len(workspace.built) >= 2: # If at least two features are built, consider grouping or rule proposing
             if random.random() < temperature * 0.3: # Probabilistically post GroupScout
                 workspace.post_codelet(GroupScout(urgency=self.urgency * 0.8)) # Lower urgency for subsequent tasks
                 logger.debug("Builder posted a GroupScout.")
             
-            # Also consider posting a RuleTester if some basic facts are available
-            if HAS_DSL_ILP and len(workspace.built) >= 1: # At least one built feature to start proposing rules
-                # A very simple rule proposal: "All objects have this shape"
-                if self.feat_type == 'shape' and random.random() < temperature * 0.2:
-                    rule_desc = f"FORALL(O, SHAPE(O, {str(self.value).upper()}))"
-                    workspace.post_codelet(RuleTester(rule_desc, urgency=self.urgency * 0.9))
-                    logger.debug(f"Builder posted a RuleTester for: {rule_desc}")
-
+            # Also consider posting a RuleProposer if some basic facts are available
+            # This logic can be more sophisticated, e.g., only after certain types of features are built
+            if HAS_DSL_ILP and random.random() < temperature * 0.4: # Probabilistically post RuleProposer
+                # The RuleProposer will scan the workspace, so no specific rule is passed here
+                workspace.post_codelet(RuleProposer(urgency=self.urgency * 1.0)) # Urgency based on current builder
+                logger.debug("Builder posted a RuleProposer.")
 
 class Breaker(Codelet):
     """
@@ -227,7 +217,6 @@ class Breaker(Codelet):
         super().__init__(urgency)
         self.structure_id = structure_id
         logger.debug(f"Breaker created for structure {structure_id} with urgency {urgency}")
-
     def run(self, workspace: 'Workspace', concept_net: 'ConceptNetwork', temperature: float):
         """
         Runs the Breaker codelet. Checks for conflicts and removes structures if necessary.
@@ -250,7 +239,6 @@ class GroupScout(Codelet):
     def __init__(self, urgency: float = 0.1):
         super().__init__(urgency)
         logger.debug(f"GroupScout created with urgency {urgency}")
-
     def run(self, workspace: 'Workspace', concept_net: 'ConceptNetwork', temperature: float):
         logger.debug("Running GroupScout.")
         
@@ -260,7 +248,7 @@ class GroupScout(Codelet):
         if len(built_features) < 2:
             logger.debug("GroupScout: Not enough built features to form a group.")
             return
-
+        
         # Simple grouping heuristic: objects sharing the same dominant shape or color
         # This is a placeholder; real grouping would involve more sophisticated clustering.
         
@@ -278,17 +266,98 @@ class GroupScout(Codelet):
                 concept_net.activate_node('group', self.urgency)
                 concept_net.activate_node(shape_val, self.urgency)
                 
-                # Consider posting a RuleTester for this group
+                # Consider posting a RuleProposer for this group
                 if HAS_DSL_ILP and random.random() < temperature * 0.5:
-                    # Example rule proposal: "All objects in this group have this shape"
-                    rule_desc = f"FORALL(O, IN_GROUP(O, {group_description}) IMPLIES SHAPE(O, {shape_val.upper()}))"
-                    workspace.post_codelet(RuleTester(rule_desc, urgency=self.urgency * 1.2)) # Higher urgency for rule testing
-                    logger.debug(f"GroupScout posted a RuleTester for group: {rule_desc}")
-
+                    # The RuleProposer will scan the workspace, so no specific rule is passed here
+                    workspace.post_codelet(RuleProposer(urgency=self.urgency * 1.2)) # Higher urgency for rule testing
+                    logger.debug(f"GroupScout posted a RuleProposer for group.")
+        
         # Add more grouping heuristics (e.g., by color, by proximity, by relation)
         # Example: Group by spatial proximity (requires object coordinates from scene graph)
         # This would require accessing scene graph data from workspace.sg
         # For now, this is conceptual.
+
+class RuleProposer(Codelet):
+    """
+    A RuleProposer codelet scans the workspace's built features and relations
+    to generate candidate rule templates (DSL expressions).
+    It then posts RuleTester codelets for these candidates.
+    """
+    def __init__(self, urgency: float = 0.1):
+        super().__init__(urgency)
+        logger.debug(f"RuleProposer created with urgency {urgency}")
+
+    def run(self, workspace: 'Workspace', concept_net: 'ConceptNetwork', temperature: float):
+        logger.debug("Running RuleProposer.")
+
+        if not HAS_DSL_ILP:
+            logger.warning("DSL/ILP components not available. RuleProposer cannot generate rules.")
+            return
+
+        # Get all currently built features and relations from the workspace
+        built_features = list(workspace.built) # (obj_id, feat_type, value, confidence)
+        # Access relations from the scene graph in workspace.sg.current_scene_graph
+        # Note: current_scene_graph might be a list of scene graphs if multiple images are processed
+        # For simplicity, let's assume we are proposing rules based on the first image's scene graph
+        current_scene_graphs = workspace.sg.current_scene_graph_data # This is a list of SGs per image
+        
+        candidate_rules = set() # Use a set to avoid duplicate rule proposals
+
+        # Rule Proposal Strategy 1: Attribute-based rules (e.g., all objects are 'circle')
+        # Iterate through built features and propose simple attribute rules
+        for obj_id, feat_type, value, confidence in built_features:
+            if confidence > 0.7: # Only propose rules based on high-confidence features
+                # Example: FORALL(O, SHAPE(O, CIRCLE))
+                rule_desc = f"FORALL(O, {feat_type.upper()}(O, {str(value).upper()}))"
+                candidate_rules.add(rule_desc)
+                # Example: EXISTS(O, SHAPE(O, CIRCLE))
+                rule_desc_exists = f"EXISTS(O, {feat_type.upper()}(O, {str(value).upper()}))"
+                candidate_rules.add(rule_desc_exists)
+
+        # Rule Proposal Strategy 2: Relation-based rules (e.g., A is LEFT_OF B)
+        if current_scene_graphs:
+            for sg_data in current_scene_graphs:
+                if 'relations' in sg_data:
+                    for rel in sg_data['relations']:
+                        subj_id = rel['subject_id']
+                        obj_id = rel['object_id']
+                        rel_type = rel['type']
+                        rel_confidence = rel.get('confidence', 1.0)
+
+                        if rel_confidence > 0.7: # Only propose rules based on high-confidence relations
+                            # Example: LEFT_OF(OBJ_0, OBJ_1)
+                            rule_desc = f"{rel_type.upper()}({subj_id.upper()}, {obj_id.upper()})"
+                            candidate_rules.add(rule_desc)
+                            # Example: FORALL(A, B, LEFT_OF(A, B)) (more abstract)
+                            rule_desc_forall = f"FORALL(A, B, {rel_type.upper()}(A, B))"
+                            candidate_rules.add(rule_desc_forall)
+                            # Example: EXISTS(A, B, LEFT_OF(A, B))
+                            rule_desc_exists = f"EXISTS(A, B, {rel_type.upper()}(A, B))"
+                            candidate_rules.add(rule_desc_exists)
+
+        # Rule Proposal Strategy 3: Combined attribute-relation rules
+        # Example: FORALL(O, IF(SHAPE(O, CIRCLE), THEN(COLOR(O, RED))))
+        for obj_id, feat_type1, val1, conf1 in built_features:
+            if conf1 > 0.7:
+                for sg_data in current_scene_graphs:
+                    if 'relations' in sg_data:
+                        for rel in sg_data['relations']:
+                            if rel['subject_id'] == obj_id and rel.get('confidence', 1.0) > 0.7:
+                                rule_desc = f"FORALL(O, IF({feat_type1.upper()}(O, {str(val1).upper()}), THEN({rel['type'].upper()}(O, {rel['object_id'].upper()}))))"
+                                candidate_rules.add(rule_desc)
+
+        # Post RuleTester codelets for each candidate rule
+        if candidate_rules:
+            logger.info(f"RuleProposer generated {len(candidate_rules)} candidate rules.")
+            for rule_desc in candidate_rules:
+                # Urgency for RuleTester can be influenced by temperature and confidence of underlying facts
+                # For now, a simple urgency based on RuleProposer's urgency
+                workspace.post_codelet(RuleTester(rule_desc, urgency=self.urgency * temperature))
+                logger.debug(f"RuleProposer posted RuleTester for: {rule_desc}")
+            concept_net.activate_node('rule_proposal', self.urgency) # Activate concept for rule proposal
+        else:
+            logger.debug("RuleProposer found no strong candidate rules to propose.")
+
 
 class RuleTester(Codelet):
     """
@@ -300,72 +369,59 @@ class RuleTester(Codelet):
         super().__init__(urgency)
         self.rule_description = rule_description
         logger.debug(f"RuleTester created for rule: '{rule_description}' with urgency {urgency}")
-
     def run(self, workspace: 'Workspace', concept_net: 'ConceptNetwork', temperature: float):
         logger.debug(f"Running RuleTester for rule: '{self.rule_description}'")
         
         if not HAS_DSL_ILP:
             logger.warning("DSL/ILP components not available. RuleTester cannot evaluate rules.")
             return
-
+        
         # Evaluate the proposed rule against the current problem's support set
-        # This requires the Workspace to have access to the support set's scene graphs and labels.
-        # For this example, we'll assume the workspace has a way to get this.
-        # In main.py, the RL agent provides support_set_scene_graphs to the environment.
-        # Here, we need to mock or pass it down.
+        # The workspace should provide access to the support set's scene graphs and labels.
+        # This is passed into the solve function in main.py and should be accessible via workspace.
         
-        # Dummy support set for evaluation within RuleTester (replace with actual data from Workspace)
-        # In a real scenario, the Workspace would hold the full problem context.
-        dummy_support_sgs = [
-            {'image_path': 'dummy_pos1.png', 'scene_graph': [{'id': 'obj_0', 'attributes': {'shape': 'circle'}}]},
-            {'image_path': 'dummy_pos2.png', 'scene_graph': [{'id': 'obj_1', 'attributes': {'shape': 'circle'}}]},
-            {'image_path': 'dummy_neg1.png', 'scene_graph': [{'id': 'obj_2', 'attributes': {'shape': 'square'}}]},
-        ]
-        dummy_support_labels = [1, 1, 0] # Example: first two are positive, last is negative
+        # Access the support set from the workspace
+        support_set_scene_graphs = workspace.support_set_scene_graphs # List of dicts
+        support_set_labels = workspace.support_set_labels # List of ints
+        
+        if not support_set_scene_graphs or not support_set_labels:
+            logger.warning("RuleTester: No support set data available in workspace for evaluation. Skipping rule test.")
+            return
 
-        # This `evaluate_rule_on_support_set` would come from `src/rule_evaluator.py`
-        # For now, it's a dummy function.
-        # The rule_evaluator expects a BongardRule object, not just a string.
-        # We need to parse the rule_description into a BongardRule object or its AST/logical facts.
+        # Parse the rule_description into a BongardRule object or its AST/logical facts.
+        # This is a simplified parsing for demonstration; a full DSL parser would be used.
+        rule_name = self.rule_description.replace(' ', '_').replace('(', '').replace(')', '').replace(',', '_')
         
-        # Simple parsing of rule_description to a dummy BongardRule for evaluation
-        # This needs to be robust, ideally using the DSL parser.
-        rule_name = self.rule_description.replace(' ', '_').replace('(', '').replace(')', '')
-        # Create a dummy BongardRule object for evaluation
-        dummy_program_ast = [{"op": "DUMMY_OP", "args": []}] # Placeholder
-        dummy_logical_facts = [f"DUMMY_FACT({rule_name})"] # Placeholder
+        # Create a dummy BongardRule object for evaluation.
+        # In a real system, this would involve parsing the rule_description string
+        # into a structured BongardRule object with its AST and logical facts.
+        # For now, we'll use a simplified rule structure.
         
-        # Check if BongardRule is available (from bongard_rules.py)
-        try:
-            from src.bongard_rules import BongardRule
-            proposed_rule_obj = BongardRule(
-                name=rule_name,
-                description=self.rule_description,
-                program_ast=dummy_program_ast,
-                logical_facts=dummy_logical_facts
-            )
-        except ImportError:
-            logger.warning("BongardRule not available. Cannot create rule object for evaluation.")
-            proposed_rule_obj = None # Cannot proceed with evaluation
-
+        # Attempt to infer is_positive_rule based on rule description keywords
+        is_positive_rule = "FORALL" in self.rule_description.upper() or "EXISTS" in self.rule_description.upper()
+        
+        proposed_rule_obj = BongardRule(
+            name=rule_name,
+            description=self.rule_description,
+            program_ast=[], # Placeholder for actual AST
+            logical_facts=[], # Placeholder for actual logical facts
+            is_positive_rule=is_positive_rule # Set based on simple heuristic
+        )
+        
         rule_accuracy = 0.0
-        if proposed_rule_obj:
-            # Call the actual rule evaluator (if imported)
-            try:
-                from src.rule_evaluator import evaluate_rule_on_support_set
-                rule_accuracy = evaluate_rule_on_support_set(proposed_rule_obj, dummy_support_sgs, dummy_support_labels)
-            except ImportError:
-                logger.warning("src.rule_evaluator.py not found. Using dummy rule accuracy.")
-                rule_accuracy = random.random() # Dummy accuracy if evaluator not found
-            except Exception as e:
-                logger.error(f"Error evaluating rule '{self.rule_description}': {e}", exc_info=True)
-                rule_accuracy = 0.0
+        try:
+            # Call the actual rule evaluator
+            # evaluate_rule_on_support_set expects a BongardRule object
+            rule_accuracy = evaluate_rule_on_support_set(proposed_rule_obj, support_set_scene_graphs, support_set_labels)
+        except Exception as e:
+            logger.error(f"Error evaluating rule '{self.rule_description}': {e}", exc_info=True)
+            rule_accuracy = 0.0 # Fallback on error
 
         # Confidence in the rule proposal
         confidence = rule_accuracy # Simple confidence based on accuracy
         
         logger.debug(f"RuleTester evaluated rule '{self.rule_description}' with accuracy {rule_accuracy:.4f} and confidence {confidence:.4f}.")
-
+        
         # Store the rule fragment (description and confidence) in the workspace
         workspace.current_rule_fragments.append({
             'rule_description': self.rule_description,
@@ -374,14 +430,13 @@ class RuleTester(Codelet):
         })
 
         # If the rule is plausible, post a RuleBuilder
-        if confidence > workspace.config['slipnet_config'].get('activation_threshold', 0.1): # Configurable threshold
+        if confidence > workspace.config['slipnet_config'].get('rule_plausibility_threshold', 0.6): # Configurable threshold
             logger.debug(f"RuleTester confirmed rule, posting RuleBuilder for '{self.rule_description}' with confidence {confidence:.4f}")
             workspace.post_codelet(RuleBuilder(self.rule_description, confidence, urgency=self.urgency * 1.5)) # Higher urgency for building confirmed rules
             # Activate 'rule' concept
             concept_net.activate_node('rule', self.urgency * 1.5)
         else:
             logger.debug(f"RuleTester did not confirm rule (confidence too low).")
-
 
 class RuleBuilder(Codelet):
     """
@@ -394,37 +449,38 @@ class RuleBuilder(Codelet):
         self.rule_description = rule_description
         self.confidence = confidence
         logger.debug(f"RuleBuilder created for rule: '{rule_description}' with confidence {confidence:.4f} and urgency {urgency}")
-
     def run(self, workspace: 'Workspace', concept_net: 'ConceptNetwork', temperature: float):
         logger.debug(f"Running RuleBuilder for rule: '{self.rule_description}'")
         
         if not HAS_DSL_ILP:
             logger.warning("DSL/ILP components not available. RuleBuilder cannot build rules.")
             return
-
+        
         # Attempt to formally construct the BongardRule object
         # This involves parsing the rule_description into an AST and logical facts.
-        # This is where the ILP's AST construction logic would be used.
+        # This is where the DSL parser and ILP's AST construction logic would be used.
         
-        # Dummy AST construction for now
-        root_node = ASTNode(Primitive("DUMMY_RULE_OP"), children=[
-            ASTNode(Primitive("DUMMY_ARG1"), value="O"),
-            ASTNode(Primitive("DUMMY_ARG2"), value="CIRCLE")
-        ])
-        program = DSLProgram(root_node)
+        # For demonstration, let's use a simplified parsing and AST construction.
+        # In a real system, you'd call DSL.parse(self.rule_description)
         
-        transducer = ASTToFactsTransducer()
-        logical_facts = transducer.convert(program)
+        # Example: Simple parsing for 'FORALL(O, SHAPE(O, CIRCLE))'
+        rule_name = self.rule_description.replace(' ', '_').replace('(', '').replace(')', '').replace(',', '_')
         
-        # Create the BongardRule object
+        # Placeholder for actual AST and logical facts from DSL parsing
+        parsed_ast = [] # This would be the result of DSL parsing
+        parsed_logical_facts = [] # This would be the result of ASTToFactsTransducer
+        
+        # Attempt to infer is_positive_rule based on rule description keywords
+        is_positive_rule = "FORALL" in self.rule_description.upper() or "EXISTS" in self.rule_description.upper()
+
         try:
-            from src.bongard_rules import BongardRule
+            # Create the BongardRule object
             built_rule = BongardRule(
-                name=self.rule_description.replace(' ', '_').replace('(', '').replace(')', ''),
+                name=rule_name,
                 description=self.rule_description,
-                program_ast=[root_node.to_dict()], # Store AST as a list of dicts
-                logical_facts=logical_facts,
-                is_positive_rule=True # Assume positive for now
+                program_ast=parsed_ast, # Use parsed AST
+                logical_facts=parsed_logical_facts, # Use parsed logical facts
+                is_positive_rule=is_positive_rule # Set based on simple heuristic
             )
             logger.info(f"RuleBuilder successfully built rule: {built_rule.name}")
             
@@ -436,9 +492,6 @@ class RuleBuilder(Codelet):
                 concept_net.activate_node('problem', self.urgency * 2) # High activation for solved problem
             else:
                 logger.debug("RuleBuilder did not mark solution (confidence too low).")
-
-        except ImportError:
-            logger.error("BongardRule not available. Cannot create rule object.")
         except Exception as e:
             logger.error(f"Error building rule '{self.rule_description}': {e}", exc_info=True)
 

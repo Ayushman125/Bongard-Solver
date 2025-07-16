@@ -23,14 +23,10 @@ from PIL import Image
 import torchvision.transforms as T
 import threading
 import copy
-
 # PyTorch Profiler imports
 from torch.profiler import profile, record_function, ProfilerActivity
 
 # Import configuration (from parent directory)
-# Assuming these are defined in your project's config or relevant files
-# For a minimal example, we'll define a dummy config and imports if they don't exist yet.
-# You will need to ensure these paths are correct relative to your project structure.
 try:
     from ..config import (
         CONFIG, DEVICE, HAS_WANDB, HAS_TORCH_QUANTIZATION,
@@ -47,14 +43,13 @@ except ImportError:
     ATTRIBUTE_FILL_MAP = {'filled': 0, 'outlined': 1}
     ATTRIBUTE_COLOR_MAP = {'black': 0, 'white': 1} # Example
     ATTRIBUTE_SIZE_MAP = {'small': 0, 'medium': 1, 'large': 2} # Example
-    ATTRIBUTE_ORIENTATION_MAP = {} # Example
-    ATTRIBUTE_SHAPE_MAP = {'triangle': 0, 'quadrilateral': 1}
-    ATTRIBUTE_TEXTURE_MAP = {} # Example
-    RELATION_MAP = {'none': 0, 'left_of': 1, 'above': 2} # Example
-    IMAGENET_MEAN = [0.5] # For grayscale images from LogoGenerator
-    IMAGENET_STD = [0.5]  # For grayscale images from LogoGenerator
+    ATTRIBUTE_ORIENTATION_MAP = {'upright': 0} # Example
+    ATTRIBUTE_SHAPE_MAP = {'triangle': 0, 'quadrilateral': 1, 'circle': 2, 'pentagon': 3, 'star': 4, 'text_character': 5}
+    ATTRIBUTE_TEXTURE_MAP = {'flat': 0} # Example
+    RELATION_MAP = {'none': 0, 'left_of': 1, 'above': 2, 'right_of': 3, 'below': 4, 'intersects': 5, 'contains': 6, 'is_contained_by': 7, 'aligned_vertically': 8, 'aligned_horizontally': 9} # Example
+    IMAGENET_MEAN = [0.485, 0.456, 0.406] # For RGB images
+    IMAGENET_STD = [0.229, 0.224, 0.225] # For RGB images
     logging.warning("Could not import full config. Using dummy values for some config items.")
-
 
 # Import PyTorch Lightning modules
 import pytorch_lightning as pl
@@ -63,10 +58,9 @@ import pytorch_lightning as pl
 from .models import LitBongard, LitSimCLR, PerceptionModule, BongardPerceptionModel # Added BongardPerceptionModel
 
 # Import data module and loader (from parent directory's src folder)
-# Assuming data.generator exists and is accessible
 try:
     from ..data import BongardDataModule, get_loader
-    from data.generator import LogoGenerator # Import LogoGenerator
+    from ..data.generator import LogoGenerator # Import LogoGenerator
 except ImportError:
     logging.warning("Could not import BongardDataModule, get_loader, or LogoGenerator. Dummy classes/functions will be used.")
     class BongardDataModule: # Dummy
@@ -75,14 +69,15 @@ except ImportError:
         def val_dataloader(self): return []
     def get_loader(dataset, batch_size, shuffle, num_workers): return [] # Dummy
     class LogoGenerator: # Dummy
-        def __init__(self, size=128): self.size = size
-        def sample_params(self): return 'triangle', 0.3*self.size, (self.size/2, self.size/2), 0
-        def draw(self, draw, shape, sz, pos, fill): pass
-        def make_sample(self): # Dummy make_sample
-            img = Image.new('L', (self.size, self.size), 255)
-            return [img], [img], "DUMMY_RULE"
-
-
+        def __init__(self, cfg): 
+            self.size = cfg['data']['image_size'][0]
+            self.canvas_width, self.canvas_height = self.size, self.size
+        def make_problem(self, problem_id): # Dummy make_problem matching new signature
+            img = np.random.randint(0, 256, size=(self.size, self.size, 3), dtype=np.uint8)
+            return (img, img, 0, b'{}', b'{}', 0.0, np.eye(3).tolist(), np.eye(3).tolist(), problem_id,
+                    np.zeros((0, self.size, self.size, 3), dtype=np.uint8), [], [], 0, 0, 1.0,
+                    [], [], [], [], [], [], 1.0, 1.0, [])
+            
 # Import losses (from current directory)
 from .losses import LabelSmoothingCrossEntropy, DistillationLoss, FeatureConsistencyLoss, SymbolicConsistencyLoss, GradNorm, CrossEntropyWithConfidence # Added CrossEntropyWithConfidence
 
@@ -99,8 +94,6 @@ except ImportError:
     logging.getLogger(__name__).warning("torchvision.transforms.v2 not found. MixUp/CutMix will be disabled.")
 
 # Import GradualWarmupScheduler and CosineAnnealingWarmRestarts (for 7.1)
-# These are now handled by optimizers.py's get_scheduler, so direct import here is not strictly needed.
-# Keeping the HAS_GRADUAL_WARMUP flag for conditional logic if needed.
 HAS_GRADUAL_WARMUP = False
 try:
     from warmup_scheduler import GradualWarmupScheduler
@@ -108,6 +101,20 @@ try:
     HAS_GRADUAL_WARMUP = True
 except ImportError:
     pass # Handled by optimizers.py
+
+# Import StyleDiscriminator and GradReverse
+try:
+    from .style_disc import StyleDiscriminator
+    from .grad_rev import grad_reverse
+    HAS_DOMAIN_ADAPTATION = True
+    logging.getLogger(__name__).info("StyleDiscriminator and GradReverse found for domain adaptation.")
+except ImportError:
+    HAS_DOMAIN_ADAPTATION = False
+    logging.getLogger(__name__).warning("StyleDiscriminator or GradReverse not found. Domain adaptation will be disabled.")
+    class StyleDiscriminator(nn.Module): # Dummy
+        def __init__(self, feat_dim): super().__init__(); self.net = nn.Identity()
+        def forward(self, x, alpha=1.0): return torch.zeros(x.shape[0], 1)
+    def grad_reverse(x, alpha): return x
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +126,6 @@ def set_seed(seed: int):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-    # pl.seed_everything(seed)  # PyTorch Lightning's seed_everything might conflict with manual seeding outside trainer
     logger.info(f"Random seed set to {seed}")
 
 # Import async_update_priorities from replay_buffer.py (now in core_models)
@@ -137,19 +143,14 @@ def async_update_priorities(replay_buffer: KnowledgeReplayBuffer, tree_indices: 
     logger.debug(f"Async update priorities called for {len(tree_indices)} samples.")
 
 # Dummy QAT/PTQ functions (actual implementations are in prune_quantize.py, which is in the project root)
-# These are kept here as placeholders if run_training_once needs to call them directly.
 def quantize_model_qat(model: nn.Module, cfg: Dict[str, Any]) -> nn.Module:
     """Dummy function for Quantization Aware Training (QAT)."""
     logger.info("Performing dummy Quantization Aware Training (QAT).")
-    # In a real scenario, this would involve torch.quantization.prepare_qat, calibrate, and convert
-    # For now, just return the model
     return model
 
 def quantize_model_ptq(model: nn.Module, val_loader: DataLoader, cfg: Dict[str, Any]) -> nn.Module:
     """Dummy function for Post-Training Quantization (PTQ)."""
     logger.info("Performing dummy Post-Training Quantization (PTQ).")
-    # In a real scenario, this would involve torch.quantization.prepare, calibrate, and convert
-    # For now, just return the model
     return model
 
 # Early Stopping class
@@ -188,8 +189,6 @@ class EarlyStopping:
         if self.verbose:
             self.trace_func(f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}). Saving model ...')
         # Save only the state_dict of the core model (PerceptionModule)
-        # If model is DDP, save model.module.perception_module.state_dict()
-        # If model is LitBongard, save model.perception_module.state_dict()
         if isinstance(model, DDP):
             torch.save(model.module.perception_module.state_dict(), self.path)
         elif isinstance(model, LitBongard):
@@ -279,48 +278,74 @@ def _get_ensemble_teacher_logits(
     if dali_image_processor is None or not config['training'].get('use_dali', False):
         transform = T.Compose([
             T.ToPILImage(),
-            T.Resize((config['data']['image_size'], config['data']['image_size'])),
+            T.Resize(tuple(config['data']['image_size'])), # Use tuple for Resize
             T.ToTensor(),
             T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
         ])
         processed_images = torch.stack([transform(img_np) for img_np in raw_images_np]).to(DEVICE)
-        processed_support_images_flat = torch.stack([transform(img_np) for img_np in raw_support_images_np]).to(DEVICE)
+        
+        # Handle support images for teacher's forward pass
+        max_support_imgs = config['data']['synthetic_data_config']['max_support_images_per_problem']
+        batch_size_actual = processed_images.shape[0]
+        
+        # Ensure raw_support_images_np is not empty before stacking
+        if raw_support_images_np and len(raw_support_images_np) > 0:
+            # Check if raw_support_images_np contains actual image data or padding arrays
+            # If it's a list of lists (from collate_fn), flatten it first
+            if isinstance(raw_support_images_np[0], list):
+                flat_support_images_np = [item for sublist in raw_support_images_np for item in sublist]
+            else:
+                flat_support_images_np = raw_support_images_np
+
+            # Filter out empty/padding images if they are all zeros
+            actual_support_images_np = [img for img in flat_support_images_np if np.sum(img) > 0]
+
+            if actual_support_images_np:
+                processed_support_images_flat = torch.stack([transform(img_np) for img_np in actual_support_images_np]).to(DEVICE)
+                # Reshape to (batch_size, max_support_imgs, C, H, W)
+                processed_support_images_reshaped = processed_support_images_flat.view(
+                    batch_size_actual, max_support_imgs, 
+                    processed_images.shape[1], processed_images.shape[2], processed_images.shape[3]
+                )
+            else:
+                # If no actual support images, create a dummy tensor of correct shape
+                processed_support_images_reshaped = torch.zeros(
+                    batch_size_actual, max_support_imgs, 
+                    processed_images.shape[1], processed_images.shape[2], processed_images.shape[3],
+                    device=DEVICE
+                )
+        else:
+            processed_support_images_reshaped = torch.zeros(
+                batch_size_actual, max_support_imgs, 
+                processed_images.shape[1], processed_images.shape[2], processed_images.shape[3],
+                device=DEVICE
+            )
+
     else:
         processed_images, _, processed_support_images_flat = dali_image_processor.run(
             raw_images_np,
             [np.zeros((1,1,3), dtype=np.uint8)] * len(raw_images_np), # Dummy view2
             raw_support_images_np
         )
-    
-    max_support_imgs = config['data']['synthetic_data_config']['max_support_images_per_problem']
-    batch_size_actual = processed_images.shape[0]
-    processed_support_images_reshaped = processed_support_images_flat.view(
-        batch_size_actual, max_support_imgs, 
-        processed_images.shape[1], processed_images.shape[2], processed_images.shape[3]
-    )
+        max_support_imgs = config['data']['synthetic_data_config']['max_support_images_per_problem']
+        batch_size_actual = processed_images.shape[0]
+        processed_support_images_reshaped = processed_support_images_flat.view(
+            batch_size_actual, max_support_imgs, 
+            processed_images.shape[1], processed_images.shape[2], processed_images.shape[3]
+        )
+
     # Dummy support labels, as they are not used by teacher's PerceptionModule directly for classification
-    dummy_support_labels_flat = torch.zeros_like(processed_support_images_reshaped[:,:,0,0,0], dtype=torch.long)
+    dummy_support_labels_flat = torch.zeros_like(processed_support_images_reshaped[:,:,0,0,0], dtype=torch.long) # Use a slice to get correct shape
 
     # If teacher_models is a single meta-learner (e.g., from stacked ensemble)
     if not isinstance(teacher_models, nn.ModuleList):
         teacher_model = teacher_models
         teacher_model.eval()
         with torch.no_grad():
-            # For a stacked ensemble meta-learner, its input is concatenated logits from base models.
-            # So, we first need to get logits from the base models (if available) or assume pre-computed.
-            # This function is called by LitBongard, which already has access to PerceptionModule.
-            # If the teacher is a meta-learner, it implies base models have already run.
-            # This part needs careful integration with how `teacher_models` is passed.
-            # For now, if it's a single model (like a meta-learner), we assume its forward takes `processed_images`
-            # and returns logits directly, or it expects pre-computed base model logits.
-            
-            # This is a critical point: how does the meta-learner get its input (base model logits)?
-            # The current setup passes raw images. If `teacher_models` is a meta-learner, it can't directly
-            # process raw images. It needs the logits from the *base models* that feed into it.
-            # For simplicity, if `teacher_models` is a single `nn.Module`, we assume it's a `PerceptionModule`
-            # or something similar that can process raw images.
-            if isinstance(teacher_model, PerceptionModule): # If it's a single PerceptionModule (e.g., a student model being distilled from another single model)
-                teacher_outputs = teacher_model(
+            if isinstance(teacher_model, PerceptionModule) or isinstance(teacher_model, LitBongard): # If it's a single PerceptionModule or LitBongard
+                # If it's LitBongard, get its internal perception_module
+                core_model = teacher_model.perception_module if isinstance(teacher_model, LitBongard) else teacher_model
+                teacher_outputs = core_model(
                     processed_images,
                     ground_truth_json_strings=raw_gt_json_strings, # Pass GT for scene graph building
                     detected_bboxes_batch=detected_bboxes_batch,
@@ -329,21 +354,8 @@ def _get_ensemble_teacher_logits(
                     support_labels_flat=dummy_support_labels_flat
                 )
                 teacher_logits = teacher_outputs['bongard_logits']
-            elif isinstance(teacher_model, nn.Module): # Assume it's a general nn.Module that takes images and returns logits
-                # This path is for a meta-learner. It needs logits from base models.
-                # This function is called from LitBongard's training_step, which has access to `self.teacher_models`.
-                # If `self.teacher_models` is a list of models, the loop below handles it.
-                # If `self.teacher_models` is a single meta-learner, it means the base model logits
-                # would have been computed already and passed *to* the meta-learner during its training.
-                # Here, we are getting logits *from* the meta-learner.
-                # This implies the meta-learner needs to be able to re-compute or receive base model logits.
-                # This is a design choice. For now, we'll assume `teacher_model` is a `PerceptionModule`
-                # or a similar end-to-end model that takes images.
-                logger.warning("Teacher model is a single nn.Module, assuming it's an end-to-end model for logits. If it's a meta-learner, its input needs to be base model logits.")
-                teacher_outputs = teacher_model(processed_images) # Simplified call
-                teacher_logits = teacher_outputs # Assuming it directly returns logits
             else:
-                logger.error(f"Unsupported teacher_model type: {type(teacher_model)}. Cannot get logits.")
+                logger.error(f"Unsupported single teacher_model type: {type(teacher_model)}. Cannot get logits.")
                 return torch.empty(0), None
             
             all_teacher_logits.append(teacher_logits)
@@ -402,19 +414,15 @@ def _calculate_iou(box1: List[float], box2: List[float]) -> float:
     y1_inter = max(box1[1], box2[1])
     x2_inter = min(box1[2], box2[2])
     y2_inter = min(box1[3], box2[3])
-
     # Compute the area of intersection rectangle
     inter_width = max(0, x2_inter - x1_inter)
     inter_height = max(0, y2_inter - y1_inter)
     inter_area = inter_width * inter_height
-
     # Compute the area of both the prediction and ground-truth rectangles
     box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
     box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
-
     # Compute the area of union
     union_area = float(box1_area + box2_area - inter_area)
-
     # Compute the IoU
     iou = inter_area / (union_area + 1e-6) # Add epsilon for numerical stability
     return iou
@@ -450,7 +458,7 @@ def _run_single_training_session_ensemble(
     """
     Runs a single training session for an ensemble member or student model.
     This function replaces the previous `run_training_once` for more granular control
-    and integration with ensemble/distillation.
+    and integration with ensemble/distillation and domain adaptation.
     Args:
         model (LitBongard): The model to train (already moved to DEVICE).
         train_loader: DALI or PyTorch DataLoader for training.
@@ -469,9 +477,6 @@ def _run_single_training_session_ensemble(
             - Dictionary of best validation metrics.
     """
     set_seed(cfg['training']['seed'] + model_idx) # Use a different seed for each member
-    
-    # If using DDP, ensure model is wrapped AFTER it's moved to device
-    # (This is handled by the caller, e.g., train_ensemble)
     
     # Initialize optimizer and scheduler using centralized functions
     optimizer = get_optimizer(model.parameters(), cfg['training'])
@@ -539,6 +544,18 @@ def _run_single_training_session_ensemble(
             logger.warning(f"SWA start epoch {swa_start_epoch} is not less than total epochs {num_epochs}. SWA disabled for {model_name_prefix}.")
     best_val_accuracy = 0.0
     
+    # Domain Adaptation: Style Discriminator
+    style_discriminator = None
+    optimizer_d = None
+    bce_loss = None
+    if HAS_DOMAIN_ADAPTATION and cfg['training'].get('use_domain_adaptation', False):
+        # Assuming feat_dim is available in model config (e.g., from backbone output)
+        feat_dim = cfg['model'].get('feat_dim', 576) # Default to MobileNetV3 small output
+        style_discriminator = StyleDiscriminator(feat_dim=feat_dim).to(DEVICE)
+        optimizer_d = torch.optim.Adam(style_discriminator.parameters(), lr=cfg['training'].get('lr_disc', 1e-4))
+        bce_loss = nn.BCELoss()
+        logger.info(f"Style Discriminator initialized with feat_dim={feat_dim}, lr_disc={cfg['training'].get('lr_disc', 1e-4)}.")
+
     # Compile model if enabled (requires PyTorch 2.0+)
     if cfg['training'].get('use_torch_compile', False):
         try:
@@ -573,24 +590,29 @@ def _run_single_training_session_ensemble(
         if hasattr(train_loader.sampler, 'set_epoch'):
             train_loader.sampler.set_epoch(epoch)
         model.train()
+        if style_discriminator:
+            style_discriminator.train() # Set discriminator to train mode
+
         total_train_loss = 0
         train_correct_predictions = 0
         train_total_samples = 0
         
         train_loop = tqdm(train_loader, leave=True, desc=f"Epoch {epoch+1}/{num_epochs} [Train {model_name_prefix}]")
         for batch_idx, batch in enumerate(train_loop):
-            # Unpack batch data
+            # Unpack batch data (now includes confidences)
             (raw_query_images_view1_np, raw_query_images_view2_np, query_labels,
              query_gts_json_view1, query_gts_json_view2, difficulties, affine1, affine2, original_indices,
              raw_support_images_flat_np, support_labels_flat, support_sgs_flat_bytes, num_support_per_problem,
              tree_indices, is_weights,
              query_bboxes_view1, query_masks_view1,
              query_bboxes_view2, query_masks_view2,
-             support_bboxes_flat, support_masks_flat
+             support_bboxes_flat, support_masks_flat,
+             query_conf1, query_conf2, support_confs_flat # Added confidences
             ) = batch
             
             query_labels = query_labels.to(DEVICE).long()
             support_labels_flat = support_labels_flat.to(DEVICE).long()
+            query_conf1 = query_conf1.to(DEVICE).float() # Move confidences to device
             
             # DALI Image Processor or torchvision transforms
             dali_processor = getattr(train_loader.dataset, 'dali_image_processor', None) # Access from dataset if DALI is used
@@ -598,34 +620,68 @@ def _run_single_training_session_ensemble(
             if dali_processor is None or not cfg['training'].get('use_dali', False):
                 transform = T.Compose([
                     T.ToPILImage(),
-                    T.Resize((cfg['data']['image_size'], cfg['data']['image_size'])),
+                    T.Resize(tuple(cfg['data']['image_size'])),
                     T.ToTensor(),
                     T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
                 ])
                 processed_query_images_view1 = torch.stack([transform(img_np) for img_np in raw_query_images_view1_np]).to(DEVICE)
                 processed_query_images_view2 = torch.stack([transform(img_np) for img_np in raw_query_images_view2_np]).to(DEVICE)
-                processed_support_images_flat = torch.stack([transform(img_np) for img_np in raw_support_images_flat_np]).to(DEVICE)
+                
+                # Handle support images for main model's forward pass
+                max_support_imgs = cfg['data']['synthetic_data_config']['max_support_images_per_problem']
+                batch_size_actual = processed_query_images_view1.shape[0]
+                
+                if raw_support_images_flat_np and len(raw_support_images_flat_np) > 0:
+                    if isinstance(raw_support_images_flat_np[0], list): # If it's a list of lists
+                        flat_support_images_np = [item for sublist in raw_support_images_flat_np for item in sublist]
+                    else:
+                        flat_support_images_np = raw_support_images_flat_np
+
+                    actual_support_images_np = [img for img in flat_support_images_np if np.sum(img) > 0] # Filter out padding
+
+                    if actual_support_images_np:
+                        processed_support_images_flat = torch.stack([transform(img_np) for img_np in actual_support_images_np]).to(DEVICE)
+                        processed_support_images_reshaped = processed_support_images_flat.view(
+                            batch_size_actual, max_support_imgs, 
+                            processed_query_images_view1.shape[1], processed_query_images_view1.shape[2], processed_query_images_view1.shape[3]
+                        )
+                    else:
+                        processed_support_images_reshaped = torch.zeros(
+                            batch_size_actual, max_support_imgs, 
+                            processed_query_images_view1.shape[1], processed_query_images_view1.shape[2], processed_query_images_view1.shape[3],
+                            device=DEVICE
+                        )
+                else:
+                    processed_support_images_reshaped = torch.zeros(
+                        batch_size_actual, max_support_imgs, 
+                        processed_query_images_view1.shape[1], processed_query_images_view1.shape[2], processed_query_images_view1.shape[3],
+                        device=DEVICE
+                    )
+
             else:
                 processed_query_images_view1, processed_query_images_view2, processed_support_images_flat = dali_processor.run(
                     raw_query_images_view1_np,
                     raw_query_images_view2_np,
                     raw_support_images_flat_np
                 )
-            
-            max_support_imgs = cfg['data']['synthetic_data_config']['max_support_images_per_problem']
-            batch_size_actual = processed_query_images_view1.shape[0]
-            processed_support_images_reshaped = processed_support_images_flat.view(
-                batch_size_actual, max_support_imgs, 
-                processed_query_images_view1.shape[1], processed_query_images_view1.shape[2], processed_query_images_view1.shape[3]
-            )
+                max_support_imgs = cfg['data']['synthetic_data_config']['max_support_images_per_problem']
+                batch_size_actual = processed_query_images_view1.shape[0]
+                processed_support_images_reshaped = processed_support_images_flat.view(
+                    batch_size_actual, max_support_imgs, 
+                    processed_query_images_view1.shape[1], processed_query_images_view1.shape[2], processed_query_images_view1.shape[3]
+                )
+
             support_labels_reshaped = support_labels_flat.view(batch_size_actual, max_support_imgs)
             
             # Apply Mixup/Cutmix
             images_view1_aug, labels_mixed = mixup_cutmix_augmenter(processed_query_images_view1, query_labels)
             images_view2_aug, _ = mixup_cutmix_augmenter(processed_query_images_view2, query_labels) # Labels for view2 not used for mixup
             
-            # Zero gradients
+            # Zero gradients for both model and discriminator
             optimizer.zero_grad()
+            if style_discriminator:
+                optimizer_d.zero_grad()
+
             with record_function("forward_backward_pass"):
                 # SAM Optimizer logic (first and second step)
                 if isinstance(optimizer, SAM) and cfg['training'].get('use_sam_optimizer', False):
@@ -638,7 +694,8 @@ def _run_single_training_session_ensemble(
                         bongard_logits_sam_first = outputs_sam_first['bongard_logits']
                         
                         # Calculate primary loss for SAM's first step
-                        per_sample_bongard_losses_sam_first = model.bongard_criterion(bongard_logits_sam_first, labels_mixed, reduction='none')
+                        # Pass query_conf1 to the criterion
+                        per_sample_bongard_losses_sam_first = model.bongard_criterion(bongard_logits_sam_first, query_labels, confidences=query_conf1, reduction='none')
                         loss_bongard_sam_first = (per_sample_bongard_losses_sam_first * is_weights.to(DEVICE)).mean() if cfg['training']['curriculum_learning'] and cfg['training']['curriculum_config']['difficulty_sampling'] and is_weights is not None else per_sample_bongard_losses_sam_first.mean()
                         
                     if cfg['training']['use_amp']:
@@ -661,7 +718,8 @@ def _run_single_training_session_ensemble(
                         scene_graphs = outputs['scene_graphs']
                         
                         # Calculate full loss (similar to LitBongard's training_step)
-                        per_sample_bongard_losses = model.bongard_criterion(bongard_logits, labels_mixed, reduction='none')
+                        # Pass query_conf1 to the criterion
+                        per_sample_bongard_losses = model.bongard_criterion(bongard_logits, query_labels, confidences=query_conf1, reduction='none')
                         loss_bongard = (per_sample_bongard_losses * is_weights.to(DEVICE)).mean() if cfg['training']['curriculum_learning'] and cfg['training']['curriculum_config']['difficulty_sampling'] and is_weights is not None else per_sample_bongard_losses.mean()
                         
                         total_batch_loss = loss_bongard
@@ -770,6 +828,48 @@ def _run_single_training_session_ensemble(
                                                          (1. - cfg['training']['distillation_config']['alpha']) * per_sample_hard_loss).mean()
                                 total_batch_loss += loss_distillation * cfg['training']['distillation_config'].get('loss_weight', 1.0)
                         
+                        # Domain Adaptation Loss
+                        loss_domain_adaptation = torch.tensor(0.0, device=DEVICE)
+                        if style_discriminator and HAS_DOMAIN_ADAPTATION and cfg['training'].get('use_domain_adaptation', False):
+                            # Get features from the perception module (before the classification head)
+                            # This assumes PerceptionModule.forward returns 'attribute_features' or similar global features
+                            # Or, if it's a LitBongard, we need to access its internal perception_module's features
+                            if isinstance(model, LitBongard):
+                                # Access the features from the backbone/feature extractor
+                                # This might require modifying PerceptionModule to expose these features
+                                # For now, let's assume 'attribute_features' is the global representation
+                                # or we can get it directly from the backbone.
+                                # If the model is LitBongard, its `outputs` already contain `attribute_features`.
+                                features_for_discriminator = attribute_features # Use attribute_features as the domain-agnostic feature
+                            else: # If model is just PerceptionModule directly
+                                features_for_discriminator = outputs['attribute_features'] # Assuming it exposes this
+
+                            if features_for_discriminator.numel() > 0:
+                                # Discriminator wants to classify synthetic as 0
+                                synthetic_labels_disc = torch.zeros(features_for_discriminator.shape[0], 1).to(DEVICE)
+                                
+                                # Train discriminator to distinguish (maximize this loss)
+                                # The GRL is applied inside the StyleDiscriminator
+                                disc_preds_synthetic = style_discriminator(features_for_discriminator.detach()) # Detach to only train discriminator
+                                disc_loss = bce_loss(disc_preds_synthetic, synthetic_labels_disc)
+                                
+                                # Update discriminator
+                                if cfg['training']['use_amp']:
+                                    scaler.scale(disc_loss).backward()
+                                    scaler.unscale_(optimizer_d)
+                                    scaler.step(optimizer_d)
+                                else:
+                                    disc_loss.backward()
+                                    optimizer_d.step()
+                                
+                                # Train generator (main model) to fool discriminator (minimize this loss)
+                                # Synthetic features should be classified as 1 (real) by discriminator
+                                real_labels_disc = torch.ones(features_for_discriminator.shape[0], 1).to(DEVICE)
+                                # Apply GRL: discriminator sees reversed gradients from this path
+                                disc_preds_adversarial = style_discriminator(features_for_discriminator, alpha=cfg['training'].get('grl_alpha', 1.0))
+                                loss_domain_adaptation = bce_loss(disc_preds_adversarial, real_labels_disc)
+                                total_batch_loss += loss_domain_adaptation * cfg['training'].get('lambda_style', 1.0)
+                        
                         current_loss = total_batch_loss.item() # Store final loss for logging
                     
                     if cfg['training']['use_amp']:
@@ -789,6 +889,9 @@ def _run_single_training_session_ensemble(
                 
                 else: # Standard optimizer path (non-SAM)
                     optimizer.zero_grad()
+                    if style_discriminator:
+                        optimizer_d.zero_grad()
+
                     with autocast(enabled=cfg['training']['use_amp']):
                         outputs = model(images_view1_aug, ground_truth_json_strings=query_gts_json_view1,
                                         detected_bboxes_batch=query_bboxes_view1, detected_masks_batch=query_masks_view1,
@@ -801,7 +904,8 @@ def _run_single_training_session_ensemble(
                         scene_graphs = outputs['scene_graphs']
                         
                         # Calculate full loss (similar to LitBongard's training_step)
-                        per_sample_bongard_losses = model.bongard_criterion(bongard_logits, labels_mixed, reduction='none')
+                        # Pass query_conf1 to the criterion
+                        per_sample_bongard_losses = model.bongard_criterion(bongard_logits, query_labels, confidences=query_conf1, reduction='none')
                         loss_bongard = (per_sample_bongard_losses * is_weights.to(DEVICE)).mean() if cfg['training']['curriculum_learning'] and cfg['training']['curriculum_config']['difficulty_sampling'] and is_weights is not None else per_sample_bongard_losses.mean()
                         
                         total_batch_loss = loss_bongard
@@ -911,6 +1015,38 @@ def _run_single_training_session_ensemble(
                                                          (1. - cfg['training']['distillation_config']['alpha']) * per_sample_hard_loss).mean()
                                 total_batch_loss += loss_distillation * cfg['training']['distillation_config'].get('loss_weight', 1.0)
                         
+                        # Domain Adaptation Loss
+                        loss_domain_adaptation = torch.tensor(0.0, device=DEVICE)
+                        if style_discriminator and HAS_DOMAIN_ADAPTATION and cfg['training'].get('use_domain_adaptation', False):
+                            # Get features from the perception module (before the classification head)
+                            features_for_discriminator = attribute_features # Use attribute_features as the domain-agnostic feature
+
+                            if features_for_discriminator.numel() > 0:
+                                # Discriminator wants to classify synthetic as 0
+                                synthetic_labels_disc = torch.zeros(features_for_discriminator.shape[0], 1).to(DEVICE)
+                                
+                                # Train discriminator to distinguish (maximize this loss)
+                                # The GRL is applied inside the StyleDiscriminator
+                                disc_preds_synthetic = style_discriminator(features_for_discriminator.detach()) # Detach to only train discriminator
+                                disc_loss = bce_loss(disc_preds_synthetic, synthetic_labels_disc)
+                                
+                                # Update discriminator
+                                if cfg['training']['use_amp']:
+                                    scaler.scale(disc_loss).backward()
+                                    scaler.unscale_(optimizer_d)
+                                    scaler.step(optimizer_d)
+                                else:
+                                    disc_loss.backward()
+                                    optimizer_d.step()
+                                
+                                # Train generator (main model) to fool discriminator (minimize this loss)
+                                # Synthetic features should be classified as 1 (real) by discriminator
+                                real_labels_disc = torch.ones(features_for_discriminator.shape[0], 1).to(DEVICE)
+                                # Apply GRL: discriminator sees reversed gradients from this path
+                                disc_preds_adversarial = style_discriminator(features_for_discriminator, alpha=cfg['training'].get('grl_alpha', 1.0))
+                                loss_domain_adaptation = bce_loss(disc_preds_adversarial, real_labels_disc)
+                                total_batch_loss += loss_domain_adaptation * cfg['training'].get('lambda_style', 1.0)
+                        
                         current_loss = total_batch_loss.item() # Store final loss for logging
                     
                     if cfg['training']['use_amp']:
@@ -938,21 +1074,20 @@ def _run_single_training_session_ensemble(
                 for student_param, ema_param in zip(model.parameters(), ema_model.parameters()):
                     ema_param.data.mul_(ema_decay).add_(student_param.data * (1 - ema_decay))
             
-            # GradNorm update (if enabled and not handled by LitBongard's internal logic)
+            # GradNorm update (if enabled)
             if grad_norm_instance:
-                # Need to pass individual loss components to GradNorm
-                # This requires calculating them separately or extracting from LitBongard's internal state.
-                # For simplicity, if GradNorm is used, it's ideally integrated within LitBongard's training_step.
-                # If using this manual loop, you'd need to compute:
-                # losses_for_gradnorm = {
-                #     'bongard_loss': loss_bongard.item(),
-                #     'attribute_loss': loss_attribute.item(),
-                #     'relation_loss': loss_relation.item(),
-                #     'consistency_loss': loss_consistency.item(),
-                #     'distillation_loss': loss_distillation.item()
-                # }
-                # grad_norm_instance.update_weights(losses_for_gradnorm, list(model.parameters()))
-                pass # GradNorm logic is more complex, handled within LitBongard if integrated there.
+                losses_for_gradnorm = {
+                    'bongard_loss': loss_bongard.item(),
+                    'attribute_loss': loss_attribute.item(),
+                    'relation_loss': loss_relation.item(),
+                    'consistency_loss': loss_consistency.item(),
+                    'distillation_loss': loss_distillation.item(),
+                    'domain_adaptation_loss': loss_domain_adaptation.item() if style_discriminator else 0.0
+                }
+                # Filter out zero losses if they are not active components
+                losses_for_gradnorm = {k: v for k, v in losses_for_gradnorm.items() if v != 0.0}
+                if losses_for_gradnorm: # Only update if there are active losses
+                    grad_norm_instance.update_weights(losses_for_gradnorm, list(model.parameters()))
             
             train_loop.set_postfix(loss=current_loss)
             
@@ -962,7 +1097,8 @@ def _run_single_training_session_ensemble(
             
             # Update PER priorities if curriculum learning is active
             if cfg['training'].get('curriculum_learning', False) and cfg['training']['curriculum_config'].get('difficulty_sampling', False) and replay_buffer is not None:
-                per_sample_losses = model.bongard_criterion(bongard_logits, query_labels, reduction='none')
+                # Use the per-sample Bongard loss for priority update
+                per_sample_losses = model.bongard_criterion(bongard_logits, query_labels, reduction='none', confidences=query_conf1) # Pass confidences here too
                 # Ensure tree_indices match per_sample_losses length
                 if tree_indices is not None and per_sample_losses.shape[0] == len(tree_indices):
                     async_update_priorities(replay_buffer, tree_indices.cpu().tolist(), per_sample_losses.cpu().tolist(), cfg)
@@ -978,11 +1114,14 @@ def _run_single_training_session_ensemble(
             swa_model.update_parameters(model)
             swa_scheduler.step()
             logger.debug(f"SWA model updated at epoch {epoch+1}.")
-
+        
         # Validation phase
         # Use the base model for validation, or SWA model if active
         val_model = swa_model.module if (swa_model and epoch >= swa_start_epoch) else model
         val_model.eval()
+        if style_discriminator:
+            style_discriminator.eval() # Set discriminator to eval mode
+
         total_val_loss = 0
         val_correct_predictions = 0
         val_total_samples = 0
@@ -997,43 +1136,75 @@ def _run_single_training_session_ensemble(
                  raw_support_images_flat_np_val, support_labels_flat_val, _, _, _, _,
                  query_bboxes_view1_val, query_masks_view1_val,
                  _, _,
-                 support_bboxes_flat_val, support_masks_flat_val
+                 support_bboxes_flat_val, support_masks_flat_val,
+                 query_conf1_val, query_conf2_val, support_confs_flat_val
                 ) = batch_val
                 
                 query_labels_val = query_labels_val.to(DEVICE).long()
                 support_labels_flat_val = support_labels_flat_val.to(DEVICE).long()
-                
+                query_conf1_val = query_conf1_val.to(DEVICE).float()
+
                 if dali_processor is None or not cfg['training'].get('use_dali', False):
                     transform = T.Compose([
                         T.ToPILImage(),
-                        T.Resize((cfg['data']['image_size'], cfg['data']['image_size'])),
+                        T.Resize(tuple(cfg['data']['image_size'])),
                         T.ToTensor(),
                         T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
                     ])
                     processed_query_images_view1_val = torch.stack([transform(img_np) for img_np in raw_query_images_view1_np]).to(DEVICE)
-                    processed_support_images_flat_val = torch.stack([transform(img_np) for img_np in raw_support_images_flat_np_val]).to(DEVICE)
+                    
+                    max_support_imgs_val = cfg['data']['synthetic_data_config']['max_support_images_per_problem']
+                    batch_size_actual_val = processed_query_images_view1_val.shape[0]
+
+                    if raw_support_images_flat_np_val and len(raw_support_images_flat_np_val) > 0:
+                        if isinstance(raw_support_images_flat_np_val[0], list):
+                            flat_support_images_np_val = [item for sublist in raw_support_images_flat_np_val for item in sublist]
+                        else:
+                            flat_support_images_np_val = raw_support_images_flat_np_val
+
+                        actual_support_images_np_val = [img for img in flat_support_images_np_val if np.sum(img) > 0]
+
+                        if actual_support_images_np_val:
+                            processed_support_images_flat_val = torch.stack([transform(img_np) for img_np in actual_support_images_np_val]).to(DEVICE)
+                            processed_support_images_reshaped_val = processed_support_images_flat_val.view(
+                                batch_size_actual_val, max_support_imgs_val, 
+                                processed_query_images_view1_val.shape[1], processed_query_images_view1_val.shape[2], processed_query_images_view1_val.shape[3]
+                            )
+                        else:
+                            processed_support_images_reshaped_val = torch.zeros(
+                                batch_size_actual_val, max_support_imgs_val, 
+                                processed_query_images_view1_val.shape[1], processed_query_images_view1_val.shape[2], processed_query_images_view1_val.shape[3],
+                                device=DEVICE
+                            )
+                    else:
+                        processed_support_images_reshaped_val = torch.zeros(
+                            batch_size_actual_val, max_support_imgs_val, 
+                            processed_query_images_view1_val.shape[1], processed_query_images_view1_val.shape[2], processed_query_images_view1_val.shape[3],
+                            device=DEVICE
+                        )
                 else:
                     processed_query_images_view1_val, _, processed_support_images_flat_val = dali_processor.run(
                         raw_query_images_view1_np,
                         [np.zeros((1,1,3), dtype=np.uint8)] * len(raw_query_images_view1_np), # Dummy view2
                         raw_support_images_flat_np_val
                     )
-                
-                max_support_imgs_val = cfg['data']['synthetic_data_config']['max_support_images_per_problem']
-                batch_size_actual_val = processed_query_images_view1_val.shape[0]
-                processed_support_images_reshaped_val = processed_support_images_flat_val.view(
-                    batch_size_actual_val, max_support_imgs_val, 
-                    processed_query_images_view1_val.shape[1], processed_query_images_view1_val.shape[2], processed_query_images_view1_val.shape[3]
-                )
+                    max_support_imgs_val = cfg['data']['synthetic_data_config']['max_support_images_per_problem']
+                    batch_size_actual_val = processed_query_images_view1_val.shape[0]
+                    processed_support_images_reshaped_val = processed_support_images_flat_val.view(
+                        batch_size_actual_val, max_support_imgs_val, 
+                        processed_query_images_view1_val.shape[1], processed_query_images_view1_val.shape[2], processed_query_images_view1_val.shape[3]
+                    )
+
                 support_labels_reshaped_val = support_labels_flat_val.view(batch_size_actual_val, max_support_imgs_val)
-                
+
                 outputs_val = val_model(processed_query_images_view1_val, ground_truth_json_strings=query_gts_json_view1_val,
                                                 detected_bboxes_batch=query_bboxes_view1_val, detected_masks_batch=query_masks_view1_val,
                                                 support_images=processed_support_images_reshaped_val,
                                                 support_labels_flat=support_labels_reshaped_val)
                 bongard_logits_val = outputs_val['bongard_logits']
                 
-                loss_val = model.bongard_criterion(bongard_logits_val, query_labels_val).mean()
+                # Pass confidences to criterion for validation loss as well
+                loss_val = model.bongard_criterion(bongard_logits_val, query_labels_val, confidences=query_conf1_val).mean()
                 total_val_loss += loss_val.item()
                 predictions_val = torch.argmax(bongard_logits_val, dim=1)
                 val_correct_predictions += (predictions_val == query_labels_val).sum().item()
@@ -1097,13 +1268,11 @@ def _run_single_training_session_ensemble(
     else:
         logger.warning(f"No best model checkpoint found at {best_model_path} to load for final evaluation/quantization. Using current model state.")
         final_model_for_quant = model # Use the current state of the model
-
     if cfg['training']['quantization']['qat']:
         final_model_for_quant = quantize_model_qat(final_model_for_quant, cfg)
         optimized_model_path = os.path.join(checkpoint_dir, f"{model_name_prefix}_qat_optimized_bongard_model.pth")
         torch.save(final_model_for_quant.state_dict(), optimized_model_path)
         logger.info(f"QAT optimized model saved to: {optimized_model_path}")
-
     if cfg['training']['quantization']['ptq']:
         final_model_for_quant = quantize_model_ptq(final_model_for_quant, val_loader, cfg)
         optimized_model_path = os.path.join(checkpoint_dir, f"{model_name_prefix}_ptq_optimized_bongard_model.pth")
@@ -1156,42 +1325,75 @@ def _validate_model_ensemble(
              raw_support_images_flat_np, support_labels_flat, _, _, _, _,
              query_bboxes_view1, query_masks_view1,
              _, _,
-             support_bboxes_flat, support_masks_flat
+             support_bboxes_flat, support_masks_flat,
+             query_conf1_val, query_conf2_val, support_confs_flat_val
             ) = batch
             
             query_labels = query_labels.to(DEVICE).long()
             support_labels_flat = support_labels_flat.to(DEVICE).long()
-            
+            query_conf1_val = query_conf1_val.to(DEVICE).float()
+
             if dali_processor is None or not config['training'].get('use_dali', False):
                 transform = T.Compose([
                     T.ToPILImage(),
-                    T.Resize((config['data']['image_size'], config['data']['image_size'])),
+                    T.Resize(tuple(config['data']['image_size'])),
                     T.ToTensor(),
                     T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
                 ])
                 processed_query_images_view1 = torch.stack([transform(img_np) for img_np in raw_query_images_view1_np]).to(DEVICE)
-                processed_support_images_flat = torch.stack([transform(img_np) for img_np in raw_support_images_flat_np]).to(DEVICE)
+                
+                max_support_imgs = config['data']['synthetic_data_config']['max_support_images_per_problem']
+                batch_size_actual = processed_query_images_view1.shape[0]
+
+                if raw_support_images_flat_np and len(raw_support_images_flat_np) > 0:
+                    if isinstance(raw_support_images_flat_np[0], list):
+                        flat_support_images_np = [item for sublist in raw_support_images_flat_np for item in sublist]
+                    else:
+                        flat_support_images_np = raw_support_images_flat_np
+
+                    actual_support_images_np = [img for img in flat_support_images_np if np.sum(img) > 0]
+
+                    if actual_support_images_np:
+                        processed_support_images_flat = torch.stack([transform(img_np) for img_np in actual_support_images_np]).to(DEVICE)
+                        processed_support_images_reshaped = processed_support_images_flat.view(
+                            batch_size_actual, max_support_imgs, 
+                            processed_query_images_view1.shape[1], processed_query_images_view1.shape[2], processed_query_images_view1.shape[3]
+                        )
+                    else:
+                        processed_support_images_reshaped = torch.zeros(
+                            batch_size_actual, max_support_imgs, 
+                            processed_query_images_view1.shape[1], processed_query_images_view1.shape[2], processed_query_images_view1.shape[3],
+                            device=DEVICE
+                        )
+                else:
+                    processed_support_images_reshaped = torch.zeros(
+                        batch_size_actual, max_support_imgs, 
+                        processed_query_images_view1.shape[1], processed_query_images_view1.shape[2], processed_query_images_view1.shape[3],
+                        device=DEVICE
+                    )
             else:
                 processed_query_images_view1, _, processed_support_images_flat = dali_processor.run(
                     raw_query_images_view1_np,
                     [np.zeros((1,1,3), dtype=np.uint8)] * len(raw_query_images_view1_np), # Dummy view2
                     raw_support_images_flat_np
                 )
-            
-            max_support_imgs = config['data']['synthetic_data_config']['max_support_images_per_problem']
-            batch_size_actual = processed_query_images_view1.shape[0]
-            processed_support_images_reshaped = processed_support_images_flat.view(
-                batch_size_actual, max_support_imgs, 
-                processed_query_images_view1.shape[1], processed_query_images_view1.shape[2], processed_query_images_view1.shape[3]
-            )
-            support_labels_reshaped = support_labels_flat.view(batch_size_actual, max_support_imgs)
+                max_support_imgs = config['data']['synthetic_data_config']['max_support_images_per_problem']
+                batch_size_actual = processed_query_images_view1.shape[0]
+                processed_support_images_reshaped = processed_support_images_flat.view(
+                    batch_size_actual, max_support_imgs, 
+                    processed_query_images_view1.shape[1], processed_query_images_view1.shape[2], processed_query_images_view1.shape[3]
+                )
+
+            support_labels_reshaped_val = support_labels_flat_val.view(batch_size_actual, max_support_imgs)
+
             outputs = model(processed_query_images_view1, ground_truth_json_strings=query_gts_json_view1,
-                                    detected_bboxes_batch=query_bboxes_view1, detected_masks_batch=query_masks_view1,
-                                    support_images=processed_support_images_reshaped,
-                                    support_labels_flat=support_labels_reshaped)
+                                    detected_bboxes_batch=query_bboxes_view1_val, detected_masks_batch=query_masks_view1_val,
+                                    support_images=processed_support_images_reshaped_val,
+                                    support_labels_flat=support_labels_reshaped_val)
             bongard_logits = outputs['bongard_logits']
             
-            loss = model.bongard_criterion(bongard_logits, query_labels).mean() # Use model's internal criterion
+            # Pass confidences to criterion for validation loss as well
+            loss = model.bongard_criterion(bongard_logits, query_labels, confidences=query_conf1_val).mean() # Use model's internal criterion
             total_val_loss += loss.item()
             
             predictions = torch.argmax(bongard_logits, dim=1)
@@ -1209,7 +1411,6 @@ def _validate_model_ensemble(
     return avg_val_loss, val_accuracy, all_predictions_logits, all_true_labels
 
 # --- New function for training perception with simple ReplayBuffer ---
-
 # Define a simple configuration class/object for hyperparameters
 # In a real scenario, this would be loaded from a YAML/JSON file.
 class TrainingConfig:
@@ -1253,19 +1454,30 @@ class TrainingConfig:
             'learning_rate': self.learning_rate,
             'weight_decay': self.weight_decay,
             'scheduler': self.scheduler,
-            'scheduler_config': self.scheduler_config
+            'scheduler_config': self.scheduler_config,
+            'use_domain_adaptation': False, # Default to False
+            'grl_alpha': 1.0,
+            'lambda_style': 0.1,
+            'lr_disc': 1e-4
         }
         self.data = {
-            'image_size': self.img_size,
+            'image_size': [self.img_size, self.img_size], # Make it a list
             'synthetic_data_config': {
                 'max_support_images_per_problem': 0 # Not used in simple perception training
             }
         }
         self.model = {
             'bongard_head_config': {
-                'num_classes': 4 # Based on BongardPerceptionModel's default
+                'num_classes': 2 # Binary classification for Bongard problem (True/False)
             },
-            'attribute_classifier_config': {} # Dummy
+            'attribute_classifier_config': { # Dummy, needed by BongardPerceptionModel
+                'shape': 5, 'color': 7, 'size': 3, 'fill': 2, 'orientation': 4, 'texture': 2,
+                'mlp_dim': 256, 'head_dropout_prob': 0.3
+            },
+            'relation_gnn_config': { # Dummy, needed by BongardPerceptionModel
+                'hidden_dim': 256, 'num_relations': 11
+            },
+            'feat_dim': 576 # Default for MobileNetV3 small
         }
         self.debug = {
             'save_model_checkpoints': 'checkpoints',
@@ -1278,113 +1490,853 @@ class TrainingConfig:
             'anneal_frames': 100000
         }
 
-
 # Preprocessing transform for images from PIL to Tensor
-preprocess = T.Compose([
+preprocess_for_buffer = T.Compose([
     T.Resize((TrainingConfig().img_size, TrainingConfig().img_size)),
     T.ToTensor(), # Converts PIL Image to FloatTensor and scales to [0.0, 1.0]
     T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD), # Normalize with mean/std
 ])
 
-def train_perception_with_buffer(config: TrainingConfig):
+def train_perception_with_buffer(cfg: Dict[str, Any]):
     """
     Trains the perception model using a simple replay buffer populated with synthetic data.
     This function is designed for Phase 1 initial perception training.
-
     Args:
-        config (TrainingConfig): Configuration object containing hyperparameters.
+        cfg (Dict[str, Any]): Configuration object containing hyperparameters.
+    Returns:
+        Tuple[str, List[float], List[int], Dict[str, Any]]:
+            - Path to the best saved model checkpoint.
+            - List of validation logits (flattened).
+            - List of true validation labels (flattened).
+            - Dictionary of best validation metrics.
     """
-    set_seed(42) # Set a fixed seed for reproducibility
-
+    set_seed(cfg['training']['seed']) # Set a fixed seed for reproducibility
+    
     # 1. Build replay buffer from synthetic data
-    logger.info(f"Initializing simple replay buffer with capacity: {config.buffer_capacity}")
-    buffer = ReplayBuffer(capacity=config.buffer_capacity)
-    gen = LogoGenerator(size=config.img_size)
-
-    logger.info(f"Generating {config.init_samples} initial samples and pushing to buffer...")
+    logger.info(f"Initializing simple replay buffer with capacity: {cfg['replay']['buffer_capacity']}")
+    # The replay buffer now stores the full problem data, including confidences
+    buffer = KnowledgeReplayBuffer(capacity=cfg['replay']['buffer_capacity'])
+    
+    # LogoGenerator now takes the full config
+    gen = LogoGenerator(cfg) 
+    
+    logger.info(f"Generating {cfg['replay']['init_samples']} initial problems and pushing to buffer...")
     # Generate samples and push to buffer
-    for _ in tqdm(range(config.init_samples), desc="Populating Replay Buffer"):
-        pos_imgs, neg_imgs, _ = gen.make_sample() # LogoGenerator returns pos, neg, rule
+    for problem_id in tqdm(range(cfg['replay']['init_samples']), desc="Populating Replay Buffer"):
+        # make_problem returns a tuple of many elements, including confidences
+        problem_data = gen.make_problem(problem_id)
+        # We need to store the raw images and their confidences in the buffer
+        # For simplicity, let's extract the main query images and their confidences
+        # The buffer push method needs to be updated to accept this complex data structure
         
-        # Treat each image+label as separate sample for the perception model
-        # Assuming pos_label and neg_label are defined in config
-        for img_pil in pos_imgs:
-            img_tensor = preprocess(img_pil)
-            buffer.push(img_tensor, config.pos_label)
-        for img_pil in neg_imgs:
-            img_tensor = preprocess(img_pil)
-            buffer.push(img_tensor, config.neg_label)
+        # Extract relevant data for buffer.push:
+        # (raw_query_images_view1_np, raw_query_images_view2_np, query_labels,
+        #  query_gts_json_view1, query_gts_json_view2, difficulties, affine1, affine2, original_indices,
+        #  raw_support_images_flat_np, support_labels_flat, support_sgs_flat_bytes, num_support_per_problem,
+        #  tree_indices, is_weights,
+        #  query_bboxes_view1, query_masks_view1,
+        #  query_bboxes_view2, query_masks_view2,
+        #  support_bboxes_flat, support_masks_flat,
+        #  query_conf1, query_conf2, support_confs_flat)
+        
+        # The buffer needs to store enough information to reconstruct a batch for training.
+        # Let's assume for this training function, the buffer stores the full problem_data tuple.
+        # The `sample` method of the buffer will then return these tuples.
+        buffer.push(problem_data)
             
     logger.info(f"Replay buffer initialized with {len(buffer)} samples.")
 
     # 2. Model, optimizer, loss
-    # Assuming BongardPerceptionModel has a class_names attribute and expects 1-channel input
-    # The number of classes should correspond to the number of unique labels (e.g., shape, color properties)
-    # For 'triangle', 'quadrilateral', 'filled', 'outlined' -> 4 classes
-    # Adjust num_classes based on your actual output space for the perception model
-    num_classes = len(BongardPerceptionModel().class_names) # Dynamically get num_classes
-    model = BongardPerceptionModel(num_classes=num_classes).to(config.device)
+    # num_classes for Bongard problem is typically 2 (True/False)
+    num_bongard_classes = cfg['model']['bongard_head_config']['num_classes']
     
-    # Pass config.training to get_optimizer as it expects a dict
-    optimizer = get_optimizer(model, config.training) 
-    criterion = CrossEntropyWithConfidence() # Assuming this loss exists and is appropriate
-
+    # Initialize LitBongard model
+    model = LitBongard(cfg).to(DEVICE)
+    
+    # Pass cfg['training'] to get_optimizer as it expects a dict
+    optimizer = get_optimizer(model.parameters(), cfg['training']) 
+    
     # total_steps for scheduler (if used)
-    total_steps = (len(buffer) // config.batch_size) * config.epochs
-    scheduler = get_scheduler(optimizer, config.training, total_steps) # Pass config.training
+    total_steps = (len(buffer) // cfg['training']['batch_size']) * cfg['training']['epochs']
+    scheduler = get_scheduler(optimizer, cfg['training'], total_steps) # Pass cfg['training']
+    
+    scaler = GradScaler() if cfg['training']['use_amp'] else None
+
+    # Domain Adaptation: Style Discriminator
+    style_discriminator = None
+    optimizer_d = None
+    bce_loss = None
+    if HAS_DOMAIN_ADAPTATION and cfg['training'].get('use_domain_adaptation', False):
+        feat_dim = cfg['model'].get('feat_dim', 576) # Default to MobileNetV3 small output
+        style_discriminator = StyleDiscriminator(feat_dim=feat_dim).to(DEVICE)
+        optimizer_d = torch.optim.Adam(style_discriminator.parameters(), lr=cfg['training'].get('lr_disc', 1e-4))
+        bce_loss = nn.BCELoss()
+        logger.info(f"Style Discriminator initialized for main training loop.")
+
+    # Early Stopping setup
+    checkpoint_dir = cfg['debug']['save_model_checkpoints']
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    best_model_path = os.path.join(checkpoint_dir, "best_perception_model.pt")
+    early_stopping = EarlyStopping(
+        patience=cfg['training']['early_stop_patience'],
+        delta=cfg['training']['early_stop_delta'],
+        verbose=True,
+        path=best_model_path
+    )
+
+    # Mixup/Cutmix augmenter
+    mixup_cutmix_augmenter = MixupCutmixAugmenter(cfg['training'], num_bongard_classes)
+
+    # Profiler setup
+    profiler_enabled = cfg['debug'].get('use_profiler', False)
+    if profiler_enabled:
+        prof = profile(
+            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=2),
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(os.path.join(cfg['debug']['logs_dir'], "profiler/main_perception_train")),
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=True
+        )
+        prof.start()
+    else:
+        prof = None
+
+    all_val_logits = []
+    all_val_labels = []
+    best_val_accuracy = 0.0
 
     # 3. Training loop sampling from buffer
     model.train()
-    logger.info(f"Starting training for {config.epochs} epochs...")
-    for epoch in range(config.epochs):
-        avg_loss, avg_acc = 0.0, 0.0
-        # Calculate steps based on buffer size and batch size
-        steps_per_epoch = len(buffer) // config.batch_size
+    if style_discriminator:
+        style_discriminator.train()
+
+    logger.info(f"Starting training for {cfg['training']['epochs']} epochs...")
+    for epoch in range(cfg['training']['epochs']):
+        if profiler_enabled:
+            prof.step()
         
+        total_train_loss = 0
+        train_correct_predictions = 0
+        train_total_samples = 0
+        
+        steps_per_epoch = len(buffer) // cfg['training']['batch_size']
         if steps_per_epoch == 0:
-            logger.warning(f"Not enough samples in buffer ({len(buffer)}) for batch size ({config.batch_size}). Skipping epoch {epoch}.")
+            logger.warning(f"Not enough samples in buffer ({len(buffer)}) for batch size ({cfg['training']['batch_size']}). Skipping epoch {epoch}.")
             continue
 
-        train_loop = tqdm(range(steps_per_epoch), leave=True, desc=f"Epoch {epoch+1}/{config.epochs} [Perception Train]")
-        for _ in train_loop:
-            imgs, labels = buffer.sample(config.batch_size)
-            imgs, labels = imgs.to(config.device), labels.to(config.device)
-
-            optimizer.zero_grad()
-            logits = model(imgs)
-            loss = criterion(logits, labels) # CrossEntropyWithConfidence expects raw logits and labels
-
-            loss.backward()
-            optimizer.step()
-
-            if scheduler is not None:
-                scheduler.step() # Step scheduler if it's not a ReduceLROnPlateau type
-
-            avg_loss += loss.item()
-            # classification_accuracy expects CPU tensors
-            avg_acc += classification_accuracy(labels.cpu(), logits.argmax(1).cpu())
+        train_loop = tqdm(range(steps_per_epoch), leave=True, desc=f"Epoch {epoch+1}/{cfg['training']['epochs']} [Perception Train]")
+        for step_idx in train_loop:
+            # Sample a batch from the replay buffer
+            # The buffer.sample method now returns the full problem_data tuple
+            batch_data = buffer.sample(cfg['training']['batch_size'])
             
-            train_loop.set_postfix(loss=loss.item(), acc=classification_accuracy(labels.cpu(), logits.argmax(1).cpu()))
+            # Unpack batch data (matching the structure from data.generator.py)
+            (raw_query_images_view1_np, raw_query_images_view2_np, query_labels,
+             query_gts_json_view1, query_gts_json_view2, difficulties, affine1, affine2, original_indices,
+             raw_support_images_flat_np, support_labels_flat, support_sgs_flat_bytes, num_support_per_problem,
+             tree_indices, is_weights,
+             query_bboxes_view1, query_masks_view1,
+             query_bboxes_view2, query_masks_view2,
+             support_bboxes_flat, support_masks_flat,
+             query_conf1, query_conf2, support_confs_flat
+            ) = zip(*batch_data) # Unzip the list of tuples into tuples of lists
 
-        avg_loss /= steps_per_epoch
-        avg_acc /= steps_per_epoch
-        print(f"Epoch {epoch+1} Loss={avg_loss:.4f} Acc={avg_acc:.4f}")
+            # Convert to tensors and move to device
+            query_labels = torch.tensor(query_labels, dtype=torch.long, device=DEVICE)
+            query_conf1 = torch.tensor(query_conf1, dtype=torch.float, device=DEVICE)
+            is_weights = torch.tensor(is_weights, dtype=torch.float, device=DEVICE)
+            tree_indices_tensor = torch.tensor(tree_indices, dtype=torch.long, device=DEVICE) # For PER update
 
-    # Save the trained model
-    os.makedirs(os.path.dirname(config.checkpoint_path), exist_ok=True)
-    torch.save(model.state_dict(), config.checkpoint_path)
-    logger.info(f"Perception model saved to {config.checkpoint_path}")
+            # Process images (apply preprocessing transforms)
+            processed_query_images_view1 = torch.stack([preprocess_for_buffer(Image.fromarray(img_np)) for img_np in raw_query_images_view1_np]).to(DEVICE)
+            processed_query_images_view2 = torch.stack([preprocess_for_buffer(Image.fromarray(img_np)) for img_np in raw_query_images_view2_np]).to(DEVICE)
+            
+            # Handle support images (assuming they are already padded in generator)
+            # raw_support_images_flat_np is a tuple of numpy arrays, each of shape (max_support_imgs, H, W, C)
+            # Need to convert each inner numpy array to tensor and then stack
+            # First, convert the tuple of numpy arrays to a list of numpy arrays
+            list_raw_support_images = list(raw_support_images_flat_np) # This is a list of (max_support, H, W, C) arrays
+            
+            # Stack the (max_support, H, W, C) arrays into a single (B, max_support, H, W, C) array
+            stacked_raw_support_images = np.stack(list_raw_support_images) # (B, max_support, H, W, C)
+            
+            # Reshape and apply transform to each support image
+            # Flatten the batch and support images for transformation
+            batch_size_actual = processed_query_images_view1.shape[0]
+            max_support_imgs = cfg['data']['synthetic_data_config']['max_support_images_per_problem']
+            
+            # Flatten the support images and process
+            # Check if there are any actual support images (not just padding)
+            if stacked_raw_support_images.size > 0 and np.any(stacked_raw_support_images > 0):
+                # Reshape to (B * max_support, H, W, C) and then process
+                flat_support_images_np_processed = np.array([
+                    img for sub_array in stacked_raw_support_images for img in sub_array
+                ])
+                
+                # Filter out all-zero padding images before transformation
+                actual_support_images_to_process = [
+                    img for img in flat_support_images_np_processed if np.sum(img) > 0
+                ]
 
-# Placeholder for update_bn if it's used in _run_single_training_session_ensemble
-def update_bn(loader: Any, model: nn.Module, device: torch.device):
+                if actual_support_images_to_process:
+                    processed_support_images_flat = torch.stack([
+                        preprocess_for_buffer(Image.fromarray(img_np)) 
+                        for img_np in actual_support_images_to_process
+                    ]).to(DEVICE)
+                    # Reshape back to (B, max_support, C, H, W)
+                    processed_support_images_reshaped = torch.zeros(
+                        batch_size_actual, max_support_imgs, 
+                        processed_query_images_view1.shape[1], processed_query_images_view1.shape[2], processed_query_images_view1.shape[3],
+                        device=DEVICE
+                    )
+                    # Fill the reshaped tensor with processed images
+                    current_processed_idx = 0
+                    for i in range(batch_size_actual):
+                        for j in range(max_support_imgs):
+                            if np.sum(stacked_raw_support_images[i, j]) > 0: # Check if original was not padding
+                                processed_support_images_reshaped[i, j] = processed_support_images_flat[current_processed_idx]
+                                current_processed_idx += 1
+                else:
+                    processed_support_images_reshaped = torch.zeros(
+                        batch_size_actual, max_support_imgs, 
+                        processed_query_images_view1.shape[1], processed_query_images_view1.shape[2], processed_query_images_view1.shape[3],
+                        device=DEVICE
+                    )
+            else:
+                processed_support_images_reshaped = torch.zeros(
+                    batch_size_actual, max_support_imgs, 
+                    processed_query_images_view1.shape[1], processed_query_images_view1.shape[2], processed_query_images_view1.shape[3],
+                    device=DEVICE
+                )
+
+            # Convert support_labels_flat (tuple of lists) to a single tensor
+            support_labels_flat_list = [item for sublist in support_labels_flat for item in sublist]
+            support_labels_reshaped = torch.tensor(support_labels_flat_list, dtype=torch.long, device=DEVICE).view(batch_size_actual, max_support_imgs)
+
+            # Apply Mixup/Cutmix
+            images_view1_aug, labels_mixed = mixup_cutmix_augmenter(processed_query_images_view1, query_labels)
+            images_view2_aug, _ = mixup_cutmix_augmenter(processed_query_images_view2, query_labels)
+            
+            # Zero gradients for both model and discriminator
+            optimizer.zero_grad()
+            if style_discriminator:
+                optimizer_d.zero_grad()
+
+            with autocast(enabled=cfg['training']['use_amp']):
+                # Forward pass through the main model
+                outputs = model(images_view1_aug, ground_truth_json_strings=list(query_gts_json_view1), # Convert tuple to list
+                                detected_bboxes_batch=list(query_bboxes_view1), detected_masks_batch=list(query_masks_view1),
+                                support_images=processed_support_images_reshaped,
+                                support_labels_flat=support_labels_reshaped)
+                
+                bongard_logits = outputs['bongard_logits']
+                attribute_logits = outputs['attribute_logits']
+                relation_logits = outputs['relation_logits']
+                attribute_features = outputs['attribute_features'] # Features for discriminator
+                scene_graphs = outputs['scene_graphs']
+
+                # Calculate Bongard loss (main classification loss)
+                # Use query_conf1 for confidence weighting
+                per_sample_bongard_losses = model.bongard_criterion(bongard_logits, query_labels, confidences=query_conf1, reduction='none')
+                loss_bongard = (per_sample_bongard_losses * is_weights).mean() if cfg['training']['curriculum_learning'] and cfg['training']['curriculum_config']['difficulty_sampling'] else per_sample_bongard_losses.mean()
+                
+                total_batch_loss = loss_bongard
+
+                # Attribute Loss
+                loss_attribute = torch.tensor(0.0, device=DEVICE)
+                num_attribute_losses = 0
+                current_flat_idx = 0
+                for i_img in range(len(scene_graphs)):
+                    sg_gt = json.loads(query_gts_json_view1[i_img].decode('utf-8'))
+                    inferred_objects_for_img = scene_graphs[i_img].get('objects', [])
+                    for inferred_obj_idx_in_img, inferred_obj in enumerate(inferred_objects_for_img):
+                        gt_obj = None
+                        inferred_bbox = inferred_obj.get('bbox_xyxy')
+                        if inferred_bbox:
+                            for gt_o in sg_gt['objects']:
+                                if _calculate_iou(gt_o['bbox'], inferred_bbox) > 0.7:
+                                    gt_obj = gt_o
+                                    break
+                        if gt_obj:
+                            for attr_name in cfg['model']['attribute_classifier_config'].keys():
+                                if attr_name == 'mlp_dim' or attr_name == 'head_dropout_prob':
+                                    continue
+                                if attr_name in gt_obj['attributes'] and attr_name in attribute_logits and attribute_logits[attr_name].numel() > 0:
+                                    if current_flat_idx < attribute_logits[attr_name].shape[0]:
+                                        attr_map = globals().get(f"ATTRIBUTE_{attr_name.upper()}_MAP")
+                                        if attr_map and gt_obj['attributes'][attr_name] in attr_map:
+                                            gt_attr_label = attr_map[gt_obj['attributes'][attr_name]]
+                                            predicted_logits = attribute_logits[attr_name][current_flat_idx].unsqueeze(0)
+                                            loss_attribute += model.attribute_criterion(predicted_logits, torch.tensor([gt_attr_label], device=DEVICE))
+                                            num_attribute_losses += 1
+                        current_flat_idx += 1
+                if num_attribute_losses > 0:
+                    loss_attribute /= num_attribute_losses
+                    total_batch_loss += loss_attribute * cfg['training'].get('attribute_loss_weight', 1.0)
+                
+                # Relation Loss
+                loss_relation = torch.tensor(0.0, device=DEVICE)
+                if not model.perception_module.use_scene_gnn and relation_logits.numel() > 0:
+                    all_gt_edge_labels_flat = []
+                    for b in range(batch_size_actual):
+                        sg_gt = json.loads(query_gts_json_view1[b].decode('utf-8'))
+                        num_gt_objects = len(sg_gt['objects'])
+                        if num_gt_objects > 1:
+                            edge_map_for_img = make_edge_index_map(num_gt_objects)
+                            temp_gt_labels = torch.full((len(edge_map_for_img),), fill_value=RELATION_MAP['none'], dtype=torch.long, device=DEVICE)
+                            for rel in sg_gt['relations']:
+                                subj_id = int(rel['subject_id'].split('_')[1])
+                                obj_id = int(rel['object_id'].split('_')[1])
+                                rel_type = rel['type']
+                                if (subj_id, obj_id) in edge_map_for_img and rel_type in RELATION_MAP:
+                                    edge_idx_flat = edge_map_for_img[(subj_id, obj_id)]
+                                    temp_gt_labels[edge_idx_flat] = RELATION_MAP[rel_type]
+                            all_gt_edge_labels_flat.append(temp_gt_labels)
+                    if all_gt_edge_labels_flat:
+                        labels_flat = torch.cat(all_gt_edge_labels_flat, dim=0)
+                        loss_relation = model.relation_criterion(relation_logits, labels_flat)
+                        total_batch_loss += loss_relation * cfg['training'].get('relation_loss_weight', 1.0)
+                
+                # Consistency Loss
+                loss_consistency = torch.tensor(0.0, device=DEVICE)
+                if cfg['training']['consistency_loss_weight'] > 0:
+                    # Need outputs for view2 to calculate consistency
+                    outputs_view2 = model(processed_query_images_view2, ground_truth_json_strings=list(query_gts_json_view2),
+                                        detected_bboxes_batch=list(query_bboxes_view2), detected_masks_batch=list(query_masks_view2),
+                                        support_images=processed_support_images_reshaped,
+                                        support_labels_flat=support_labels_reshaped)
+                    if cfg['training']['feature_consistency_weight'] > 0 and attribute_features.numel() > 0 and outputs_view2['attribute_features'].numel() > 0:
+                        loss_feature_consistency = model.feature_consistency_criterion(attribute_features, outputs_view2['attribute_features'])
+                        loss_consistency += cfg['training']['feature_consistency_weight'] * loss_feature_consistency
+                    if cfg['training']['symbolic_consistency_weight'] > 0 and model.HAS_SYMBOLIC_CONSISTENCY and model.symbolic_consistency_criterion:
+                        loss_symbolic_consistency = model.symbolic_consistency_criterion(
+                            scene_graphs1=scene_graphs,
+                            scene_graphs2=outputs_view2['scene_graphs'],
+                            labels=query_labels,
+                            ground_truth_scene_graphs=list(query_gts_json_view1)
+                        )
+                        loss_consistency += cfg['training']['symbolic_consistency_weight'] * loss_symbolic_consistency
+                total_batch_loss += cfg['training']['consistency_loss_weight'] * loss_consistency
+                
+                # Distillation Loss (not applicable for base training, only for student)
+                loss_distillation = torch.tensor(0.0, device=DEVICE) # Will remain 0 here
+                
+                # Domain Adaptation Loss
+                loss_domain_adaptation = torch.tensor(0.0, device=DEVICE)
+                if style_discriminator and HAS_DOMAIN_ADAPTATION and cfg['training'].get('use_domain_adaptation', False):
+                    features_for_discriminator = attribute_features # Features from the main model's backbone
+                    
+                    if features_for_discriminator.numel() > 0:
+                        # Train discriminator (maximize its loss)
+                        # Label synthetic features as 0
+                        synthetic_labels_disc = torch.zeros(features_for_discriminator.shape[0], 1).to(DEVICE)
+                        disc_preds_synthetic = style_discriminator(features_for_discriminator.detach()) # Detach to only train discriminator
+                        disc_loss = bce_loss(disc_preds_synthetic, synthetic_labels_disc)
+                        
+                        # Update discriminator
+                        if cfg['training']['use_amp']:
+                            scaler.scale(disc_loss).backward()
+                            scaler.unscale_(optimizer_d)
+                            scaler.step(optimizer_d)
+                        else:
+                            disc_loss.backward()
+                            optimizer_d.step()
+                        
+                        # Train generator (main model) to fool discriminator (minimize its loss)
+                        # Label synthetic features as 1 (real) for the generator's objective
+                        real_labels_disc = torch.ones(features_for_discriminator.shape[0], 1).to(DEVICE)
+                        disc_preds_adversarial = style_discriminator(features_for_discriminator, alpha=cfg['training'].get('grl_alpha', 1.0)) # GRL applied here
+                        loss_domain_adaptation = bce_loss(disc_preds_adversarial, real_labels_disc)
+                        total_batch_loss += loss_domain_adaptation * cfg['training'].get('lambda_style', 1.0)
+                
+                current_loss = total_batch_loss.item() # Store final loss for logging
+            
+            # Backward pass and optimizer step for main model
+            if cfg['training']['use_amp']:
+                scaler.scale(total_batch_loss).backward()
+                scaler.unscale_(optimizer) # Unscale gradients before clipping
+            else:
+                total_batch_loss.backward()
+            
+            if cfg['training'].get('max_grad_norm', 0.0) > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), cfg['training']['max_grad_norm'])
+            
+            if cfg['training']['use_amp']:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
+            
+            total_train_loss += current_loss
+            
+            if scheduler is not None and (isinstance(scheduler, OneCycleLR) or (HAS_GRADUAL_WARMUP and isinstance(scheduler, GradualWarmupScheduler) and isinstance(scheduler.after_scheduler, CosineAnnealingWarmRestarts))):
+                scheduler.step()
+            
+            # GradNorm update (if enabled)
+            if grad_norm_instance:
+                losses_for_gradnorm = {
+                    'bongard_loss': loss_bongard.item(),
+                    'attribute_loss': loss_attribute.item(),
+                    'relation_loss': loss_relation.item(),
+                    'consistency_loss': loss_consistency.item(),
+                    'distillation_loss': loss_distillation.item(), # Will be 0 here
+                    'domain_adaptation_loss': loss_domain_adaptation.item()
+                }
+                losses_for_gradnorm = {k: v for k, v in losses_for_gradnorm.items() if v != 0.0}
+                if losses_for_gradnorm:
+                    grad_norm_instance.update_weights(losses_for_gradnorm, list(model.parameters()))
+            
+            train_loop.set_postfix(loss=current_loss)
+            
+            predictions = torch.argmax(bongard_logits, dim=1)
+            train_correct_predictions += (predictions == query_labels).sum().item()
+            train_total_samples += query_labels.size(0)
+            
+            # Update PER priorities if curriculum learning is active
+            if cfg['training'].get('curriculum_learning', False) and cfg['training']['curriculum_config'].get('difficulty_sampling', False) and replay_buffer is not None:
+                # Use the per-sample Bongard loss for priority update
+                per_sample_losses = model.bongard_criterion(bongard_logits, query_labels, reduction='none', confidences=query_conf1) # Pass confidences here too
+                # Ensure tree_indices match per_sample_losses length
+                if tree_indices_tensor is not None and per_sample_losses.shape[0] == len(tree_indices_tensor):
+                    async_update_priorities(replay_buffer, tree_indices_tensor.cpu().tolist(), per_sample_losses.cpu().tolist(), cfg)
+                else:
+                    logger.warning("Skipping PER priority update: tree_indices mismatch or not provided.")
+            
+        avg_train_loss = total_train_loss / steps_per_epoch
+        train_accuracy = train_correct_predictions / train_total_samples
+        logger.info(f"Epoch {epoch+1} | Train Loss: {avg_train_loss:.4f} | Train Acc: {train_accuracy:.4f}")
+        
+        # SWA update
+        if swa_model and epoch >= swa_start_epoch:
+            swa_model.update_parameters(model)
+            swa_scheduler.step()
+            logger.debug(f"SWA model updated at epoch {epoch+1}.")
+        
+        # Validation phase
+        # Use the base model for validation, or SWA model if active
+        val_model = swa_model.module if (swa_model and epoch >= swa_start_epoch) else model
+        val_model.eval()
+        if style_discriminator:
+            style_discriminator.eval() # Set discriminator to eval mode
+
+        total_val_loss = 0
+        val_correct_predictions = 0
+        val_total_samples = 0
+        
+        current_epoch_val_logits = []
+        current_epoch_val_labels = []
+        
+        # Create a dummy validation loader from the generator for simplicity if not provided
+        if val_loader is None:
+            logger.warning("No explicit validation loader provided. Generating dummy validation samples.")
+            class DummyValDataset(Dataset):
+                def __init__(self, cfg_val, num_samples_val=100):
+                    self.generator = LogoGenerator(cfg_val)
+                    self.num_samples = num_samples_val
+                def __len__(self): return self.num_samples
+                def __getitem__(self, idx):
+                    problem_data = self.generator.make_problem(idx)
+                    # Extract query image 1, label, and confidence 1
+                    img_np = problem_data[0]
+                    label = problem_data[2]
+                    conf = problem_data[21]
+                    # Apply preprocessing
+                    img_tensor = preprocess_for_buffer(Image.fromarray(img_np))
+                    return img_tensor, torch.tensor(label, dtype=torch.long), torch.tensor(conf, dtype=torch.float)
+            
+            dummy_val_dataset = DummyValDataset(cfg, num_samples_val=cfg['data']['synthetic_data_config'].get('num_val_problems', 20))
+            val_loader = DataLoader(
+                dummy_val_dataset,
+                batch_size=cfg['training']['batch_size'],
+                shuffle=False,
+                num_workers=cfg['data']['dataloader_workers']
+            )
+
+        val_loop = tqdm(val_loader, leave=True, desc=f"Epoch {epoch+1}/{num_epochs} [Validation {model_name_prefix}]")
+        with torch.no_grad():
+            for batch_val in val_loop:
+                # If using DummyValDataset, batch_val is (images, labels, confidences)
+                if isinstance(batch_val, (list, tuple)) and len(batch_val) == 3 and isinstance(batch_val[0], torch.Tensor):
+                    processed_query_images_view1_val = batch_val[0].to(DEVICE)
+                    query_labels_val = batch_val[1].to(DEVICE).long()
+                    query_conf1_val = batch_val[2].to(DEVICE).float()
+                    
+                    # Dummy values for other inputs to model.forward that are not in simple validation batch
+                    query_gts_json_view1_val = [b'{}'] * processed_query_images_view1_val.shape[0]
+                    query_bboxes_view1_val = [[]] * processed_query_images_view1_val.shape[0]
+                    query_masks_view1_val = [[]] * processed_query_images_view1_val.shape[0]
+                    processed_support_images_reshaped_val = torch.zeros(
+                        processed_query_images_view1_val.shape[0], 
+                        cfg['data']['synthetic_data_config']['max_support_images_per_problem'], 
+                        processed_query_images_view1_val.shape[1], 
+                        processed_query_images_view1_val.shape[2], 
+                        processed_query_images_view1_val.shape[3],
+                        device=DEVICE
+                    )
+                    support_labels_reshaped_val = torch.zeros(processed_query_images_view1_val.shape[0], cfg['data']['synthetic_data_config']['max_support_images_per_problem'], dtype=torch.long, device=DEVICE)
+
+                else: # Assume full batch structure from BongardDataModule
+                    (raw_query_images_view1_np, _, query_labels_val,
+                    query_gts_json_view1_val, _, _, _, _, _,
+                    raw_support_images_flat_np_val, support_labels_flat_val, _, _, _, _,
+                    query_bboxes_view1_val, query_masks_view1_val,
+                    _, _,
+                    support_bboxes_flat_val, support_masks_flat_val,
+                    query_conf1_val, query_conf2_val, support_confs_flat_val
+                    ) = batch_val
+                    
+                    query_labels_val = query_labels_val.to(DEVICE).long()
+                    query_conf1_val = query_conf1_val.to(DEVICE).float()
+                    
+                    if dali_processor is None or not cfg['training'].get('use_dali', False):
+                        transform = T.Compose([
+                            T.ToPILImage(),
+                            T.Resize(tuple(cfg['data']['image_size'])),
+                            T.ToTensor(),
+                            T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
+                        ])
+                        processed_query_images_view1_val = torch.stack([transform(Image.fromarray(img_np)) for img_np in raw_query_images_view1_np]).to(DEVICE)
+                        
+                        max_support_imgs_val = cfg['data']['synthetic_data_config']['max_support_images_per_problem']
+                        batch_size_actual_val = processed_query_images_view1_val.shape[0]
+
+                        list_raw_support_images_val = list(raw_support_images_flat_np_val)
+                        stacked_raw_support_images_val = np.stack(list_raw_support_images_val)
+                        
+                        if stacked_raw_support_images_val.size > 0 and np.any(stacked_raw_support_images_val > 0):
+                            flat_support_images_np_processed_val = np.array([
+                                img for sub_array in stacked_raw_support_images_val for img in sub_array
+                            ])
+                            actual_support_images_to_process_val = [
+                                img for img in flat_support_images_np_processed_val if np.sum(img) > 0
+                            ]
+                            if actual_support_images_to_process_val:
+                                processed_support_images_flat_val = torch.stack([transform(Image.fromarray(img_np)) for img_np in actual_support_images_to_process_val]).to(DEVICE)
+                                processed_support_images_reshaped_val = torch.zeros(
+                                    batch_size_actual_val, max_support_imgs_val, 
+                                    processed_query_images_view1_val.shape[1], processed_query_images_view1_val.shape[2], processed_query_images_view1_val.shape[3],
+                                    device=DEVICE
+                                )
+                                current_processed_idx_val = 0
+                                for i in range(batch_size_actual_val):
+                                    for j in range(max_support_imgs_val):
+                                        if np.sum(stacked_raw_support_images_val[i, j]) > 0:
+                                            processed_support_images_reshaped_val[i, j] = processed_support_images_flat_val[current_processed_idx_val]
+                                            current_processed_idx_val += 1
+                            else:
+                                processed_support_images_reshaped_val = torch.zeros(
+                                    batch_size_actual_val, max_support_imgs_val, 
+                                    processed_query_images_view1_val.shape[1], processed_query_images_view1_val.shape[2], processed_query_images_view1_val.shape[3],
+                                    device=DEVICE
+                                )
+                        else:
+                            processed_support_images_reshaped_val = torch.zeros(
+                                batch_size_actual_val, max_support_imgs_val, 
+                                processed_query_images_view1_val.shape[1], processed_query_images_view1_val.shape[2], processed_query_images_view1_val.shape[3],
+                                device=DEVICE
+                            )
+
+                    else: # DALI path for validation
+                        processed_query_images_view1_val, _, processed_support_images_flat_val = dali_processor.run(
+                            raw_query_images_view1_np,
+                            [np.zeros((1,1,3), dtype=np.uint8)] * len(raw_query_images_view1_np),
+                            raw_support_images_flat_np_val
+                        )
+                        max_support_imgs_val = cfg['data']['synthetic_data_config']['max_support_images_per_problem']
+                        batch_size_actual_val = processed_query_images_view1_val.shape[0]
+                        processed_support_images_reshaped_val = processed_support_images_flat_val.view(
+                            batch_size_actual_val, max_support_imgs_val, 
+                            processed_query_images_view1_val.shape[1], processed_query_images_view1_val.shape[2], processed_query_images_view1_val.shape[3]
+                        )
+                    
+                    support_labels_flat_list_val = [item for sublist in support_labels_flat_val for item in sublist]
+                    support_labels_reshaped_val = torch.tensor(support_labels_flat_list_val, dtype=torch.long, device=DEVICE).view(batch_size_actual_val, max_support_imgs_val)
+
+                outputs_val = val_model(processed_query_images_view1_val, ground_truth_json_strings=list(query_gts_json_view1_val),
+                                                detected_bboxes_batch=list(query_bboxes_view1_val), detected_masks_batch=list(query_masks_view1_val),
+                                                support_images=processed_support_images_reshaped_val,
+                                                support_labels_flat=support_labels_reshaped_val)
+                bongard_logits_val = outputs_val['bongard_logits']
+                
+                loss_val = model.bongard_criterion(bongard_logits_val, query_labels_val, confidences=query_conf1_val).mean() # Use model's internal criterion
+                total_val_loss += loss_val.item()
+                predictions_val = torch.argmax(bongard_logits_val, dim=1)
+                val_correct_predictions += (predictions_val == query_labels_val).sum().item()
+                val_total_samples += query_labels_val.size(0)
+                val_loop.set_postfix(loss=loss_val.item())
+                current_epoch_val_logits.extend(bongard_logits_val.cpu().numpy().tolist())
+                current_epoch_val_labels.extend(query_labels_val.cpu().numpy().tolist())
+        
+        avg_val_loss = total_val_loss / len(val_loader)
+        val_accuracy = val_correct_predictions / val_total_samples
+        logger.info(f"Epoch {epoch+1} | Val Loss: {avg_val_loss:.4f} | Val Acc: {val_accuracy:.4f}")
+        
+        if scheduler is not None and not (isinstance(scheduler, OneCycleLR) or (HAS_GRADUAL_WARMUP and isinstance(scheduler, GradualWarmupScheduler) and isinstance(scheduler.after_scheduler, CosineAnnealingWarmRestarts))):
+            if isinstance(scheduler, ReduceLROnPlateau):
+                scheduler.step(avg_val_loss)
+            else:
+                scheduler.step()
+        
+        early_stopping(avg_val_loss, model) # Pass the original model to EarlyStopping
+        if early_stopping.early_stop:
+            logger.info(f"Early stopping triggered for main training at epoch {epoch+1}.")
+            break
+        
+        if val_accuracy > best_val_accuracy:
+            best_val_accuracy = val_accuracy
+            logger.info(f"New best validation accuracy for main training: {best_val_accuracy:.4f}")
+    
+    if profiler_enabled:
+        prof.stop()
+        logger.info(f"PyTorch Profiler trace saved for main training.")
+    
+    # Load best model for potential QAT/PTQ
+    if os.path.exists(best_model_path):
+        final_model_for_quant = LitBongard(cfg).to(DEVICE)
+        loaded_state_dict = torch.load(best_model_path, map_location=DEVICE)
+        if list(loaded_state_dict.keys())[0].startswith('module.'):
+            loaded_state_dict = {k.replace('module.', ''): v for k, v in loaded_state_dict.items()}
+        final_model_for_quant.perception_module.load_state_dict(loaded_state_dict)
+        logger.info(f"Loaded best model from {best_model_path} for final evaluation/quantization.")
+    else:
+        logger.warning(f"No best model checkpoint found at {best_model_path} to load for final evaluation/quantization. Using current model state.")
+        final_model_for_quant = model # Use the current state of the model
+
+    if cfg['training']['quantization'].get('qat', False):
+        final_model_for_quant = quantize_model_qat(final_model_for_quant, cfg)
+        optimized_model_path = os.path.join(checkpoint_dir, "qat_optimized_bongard_model.pth")
+        torch.save(final_model_for_quant.state_dict(), optimized_model_path)
+        logger.info(f"QAT optimized model saved to: {optimized_model_path}")
+    if cfg['training']['quantization'].get('ptq', False):
+        # PTQ needs a calibration dataset, typically the validation loader
+        final_model_for_quant = quantize_model_ptq(final_model_for_quant, val_loader, cfg)
+        optimized_model_path = os.path.join(checkpoint_dir, "ptq_optimized_bongard_model.pth")
+        torch.save(final_model_for_quant.state_dict(), optimized_model_path)
+        logger.info(f"PTQ optimized model saved to: {optimized_model_path}")
+    
+    logger.info(f"--- Main training session finished. ---")
+    
+    return best_model_path, current_epoch_val_logits, current_epoch_val_labels, {
+        'val_loss': avg_val_loss,
+        'val_accuracy': val_accuracy,
+        'logits': np.array(current_epoch_val_logits),
+        'labels': np.array(current_epoch_val_labels)
+    }
+
+def train_ensemble(
+    num_members: int,
+    train_loader: Any,
+    val_loader: Any,
+    cfg: Dict[str, Any],
+    current_rank: int,
+    world_size: int,
+    is_ddp_initialized: bool
+) -> Tuple[List[LitBongard], List[Dict[str, Any]]]:
     """
-    Updates BatchNorm running statistics by passing data through the model.
-    This is a dummy implementation; a proper one would iterate through the loader.
+    Trains an ensemble of `num_members` PerceptionModule models.
+    Args:
+        num_members (int): Number of ensemble members to train.
+        train_loader: DataLoader for training.
+        val_loader: DataLoader for validation.
+        cfg (Dict[str, Any]): Configuration dictionary.
+        current_rank (int): Current GPU rank.
+        world_size (int): Total number of GPUs.
+        is_ddp_initialized (bool): True if DDP is already initialized.
+    Returns:
+        Tuple[List[LitBongard], List[Dict[str, Any]]]:
+            - List of trained ensemble member models.
+            - List of best validation metrics for each member.
     """
-    logger.info("Running dummy update_bn. Implement a proper BatchNorm update if needed.")
-    model.train()
-    # for batch in loader:
-    #     images = batch[0].to(device) # Assuming images are the first element
-    #     _ = model(images)
-    model.eval() # Set back to eval mode after update
+    logger.info(f"Starting training for an ensemble of {num_members} models.")
+    trained_members = []
+    all_members_best_metrics = []
+
+    for i in range(num_members):
+        logger.info(f"--- Training Ensemble Member {i+1}/{num_members} ---")
+        model = LitBongard(cfg).to(DEVICE)
+        if is_ddp_initialized:
+            model = DDP(model, device_ids=[current_rank], output_device=current_rank, find_unused_parameters=False)
+        
+        member_best_path, member_val_logits, member_val_labels, member_metrics = \
+            _run_single_training_session_ensemble(
+                model=model,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                current_rank=current_rank,
+                is_ddp_initialized=is_ddp_initialized,
+                model_idx=i, # Pass member index
+                cfg=cfg
+            )
+        
+        # Load the best model state dict for the ensemble member
+        loaded_model = LitBongard(cfg).to(DEVICE)
+        loaded_state_dict = torch.load(member_best_path, map_location=DEVICE)
+        if list(loaded_state_dict.keys())[0].startswith('module.'):
+            loaded_state_dict = {k.replace('module.', ''): v for k, v in loaded_state_dict.items()}
+        loaded_model.perception_module.load_state_dict(loaded_state_dict)
+        loaded_model.eval() # Set to eval mode
+        trained_members.append(loaded_model)
+        all_members_best_metrics.append(member_metrics)
+        logger.info(f"Ensemble Member {i+1} training completed. Best accuracy: {member_metrics.get('val_accuracy', 0.0):.4f}")
+    
+    logger.info("All ensemble members trained.")
+    return trained_members, all_members_best_metrics
+
+def train_distilled_student_orchestrator_combined(
+    num_ensemble_members: int,
+    train_loader: Any,
+    val_loader: Any,
+    student_model_config: Dict[str, Any],
+    epochs_student: int,
+    teacher_ensemble_type: str,
+    train_members: bool, # Flag to indicate if teachers should be trained or loaded
+    cfg: Dict[str, Any], # Full config
+    current_rank: int,
+    world_size: int,
+    is_ddp_initialized: bool
+) -> Tuple[LitBongard, Dict[str, Any], Dict[str, Any]]:
+    """
+    Orchestrates the training of teacher ensemble members and then distills knowledge
+    to a student model.
+    Args:
+        num_ensemble_members (int): Number of teacher ensemble members.
+        train_loader: DataLoader for training.
+        val_loader: DataLoader for validation.
+        student_model_config (Dict[str, Any]): Configuration for the student model.
+        epochs_student (int): Number of epochs to train the student.
+        teacher_ensemble_type (str): Type of ensemble ('soft_vote', 'hard_vote', 'stacked').
+        train_members (bool): If True, train teachers; otherwise, load them.
+        cfg (Dict[str, Any]): Full configuration dictionary.
+        current_rank (int): Current GPU rank.
+        world_size (int): Total number of GPUs.
+        is_ddp_initialized (bool): True if DDP is already initialized.
+    Returns:
+        Tuple[LitBongard, Dict[str, Any], Dict[str, Any]]:
+            - The trained student model.
+            - Metrics for the teacher ensemble.
+            - Metrics for the student model.
+    """
+    logger.info("Starting distillation orchestration.")
+    teacher_models = []
+    teacher_ensemble_metrics = {}
+
+    if train_members:
+        logger.info(f"Training {num_ensemble_members} teacher ensemble members.")
+        teacher_models, teacher_metrics_list = train_ensemble(
+            num_members=num_ensemble_members,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            cfg=cfg,
+            current_rank=current_rank,
+            world_size=world_size,
+            is_ddp_initialized=is_ddp_initialized
+        )
+        # Aggregate teacher metrics (e.g., average accuracy)
+        if teacher_metrics_list:
+            avg_teacher_acc = sum(m.get('val_accuracy', 0.0) for m in teacher_metrics_list) / len(teacher_metrics_list)
+            teacher_ensemble_metrics = {'accuracy': avg_teacher_acc, 'individual_metrics': teacher_metrics_list}
+            logger.info(f"Teacher ensemble training completed. Average accuracy: {avg_teacher_acc:.4f}")
+    else:
+        logger.info(f"Loading {num_ensemble_members} pre-trained teacher ensemble members.")
+        for i in range(num_ensemble_members):
+            member_path = os.path.join(cfg['debug']['save_model_checkpoints'], f"member_{i}_best_model.pt")
+            if os.path.exists(member_path):
+                loaded_model, _ = load_trained_model(
+                    model_path=member_path,
+                    cfg=cfg,
+                    current_rank=current_rank,
+                    is_ddp_initialized=is_ddp_initialized,
+                    val_loader=val_loader # Pass val_loader for model init if needed
+                )
+                loaded_model.eval()
+                teacher_models.append(loaded_model)
+            else:
+                logger.error(f"Teacher model member not found at {member_path}. Cannot proceed with distillation.")
+                return None, {}, {}
+        logger.info("All teacher ensemble members loaded.")
+
+    # Initialize student model
+    logger.info("Initializing student model for distillation.")
+    student_model = LitBongard(student_model_config).to(DEVICE)
+    if is_ddp_initialized:
+        student_model = DDP(student_model, device_ids=[current_rank], output_device=current_rank, find_unused_parameters=False)
+
+    logger.info("Starting student model distillation training.")
+    student_best_path, student_val_logits, student_val_labels, student_metrics = \
+        _run_single_training_session_ensemble(
+            model=student_model,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            current_rank=current_rank,
+            is_ddp_initialized=is_ddp_initialized,
+            model_idx=-1, # Indicate this is the student model
+            cfg=cfg,
+            teacher_model=teacher_models # Pass the trained teacher models
+        )
+    
+    # Load the best student model
+    final_student_model, _ = load_trained_model(
+        model_path=student_best_path,
+        cfg=cfg,
+        current_rank=current_rank,
+        is_ddp_initialized=is_ddp_initialized,
+        val_loader=val_loader
+    )
+    final_student_model.eval()
+    logger.info(f"Student model distillation completed. Best accuracy: {student_metrics.get('val_accuracy', 0.0):.4f}")
+
+    return final_student_model, teacher_ensemble_metrics, student_metrics
+
+# Function to load a trained model (PerceptionModule)
+def load_trained_model(
+    model_path: str, 
+    cfg: Dict[str, Any], 
+    current_rank: int, 
+    is_ddp_initialized: bool,
+    val_loader: Any = None # Optional: for BN update if needed
+) -> Tuple[Union[PerceptionModule, LitBongard], Dict[str, Any]]:
+    """
+    Loads a pre-trained PerceptionModule model.
+    Args:
+        model_path (str): Path to the model checkpoint.
+        cfg (Dict[str, Any]): Configuration dictionary.
+        current_rank (int): Current GPU rank.
+        is_ddp_initialized (bool): True if DDP is already initialized.
+        val_loader (Any, optional): DataLoader for validation, used for BatchNorm update if needed.
+    Returns:
+        Tuple[Union[PerceptionModule, LitBongard], Dict[str, Any]]:
+            - Loaded model (PerceptionModule or LitBongard).
+            - Loaded metrics (if available in checkpoint).
+    """
+    logger.info(f"Loading model from {model_path}...")
+    # Initialize the full LitBongard model as it contains PerceptionModule
+    model = LitBongard(cfg).to(DEVICE)
+    
+    # Load state dict
+    state_dict = torch.load(model_path, map_location=DEVICE)
+    
+    # If the state_dict was saved from a DDP model, remove 'module.' prefix
+    if list(state_dict.keys())[0].startswith('module.'):
+        state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
+    
+    # If the state_dict is from a raw PerceptionModule, load it directly into model.perception_module
+    # If it's from a LitBongard, it should have keys like 'perception_module.backbone.0.weight'
+    # Attempt to load, allowing for missing keys if the checkpoint is only for the backbone
+    model.perception_module.load_state_dict(state_dict, strict=False)
+    
+    logger.info("Model loaded successfully.")
+    model.eval() # Set to evaluation mode
+    
+    # If DDP is initialized, wrap the model
+    if is_ddp_initialized:
+        model = DDP(model, device_ids=[current_rank], output_device=current_rank, find_unused_parameters=False)
+    
+    # If using SWA and loading an SWA model, you might need to update BN layers
+    # This is a placeholder for that logic if needed.
+    # if cfg['training'].get('use_swa', False) and 'swa_model' in model_path:
+    #     logger.info("Updating BatchNorm for loaded SWA model...")
+    #     update_bn(val_loader, model, device=DEVICE) # Assuming update_bn function exists
+    
+    return model, {} # Return empty metrics for now, as they are not typically saved in state_dict
 
