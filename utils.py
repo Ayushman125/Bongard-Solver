@@ -1,15 +1,17 @@
-# Folder: bongard_solver/
-# File: utils.py
+# src/utils.py
+
 import torch
 import numpy as np
 import random
 import os
 import logging
-import sys   # Added for setup_logging
+import sys
 import json
 from typing import List, Dict, Any, Tuple, Optional
-from numba import njit   # For JIT compilation of Python functions
-from functools import lru_cache   # For caching
+from numba import njit
+from functools import lru_cache
+import torch.nn as nn # Added for cross_attend
+
 # Conditional import for torch_geometric.nn.global_mean_pool
 try:
     from torch_geometric.nn import global_mean_pool
@@ -21,8 +23,28 @@ except ImportError:
     logger = logging.getLogger(__name__)
     logger.warning("torch_geometric not found. global_mean_pool will be a dummy function.")
     # Dummy global_mean_pool if PyG is not available
-    global_mean_pool = lambda node_embeds, batch: torch.mean(node_embeds, dim=0, keepdim=True) if node_embeds.numel() > 0 else torch.zeros(1, node_embeds.shape[-1], device=node_embeds.device)
+    def global_mean_pool(node_embeds: torch.Tensor, batch: torch.Tensor) -> torch.Tensor:
+        """
+        Dummy global mean pooling function when PyTorch Geometric is not available.
+        Performs mean pooling per graph based on the batch index.
+        """
+        if node_embeds.numel() == 0:
+            return torch.empty(0, node_embeds.shape[-1], device=node_embeds.device)
+
+        unique_batches = torch.unique(batch)
+        pooled_embeddings = []
+        for b_id in unique_batches:
+            mask = (batch == b_id)
+            if node_embeds[mask].numel() > 0:
+                pooled_embeddings.append(torch.mean(node_embeds[mask], dim=0, keepdim=True))
+            else:
+                # Handle empty graphs if necessary, e.g., return zeros
+                pooled_embeddings.append(torch.zeros(1, node_embeds.shape[-1], device=node_embeds.device))
+        return torch.cat(pooled_embeddings, dim=0) if pooled_embeddings else torch.empty(0, node_embeds.shape[-1], device=node_embeds.device)
+
+
 logger = logging.getLogger(__name__)
+
 # --- Logging Setup ---
 def setup_logging(log_level: str = 'INFO', log_file: Optional[str] = None):
     """
@@ -30,7 +52,7 @@ def setup_logging(log_level: str = 'INFO', log_file: Optional[str] = None):
     Args:
         log_level (str): The minimum level of messages to log (e.g., 'DEBUG', 'INFO', 'WARNING', 'ERROR').
         log_file (Optional[str]): Path to a file where logs should also be written.
-                                    If None, logs only to console.
+                                   If None, logs only to console.
     """
     # Ensure the root logger is configured only once
     if not logging.root.handlers:
@@ -59,6 +81,7 @@ def setup_logging(log_level: str = 'INFO', log_file: Optional[str] = None):
         logger.info(f"Logging configured with level: {log_level} and file: {log_file}")
     else:
         logger.debug("Logging already configured. Skipping setup.")
+
 # --- Random Seed Setting ---
 def set_seed(seed: int):
     """Sets the random seed for reproducibility."""
@@ -70,6 +93,7 @@ def set_seed(seed: int):
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
     logger.info(f"Random seed set to {seed}.")
+
 # --- Configuration Loading ---
 def load_config(config_path: str) -> Dict[str, Any]:
     """
@@ -127,6 +151,7 @@ def _calculate_iou(box1: List[float], box2: List[float]) -> float:
     union_area = float(box1_area + box2_area - inter_area)
     
     return inter_area / union_area if union_area > 0 else 0.0
+
 # --- Scene Graph Utilities ---
 def get_symbolic_embedding_dims(config: Dict[str, Any]) -> Dict[str, int]:
     """
@@ -134,10 +159,22 @@ def get_symbolic_embedding_dims(config: Dict[str, Any]) -> Dict[str, int]:
     This function now takes the full config dict.
     """
     # Import config attributes locally to avoid circular imports if config.py imports utils
-    from config import ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_FILL_MAP, \
-                     ATTRIBUTE_SIZE_MAP, ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_TEXTURE_MAP, \
-                     RELATION_MAP
-    
+    # Assuming these are defined in a config module that is accessible
+    try:
+        from config import ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_FILL_MAP, \
+                           ATTRIBUTE_SIZE_MAP, ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_TEXTURE_MAP, \
+                           RELATION_MAP
+    except ImportError:
+        logger.warning("Could not import attribute/relation maps from config. Using dummy values.")
+        ATTRIBUTE_SHAPE_MAP = {'circle':0, 'square':1}
+        ATTRIBUTE_COLOR_MAP = {'red':0, 'blue':1}
+        ATTRIBUTE_FILL_MAP = {'filled':0, 'outlined':1}
+        ATTRIBUTE_SIZE_MAP = {'small':0, 'medium':1}
+        ATTRIBUTE_ORIENTATION_MAP = {'horizontal':0}
+        ATTRIBUTE_TEXTURE_MAP = {'smooth':0}
+        RELATION_MAP = {'left_of':0, 'above':1}
+
+
     dims = {
         'shape_dim': len(ATTRIBUTE_SHAPE_MAP),
         'color_dim': len(ATTRIBUTE_COLOR_MAP),
@@ -149,6 +186,7 @@ def get_symbolic_embedding_dims(config: Dict[str, Any]) -> Dict[str, int]:
     }
     logger.debug(f"Symbolic embedding dimensions: {dims}")
     return dims
+
 @lru_cache(maxsize=128)   # Cache the mapping for common max_objects values
 def make_edge_index_map(num_objects: int) -> Dict[Tuple[int, int], int]:
     """
@@ -159,7 +197,7 @@ def make_edge_index_map(num_objects: int) -> Dict[Tuple[int, int], int]:
         num_objects (int): The number of objects in a scene graph.
     Returns:
         Dict[Tuple[int, int], int]: A dictionary mapping (subject_id, object_id) tuples to their
-                                     corresponding linear index.
+                                    corresponding linear index.
     """
     edge_index_map = {}
     idx = 0
@@ -169,13 +207,14 @@ def make_edge_index_map(num_objects: int) -> Dict[Tuple[int, int], int]:
             edge_index_map[(i, j)] = idx
             idx += 1
     return edge_index_map
+
 def get_predicted_relation(
     objects: List[Dict[str, Any]],
     relations: List[Dict[str, Any]],
     image_width: int,
     image_height: int,
-    bbox_iou_threshold: float = 0.1,     # For 'overlapping' and 'touching'
-    spatial_tolerance_ratio: float = 0.1     # For 'above', 'below', 'left_of', 'right_of'
+    bbox_iou_threshold: float = 0.1,      # For 'overlapping' and 'touching'
+    spatial_tolerance_ratio: float = 0.1      # For 'above', 'below', 'left_of', 'right_of'
 ) -> List[Dict[str, Any]]:
     """
     Infers relations between objects based on their attributes and spatial positions.
@@ -183,10 +222,10 @@ def get_predicted_relation(
     definition of relations and how they are derived from object properties.
     Args:
         objects (List[Dict[str, Any]]): A list of detected/ground truth objects,
-                                         each with 'id', 'shape', 'color', 'bbox', etc.
+                                        each with 'id', 'shape', 'color', 'bbox', etc.
         relations (List[Dict[str, Any]]): Existing relations (e.g., from ground truth).
-                                         New relations might be added or existing
-                                         ones validated.
+                                        New relations might be added or existing
+                                        ones validated.
         image_width (int): Width of the image.
         image_height (int): Height of the image.
         bbox_iou_threshold (float): IoU threshold to consider objects overlapping/touching.
@@ -247,10 +286,10 @@ def get_predicted_relation(
                 inferred_relations.append({'type': 'touching', 'subject_id': obj1['id'], 'object_id': obj2['id']})
                 inferred_relations.append({'type': 'touching', 'subject_id': obj2['id'], 'object_id': obj1['id']})
             elif iou == 0 and (
-                abs(bbox1[2] - bbox2[0]) < spatial_tolerance_ratio * image_width or     # right edge of 1 near left edge of 2
-                abs(bbox2[2] - bbox1[0]) < spatial_tolerance_ratio * image_width or     # right edge of 2 near left edge of 1
-                abs(bbox1[3] - bbox2[1]) < spatial_tolerance_ratio * image_height or     # bottom edge of 1 near top edge of 2
-                abs(bbox2[3] - bbox1[1]) < spatial_tolerance_ratio * image_height       # bottom edge of 2 near top edge of 1
+                abs(bbox1[2] - bbox2[0]) < spatial_tolerance_ratio * image_width or    # right edge of 1 near left edge of 2
+                abs(bbox2[2] - bbox1[0]) < spatial_tolerance_ratio * image_width or    # right edge of 2 near left edge of 1
+                abs(bbox1[3] - bbox2[1]) < spatial_tolerance_ratio * image_height or    # bottom edge of 1 near top edge of 2
+                abs(bbox2[3] - bbox1[1]) < spatial_tolerance_ratio * image_height      # bottom edge of 2 near top edge of 1
             ):
                 # Check if bounding boxes are very close but not overlapping
                 inferred_relations.append({'type': 'touching', 'subject_id': obj1['id'], 'object_id': obj2['id']})
@@ -287,12 +326,13 @@ def get_predicted_relation(
     
     logger.debug(f"Inferred {len(inferred_relations)} relations.")
     return inferred_relations
+
 def cross_attend(query: torch.Tensor, context: torch.Tensor, embed_dim: int, num_heads: int = 1) -> torch.Tensor:
     """
     Performs cross-attention between a query and a context.
     Args:
         query (torch.Tensor): The query tensor (Batch_size, Query_dim).
-                               This will be unsqueezed to (Batch_size, 1, Query_dim) for attention.
+                              This will be unsqueezed to (Batch_size, 1, Query_dim) for attention.
         context (torch.Tensor): The context tensor (Batch_size, Context_dim).
                                 This will be unsqueezed to (Batch_size, 1, Context_dim) for attention.
         embed_dim (int): The embedding dimension for the attention mechanism.
@@ -320,9 +360,9 @@ def cross_attend(query: torch.Tensor, context: torch.Tensor, embed_dim: int, num
     attn = nn.MultiheadAttention(
         embed_dim=query.shape[-1],    # Query_dim
         num_heads=num_heads,
-        kdim=context.shape[-1],      # Context_dim
-        vdim=context.shape[-1],      # Context_dim
-        batch_first=True             # Input/output tensors are (batch, seq_len, feature)
+        kdim=context.shape[-1],       # Context_dim
+        vdim=context.shape[-1],       # Context_dim
+        batch_first=True              # Input/output tensors are (batch, seq_len, feature)
     ).to(query.device)    # Ensure attention module is on the same device as inputs
     # attn_output: (B, 1, Query_dim)
     attn_output, _ = attn(
@@ -332,6 +372,7 @@ def cross_attend(query: torch.Tensor, context: torch.Tensor, embed_dim: int, num
     )
     
     return attn_output.squeeze(1)    # Remove sequence length dimension: (B, Query_dim)
+
 # --- Dummy Forward Feature-Dim Inference ---
 def infer_feature_dim(model: nn.Module, img_size: int, device: torch.device) -> int:
     """
@@ -353,7 +394,7 @@ def infer_feature_dim(model: nn.Module, img_size: int, device: torch.device) -> 
         fmap_or_list = model(x)
         
         if isinstance(fmap_or_list, list):
-            fmap = fmap_or_list[-1]  # Take the last feature map
+            fmap = fmap_or_list[-1]    # Take the last feature map
         else:
             fmap = fmap_or_list
         
@@ -375,6 +416,7 @@ def infer_feature_dim(model: nn.Module, img_size: int, device: torch.device) -> 
             return fmap.size(1)
         else:
             raise ValueError(f"Unsupported feature map dimension for inference: {fmap.ndim}")
+
 # --- Graph Pooling Helper ---
 def graph_pool(node_embeds: torch.Tensor, batch_idx: torch.Tensor) -> torch.Tensor:
     """
@@ -403,19 +445,41 @@ def graph_pool(node_embeds: torch.Tensor, batch_idx: torch.Tensor) -> torch.Tens
         return torch.cat(pooled_embeddings, dim=0) if pooled_embeddings else torch.empty(0, node_embeds.shape[-1], device=node_embeds.device)
     
     return global_mean_pool(node_embeds, batch_idx)
-# --- Caching Notes ---
-# Memory-Mapped Index Cache:
-# For very large datasets where image paths or other metadata are stored in files,
-# using numpy.load(filename, mmap_mode='r') can create a memory-mapped array.
-# This allows accessing data from disk as if it were in memory, reducing RAM usage
-# and improving load times for repeated access to large index files.
-# This would typically be implemented in data loading functions (e.g., in data.py)
-# when loading manifest files.
-# Example:
-# image_paths = np.load('image_manifest.npy', mmap_mode='r') # in data.py
-# Fractal Cache with LRU:
-# The `@lru_cache` decorator (from functools) is already used above for `make_edge_index_map`.
-# If there were functions generating fractals or other complex procedural content
-# that are deterministic for given inputs, `@lru_cache` would be applied to them
-# to store results in memory and avoid recomputation for repeated inputs.
-# Ensure `maxsize` is tuned to balance memory usage and caching effectiveness.
+
+# --- New: Temperature Utility ---
+# This function requires the Workspace object, so it's placed in utils.py
+# as it's a general utility that can be imported by main.py
+def compute_temperature(ws: 'Workspace', alpha: float = 0.7, beta: float = 0.3) -> float:
+    """
+    Computes the system temperature based on concept network activation and
+    workspace structure coherence.
+    Args:
+        ws (Workspace): The current Workspace instance.
+        alpha (float): Weight for the average concept activation component.
+        beta (float): Weight for the structure coherence component.
+    Returns:
+        float: The computed temperature (between 0.0 and 1.0).
+    """
+    if not ws.concept_net.nodes:
+        logger.warning("Concept network has no nodes. Returning default temperature 1.0.")
+        return 1.0
+
+    # Calculate average activation across all concept nodes
+    total_activation = sum(n.activation for n in ws.concept_net.nodes.values())
+    avg_act = total_activation / len(ws.concept_net.nodes)
+    
+    # Get structure coherence from the workspace
+    coh = ws.structure_coherence()
+    
+    # Temperature formula: higher average activation and higher coherence lead to lower temperature
+    # (1 - avg_act) means if avg_act is high (e.g., 0.9), this term is low (0.1)
+    # (1 - coh) means if coherence is high (e.g., 0.9), this term is low (0.1)
+    # So, high activation and high coherence lead to a lower temperature, promoting exploitation.
+    # Low activation and low coherence lead to a higher temperature, promoting exploration.
+    temp = alpha * (1 - avg_act) + beta * (1 - coh)
+    
+    # Ensure temperature is within [0, 1] bounds
+    temp = max(0.0, min(1.0, temp))
+    logger.debug(f"Computed temperature: {temp:.4f} (avg_act: {avg_act:.4f}, coherence: {coh:.4f})")
+    return temp
+
