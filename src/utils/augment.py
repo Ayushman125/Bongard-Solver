@@ -2,10 +2,10 @@
 # File: augment.py
 import logging
 import numpy as np
-import random # For conditional augmentations if needed
-import cv2 # Required by Albumentations for some transforms
+import random  # For conditional augmentations if needed
+import cv2  # Required by Albumentations for some transforms
 import torch
-from PIL import Image # For converting PIL to numpy and back if needed for legacy
+from PIL import Image  # For converting PIL to numpy and back if needed for legacy
 
 # Import Albumentations
 try:
@@ -39,27 +39,27 @@ if HAS_ALBUMENTATIONS:
         logger.warning("Could not import IMAGENET_MEAN/STD/NUM_CHANNELS/CONFIG from config. Using default ImageNet values.")
         IMAGENET_MEAN = [0.485, 0.456, 0.406]
         IMAGENET_STD = [0.229, 0.224, 0.225]
-        IMAGE_SIZE = [128, 128] # Default size if config not available
+        IMAGE_SIZE = [128, 128]  # Default size if config not available
 
     augmenter = A.Compose([
-        A.Resize(IMAGE_SIZE[0], IMAGE_SIZE[1], always_apply=True), # Ensure consistent size
+        A.Resize(IMAGE_SIZE[0], IMAGE_SIZE[1], always_apply=True),  # Ensure consistent size
         A.OneOf([
-            A.GaussNoise(var_limit=(5.0, 30.0), p=0.5), # Adjusted var_limit as per prompt
+            A.GaussNoise(var_limit=(5.0, 30.0), p=0.5),  # Adjusted var_limit as per prompt
             A.ISONoise(color_shift=(0.01, 0.05), p=0.5),
-        ], p=0.5), # 50% chance for either GaussNoise or ISONoise
+        ], p=0.5),  # 50% chance for either GaussNoise or ISONoise
         A.OneOf([
-            A.MotionBlur(blur_limit=5, p=0.5), # blur_limit must be odd
+            A.MotionBlur(blur_limit=5, p=0.5),  # blur_limit must be odd
             A.MedianBlur(blur_limit=5, p=0.5),
-            A.GaussianBlur(blur_limit=5, p=0.5), # Added GaussianBlur for more options
-        ], p=0.3), # 30% chance for one of the blur types
+            A.GaussianBlur(blur_limit=5, p=0.5),  # Added GaussianBlur for more options
+        ], p=0.3),  # 30% chance for one of the blur types
         A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5),
-        A.HueSaturationValue(hue_shift_limit=20, sat_shift_limit=30, val_shift_limit=20, p=0.5), # Added for color variation
-        A.Perspective(distortion_scale=0.05, p=0.3, border_mode=cv2.BORDER_CONSTANT, value=(255,255,255)), # Fill with white for perspective
+        A.HueSaturationValue(hue_shift_limit=20, sat_shift_limit=30, val_shift_limit=20, p=0.5),  # Added for color variation
+        A.Perspective(distortion_scale=0.05, p=0.3, border_mode=cv2.BORDER_CONSTANT, value=(255,255,255)),  # Fill with white for perspective
         A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.1,
-                           rotate_limit=10, border_mode=cv2.BORDER_CONSTANT, value=(255,255,255), p=0.5), # Fill with white
-        A.CoarseDropout(max_holes=4, max_height=16, max_width=16, fill_value=(255,255,255), p=0.3), # Simulate occlusion, fill with white
-        A.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD), # ImageNet normalization
-        ToTensorV2() # Converts numpy array (H, W, C) to PyTorch tensor (C, H, W)
+                           rotate_limit=10, border_mode=cv2.BORDER_CONSTANT, value=(255,255,255), p=0.5),  # Fill with white
+        A.CoarseDropout(max_holes=4, max_height=16, max_width=16, fill_value=(255,255,255), p=0.3),  # Simulate occlusion, fill with white
+        A.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),  # ImageNet normalization
+        ToTensorV2()  # Converts numpy array (H, W, C) to PyTorch tensor (C, H, W)
     ])
 else:
     # Dummy augmenter if Albumentations is not available
@@ -101,7 +101,7 @@ if __name__ == '__main__':
     img_size = 256
     dummy_img_pil = Image.new('RGB', (img_size, img_size), (255, 255, 255))
     draw = ImageDraw.Draw(dummy_img_pil)
-    draw.ellipse((50, 50, 200, 200), fill=(0, 0, 0)) # Black circle
+    draw.ellipse((50, 50, 200, 200), fill=(0, 0, 0))  # Black circle
     
     logger.info(f"Original image PIL mode: {dummy_img_pil.mode}, size: {dummy_img_pil.size}")
     # Apply augmentation
@@ -117,12 +117,12 @@ if __name__ == '__main__':
         reverse_normalize = A.Compose([
             A.Normalize(mean=[0.0, 0.0, 0.0], std=[1/s for s in IMAGENET_STD]),
             A.Normalize(mean=[-m for m in IMAGENET_MEAN], std=[1.0, 1.0, 1.0]),
-            ToTensorV2(transpose_mask=False) # Keep HWC for numpy conversion
+            ToTensorV2(transpose_mask=False)  # Keep HWC for numpy conversion
         ])
         
         # Convert tensor back to numpy HWC, then denormalize
         # Ensure it's on CPU and convert to numpy
-        augmented_np_normalized = augmented_tensor.permute(1, 2, 0).cpu().numpy() # CHW to HWC
+        augmented_np_normalized = augmented_tensor.permute(1, 2, 0).cpu().numpy()  # CHW to HWC
         
         # Apply reverse normalization
         denormalized_img_np = reverse_normalize(image=augmented_np_normalized)['image']
@@ -134,4 +134,3 @@ if __name__ == '__main__':
         logger.info("Saved augmented_example.png (denormalized for viewing).")
     else:
         logger.warning("Albumentations not available, cannot denormalize for visualization.")
-

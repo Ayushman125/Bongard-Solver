@@ -11,6 +11,7 @@ from typing import Dict, Any, List, Tuple, Optional, Union
 import os
 import json
 import math  # For geometric calculations
+import glob # Added for background textures loader
 
 # Import global configuration and Bongard rules from the project root
 try:
@@ -69,15 +70,15 @@ logger.setLevel(logging.INFO)
 
 class LogoGenerator(Dataset):
     """
-    Programmatically generates Bongard-LOGO problems, including images and
-    their corresponding ground-truth DSL rules, with added domain randomization.
+    Generates synthetic Bongard-like problems with various attributes and relations.
+    Supports domain randomization techniques like background textures, jitter, occluders, and blur.
     """
-    def __init__(self, cfg: Dict[str, Any], bg_textures: Optional[List[Image.Image]] = None):
+    def __init__(self, cfg: Dict[str, Any], bg_textures_dir: str = "data/textures"):
         """
         Initializes the LogoGenerator.
         Args:
             cfg (Dict[str, Any]): Configuration dictionary.
-            bg_textures (Optional[List[Image.Image]]): List of PIL Image objects to use as backgrounds.
+            bg_textures_dir (str): Directory containing background texture images.
         """
         self.cfg = cfg['data']['synthetic_data_config']
         self.image_size = cfg['data']['image_size']  # [height, width]
@@ -112,32 +113,27 @@ class LogoGenerator(Dataset):
             'yellow': (255, 255, 0), 'black': (0, 0, 0), 'white': (255, 255, 255),
             'gray': (128, 128, 128), 'orange': (255, 165, 0), 'purple': (128, 0, 128)
         }
-        # Load background textures
-        self.bg_textures = self._load_background_textures(self.cfg.get('background_texture_path')) if bg_textures is None else bg_textures
+        
+        # Load background textures directly in constructor as requested
+        self.bg_textures = []
+        if self.cfg.get('use_background_textures', False) and bg_textures_dir and os.path.exists(bg_textures_dir):
+            texture_paths = glob.glob(os.path.join(bg_textures_dir, "*.*"))
+            for p in texture_paths:
+                try:
+                    # Convert to RGB to handle various image types, then resize to canvas size
+                    img = Image.open(p).convert("RGB").resize((self.canvas_width, self.canvas_height))
+                    self.bg_textures.append(img)
+                except Exception as e:
+                    logger.warning(f"Could not load background texture {p}: {e}")
         logger.info(f"LogoGenerator initialized with canvas size {self.image_size}. Loaded {len(self.bg_textures)} background textures.")
-
-    def _load_background_textures(self, texture_path: Optional[str]) -> List[Image.Image]:
-        """Loads background textures from a specified directory."""
-        textures = []
-        if texture_path and os.path.exists(texture_path):
-            for filename in os.listdir(texture_path):
-                if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.gif')):
-                    try:
-                        img_path = os.path.join(texture_path, filename)
-                        # Open as RGB to handle various image types, then resize
-                        img = Image.open(img_path).convert("RGB").resize((self.canvas_width, self.canvas_height))
-                        textures.append(img)
-                    except Exception as e:
-                        logger.warning(f"Could not load background texture {filename}: {e}")
-        return textures
 
     def _randomize_canvas(self) -> Tuple[Image.Image, ImageDraw.ImageDraw]:
         """
         Randomizes the canvas by optionally applying a background texture or a random color.
         Returns a PIL Image and its ImageDraw object.
         """
-        # 20% chance to use a random background texture if available
-        if self.bg_textures and random.random() < 0.2:
+        # Use a random background texture if available and enabled by config
+        if self.bg_textures and self.cfg.get('use_background_textures', False) and random.random() < 0.2:
             bg = random.choice(self.bg_textures).copy()  # Use a copy to avoid modifying original texture
             return bg, ImageDraw.Draw(bg)
         
@@ -414,7 +410,7 @@ class LogoGenerator(Dataset):
         existing_bboxes = []  # To keep track of drawn object bounding boxes for overlap check
         # Calculate base confidence for the image (starts high, reduced by randomization)
         image_confidence = 1.0
-        if self.bg_textures and random.random() < 0.2:  # If background texture was used
+        if self.bg_textures and self.cfg.get('use_background_textures', False) and random.random() < 0.2:  # If background texture was used
             image_confidence *= 0.9  # Slightly reduce confidence for more complex backgrounds
 
         for i in range(num_objects):
@@ -595,7 +591,7 @@ class LogoGenerator(Dataset):
                 dummy_query_bboxes_view1, dummy_query_masks_view1,
                 dummy_query_bboxes_view2, dummy_query_masks_view2,
                 dummy_support_bboxes_flat, dummy_support_masks_flat,
-                query_conf1, query_conf2, support_confs_flat, gt_rule_description) # Added gt_rule_description
+                query_conf1, query_conf2, support_confs_flat, gt_rule_description) # Added confidences and gt_rule
 
 class LogoDataset(Dataset):
     """
@@ -606,17 +602,9 @@ class LogoDataset(Dataset):
         self.num_samples = num_samples
         self.transform = transform
         
-        # Load background textures once for the generator
-        texture_paths = glob.glob(os.path.join(cfg['data']['synthetic_data_config'].get('background_texture_path', './data/textures'), "*.*"))
-        textures = []
-        for p in texture_paths:
-            try:
-                # Convert to RGB to handle various image types, then to L for grayscale compatibility
-                textures.append(Image.open(p).convert('RGB').resize(tuple(cfg['data']['image_size'])))
-            except Exception as e:
-                logger.warning(f"Could not load texture {p}: {e}")
-
-        self.generator = LogoGenerator(cfg, bg_textures=textures)
+        # Pass the background_texture_path from config to LogoGenerator
+        bg_textures_dir = cfg['data']['synthetic_data_config'].get('background_texture_path', './data/textures')
+        self.generator = LogoGenerator(cfg, bg_textures_dir=bg_textures_dir) # Pass the directory
         logger.info(f"LogoDataset initialized to generate {num_samples} problems.")
 
     def __len__(self):
@@ -697,7 +685,8 @@ if __name__ == '__main__':
                     'min_occluder_size': 5,
                     'max_occluder_size': 20,
                     'jitter_width_range': [1, 3],
-                    'jitter_dash_options': [None, (4,2), (2,2,2)]
+                    'jitter_dash_options': [None, (4,2), (2,2,2)],
+                    'use_background_textures': True # Enable for dummy test
                 }
             },
             'training': {'augmentation_config': {}}
@@ -719,7 +708,7 @@ if __name__ == '__main__':
         Image.new('RGB', (128, 128), color = (100, 100, 100)).save('./data/textures/texture1.png')
         Image.new('RGB', (128, 128), color = (150, 150, 150)).save('./data/textures/texture2.png')
 
-    generator = LogoGenerator(CONFIG)
+    generator = LogoGenerator(CONFIG, bg_textures_dir=CONFIG['data']['synthetic_data_config']['background_texture_path'])
     
     logger.info("Generating a sample Bongard problem...")
     problem_data = generator.make_problem(problem_id=0)
