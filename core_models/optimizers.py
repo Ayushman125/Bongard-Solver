@@ -1,5 +1,6 @@
 # Folder: bongard_solver/core_models/
 # File: optimizers.py
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -10,15 +11,15 @@ import math
 from typing import Dict, Any, Optional, Union
 
 # Import from config (assuming config.py is in the project root, so relative path from core_models)
-from ..config import HAS_TIMM_OPTIM
+from ..config import HAS_TIMM_OPTIM # Check if timm.optim is preferred
 
 # Added for Gradual Warmup
+HAS_GRADUAL_WARMUP = False
 try:
     from warmup_scheduler import GradualWarmupScheduler
     HAS_GRADUAL_WARMUP = True
     logging.getLogger(__name__).info("GradualWarmupScheduler found and enabled.")
 except ImportError:
-    HAS_GRADUAL_WARMUP = False
     logging.getLogger(__name__).warning("warmup_scheduler not found. Gradual Warmup functionality will be disabled.")
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,7 @@ if HAS_TIMM_OPTIM:
         logger.info("Using Lion/MADGRAD from timm.optim.")
     except ImportError:
         logger.warning("timm.optim not found. Lion/MADGRAD from timm will be disabled. Checking torch_optimizer as fallback.")
-        HAS_TIMM_OPTIM = False # Disable timm.optim if import fails
+        HAS_TIMM_OPTIM = False  # Disable timm.optim if import fails
         try:
             from torch_optimizer import Lion as TorchOptimizerLion, MADGRAD as TorchOptimizerMADGRAD
             Lion = TorchOptimizerLion
@@ -59,7 +60,7 @@ else:
 
 # --- Import Local SAM and SophiaG Implementations ---
 # Assuming your actual sam.py and sophia.py files are in the same core_models directory.
-SAM = None # Initialize to None
+SAM = None  # Initialize to None
 try:
     from .sam import SAM
     logger.info("Successfully imported local SAM optimizer from .sam.py.")
@@ -73,10 +74,10 @@ except ImportError:
             logger.warning("Using dummy SAM optimizer due to import failure.")
         def first_step(self, zero_grad=False): pass
         def second_step(self, zero_grad=False): pass
-        def _grad_norm(self): return torch.tensor(1.0) # Dummy norm
+        def _grad_norm(self): return torch.tensor(1.0)  # Dummy norm
         def load_state_dict(self, state_dict): pass
 
-SophiaG = None # Initialize to None
+SophiaG = None  # Initialize to None
 try:
     from .sophia import SophiaG
     logger.info("Successfully imported local SophiaG optimizer from .sophia.py.")
@@ -108,6 +109,7 @@ try:
 except ImportError:
     logger.warning("nystrom_attention not found. Nystrom attention will be disabled.")
 
+
 # --- Optimizer Functions ---
 def get_optimizer(model: nn.Module, config: Dict[str, Any]) -> optim.Optimizer:
     """
@@ -120,9 +122,9 @@ def get_optimizer(model: nn.Module, config: Dict[str, Any]) -> optim.Optimizer:
     """
     optimizer_name = config['optimizer']
     learning_rate = config['learning_rate']
-    weight_decay = config.get('weight_decay', 0.0) # Added weight decay from config
+    weight_decay = config.get('weight_decay', 0.0)  # Added weight decay from config
     
-    optimizer = None # Initialize optimizer to None
+    optimizer = None  # Initialize optimizer to None
 
     if optimizer_name == 'AdamW':
         optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
@@ -182,7 +184,7 @@ def get_scheduler(optimizer: optim.Optimizer, config: Dict[str, Any], total_step
                                max_lr=scheduler_config['OneCycleLR']['max_lr'],
                                total_steps=total_steps,
                                pct_start=scheduler_config['OneCycleLR']['pct_start'],
-                               anneal_strategy=scheduler_config['OneCycleLR'].get('anneal_strategy', 'cos')) # Default to 'cos'
+                               anneal_strategy=scheduler_config['OneCycleLR'].get('anneal_strategy', 'cos'))  # Default to 'cos'
         logger.info("Using OneCycleLR scheduler.")
     elif scheduler_name == 'ReduceLROnPlateau':
         scheduler = ReduceLROnPlateau(optimizer, **scheduler_config['ReduceLROnPlateau'])
@@ -237,7 +239,7 @@ def get_attention_layer(cfg: Dict[str, Any]) -> nn.Module:
     feat_dim = cfg['model'].get('feature_dim')
     if feat_dim is None:
         logger.error("Feature dimension (cfg['model']['feature_dim']) not found for attention layer. Using dummy 512.")
-        feat_dim = 512 # Fallback
+        feat_dim = 512  # Fallback
     
     heads = cfg['attn'].get('heads', 8)
 
@@ -273,3 +275,4 @@ def get_attention_layer(cfg: Dict[str, Any]) -> nn.Module:
         )
     else:
         raise ValueError(f"Unsupported attention type: {attn_type}")
+

@@ -1,20 +1,70 @@
-# Folder: bongard_solver/src/scene_graph_builder.py
+# Folder: bongard_solver/src/
+# File: scene_graph_builder.py
 
 import numpy as np
 import networkx as nx
 import logging
-import cv2 # For mask processing and contour detection
-from PIL import Image # For opening images
-import math # For geometric calculations
+import cv2  # For mask processing and contour detection
+from PIL import Image  # For opening images
+import math  # For geometric calculations
 from collections import defaultdict
-import json # For saving/loading symbolic annotations
+import json  # For saving/loading symbolic annotations
 from typing import List, Dict, Any, Tuple, Optional
+import torch # For SAM and CNN features
 
 # Configure logging for this module
 logger = logging.getLogger(__name__)
 
-# --- Helper Functions for Mask Processing (from symbolic_fusion.py) ---
+# Import configuration
+try:
+    from config import CONFIG, YOLO_CLASS_MAP
+except ImportError:
+    logger.error("Could not import CONFIG or YOLO_CLASS_MAP from config.py. SceneGraphBuilder will use default values.")
+    CONFIG = {'model': {'yolo_conf_threshold': 0.25, 'yolo_iou_threshold': 0.7, 'object_detector_model_path': 'yolov8n.pt'},
+              'segmentation': {'use_sam': False, 'sam_model_type': 'vit_b', 'sam_checkpoint_path': '', 'sam_points_per_side': 32, 'sam_pred_iou_thresh': 0.88},
+              'debug': {'max_fallback_cnt': 5, 'min_contour_area_sam_fallback': 50}}
+    YOLO_CLASS_MAP = {0: "object"}
 
+# Import primitive_extractor for attribute extraction with confidence
+try:
+    from src.perception.primitive_extractor import extract_shape_conf, extract_fill_conf, extract_cnn_features
+    HAS_PRIMITIVE_EXTRACTOR = True
+except ImportError:
+    logger.warning("Could not import primitive_extractor.py. SceneGraphBuilder will use dummy attribute extraction.")
+    HAS_PRIMITIVE_EXTRACTOR = False
+    def extract_shape_conf(img): return "dummy_shape", 0.5
+    def extract_fill_conf(img): return "dummy_fill", 0.5
+    def extract_cnn_features(img): return {"shape": ("dummy_cnn_shape", 0.6), "color": ("dummy_cnn_color", 0.7), "size": ("dummy_cnn_size", 0.5)}
+
+# Import SAM for segmentation
+HAS_SAM_SEG = False
+try:
+    from segment_anything import sam_model_registry, SamAutomaticMaskGenerator, SamPredictor
+    HAS_SAM_SEG = True
+    logger.info("Segment Anything Model (SAM) found and enabled for SceneGraphBuilder.")
+except ImportError:
+    logger.warning("Segment Anything Model (SAM) not found. SAM segmentation will be disabled in SceneGraphBuilder.")
+
+# Import Ultralytics YOLO for object detection
+HAS_ULTRALYTICS = False
+try:
+    from ultralytics import YOLO as RealYOLO  # Import RealYOLO from ultralytics
+    HAS_ULTRALYTICS = True
+    logger.info("Ultralytics YOLO found and enabled for SceneGraphBuilder.")
+except ImportError:
+    logger.warning("Ultralytics YOLO not found. YOLO detection will be disabled in SceneGraphBuilder.")
+    class RealYOLO: # Dummy YOLO class
+        def __init__(self, model_path): self.model_path = model_path
+        def __call__(self, img, conf=0.25, iou=0.7, verbose=False, augment=False):
+            class DummyBoxes:
+                def __init__(self): self.conf = torch.tensor([]); self.cls = torch.tensor([]); self.xyxy = torch.tensor([])
+                def __len__(self): return 0
+            class DummyResult:
+                def __init__(self): self.boxes = DummyBoxes(); self.masks = None
+                def plot(self, *args, **kwargs): return np.zeros((100,100,3), dtype=np.uint8)
+            return [DummyResult()]
+
+# --- Helper Functions for Mask Processing (from symbolic_fusion.py) ---
 def _mask_to_bbox(mask: np.ndarray) -> list:
     """
     Converts a binary mask to an axis-aligned bounding box [xmin, ymin, xmax, ymax].
@@ -26,11 +76,9 @@ def _mask_to_bbox(mask: np.ndarray) -> list:
     if mask.ndim != 2:
         logger.error(f"Input mask must be 2D, got {mask.ndim}D.")
         return [0, 0, 0, 0]
-
     ys, xs = np.where(mask > 0)
     if xs.size == 0 or ys.size == 0:
-        return [0, 0, 0, 0] # Return empty box if no foreground pixels
-
+        return [0, 0, 0, 0]  # Return empty box if no foreground pixels
     xmin, ymin = int(xs.min()), int(ys.min())
     xmax, ymax = int(xs.max()), int(ys.max())
     return [xmin, ymin, xmax, ymax]
@@ -46,11 +94,9 @@ def _mask_centroid(mask: np.ndarray) -> list:
     if mask.ndim != 2:
         logger.error(f"Input mask must be 2D, got {mask.ndim}D.")
         return [0, 0]
-
     ys, xs = np.where(mask > 0)
     if xs.size == 0 or ys.size == 0:
-        return [0, 0] # Return [0,0] if no foreground pixels
-
+        return [0, 0]  # Return [0,0] if no foreground pixels
     return [float(xs.mean()), float(ys.mean())]
 
 def _mask_area(mask: np.ndarray) -> int:
@@ -72,14 +118,14 @@ def _mask_aspect_ratio(mask: np.ndarray) -> float:
     Args:
         mask (np.ndarray): A 2D binary mask.
     Returns:
-        float: Aspect ratio, or 0.0 if mask is empty or height is zero.
+        float: Aspect ratio, or 0.0 if mask or height is zero.
     """
     bbox = _mask_to_bbox(mask)
     xmin, ymin, xmax, ymax = bbox
     width = xmax - xmin
     height = ymax - ymin
     if height == 0:
-        return 0.0 # Avoid division by zero
+        return 0.0  # Avoid division by zero
     return float(width / height)
 
 def _mask_solidity(mask: np.ndarray) -> float:
@@ -113,14 +159,11 @@ def iou_xyxy(bbox1: list, bbox2: list) -> float:
     yA = max(bbox1[1], bbox2[1])
     xB = min(bbox1[2], bbox2[2])
     yB = min(bbox1[3], bbox2[3])
-
     inter_width = max(0, xB - xA)
     inter_height = max(0, yB - yA)
     inter_area = inter_width * inter_height
-
     bbox1_area = (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1])
     bbox2_area = (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1])
-
     union_area = bbox1_area + bbox2_area - inter_area
     return inter_area / union_area if union_area > 0 else 0.0
 
@@ -144,39 +187,36 @@ def _get_spatial_relations(bbox1: list, bbox2: list, threshold_iou: float = 0.01
 
     # Horizontal relations
     if cx1 < cx2 - center_dist_thresh_px:
-        relations.append('left_of') # Changed to underscore for consistency with DSL
+        relations.append('left_of')
     elif cx1 > cx2 + center_dist_thresh_px:
-        relations.append('right_of') # Changed to underscore for consistency with DSL
+        relations.append('right_of')
     
     # Vertical relations (smaller y is higher)
     if cy1 < cy2 - center_dist_thresh_px:
-        relations.append('above') # Changed to underscore for consistency with DSL
+        relations.append('above')
     elif cy1 > cy2 + center_dist_thresh_px:
-        relations.append('below') # Changed to underscore for consistency with DSL
+        relations.append('below')
 
     # Overlap
     current_iou = iou_xyxy(bbox1, bbox2)
     if current_iou > threshold_iou:
-        relations.append('intersects') # Changed to underscore for consistency with DSL
-        # Removed 'highly-overlaps' for simplicity and consistency with DSL
+        relations.append('intersects')
     
     # Contains (A contains B)
-    # This is a strict bounding box containment. For mask-based containment,
-    # you'd need to check if mask B is entirely within mask A.
     if (bbox1[0] <= bbox2[0] and bbox1[1] <= bbox2[1] and
         bbox1[2] >= bbox2[2] and bbox1[3] >= bbox2[3]):
-        relations.append('contains') # Changed to underscore for consistency with DSL
+        relations.append('contains')
     
     # Is contained by (A is contained by B)
     if (bbox2[0] <= bbox1[0] and bbox2[1] <= bbox1[1] and
         bbox2[2] >= bbox1[2] and bbox2[3] >= bbox1[3]):
-        relations.append('is_contained_by') # New relation for clarity, or can be inferred from 'contains'
-
+        relations.append('is_contained_by')
+    
     # Alignment (horizontal or vertical)
     if abs(cx1 - cx2) < center_dist_thresh_px:
-        relations.append('aligned_vertically') # Changed to underscore for consistency with DSL
+        relations.append('aligned_vertically')
     if abs(cy1 - cy2) < center_dist_thresh_px:
-        relations.append('aligned_horizontally') # Changed to underscore for consistency with DSL
+        relations.append('aligned_horizontally')
 
     return relations
 
@@ -193,87 +233,181 @@ def _cluster_by_proximity(G: nx.Graph, threshold: float = 50.0) -> dict:
     clusters = {}
     cluster_id = 0
     visited = set()
-
     for node in G.nodes:
         if node in visited:
             continue
-
         # Start a BFS from the current unvisited node
         queue = [node]
         current_cluster_nodes = []
-
         while queue:
-            n = queue.pop(0) # Use pop(0) for BFS (queue behavior)
+            n = queue.pop(0)  # Use pop(0) for BFS (queue behavior)
             if n in visited:
                 continue
             
             visited.add(n)
             current_cluster_nodes.append(n)
             clusters[n] = cluster_id
-
             for nbr in G.neighbors(n):
                 # Ensure 'distance' attribute exists and is below threshold
                 edge_data = G[n][nbr]
                 if 'distance' in edge_data and edge_data['distance'] < threshold and nbr not in visited:
                     queue.append(nbr)
         
-        if current_cluster_nodes: # Increment cluster_id only if a new cluster was found
+        if current_cluster_nodes:  # Increment cluster_id only if a new cluster was found
             cluster_id += 1
     
     return clusters
 
-# --- Object Detection/Segmentation (Placeholder for external models) ---
-class ClassicalCVCropper:
+# --- Object Detection/Segmentation ---
+class ObjectDetector:
     """
-    A classical computer vision approach to object detection and mask extraction
-    using contour detection. Replaces Mask R-CNN dependency.
+    Handles object detection using either YOLO or a classical CV fallback.
+    Can optionally integrate SAM for instance segmentation.
     """
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.contour_conf_thresh = config.get('cv_contour_conf_thresh', 0.1) # Min area ratio for a contour to be considered an object
-        logger.info(f"ClassicalCVCropper initialized with contour_conf_thresh: {self.contour_conf_thresh}")
+        self.use_sam = config['segmentation']['use_sam'] and HAS_SAM_SEG
+        self.use_yolo = config['model'].get('use_yolo', True) and HAS_ULTRALYTICS # Default to YOLO if available
+        
+        self.yolo_model = None
+        self.sam_predictor = None
+        self.sam_mask_generator = None
+        
+        if self.use_yolo:
+            try:
+                self.yolo_model = RealYOLO(self.config['model']['object_detector_model_path'])
+                logger.info(f"YOLO model loaded from {self.config['model']['object_detector_model_path']}")
+            except Exception as e:
+                logger.error(f"Failed to load YOLO model: {e}. Disabling YOLO.")
+                self.use_yolo = False
+        
+        if self.use_sam:
+            try:
+                sam_checkpoint = self.config['segmentation']['sam_checkpoint_path']
+                model_type = self.config['segmentation']['sam_model_type']
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                
+                sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
+                sam.to(device=device)
+                self.sam_predictor = SamPredictor(sam)
+                self.sam_mask_generator = SamAutomaticMaskGenerator(
+                    sam, 
+                    points_per_side=self.config['segmentation']['sam_points_per_side'],
+                    pred_iou_thresh=self.config['segmentation']['sam_pred_iou_thresh']
+                )
+                logger.info(f"SAM {model_type} loaded for segmentation.")
+            except Exception as e:
+                logger.error(f"Failed to load SAM model: {e}. Disabling SAM segmentation.")
+                self.use_sam = False
 
-    def detect_objects(self, image_np: np.ndarray) -> List[np.ndarray]:
+        # Classical CV fallback parameters
+        self.min_contour_area_ratio = self.config['debug'].get('min_contour_area_sam_fallback', 50) / (CONFIG['data']['image_size'][0] * CONFIG['data']['image_size'][1]) # Convert to ratio
+        self.max_fallback_cnt = self.config['debug'].get('max_fallback_cnt', 5)
+        logger.info(f"ObjectDetector initialized. Use SAM: {self.use_sam}, Use YOLO: {self.use_yolo}")
+
+    def detect_and_segment(self, image_np: np.ndarray) -> List[Dict[str, Any]]:
         """
-        Detects objects in an image using contour detection and returns their masks.
-        Args:
-            image_np (np.ndarray): Input image as a NumPy array (H, W, 3).
-        Returns:
-            List[np.ndarray]: A list of binary masks, one for each detected object.
+        Detects objects and generates masks. Prioritizes SAM, then YOLO, then CV fallback.
+        Returns a list of dictionaries, each with 'bbox', 'mask', 'label', 'confidence'.
         """
         if image_np is None or image_np.size == 0:
             logger.warning("Input image is empty or None for object detection.")
             return []
 
-        # Convert to grayscale
+        image_pil = Image.fromarray(image_np)
+        detections = []
+
+        if self.use_sam:
+            logger.debug("Attempting SAM automatic mask generation.")
+            try:
+                sam_results = self.sam_mask_generator.generate(image_np)
+                for mask_data in sam_results:
+                    # SAM returns masks as bool, convert to uint8
+                    mask = mask_data['segmentation'].astype(np.uint8) * 255
+                    bbox = mask_data['bbox'] # xywh format
+                    # Convert bbox from xywh to xyxy
+                    bbox_xyxy = [bbox[0], bbox[1], bbox[0]+bbox[2], bbox[1]+bbox[3]]
+                    detections.append({
+                        'bbox': bbox_xyxy,
+                        'mask': mask,
+                        'label': 'object', # SAM doesn't classify, so generic 'object'
+                        'confidence': mask_data.get('stability_score', 1.0) # Use stability score as confidence
+                    })
+                logger.info(f"SAM detected {len(detections)} objects.")
+                if detections: return detections
+            except Exception as e:
+                logger.error(f"Error during SAM mask generation: {e}. Falling back to YOLO/CV.", exc_info=True)
+                self.use_sam = False # Disable SAM for current run if it fails
+
+        if self.use_yolo:
+            logger.debug("Attempting YOLO detection.")
+            try:
+                # YOLO expects PIL Image or numpy array (RGB)
+                yolo_results = self.yolo_model(image_pil, 
+                                                conf=self.config['model']['yolo_conf_threshold'], 
+                                                iou=self.config['model']['yolo_iou_threshold'],
+                                                verbose=False,
+                                                augment=self.config['model'].get('yolo_augment', False)) # Use YOLO TTA
+                
+                for r in yolo_results:
+                    if r.boxes:
+                        for i in range(len(r.boxes)):
+                            bbox_xyxy = r.boxes.xyxy[i].cpu().numpy().astype(int).tolist()
+                            confidence = r.boxes.conf[i].item()
+                            class_id = int(r.boxes.cls[i].item())
+                            label = YOLO_CLASS_MAP.get(class_id, f"class_{class_id}")
+                            
+                            mask = None
+                            if r.masks is not None:
+                                # YOLO masks are typically (N, H, W) float tensors
+                                # Convert to binary numpy array (H, W)
+                                mask_tensor = r.masks.data[i].cpu().numpy() # This is already H,W
+                                mask = (mask_tensor > 0.5).astype(np.uint8) * 255 # Threshold and convert to 0/255
+                            
+                            detections.append({
+                                'bbox': bbox_xyxy,
+                                'mask': mask, # Can be None if no mask predicted
+                                'label': label,
+                                'confidence': confidence
+                            })
+                logger.info(f"YOLO detected {len(detections)} objects.")
+                # Filter out detections with very low confidence, even if YOLO returned them
+                detections = [d for d in detections if d['confidence'] >= self.config['model']['detection_confidence_threshold']]
+                if detections: return detections
+            except Exception as e:
+                logger.error(f"Error during YOLO detection: {e}. Falling back to classical CV.", exc_info=True)
+                self.use_yolo = False # Disable YOLO for current run if it fails
+
+        logger.info("Falling back to Classical CV (contour detection) for objects.")
+        # Classical CV fallback
         gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
-        
-        # Apply Gaussian blur to reduce noise and help contour detection
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        
-        # Use Canny edge detection or adaptive thresholding
-        # For simplicity, let's use a fixed threshold or Otsu's method
         _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        
-        # Find contours
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        masks = []
+        # Sort contours by area in descending order and take top N
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)[:self.max_fallback_cnt]
+
         image_area = image_np.shape[0] * image_np.shape[1]
         
         for contour in contours:
-            # Filter small contours (noise)
             area = cv2.contourArea(contour)
-            if area > image_area * self.contour_conf_thresh: # Only consider contours above a certain relative area
+            if area > image_area * self.min_contour_area_ratio:
                 mask = np.zeros(image_np.shape[:2], dtype=np.uint8)
                 cv2.drawContours(mask, [contour], -1, 255, cv2.FILLED)
-                masks.append((mask > 0).astype(np.uint8)) # Convert to binary 0/1 mask
-        
-        logger.info(f"Detected {len(masks)} objects using ClassicalCVCropper.")
-        return masks
+                bbox_xyxy = cv2.boundingRect(contour) # xywh
+                bbox_xyxy = [bbox_xyxy[0], bbox_xyxy[1], bbox_xyxy[0]+bbox_xyxy[2], bbox_xyxy[1]+bbox_xyxy[3]] # Convert to xyxy
+                detections.append({
+                    'bbox': bbox_xyxy,
+                    'mask': (mask > 0).astype(np.uint8) * 255, # Binary 0/255 mask
+                    'label': 'object_cv', # Label for CV detected objects
+                    'confidence': area / image_area # Use area ratio as confidence
+                })
+        logger.info(f"Classical CV detected {len(detections)} objects.")
+        return detections
+
 
 # --- Main Scene Graph Builder Class ---
-
 class SceneGraphBuilder:
     """
     Constructs a symbolic scene graph from an image.
@@ -285,22 +419,33 @@ class SceneGraphBuilder:
             images (List[Any]): List of image data (e.g., file paths or numpy arrays).
             config (Dict[str, Any]): Configuration dictionary, including perception parameters.
         """
-        self.images = images # Can be paths or actual image data
+        self.images = images  # Can be paths or actual image data
         self.config = config
-        self.cropper = ClassicalCVCropper(config) # Use the classical CV cropper
+        self.object_detector = ObjectDetector(config)  # Use the unified ObjectDetector
         self._solution_found = False
         self._solution = None
         
         # Initialize an empty list to store object IDs for the workspace
         # These are usually just indices for now, but could be more complex.
         self.objects = [f"obj_{i}" for i in range(len(images))] if images else []
+        
+        # Cache for object images (crops) to avoid re-cropping for attribute extraction
+        self._object_image_cache: Dict[str, Image.Image] = {} 
         logger.info(f"SceneGraphBuilder initialized for {len(self.images)} images.")
+
+    def get_object_image(self, obj_id: str) -> Optional[Image.Image]:
+        """
+        Retrieves a PIL Image crop for a given object ID from the cache.
+        This method assumes that `build_scene_graph` has already been called
+        and populated the cache.
+        """
+        return self._object_image_cache.get(obj_id)
 
     def extract_feature(self, obj_id: str, feat_type: str) -> Tuple[Any, float]:
         """
         Extracts a specific feature (attribute or relation) for a given object.
         This method is primarily used by the emergent system's codelets.
-        It relies on the underlying scene graph data.
+        It relies on the underlying scene graph data or direct primitive extraction.
         
         Args:
             obj_id (str): The ID of the object (e.g., "obj_0").
@@ -308,76 +453,43 @@ class SceneGraphBuilder:
         Returns:
             Tuple[Any, float]: The extracted feature value and a confidence score.
         """
-        # This method needs to access the *already built* scene graph for a specific image.
-        # The `Workspace` will call this for a specific object within a specific image context.
-        # For this to work, `SceneGraphBuilder` needs to store the scene graphs it builds.
-        # Let's assume for simplicity that `obj_id` directly maps to an index in `self.objects`
-        # and we are extracting features for the *first* image's scene graph.
-        # In a multi-image context, `extract_feature` would need an `image_idx` argument.
-        
-        # For now, this method will be a placeholder that returns dummy values based on type,
-        # as the full scene graph for a *specific image* isn't directly accessible here
-        # without a context. The `build_scene_graph` method below is what actually
-        # populates the scene graph.
-        
-        # If the emergent system needs to query features on *specific* objects from *specific* images,
-        # the SceneGraphBuilder should be designed to hold pre-computed scene graphs,
-        # or `extract_feature` should take an `image_idx` as an argument.
-        
-        # Given the current `main.py` setup, `extract_feature` is called in `Workspace`
-        # with a generic `obj` (which is 'obj_X') and `feat`.
-        # This means it's asking for a *general* feature, not necessarily from a specific image.
-        # So, we return a mock value.
-        
-        # In a real system, the `Workspace` would pass the *current image's scene graph*
-        # to `extract_feature` or `SceneGraphBuilder` would manage a cache of scene graphs.
+        obj_image = self.get_object_image(obj_id)
+        if obj_image is None:
+            logger.warning(f"No image available in cache for object {obj_id}. Cannot extract feature {feat_type}. Returning dummy.")
+            # Fallback to dummy extraction if no image is available
+            return "unknown", 0.1
 
-        # For the purpose of making this non-dummy, we will return values that align
-        # with the attributes/relations that `_get_scene_graph_from_masks` infers.
-        # However, without a concrete image and object context, these are still general.
+        val, conf = "unknown", 0.0
+        if HAS_PRIMITIVE_EXTRACTOR:
+            # Use CNN-based features if configured, otherwise classical CV
+            if self.config['model'].get('use_cnn_features', True): # Default to CNN features
+                cnn_feats = extract_cnn_features(obj_image)
+                if feat_type in cnn_feats:
+                    val, conf = cnn_feats[feat_type]
+                else:
+                    logger.warning(f"CNN features for {feat_type} not available. Falling back to CV.")
+                    if feat_type == 'shape': val, conf = extract_shape_conf(obj_image)
+                    elif feat_type == 'fill': val, conf = extract_fill_conf(obj_image)
+                    else: val, conf = "unknown", 0.1 # Default for unsupported CV features
+            else: # Use classical CV features
+                if feat_type == 'shape': val, conf = extract_shape_conf(obj_image)
+                elif feat_type == 'fill': val, conf = extract_fill_conf(obj_image)
+                # Add more CV-based feature extractions as needed
+                else:
+                    logger.warning(f"Unsupported feature type '{feat_type}' for classical CV. Using dummy.")
+                    val, conf = "unknown", 0.1
+        else:
+            # Fallback to simple mock if primitive_extractor is not available
+            if feat_type == 'shape': val, conf = random.choice(['circle', 'square', 'triangle']), random.uniform(0.7, 0.9)
+            elif feat_type == 'color': val, conf = random.choice(['red', 'blue', 'green']), random.uniform(0.6, 0.8)
+            elif feat_type == 'size': val, conf = random.choice(['small', 'medium', 'large']), random.uniform(0.7, 0.9)
+            elif feat_type == 'fill': val, conf = random.choice(['filled', 'outlined']), random.uniform(0.6, 0.8)
+            elif feat_type == 'orientation': val, conf = random.choice(['horizontal', 'vertical']), random.uniform(0.6, 0.8)
+            elif feat_type == 'texture': val, conf = random.choice(['smooth', 'rough']), random.uniform(0.6, 0.8)
+            else: val, conf = "unknown", 0.1 # Default for relations or unknown types
 
-        # This part is tricky because `extract_feature` is called by codelets that don't
-        # necessarily have the full image context. The `build_scene_graph` method is
-        # what generates the full scene graph for an image.
-        # For now, let's return a simple mock based on the feature type.
-        # A more robust solution would involve the `Workspace` passing the current
-        # image's scene graph to `extract_feature`.
-
-        # This `extract_feature` is a placeholder for a *perception module*
-        # that can extract features from a *specific object instance*.
-        # It's not directly tied to the overall `build_scene_graph` process.
-        
-        # Given the current design, where `build_scene_graph` creates the full SG,
-        # `extract_feature` should ideally query that SG.
-        # Since `self.images` is just paths, we can't do real extraction here.
-        # So, this remains a mock for now, but it's a mock that *could* be real
-        # if `image_data` and `object_id` were passed directly.
-        
-        # The `Workspace`'s `Scout` codelet calls `sg.extract_feature(obj, feat)`.
-        # This `obj` is like 'obj_0'. It's not tied to a specific image.
-        # This suggests `extract_feature` should be able to get this from a *global*
-        # understanding or a pre-computed knowledge base, or it needs the image context.
-
-        # For the current setup, where `main.py` creates dummy images and passes them,
-        # and `build_scene_graph` is called for *each* image, the `extract_feature`
-        # here is slightly misaligned. It's designed for a low-level perception query.
-        # Let's keep it as a mock that aligns with potential real output.
-        
-        # Example: if feat_type is 'shape', return 'circle'
-        if feat_type == 'shape': return "circle", 0.8
-        if feat_type == 'color': return "red", 0.7
-        if feat_type == 'size': return "small", 0.6
-        if feat_type == 'position_h': return "center_h", 0.5 # Simplified
-        if feat_type == 'position_v': return "center_v", 0.5 # Simplified
-        if feat_type == 'fill': return "solid", 0.7
-        if feat_type == 'orientation': return "upright", 0.6
-        if feat_type == 'texture': return "none", 0.6
-        # For relations, it's more complex as it needs two objects.
-        # This function is designed for single-object attribute extraction.
-        # Relations are inferred in `_get_scene_graph_from_masks`.
-        if feat_type in ["left_of", "right_of", "above", "below", "contains", "intersects", "aligned_horizontally", "aligned_vertically"]:
-            return "true", 0.5 # Dummy for relations
-        return "unknown", 0.1
+        logger.debug(f"Extracted feature for {obj_id}, {feat_type}: {val} (conf: {conf:.4f})")
+        return val, conf
 
     def problem_solved(self) -> bool:
         return self._solution_found
@@ -392,7 +504,7 @@ class SceneGraphBuilder:
     def build_scene_graph(self, image_np: np.ndarray) -> Dict[str, Any]:
         """
         Constructs a scene graph for a single image.
-        This method integrates the object detection (ClassicalCVCropper)
+        This method integrates the object detection (ObjectDetector)
         and symbolic fusion logic.
         
         Args:
@@ -404,48 +516,68 @@ class SceneGraphBuilder:
         if image_np is None or image_np.size == 0:
             logger.warning("No image provided for scene graph building.")
             return {'objects': [], 'relations': [], 'image_info': {}}
-
         logger.info(f"Building scene graph for image of shape {image_np.shape}.")
         
-        # 1. Object Detection: Get masks using ClassicalCVCropper
-        masks = self.cropper.detect_objects(image_np)
+        # 1. Object Detection and Segmentation
+        detected_objects = self.object_detector.detect_and_segment(image_np)
         
-        if not masks:
-            logger.info("No objects detected by cropper. Returning empty scene graph.")
+        if not detected_objects:
+            logger.info("No objects detected. Returning empty scene graph.")
             return {'objects': [], 'relations': [], 'image_info': {}}
 
-        # 2. Extract basic geometric properties and initial attributes from masks
+        # 2. Extract basic geometric properties and initial attributes from masks/bboxes
         objects_data = []
-        for idx, mask in enumerate(masks):
+        self._object_image_cache.clear() # Clear cache for new image
+        for idx, obj_det in enumerate(detected_objects):
+            mask = obj_det['mask']
+            bbox_xyxy = obj_det['bbox'] # Already in xyxy format
+            
+            # Crop object image for attribute extraction
+            xmin, ymin, xmax, ymax = bbox_xyxy
+            obj_image_np = image_np[ymin:ymax, xmin:xmax]
+            obj_image_pil = Image.fromarray(obj_image_np)
+            
+            # Store cropped image in cache for later `extract_feature` calls
+            obj_id_str = f"obj_{idx}"
+            self._object_image_cache[obj_id_str] = obj_image_pil
+
             props = {
-                'id': idx, # Assign an ID to each object
-                'area': _mask_area(mask),
-                'bbox_xyxy': _mask_to_bbox(mask), # [xmin, ymin, xmax, ymax]
-                'centroid': _mask_centroid(mask),
-                'aspect_ratio': _mask_aspect_ratio(mask),
-                'solidity': _mask_solidity(mask),
-                'mask': mask.tolist() # Store mask as list for JSON serialization (convert back to np.array if needed)
+                'id': obj_id_str,  # Assign an ID to each object
+                'area': _mask_area(mask) if mask is not None else (bbox_xyxy[2]-bbox_xyxy[0])*(bbox_xyxy[3]-bbox_xyxy[1]),
+                'bbox_xyxy': bbox_xyxy,  # [xmin, ymin, xmax, ymax]
+                'centroid': _mask_centroid(mask) if mask is not None else [(bbox_xyxy[0]+bbox_xyxy[2])/2, (bbox_xyxy[1]+bbox_xyxy[3])/2],
+                'aspect_ratio': _mask_aspect_ratio(mask) if mask is not None else (bbox_xyxy[2]-bbox_xyxy[0])/(bbox_xyxy[3]-bbox_xyxy[1] + 1e-6),
+                'solidity': _mask_solidity(mask) if mask is not None else 1.0, # Bbox solidity is 1.0
+                'mask': mask.tolist() if mask is not None else [] # Store mask as list for JSON serialization
             }
-            # For now, attributes are not directly extracted from raw pixels here.
-            # They would come from a separate attribute classification model or a more advanced CV module.
-            # We will generate dummy attributes for demonstration or assume they are passed.
-            # For this integration, we'll assign dummy attributes if not provided.
-            props['attributes'] = {
-                'shape': random.choice(['circle', 'square', 'triangle']),
-                'color': random.choice(['red', 'blue', 'green']),
-                'size': random.choice(['small', 'medium', 'large'])
-            }
+            
+            # Extract attributes using primitive_extractor with confidence
+            attributes = {}
+            attribute_confidences = {}
+            for feat_type in ['shape', 'color', 'size', 'fill', 'orientation', 'texture']:
+                val, conf = self.extract_feature(obj_id_str, feat_type) # Use the unified extract_feature
+                attributes[feat_type] = val
+                attribute_confidences[feat_type] = conf
+            
+            props['attributes'] = attributes
+            props['attribute_confidences'] = attribute_confidences # Store confidences
+            props['detection_confidence'] = obj_det.get('confidence', 1.0) # Confidence from detector
+            props['label'] = obj_det.get('label', 'object') # Label from detector
+            
             objects_data.append(props)
         logger.info(f"Extracted properties for {len(objects_data)} objects.")
 
         # 3. Build relation graph and infer spatial relations
         G = nx.Graph()
         for i, obj_i in enumerate(objects_data):
-            G.add_node(i, **obj_i) # Add all object properties as node attributes
-
+            G.add_node(i, **obj_i)  # Add all object properties as node attributes
+        
         relations_list = []
         image_height = image_np.shape[0]
-        proximity_threshold = image_height * self.config.get('proximity_threshold_ratio', 0.1) # Configurable threshold
+        image_width = image_np.shape[1]
+        
+        proximity_threshold = image_height * self.config.get('proximity_threshold_ratio', 0.1)  # Configurable threshold
+        center_dist_thresh_px = self.config.get('center_dist_thresh_px', 10.0)
 
         for i in range(len(objects_data)):
             for j in range(i + 1, len(objects_data)):
@@ -457,24 +589,33 @@ class SceneGraphBuilder:
                 
                 # Add specific spatial relation types as edge attributes and to relations_list
                 spatial_rels = _get_spatial_relations(bbox_i, bbox_j, 
-                                                      center_dist_thresh_px=self.config.get('center_dist_thresh_px', 10.0))
+                                                      threshold_iou=self.config['model']['yolo_iou_threshold'], # Use YOLO IoU threshold
+                                                      center_dist_thresh_px=center_dist_thresh_px)
                 
                 for s_rel in spatial_rels:
                     # Add to NetworkX graph for clustering
-                    G.add_edge(i, j, relation_type=s_rel, distance=float(dist)) # Store distance on edge
+                    G.add_edge(i, j, relation_type=s_rel, distance=float(dist))  # Store distance on edge
                     # Add to the relations list for the scene graph output
                     relations_list.append({
-                        'subject_id': i,
-                        'object_id': j,
+                        'subject_id': objects_data[i]['id'], # Use string IDs
+                        'object_id': objects_data[j]['id'], # Use string IDs
                         'type': s_rel,
-                        'confidence': 1.0 # Placeholder confidence
+                        'confidence': 1.0  # Placeholder confidence, could be learned
                     })
+                    # Also add inverse relation
+                    relations_list.append({
+                        'subject_id': objects_data[j]['id'],
+                        'object_id': objects_data[i]['id'],
+                        'type': s_rel + '_inverse', # e.g., 'right_of_inverse' for 'left_of'
+                        'confidence': 1.0
+                    })
+
         logger.info(f"Inferred {len(relations_list)} spatial relations.")
 
         # 4. Grouping logic (e.g., cluster by proximity)
         clusters = _cluster_by_proximity(G, threshold=proximity_threshold)
         for idx, obj_data in enumerate(objects_data):
-            obj_data['group_id'] = clusters.get(idx, -1) # Assign cluster ID
+            obj_data['group_id'] = clusters.get(idx, -1)  # Assign cluster ID
         logger.info(f"Performed object grouping. Found {len(set(clusters.values()))} groups.")
 
         # 5. Construct the final scene graph dictionary

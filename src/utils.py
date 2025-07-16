@@ -1,5 +1,6 @@
 # Folder: bongard_solver/src/
 # File: utils.py
+
 import torch
 import numpy as np
 import random
@@ -13,13 +14,13 @@ from functools import lru_cache
 import torch.nn as nn
 
 # Conditional import for torch_geometric.nn.global_mean_pool
+HAS_PYG_POOL = False
 try:
     from torch_geometric.nn import global_mean_pool
     HAS_PYG_POOL = True
     logger = logging.getLogger(__name__)
     logger.info("torch_geometric.nn.global_mean_pool found and enabled.")
 except ImportError:
-    HAS_PYG_POOL = False
     logger = logging.getLogger(__name__)
     logger.warning("PyTorch Geometric not found. global_mean_pool will be a dummy function.")
     # Dummy global_mean_pool if PyG is not available
@@ -46,7 +47,20 @@ logger = logging.getLogger(__name__)
 
 # Forward declaration for type hinting if Workspace is in another file
 if TYPE_CHECKING:
-    from .symbolic_engine import Workspace # Assuming Workspace is in symbolic_engine.py
+    from src.emergent.workspace_ext import Workspace  # Corrected import path
+
+# Import augment_image from src/utils/augment.py
+try:
+    from src.utils.augment import augment_image
+    HAS_AUGMENT_IMAGE = True
+except ImportError:
+    logger.warning("Could not import augment_image from src/utils/augment.py. Image augmentations will not be applied via this utility.")
+    HAS_AUGMENT_IMAGE = False
+    # Dummy augment_image function
+    def augment_image(img_np: np.ndarray) -> np.ndarray:
+        logger.warning("Using dummy augment_image: returns original image.")
+        return img_np
+
 
 # --- Logging Setup ---
 def setup_logging(log_level: str = 'INFO', log_file: Optional[str] = None):
@@ -60,7 +74,6 @@ def setup_logging(log_level: str = 'INFO', log_file: Optional[str] = None):
     # Remove all existing handlers to prevent duplicate logs if called multiple times
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
-
     numeric_level = getattr(logging, log_level.upper(), None)
     if not isinstance(numeric_level, int):
         raise ValueError(f"Invalid log level: {log_level}")
@@ -107,6 +120,9 @@ def load_config(config_path: str) -> Dict[str, Any]:
         Dict[str, Any]: The loaded configuration dictionary.
     """
     import yaml  # Import yaml here to avoid circular dependency if config.py imports utils
+    if not os.path.exists(config_path):
+        logger.error(f"Config file not found at {config_path}.")
+        raise FileNotFoundError(f"Config file not found at {config_path}")
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     logger.info(f"Configuration loaded from {config_path}")
@@ -177,6 +193,7 @@ def get_symbolic_embedding_dims(config: Dict[str, Any]) -> Dict[str, int]:
         ATTRIBUTE_ORIENTATION_MAP = {'horizontal':0}
         ATTRIBUTE_TEXTURE_MAP = {'smooth':0}
         RELATION_MAP = {'left_of':0, 'above':1}
+
     dims = {
         'shape_dim': len(ATTRIBUTE_SHAPE_MAP),
         'color_dim': len(ATTRIBUTE_COLOR_MAP),
@@ -205,7 +222,7 @@ def make_edge_index_map(num_objects: int) -> Dict[Tuple[int, int], int]:
     idx = 0
     for i in range(num_objects):
         for j in range(num_objects):
-            if i == j: continue    # Skip self-loops
+            if i == j: continue     # Skip self-loops
             edge_index_map[(i, j)] = idx
             idx += 1
     return edge_index_map
@@ -219,7 +236,7 @@ def get_predicted_relation(
     spatial_tolerance_ratio: float = 0.1
 ) -> List[Dict[str, Any]]:
     """
-    Infere relations between objects based on their attributes and spatial positions.
+    Infers relations between objects based on their attributes and spatial positions.
     This is a conceptual function and needs robust implementation based on your
     definition of relations and how they are derived from object properties.
     Args:
@@ -270,8 +287,8 @@ def get_predicted_relation(
                 inferred_relations.append({'type': 'different_size', 'subject_id': obj2['id'], 'object_id': obj1['id']})
             
             # --- Spatial relations ---
-            bbox1 = obj1['bbox']
-            bbox2 = obj2['bbox']
+            bbox1 = obj1['bbox_xyxy'] # Ensure bbox is xyxy
+            bbox2 = obj2['bbox_xyxy']
             
             # Calculate centers
             center1_x = bbox1[0] + (bbox1[2] - bbox1[0]) / 2
@@ -288,10 +305,10 @@ def get_predicted_relation(
                 inferred_relations.append({'type': 'touching', 'subject_id': obj1['id'], 'object_id': obj2['id']})
                 inferred_relations.append({'type': 'touching', 'subject_id': obj2['id'], 'object_id': obj1['id']})
             elif iou == 0 and (
-                abs(bbox1[2] - bbox2[0]) < spatial_tolerance_ratio * image_width or    # right edge of 1 near left edge of 2
-                abs(bbox2[2] - bbox1[0]) < spatial_tolerance_ratio * image_width or    # right edge of 2 near left edge of 1
-                abs(bbox1[3] - bbox2[1]) < spatial_tolerance_ratio * image_height or    # bottom edge of 1 near top edge of 2
-                abs(bbox2[3] - bbox1[1]) < spatial_tolerance_ratio * image_height      # bottom edge of 2 near top edge of 1
+                abs(bbox1[2] - bbox2[0]) < spatial_tolerance_ratio * image_width or     # right edge of 1 near left edge of 2
+                abs(bbox2[2] - bbox1[0]) < spatial_tolerance_ratio * image_width or     # right edge of 2 near left edge of 1
+                abs(bbox1[3] - bbox2[1]) < spatial_tolerance_ratio * image_height or     # bottom edge of 1 near top edge of 2
+                abs(bbox2[3] - bbox1[1]) < spatial_tolerance_ratio * image_height       # bottom edge of 2 near top edge of 1
             ):
                 # Check if bounding boxes are very close but not overlapping
                 inferred_relations.append({'type': 'touching', 'subject_id': obj1['id'], 'object_id': obj2['id']})
@@ -343,20 +360,20 @@ def cross_attend(query: torch.Tensor, context: torch.Tensor, embed_dim: int, num
     Returns:
         torch.Tensor: The output of the cross-attention (Batch_size, Query_dim).
     """
-    if query.dim() == 1:    # Handle single query
+    if query.dim() == 1:     # Handle single query
         query = query.unsqueeze(0)
-    if context.dim() == 1:    # Handle single context
+    if context.dim() == 1:     # Handle single context
         context = context.unsqueeze(0)
     
-    query_seq = query.unsqueeze(1)      # (B, 1, Query_dim)
-    context_seq = context.unsqueeze(1)  # (B, 1, Context_dim)
+    query_seq = query.unsqueeze(1)       # (B, 1, Query_dim)
+    context_seq = context.unsqueeze(1)   # (B, 1, Context_dim)
     
     attn = nn.MultiheadAttention(
-        embed_dim=query.shape[-1],      # Query_dim
+        embed_dim=query.shape[-1],       # Query_dim
         num_heads=num_heads,
-        kdim=context.shape[-1],         # Context_dim
-        vdim=context.shape[-1],         # Context_dim
-        batch_first=True                # Input/output tensors are (batch, seq_len, feature)
+        kdim=context.shape[-1],          # Context_dim
+        vdim=context.shape[-1],          # Context_dim
+        batch_first=True                 # Input/output tensors are (batch, seq_len, feature)
     ).to(query.device)
     
     attn_output, _ = attn(
@@ -370,7 +387,7 @@ def cross_attend(query: torch.Tensor, context: torch.Tensor, embed_dim: int, num
 # --- Dummy Forward Feature-Dim Inference ---
 def infer_feature_dim(model: nn.Module, img_size: int, device: torch.device) -> int:
     """
-    Infere the output feature dimension of a model by performing a dummy forward pass.
+    Infers the output feature dimension of a model by performing a dummy forward pass.
     This is useful for dynamically setting input dimensions for subsequent layers.
     Args:
         model (nn.Module): The model whose feature dimension needs to be inferred.
@@ -449,3 +466,4 @@ def compute_temperature(ws: 'Workspace', alpha: float = 0.7, beta: float = 0.3) 
     temp = max(0.0, min(1.0, temp))
     logger.debug(f"Computed temperature: {temp:.4f} (avg_act: {avg_act:.4f}, coherence: {coh:.4f})")
     return temp
+

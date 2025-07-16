@@ -27,9 +27,9 @@ class Concept:
         self.depth = depth
         self.activation = activation
         self.initial_activation_decay_rate = initial_activation_decay_rate
-        self.links: Dict[str, Tuple['Concept', float]] = {}  # {neighbor_name: (neighbor_node, weight)}
-        self.incoming_activation = 0.0 # Accumulates activation from neighbors in a single step
-        self.is_initial_activation = False # Flag for initial activation decay
+        self.links: Dict[str, Tuple['Concept', float]] = {}   # {neighbor_name: (neighbor_node, weight)}
+        self.incoming_activation = 0.0  # Accumulates activation from neighbors in a single step
+        self.is_initial_activation = False  # Flag for initial activation decay
 
     def add_link(self, neighbor_node: 'Concept', weight: float):
         """
@@ -56,7 +56,7 @@ class Concept:
         # Apply special decay for initial activations
         if self.is_initial_activation:
             self.activation = max(0.0, self.activation - self.initial_activation_decay_rate)
-            if self.activation <= 0.01: # If activation is very low, it's no longer 'initial'
+            if self.activation <= 0.01:  # If activation is very low, it's no longer 'initial'
                 self.is_initial_activation = False
 
         # Spread to neighbors
@@ -74,7 +74,7 @@ class Concept:
         Caps activation at max_activation.
         """
         self.activation = min(max_activation, self.activation + self.incoming_activation)
-        self.incoming_activation = 0.0 # Reset for next step
+        self.incoming_activation = 0.0  # Reset for next step
 
     def set_activation(self, value: float, is_initial: bool = False):
         """Sets the activation of the node directly."""
@@ -90,8 +90,7 @@ class Concept:
             'links': {neighbor_node.name: weight for neighbor_node, weight in self.links.values()}
         }
 
-
-class ConceptNet:
+class ConceptNetwork:
     """
     Manages the graph of interconnected Concept (nodes).
     Handles activation propagation and overall Concept Network state.
@@ -129,20 +128,25 @@ class ConceptNet:
         for attr_map in [ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_FILL_MAP,
                          ATTRIBUTE_SIZE_MAP, ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_TEXTURE_MAP]:
             for name in attr_map.keys():
-                self.add_node(name, depth=0) # Basic attributes at depth 0
+                self.add_node(name, depth=0)  # Basic attributes at depth 0
 
         # Relations (Depth 1)
         for name in RELATION_MAP.keys():
-            if name != 'unrelated': # 'unrelated' is usually a null relation, not a concept to activate
+            if name != 'unrelated':  # 'unrelated' is usually a null relation, not a concept to activate
                 self.add_node(name, depth=1)
 
-        # Abstract Concepts (Depth 2+) - Example, these can be customized via config
+        # Abstract Concepts (Depth 2+) - Customized via config
         abstract_concepts = self.config.get('abstract_concepts', {
             "group": 2, "symmetry": 2, "correspondence": 2,
-            "rule": 3, "analogy": 3, "problem": 3
+            "rule": 3, "analogy": 3, "problem": 3,
+            "count": 2, "relation_type": 1, "attribute_type": 1 # Added new concepts
         })
         for name, depth in abstract_concepts.items():
             self.add_node(name, depth=depth)
+
+        # Add generic attribute/relation type concepts
+        self.add_node('attribute_type', depth=1)
+        self.add_node('relation_type', depth=1)
 
         logger.info(f"ConceptNet: Initialized {len(self.nodes)} concept nodes.")
 
@@ -153,47 +157,66 @@ class ConceptNet:
         """
         # Import maps from the project root's config.py
         try:
-            from config import ATTRIBUTE_COLOR_MAP, ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_SIZE_MAP, RELATION_MAP
+            from config import ATTRIBUTE_COLOR_MAP, ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_SIZE_MAP, RELATION_MAP, \
+                               ATTRIBUTE_FILL_MAP, ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_TEXTURE_MAP
         except ImportError:
             logger.error("Could not import attribute/relation maps from config.py for links. ConceptNet links will be incomplete.")
             ATTRIBUTE_SHAPE_MAP = {'circle':0, 'square':1}
             ATTRIBUTE_COLOR_MAP = {'red':0, 'blue':1}
             ATTRIBUTE_SIZE_MAP = {'small':0, 'medium':1}
             RELATION_MAP = {'above':0, 'left_of':1}
+            ATTRIBUTE_FILL_MAP = {'solid':0, 'outline':1}
+            ATTRIBUTE_ORIENTATION_MAP = {'upright':0}
+            ATTRIBUTE_TEXTURE_MAP = {'flat':0}
 
         # Example links (customize extensively based on your domain knowledge)
         # Links from specific attribute values to their general attribute type
-        for color_name in ATTRIBUTE_COLOR_MAP.keys():
-            if color_name in self.nodes:
-                if 'color' not in self.nodes: self.add_node('color', depth=1) # Ensure parent concept exists
-                self.add_link(color_name, 'color', 0.8)
-        for shape_name in ATTRIBUTE_SHAPE_MAP.keys():
-            if shape_name in self.nodes:
-                if 'shape' not in self.nodes: self.add_node('shape', depth=1)
-                self.add_link(shape_name, 'shape', 0.8)
-        for size_name in ATTRIBUTE_SIZE_MAP.keys():
-            if size_name in self.nodes:
-                if 'size' not in self.nodes: self.add_node('size', depth=1)
-                self.add_link(size_name, 'size', 0.8)
-        
+        for attr_map, attr_type_name in [
+            (ATTRIBUTE_COLOR_MAP, 'color'),
+            (ATTRIBUTE_SHAPE_MAP, 'shape'),
+            (ATTRIBUTE_FILL_MAP, 'fill'),
+            (ATTRIBUTE_SIZE_MAP, 'size'),
+            (ATTRIBUTE_ORIENTATION_MAP, 'orientation'),
+            (ATTRIBUTE_TEXTURE_MAP, 'texture')
+        ]:
+            if attr_type_name not in self.nodes:
+                self.add_node(attr_type_name, depth=1) # Ensure parent concept exists
+            for name in attr_map.keys():
+                if name in self.nodes:
+                    self.add_link(name, attr_type_name, 0.8) # e.g., 'red' -> 'color'
+                    self.add_link(attr_type_name, 'attribute_type', 0.9) # e.g., 'color' -> 'attribute_type'
+
+        # Relations to 'relation_type'
+        for rel_name in RELATION_MAP.keys():
+            if rel_name != 'unrelated' and rel_name in self.nodes:
+                if 'relation_type' not in self.nodes:
+                    self.add_node('relation_type', depth=1)
+                self.add_link(rel_name, 'relation_type', 0.9) # e.g., 'left_of' -> 'relation_type'
+
         # Attribute Type to Abstract Concepts
         if 'color' in self.nodes and 'group' in self.nodes: self.add_link('color', 'group', 0.5)
         if 'shape' in self.nodes and 'group' in self.nodes: self.add_link('shape', 'group', 0.6)
         if 'size' in self.nodes and 'group' in self.nodes: self.add_link('size', 'group', 0.4)
-
+        
         # Relations to Abstract Concepts
-        for rel_name in ['left_of', 'right_of', 'above', 'below', 'inside', 'contains', 'overlaps', 'touches']: # Use keys from RELATION_MAP
+        for rel_name in ['left_of', 'right_of', 'above', 'below', 'inside', 'contains', 'overlaps', 'touches']:
             if rel_name in self.nodes and 'correspondence' in self.nodes:
                 self.add_link(rel_name, 'correspondence', 0.7)
         
-        if 'same_shape_as' in self.nodes and 'symmetry' in self.nodes: self.add_link('same_shape_as', 'symmetry', 0.6) # Example, assuming this relation exists
-        if 'same_color_as' in self.nodes and 'symmetry' in self.nodes: self.add_link('same_color_as', 'symmetry', 0.5) # Example
+        # Add links for 'count' concept
+        if 'count' in self.nodes:
+            if 'shape' in self.nodes: self.add_link('shape', 'count', 0.6)
+            if 'color' in self.nodes: self.add_link('color', 'count', 0.5)
+            if 'group' in self.nodes: self.add_link('group', 'count', 0.7)
 
         # Abstract Concepts to 'rule' or 'problem'
         if 'group' in self.nodes and 'rule' in self.nodes: self.add_link('group', 'rule', 0.7)
         if 'symmetry' in self.nodes and 'rule' in self.nodes: self.add_link('symmetry', 'rule', 0.8)
         if 'correspondence' in self.nodes and 'analogy' in self.nodes: self.add_link('correspondence', 'analogy', 0.8)
         if 'analogy' in self.nodes and 'problem' in self.nodes: self.add_link('analogy', 'problem', 0.9)
+        if 'count' in self.nodes and 'rule' in self.nodes: self.add_link('count', 'rule', 0.75) # Count rules are common
+        if 'attribute_type' in self.nodes and 'rule' in self.nodes: self.add_link('attribute_type', 'rule', 0.6)
+        if 'relation_type' in self.nodes and 'rule' in self.nodes: self.add_link('relation_type', 'rule', 0.65)
 
         logger.info(f"ConceptNet: Initialized links between concept nodes.")
 
@@ -256,8 +279,9 @@ class ConceptNet:
         if total_activation > 0:
             # Only normalize if total_activation is greater than 0 to avoid division by zero
             # This normalization is global, making activations competitive.
+            # It's important to use a small epsilon to avoid division by zero if total_activation is near zero.
             for node in self.nodes.values():
-                node.activation /= total_activation
+                node.activation /= (total_activation + 1e-9) # Add epsilon
         
         logger.debug(f"ConceptNet: Stepped. Total activation: {total_activation:.4f}")
 

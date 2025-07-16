@@ -1,4 +1,5 @@
-# Folder: bongard_solver/src/rl_module.py
+# Folder: bongard_solver/src/
+# File: rl_module.py
 
 import torch
 import torch.nn as nn
@@ -7,11 +8,12 @@ import numpy as np
 import random
 import logging
 from typing import List, Dict, Any, Tuple, Optional, Union
+import collections # For defaultdict
 
 # Import BongardRule and RuleAtom from bongard_rules
 # Assuming bongard_rules.py exists and defines these constants and classes
 try:
-    from bongard_rules import BongardRule, RuleAtom, ALL_RULE_ATOMS
+    from src.bongard_rules import BongardRule, RuleAtom, ALL_RULE_ATOMS
 except ImportError:
     logging.warning("Could not import bongard_rules. Using dummy BongardRule and RuleAtom.")
     class RuleAtom:
@@ -21,11 +23,12 @@ except ImportError:
             self.arity = arity
         def __repr__(self): return self.name
     class BongardRule:
-        def __init__(self, name, description, program_ast, logical_facts):
+        def __init__(self, name, description, program_ast, logical_facts, is_positive_rule=True):
             self.name = name
             self.description = description
             self.program_ast = program_ast
             self.logical_facts = logical_facts
+            self.is_positive_rule = is_positive_rule
         def __repr__(self): return self.name
     ALL_RULE_ATOMS = {
         "SHAPE": RuleAtom("SHAPE", arity=2), "COLOR": RuleAtom("COLOR", arity=2),
@@ -33,23 +36,27 @@ except ImportError:
         "AND": RuleAtom("AND", arity=-1), "OR": RuleAtom("OR", arity=-1), "NOT": RuleAtom("NOT", arity=1),
         "FORALL": RuleAtom("FORALL", arity=2), "EXISTS": RuleAtom("EXISTS", arity=2),
         "object_variable": RuleAtom("object_variable", is_value=True),
-        "IMPLIES": RuleAtom("IMPLIES", arity=2)
+        "IMPLIES": RuleAtom("IMPLIES", arity=2),
+        "GT": RuleAtom("GT", arity=2), "LT": RuleAtom("LT", arity=2), "EQ": RuleAtom("EQ", arity=2),
+        "COUNT": RuleAtom("COUNT", arity=2),
+        "INT_1": RuleAtom("INT_1", is_value=True), "INT_2": RuleAtom("INT_2", is_value=True),
+        "INT_3": RuleAtom("INT_3", is_value=True), "INT_4": RuleAtom("INT_4", is_value=True),
+        "INT_5": RuleAtom("INT_5", is_value=True),
     }
-
 
 # Import rule_evaluator for precise reward calculation
 try:
-    from rule_evaluator import evaluate_rule_on_support_set
+    from src.rule_evaluator import evaluate_rule_on_support_set
 except ImportError:
     logging.warning("Could not import rule_evaluator. Using dummy evaluate_rule_on_support_set.")
     def evaluate_rule_on_support_set(rule: BongardRule, scene_graphs: List[Dict[str, Any]], labels: List[int]) -> float:
         """Dummy rule evaluator: always returns 0.5."""
         logging.warning("Using dummy rule_evaluator. Reward will be constant.")
-        return 0.5 # Dummy accuracy
+        return 0.5  # Dummy accuracy
 
 # Import ASTToFactsTransducer from dsl for rule construction
 try:
-    from dsl import ASTToFactsTransducer, ASTNode, Primitive, DSLProgram, DSL_VALUES, DSL_FUNCTIONS
+    from src.dsl import ASTToFactsTransducer, ASTNode, Primitive, DSLProgram, DSL_VALUES, DSL_FUNCTIONS
 except ImportError:
     logging.warning("Could not import DSL components. Rule construction will be limited.")
     # Dummy classes if dsl.py is not fully accessible
@@ -57,7 +64,7 @@ except ImportError:
         def __init__(self, primitive, children=None, value=None): self.primitive = primitive; self.children = children or []; self.value = value
         def to_dict(self): return {"op": self.primitive.name, "args": [c.to_dict() for c in self.children]}
     class Primitive:
-        def __init__(self, name, func, type_signature, is_terminal=False): self.name = name; self.func = func; self.type_signature = type_signature; self.is_terminal = is_terminal
+        def __init__(self, name, func=None, type_signature=None, is_terminal=False): self.name = name; self.func = func; self.type_signature = type_signature; self.is_terminal = is_terminal
     class DSLProgram:
         def __init__(self, root_node): self.root = root_node
     class ASTToFactsTransducer:
@@ -65,6 +72,30 @@ except ImportError:
     DSL_VALUES = []
     DSL_FUNCTIONS = []
 
+# Import KnowledgeReplayBuffer from core_models/replay_buffer.py
+try:
+    from core_models.replay_buffer import KnowledgeReplayBuffer
+    HAS_KNOWLEDGE_REPLAY_BUFFER = True
+except ImportError:
+    logging.warning("KnowledgeReplayBuffer not found in core_models/replay_buffer.py. Replay buffer will be a simple list.")
+    HAS_KNOWLEDGE_REPLAY_BUFFER = False
+    class KnowledgeReplayBuffer: # Simple list-based dummy
+        def __init__(self, capacity: int, *args, **kwargs):
+            self.buffer = collections.deque(maxlen=capacity)
+            self.priorities = collections.deque(maxlen=capacity)
+        def add(self, sample: Any, original_index: int, initial_priority: float = 1.0):
+            self.buffer.append(sample)
+            self.priorities.append(initial_priority)
+        def sample(self, batch_size: int, beta: float = 0.4) -> Tuple[List[Any], np.ndarray, np.ndarray]:
+            if not self.buffer: return [], np.array([]), np.array([])
+            indices = random.sample(range(len(self.buffer)), min(batch_size, len(self.buffer)))
+            samples = [self.buffer[i] for i in indices]
+            # Dummy importance sampling weights
+            is_weights = np.ones(len(samples), dtype=np.float32)
+            return samples, np.array(indices), is_weights
+        def update_priorities(self, original_indices: List[int], errors: List[float]):
+            pass # Dummy update
+        def __len__(self): return len(self.buffer)
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +132,7 @@ class BongardEnv:
     """
     def __init__(self, support_set_features: List[torch.Tensor],
                  support_set_labels: List[int],
-                 support_set_scene_graphs: List[Dict[str, Any]], # Added for precise reward
+                 support_set_scene_graphs: List[Dict[str, Any]],  # Added for precise reward
                  max_steps: int = 50):
         """
         Args:
@@ -116,10 +147,9 @@ class BongardEnv:
         self.support_set_scene_graphs = support_set_scene_graphs
         self.max_steps = max_steps
         
-        self.current_rule_components: List[RuleAtom] = [] # Stores sequence of proposed RuleAtoms
+        self.current_rule_components: List[RuleAtom] = []  # Stores sequence of proposed RuleAtoms
         self.current_step = 0
         self.done = False
-
         self.action_space = RuleGraphSpace()
         # Observation space is conceptually summarized by the support set context features
         self.observation_space_dim = support_set_features[0].shape[0] if support_set_features else 0
@@ -129,7 +159,11 @@ class BongardEnv:
         
         # Map RuleAtom names to DSL Primitive objects for AST construction
         self.primitive_map = {p.name: p for p in DSL_VALUES + DSL_FUNCTIONS}
-        
+        # Ensure primitive_map includes all RuleAtoms
+        for atom in ALL_RULE_ATOMS.values():
+            if atom.name not in self.primitive_map:
+                self.primitive_map[atom.name] = Primitive(atom.name, None, "unknown_type", is_terminal=atom.is_value)
+
         logger.info(f"BongardEnv initialized. Max steps: {max_steps}.")
 
     def reset(self, support_set_features: List[torch.Tensor],
@@ -143,7 +177,7 @@ class BongardEnv:
         self.current_step = 0
         self.done = False
         logger.debug("BongardEnv reset.")
-        return self.support_set_features # Return initial observation (features of support set)
+        return self.support_set_features  # Return initial observation (features of support set)
 
     def step(self, action_idx: int) -> Tuple[List[torch.Tensor], float, bool, Dict[str, Any]]:
         """
@@ -155,14 +189,14 @@ class BongardEnv:
         self.current_rule_components.append(rule_component)
 
         reward = 0.0
-        info = {'rule_proposed': False, 'rule_name': 'None', 'rule_accuracy': 0.0}
-
+        info = {'rule_proposed': False, 'rule_name': 'None', 'rule_accuracy': 0.0, 'proposed_rule_object': None}
+        
         # Heuristic for "rule complete": if we have enough components to form a basic rule, or max steps.
         # This is still a heuristic. A more robust system would have an explicit "end_rule" action
         # or a grammar-based completion check.
         is_heuristic_rule_complete = len(self.current_rule_components) >= 3 and \
                                      (self.current_rule_components[-1].is_value or \
-                                      self.current_rule_components[-1].name in ["AND", "OR", "NOT", "IMPLIES"])
+                                      self.current_rule_components[-1].name in ["AND", "OR", "NOT", "IMPLIES", "COUNT", "GT", "LT", "EQ"])
         
         if self.current_step >= self.max_steps or is_heuristic_rule_complete:
             self.done = True
@@ -172,17 +206,18 @@ class BongardEnv:
             if proposed_rule:
                 info['rule_proposed'] = True
                 info['rule_name'] = proposed_rule.name
+                info['proposed_rule_object'] = proposed_rule # Pass the BongardRule object
                 
                 # Calculate precise reward using rule_evaluator
                 accuracy = evaluate_rule_on_support_set(proposed_rule, self.support_set_scene_graphs, self.support_set_labels)
-                reward = accuracy # Reward is the accuracy on the support set
+                reward = accuracy  # Reward is the accuracy on the support set
                 info['rule_accuracy'] = accuracy
             else:
-                reward = -0.1 # Small penalty for invalid rule
+                reward = -0.1  # Small penalty for invalid rule
                 logger.debug("RL: Proposed rule was invalid.")
             
             logger.debug(f"RL Episode finished. Final reward: {reward:.2f}, Rule: {info['rule_name']}, Acc: {info['rule_accuracy']:.2f}")
-
+        
         return self.support_set_features, reward, self.done, info
 
     def _construct_rule_from_components(self, components: List[RuleAtom]) -> Optional[BongardRule]:
@@ -193,35 +228,28 @@ class BongardEnv:
         """
         if not components:
             return None
-
-        # This parser is highly simplified. A full parser would need to handle
-        # operator precedence, variable binding, and arbitrary nesting.
-        # We will attempt to construct a few common rule patterns.
-
+        
         try:
             # Pattern 1: Quantified Attribute Predicate (e.g., FORALL(O, shape(O, circle)))
             # Components: [QUANTIFIER, OBJ_VAR, ATTR_PREDICATE, OBJ_VAR, VALUE]
-            if (len(components) >= 5 and
+            # Simplified to look for: QUANTIFIER, OBJ_VAR, ATTR_PREDICATE, VALUE
+            if (len(components) >= 4 and
                 components[0].name in ["FORALL", "EXISTS"] and
                 components[1].name == "object_variable" and
-                components[2].arity == 2 and not components[2].is_value and # e.g., SHAPE, COLOR
-                components[3].name == "object_variable" and # Should be the same object variable
-                components[4].is_value): # e.g., circle, red
+                components[2].arity == 2 and not components[2].is_value and  # e.g., SHAPE, COLOR
+                components[3].is_value):  # e.g., circle, red
                 
                 quantifier_atom = components[0]
                 obj_var_atom = components[1]
                 attribute_atom = components[2]
-                value_atom = components[4]
-
-                # Create AST Nodes
-                value_node = ASTNode(self.primitive_map[value_atom.name], value=value_atom.name)
-                obj_var_node = ASTNode(self.primitive_map[obj_var_atom.name], value="O") # Standardize to 'O'
+                value_atom = components[3]
                 
-                # Attribute predicate (e.g., shape(O, circle))
+                value_node = ASTNode(self.primitive_map[value_atom.name], value=value_atom.name)
+                obj_var_node = ASTNode(self.primitive_map[obj_var_atom.name], value="O")  # Standardize to 'O'
+                
                 predicate_node = ASTNode(self.primitive_map[attribute_atom.name], 
                                          children=[obj_var_node, value_node])
                 
-                # Quantified expression (e.g., FORALL(O, predicate_node))
                 root_node = ASTNode(self.primitive_map[quantifier_atom.name], 
                                     children=[obj_var_node, predicate_node])
                 
@@ -235,52 +263,50 @@ class BongardEnv:
                     program_ast=[program_ast_root],
                     logical_facts=logical_facts
                 )
-
-            # Pattern 2: Simple Logical AND/OR of two attribute predicates
-            # Components: [LOGICAL_OP, ATTR_PRED1, OBJ_VAR1, VALUE1, ATTR_PRED2, OBJ_VAR2, VALUE2]
-            # This is a very specific sequence, assuming distinct object variables for now.
-            elif (len(components) >= 7 and
-                  components[0].name in ["AND", "OR"] and
-                  components[1].arity == 2 and not components[1].is_value and # ATTR_PRED1
-                  components[2].name == "object_variable" and components[3].is_value and # OBJ_VAR1, VALUE1
-                  components[4].arity == 2 and not components[4].is_value and # ATTR_PRED2
-                  components[5].name == "object_variable" and components[6].is_value): # OBJ_VAR2, VALUE2
+            
+            # Pattern 2: Count-based rules (e.g., EQ(COUNT(O, shape(O, circle)), INT_3))
+            # Components: [EQ, COUNT, OBJ_VAR, ATTR_PREDICATE, VALUE, INT_N]
+            elif (len(components) >= 6 and
+                  components[0].name == "EQ" and
+                  components[1].name == "COUNT" and
+                  components[2].name == "object_variable" and
+                  components[3].arity == 2 and not components[3].is_value and # ATTR_PREDICATE
+                  components[4].is_value and # VALUE
+                  components[5].name.startswith("INT_")): # INT_N
                 
-                logical_op_atom = components[0]
-                pred1_atom = components[1]
-                obj_var1_atom = components[2]
-                value1_atom = components[3]
-                pred2_atom = components[4]
-                obj_var2_atom = components[5]
-                value2_atom = components[6]
-
-                # Create AST Nodes for predicates
-                obj_node1 = ASTNode(self.primitive_map[obj_var1_atom.name], value="O1")
-                value_node1 = ASTNode(self.primitive_map[value1_atom.name], value=value1_atom.name)
-                predicate_node1 = ASTNode(self.primitive_map[pred1_atom.name], children=[obj_node1, value_node1])
-
-                obj_node2 = ASTNode(self.primitive_map[obj_var2_atom.name], value="O2")
-                value_node2 = ASTNode(self.primitive_map[value2_atom.name], value=value2_atom.name)
-                predicate_node2 = ASTNode(self.primitive_map[pred2_atom.name], children=[obj_node2, value_node2])
-
-                # Logical operation node
-                root_node = ASTNode(self.primitive_map[logical_op_atom.name], 
-                                    children=[predicate_node1, predicate_node2])
+                count_op_atom = components[1]
+                obj_var_atom = components[2]
+                attribute_atom = components[3]
+                value_atom = components[4]
+                int_atom = components[5]
+                
+                obj_var_node = ASTNode(self.primitive_map[obj_var_atom.name], value="O")
+                value_node = ASTNode(self.primitive_map[value_atom.name], value=value_atom.name)
+                
+                attr_predicate_node = ASTNode(self.primitive_map[attribute_atom.name],
+                                              children=[obj_var_node, value_node])
+                
+                count_node = ASTNode(self.primitive_map[count_op_atom.name],
+                                     children=[obj_var_node, attr_predicate_node])
+                
+                int_value = int(int_atom.name.split('_')[1])
+                int_node = ASTNode(self.primitive_map[int_atom.name], value=int_value)
+                
+                root_node = ASTNode(self.primitive_map["EQ"], children=[count_node, int_node])
                 
                 program_ast_root = root_node.to_dict()
                 program = DSLProgram(root_node)
                 logical_facts = self.transducer.convert(program)
-
+                
                 return BongardRule(
-                    name=f"Proposed_{logical_op_atom.name}_{pred1_atom.name}_{pred2_atom.name}",
-                    description=f"RL proposed rule: {logical_op_atom.name}({pred1_atom.name}(O1, {value1_atom.name}), {pred2_atom.name}(O2, {value2_atom.name}))",
+                    name=f"Proposed_COUNT_{attribute_atom.name}_{value_atom.name}_EQ_{int_value}",
+                    description=f"RL proposed rule: COUNT(O, {attribute_atom.name}(O, {value_atom.name})) == {int_value}",
                     program_ast=[program_ast_root],
                     logical_facts=logical_facts
                 )
 
             logger.debug(f"RL: Could not parse components into a known rule pattern: {components}")
             return None
-
         except Exception as e:
             logger.error(f"Error parsing rule components during AST construction: {e}. Components: {components}")
             return None
@@ -294,7 +320,7 @@ class RulePolicy(nn.Module):
         super().__init__()
         self.fc1 = nn.Linear(support_context_dim, 256)
         self.relu = nn.ReLU()
-        self.fc_actions = nn.Linear(256, action_space_size) # Logits for actions
+        self.fc_actions = nn.Linear(256, action_space_size)  # Logits for actions
         logger.info(f"RulePolicy initialized. Context dim: {support_context_dim}, Action space: {action_space_size}.")
 
     def forward(self, support_set_context: torch.Tensor) -> torch.Tensor:
@@ -330,7 +356,7 @@ class RLAgent:
             learning_rate (float): Learning rate for the policy optimizer.
             gamma (float): Discount factor for rewards.
         """
-        self.env = None # Environment will be set when search is called
+        self.env = None  # Environment will be set when search is called
         self.policy = RulePolicy(support_context_dim, RuleGraphSpace().num_actions)
         self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=learning_rate)
         self.gamma = gamma
@@ -346,7 +372,7 @@ class RLAgent:
         Returns:
             Tuple[int, torch.Tensor]: The chosen action index and its log probability.
         """
-        state = state.unsqueeze(0) # Add batch dimension
+        state = state.unsqueeze(0)  # Add batch dimension
         logits = self.policy(state)
         probs = F.softmax(logits, dim=-1)
         m = torch.distributions.Categorical(probs)
@@ -367,11 +393,11 @@ class RLAgent:
         
         # Normalize returns (optional, but often helps stability)
         returns = torch.tensor(returns)
-        if len(returns) > 1: # Avoid division by zero for single step episodes
+        if len(returns) > 1:  # Avoid division by zero for single step episodes
             returns = (returns - returns.mean()) / (returns.std() + 1e-9)
-        else: # If only one return, just use it as is
-            pass # No normalization needed for single element
-
+        else:  # If only one return, just use it as is
+            pass  # No normalization needed for single element
+        
         for log_prob, R in zip(self.log_probs, returns):
             policy_loss.append(-log_prob * R)
         
@@ -386,7 +412,7 @@ class RLAgent:
 
     def search(self, rules: List[str], support_set_features: List[torch.Tensor],
                support_set_labels: List[int], support_set_scene_graphs: List[Dict[str, Any]],
-               num_episodes: int = 10) -> 'RLAgent.Solution':
+               num_episodes: int = 10, causal_strengths: Optional[Dict[str, float]] = None) -> 'RLAgent.Solution':
         """
         Searches for the best Bongard rule using the RL agent.
         Args:
@@ -396,6 +422,7 @@ class RLAgent:
             support_set_labels (List[int]): Labels for support images.
             support_set_scene_graphs (List[Dict[str, Any]]): Scene graphs for support images.
             num_episodes (int): Number of episodes (rule generation attempts) to run.
+            causal_strengths (Optional[Dict[str, float]]): Causal strengths from causal.py for guiding policy.
         Returns:
             RLAgent.Solution: The best rule found and its accuracy.
         """
@@ -406,15 +433,26 @@ class RLAgent:
         
         best_rule_accuracy = -1.0
         best_rule_solution: Optional[RLAgent.Solution] = None
-
+        
         # Aggregate support set features into a single context vector for the policy
         if support_set_features:
             # Simple mean pooling of features for context
             support_context = torch.mean(torch.stack(support_set_features), dim=0)
         else:
-            # Handle case with no features (e.g., return a zero tensor of appropriate dim)
             logger.warning("No support set features provided. Using zero vector as context.")
-            support_context = torch.zeros(self.policy.fc1.in_features) # Match input dim of policy
+            support_context = torch.zeros(self.policy.fc1.in_features)  # Match input dim of policy
+        
+        # Integrate causal strengths into the context or policy (conceptual)
+        # This is an advanced integration. One way is to concatenate a vector of causal strengths
+        # to the support_context, or use it to modulate action probabilities.
+        # For now, we just log its presence.
+        if causal_strengths:
+            logger.debug(f"RLAgent received causal strengths: {causal_strengths}")
+            # Example: Create a tensor from a subset of causal strengths to augment context
+            # This would require careful design of the policy network's input dimension.
+            # causal_strength_vector = torch.tensor([causal_strengths.get(k, 0.5) for k in ['SHAPE', 'COLOR', 'LEFT_OF']], dtype=torch.float32)
+            # support_context = torch.cat((support_context, causal_strength_vector))
+            # The policy network's input_dim would need to be adjusted accordingly.
 
         for episode in range(num_episodes):
             state = self.env.reset(support_set_features, support_set_labels, support_set_scene_graphs)
@@ -427,7 +465,6 @@ class RLAgent:
                 
                 self.rewards.append(reward)
                 episode_rewards.append(reward)
-
                 if done:
                     # If a rule was proposed and evaluated
                     if info['rule_proposed']:
@@ -439,13 +476,13 @@ class RLAgent:
                             best_rule_solution = RLAgent.Solution(
                                 score=current_accuracy,
                                 description=f"RL found rule: {info['rule_name']} (Acc: {current_accuracy:.4f})",
-                                rule=info.get('proposed_rule_object') # If you pass the BongardRule object in info
+                                rule=info.get('proposed_rule_object')  # Pass the BongardRule object
                             )
                     else:
                         logger.debug(f"Episode {episode + 1} finished (step {t+1}). No valid rule proposed.")
                     break
             
-            self.learn() # Update policy after each episode
+            self.learn()  # Update policy after each episode
 
         if best_rule_solution:
             logger.info(f"RLAgent search completed. Best rule accuracy: {best_rule_accuracy:.4f}")

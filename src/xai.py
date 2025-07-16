@@ -1,5 +1,6 @@
 # Folder: bongard_solver/src/
 # File: xai.py
+
 import logging
 import torch
 import torch.nn as nn
@@ -8,19 +9,24 @@ import numpy as np
 import os
 from PIL import Image
 from typing import Dict, Any, Optional, Union, Callable, List
+
 # Import torchvision transforms for consistent preprocessing/denormalization
 from torchvision import transforms as T
 
 # Import ImageNet normalization parameters from the project root config
 try:
-    from config import IMAGENET_MEAN, IMAGENET_STD
+    # Use the 0-1 range for visualization as PIL/numpy expect this for display
+    from config import IMAGENET_MEAN_0_1, IMAGENET_STD_0_1
+    IMAGENET_MEAN = IMAGENET_MEAN_0_1
+    IMAGENET_STD = IMAGENET_STD_0_1
 except ImportError:
-    logger.error("Could not import IMAGENET_MEAN, IMAGENET_STD from config.py. XAI visualizations might use incorrect normalization.")
-    # Fallback to standard ImageNet values if config is not accessible
+    logger.error("Could not import IMAGENET_MEAN_0_1, IMAGENET_STD_0_1 from config.py. XAI visualizations might use incorrect normalization.")
+    # Fallback to standard ImageNet values (0-1 range) if config is not accessible
     IMAGENET_MEAN = [0.485, 0.456, 0.406]
     IMAGENET_STD = [0.229, 0.224, 0.225]
 
 # Import Grad-CAM library components
+HAS_GRAD_CAM = False
 try:
     from pytorch_grad_cam import GradCAM, GradCAMPlusPlus
     from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
@@ -29,11 +35,11 @@ try:
     logger = logging.getLogger(__name__)  # Ensure logger is initialized before use
     logger.info("pytorch-grad-cam library found and enabled.")
 except ImportError:
-    HAS_GRAD_CAM = False
     logger = logging.getLogger(__name__)  # Ensure logger is initialized before use
     logger.warning("pytorch-grad-cam library not found. Grad-CAM visualization will be disabled.")
 
 # Captum is required for Integrated Gradients
+HAS_CAPTUM = False
 try:
     from captum.attr import IntegratedGradients
     HAS_CAPTUM = True
@@ -52,19 +58,19 @@ denormalize_transform = T.Compose([
     T.Normalize(mean=[-m for m in IMAGENET_MEAN], std=[1.0, 1.0, 1.0]),   # Undo mean
     T.ToPILImage(),   # Convert to PIL Image
     T.ToTensor(),     # Convert back to tensor (float, [0,1], C,H,W)
-    lambda x: x.permute(1, 2, 0).cpu().numpy()    # Permute to HWC and convert to numpy
+    lambda x: x.permute(1, 2, 0).cpu().numpy()      # Permute to HWC and convert to numpy
 ])
 
 def generate_grad_cam(
     model: nn.Module,
-    input_tensor: torch.Tensor,    # Expected: (1, C, H, W) normalized tensor
+    input_tensor: torch.Tensor,      # Expected: (1, C, H, W) normalized tensor
     target_layer: nn.Module,
-    target_category: Optional[int],    # Class index to explain
-    image_path: str,    # Path to save the CAM overlay image
+    target_category: Optional[int],      # Class index to explain
+    image_path: str,     # Path to save the CAM overlay image
     save_dir: str = './grad_cam_outputs',
     file_suffix: str = '',
     use_grad_cam_plus_plus: bool = False,
-    reshape_transform: Optional[Callable] = None    # For ViT-like models
+    reshape_transform: Optional[Callable] = None      # For ViT-like models
 ):
     """
     Generates and saves a Grad-CAM visualization for a given input.
@@ -126,7 +132,7 @@ def generate_grad_cam(
     # We use the denormalize_transform defined above.
     
     # Clone to avoid modifying original tensor and move to CPU if on GPU
-    img_for_overlay_tensor = input_tensor.squeeze(0).cpu()    # Remove batch dim, move to CPU
+    img_for_overlay_tensor = input_tensor.squeeze(0).cpu()      # Remove batch dim, move to CPU
     img_for_overlay_np = denormalize_transform(img_for_overlay_tensor)
     
     # Ensure the numpy array is in the correct type and range for show_cam_on_image
@@ -157,10 +163,10 @@ def explain_gnn(model: nn.Module, node_feats: torch.Tensor, edge_index: torch.Te
         node_feats (torch.Tensor): Node features.
         edge_index (torch.Tensor): Edge index (adjacency list).
         target_idx (Union[int, Tuple[int, int]]): The target for attribution.
-                                                   If int, it's a node index for node-level output.
-                                                   If tuple (src_node, dst_node), it's an edge for edge-level output.
-                                                   This should correspond to an index in the model's output if
-                                                   the model outputs scores per edge/node, or a way to select a scalar output.
+                                                    If int, it's a node index for node-level output.
+                                                    If tuple (src_node, dst_node), it's an edge for edge-level output.
+                                                    This should correspond to an index in the model's output if
+                                                    the model outputs scores per edge/node, or a way to select a scalar output.
     Returns:
         torch.Tensor: Attributions for node features.
     """
@@ -179,38 +185,32 @@ def explain_gnn(model: nn.Module, node_feats: torch.Tensor, edge_index: torch.Te
         # and that `target_idx` can be used as a target index for the output.
         # You might need to adapt this based on your actual GNN model's output structure.
         
-        # Example: If your model outputs a [num_nodes, num_classes] tensor, and target_idx is a node index
-        # You'd typically want to explain the prediction for a specific class for that node.
-        # For simplicity, let's assume the model's output is a 1D tensor where target_idx selects the element.
-        # In a real scenario, you might need to wrap the model or define a custom `forward` for Captum.
-        
         # Dummy target function if the model's output is complex
         def forward_with_target_selection(node_feats_input, edge_index_input):
             # This is a placeholder. Adapt this to your actual GNN model's forward pass
             # and how you extract the scalar value you want to explain.
             model_output = model(node_feats_input, edge_index_input)
             
-            if isinstance(target_idx, int): # Explaining a node's output
-                if model_output.ndim > 1: # e.g., [num_nodes, num_classes]
+            if isinstance(target_idx, int):  # Explaining a node's output
+                if model_output.ndim > 1:  # e.g., [num_nodes, num_classes]
                     # Assuming we want to explain the highest predicted class for this node
                     return model_output[target_idx].max()
-                else: # e.g., [num_nodes]
+                else:  # e.g., [num_nodes]
                     return model_output[target_idx]
-            elif isinstance(target_idx, tuple) and len(target_idx) == 2: # Explaining an edge's output
+            elif isinstance(target_idx, tuple) and len(target_idx) == 2:  # Explaining an edge's output
                 # This requires your GNN to output something specific to edges.
                 # For example, if it outputs [num_edges, num_relation_types]
                 # You'd need to find the index of the target_edge and select its score.
                 logger.warning("Edge-level explanation for GNNs is complex and requires specific model output structure.")
-                return model_output.sum() # Fallback to sum for dummy
+                return model_output.sum()  # Fallback to sum for dummy
             else:
                 raise ValueError(f"Unsupported target_idx type: {type(target_idx)}")
 
         # Make node_feats require gradient for attribution
         node_feats_requires_grad = node_feats.clone().detach().requires_grad_(True)
-
         attributions, delta = ig.attribute(
             inputs=(node_feats_requires_grad, edge_index),
-            target=forward_with_target_selection, # Pass the function that selects scalar output
+            target=forward_with_target_selection,  # Pass the function that selects scalar output
             return_convergence_delta=True
         )
         logger.info("Integrated Gradients attributions computed.")
@@ -227,9 +227,9 @@ def rollout_attention(attns: List[torch.Tensor], discard_ratio: float = 0.9) -> 
     
     Args:
         attns (list[torch.Tensor]): A list of attention matrices from each layer.
-                                    Each tensor in the list should be of shape [B, heads, N, N],
-                                    where B is batch size, heads is number of attention heads,
-                                    N is the sequence length (e.g., num_patches + 1 for CLS token).
+                                     Each tensor in the list should be of shape [B, heads, N, N],
+                                     where B is batch size, heads is number of attention heads,
+                                     N is the sequence length (e.g., num_patches + 1 for CLS token).
         discard_ratio (float): The ratio of attention weights to discard (set to zero)
                                before summing, to focus on stronger connections.
                                A value of 0.9 means the weakest 90% of connections are discarded.
@@ -245,7 +245,6 @@ def rollout_attention(attns: List[torch.Tensor], discard_ratio: float = 0.9) -> 
     # Shape of result will be [B, N, N]
     batch_size, _, seq_len, _ = attns[0].shape
     result = torch.eye(seq_len, device=attns[0].device).unsqueeze(0).repeat(batch_size, 1, 1)  # [B, N, N]
-
     for a in attns:  # Iterate through each layer's attention matrix
         # Average attention weights across heads for each layer
         avg = a.mean(dim=1)    # [B, N, N]
@@ -276,7 +275,7 @@ def rollout_attention(attns: List[torch.Tensor], discard_ratio: float = 0.9) -> 
         # This propagates the attention from previous layers to the current layer
         result = result @ layer_attn_processed
         
-    return result    # [B, N, N]
+    return result      # [B, N, N]
 
 if __name__ == '__main__':
     # Example Usage (conceptual - replace with your actual GNN model and data)
@@ -284,38 +283,36 @@ if __name__ == '__main__':
         def __init__(self, input_dim, output_dim):
             super().__init__()
             self.linear = nn.Linear(input_dim, output_dim) 
-
         def forward(self, node_feats, edge_index):
             # Simplified: just a linear layer. A real GNN would use graph convolutions.
             # This example assumes it outputs a scalar for each node.
-            return self.linear(node_feats).squeeze(-1) # Output a scalar for each node
+            return self.linear(node_feats).squeeze(-1)  # Output a scalar for each node
 
     # Create dummy data
     input_dim = 5
     output_dim = 1
     dummy_model = SimpleGNN(input_dim, output_dim)
-    dummy_node_feats = torch.randn(10, input_dim, requires_grad=True) # 10 nodes, 5 features
-    dummy_edge_index = torch.tensor([[0, 1, 2, 3], [1, 0, 3, 2]], dtype=torch.long) # Dummy edges
-
+    dummy_node_feats = torch.randn(10, input_dim, requires_grad=True)  # 10 nodes, 5 features
+    dummy_edge_index = torch.tensor([[0, 1, 2, 3], [1, 0, 3, 2]], dtype=torch.long)  # Dummy edges
+    
     # Target node for explanation (e.g., explaining the output for node 0)
     target_node_idx = 0 
-
     attributions = explain_gnn(dummy_model, dummy_node_feats, dummy_edge_index, target_node_idx)
-
     if attributions is not None:
         logger.info(f"Attributions for node {target_node_idx}: {attributions}")
+    else:
+        logger.info("GNN attributions could not be computed.")
 
     # Example for Attention Rollout
     logger.info("\n--- Attention Rollout Example ---")
     # Simulate attention matrices from 3 layers, 4 heads, sequence length 10 (1 CLS + 9 patches)
     dummy_attns = [
-        torch.randn(1, 4, 10, 10), # Layer 1
-        torch.randn(1, 4, 10, 10), # Layer 2
-        torch.randn(1, 4, 10, 10)  # Layer 3
+        torch.randn(1, 4, 10, 10),  # Layer 1
+        torch.randn(1, 4, 10, 10),  # Layer 2
+        torch.randn(1, 4, 10, 10)   # Layer 3
     ]
     # Normalize dummy attention matrices (each row sums to 1)
     dummy_attns = [F.softmax(attn, dim=-1) for attn in dummy_attns]
-
     rollout_map = rollout_attention(dummy_attns, discard_ratio=0.5)
     if rollout_map.numel() > 0:
         logger.info(f"Attention Rollout Map shape: {rollout_map.shape}")
