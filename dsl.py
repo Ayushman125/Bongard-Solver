@@ -6,18 +6,68 @@ from typing import List, Dict, Any, Tuple, Optional, Union
 import logging
 
 # Import rule atoms from bongard_rules
-from bongard_rules import (
-    RuleAtom, ATTR_SHAPE, ATTR_COLOR, ATTR_FILL, ATTR_SIZE, ATTR_ORIENTATION, ATTR_TEXTURE,
-    REL_LEFT_OF, REL_RIGHT_OF, REL_ABOVE, REL_BELOW, REL_IS_CLOSE_TO,
-    REL_ALIGNED_HORIZONTALLY, REL_ALIGNED_VERTICALLY, REL_CONTAINS, REL_INTERSECTS,
-    LOGIC_AND, LOGIC_OR, LOGIC_NOT, LOGIC_EXISTS, LOGIC_FORALL, LOGIC_COUNT,
-    SHAPE_CIRCLE, SHAPE_SQUARE, SHAPE_TRIANGLE, SHAPE_STAR,
-    COLOR_RED, COLOR_BLUE, COLOR_GREEN, COLOR_BLACK, COLOR_WHITE,
-    FILL_SOLID, FILL_HOLLOW, FILL_STRIPED, FILL_DOTTED,
-    SIZE_SMALL, SIZE_MEDIUM, SIZE_LARGE,
-    ORIENTATION_UPRIGHT, ORIENTATION_INVERTED,
-    TEXTURE_NONE, TEXTURE_STRIPED, TEXTURE_DOTTED
-)
+# Assuming bongard_rules.py exists and defines these constants
+try:
+    from bongard_rules import (
+        RuleAtom, ATTR_SHAPE, ATTR_COLOR, ATTR_FILL, ATTR_SIZE, ATTR_ORIENTATION, ATTR_TEXTURE,
+        REL_LEFT_OF, REL_RIGHT_OF, REL_ABOVE, REL_BELOW, REL_IS_CLOSE_TO,
+        REL_ALIGNED_HORIZONTALLY, REL_ALIGNED_VERTICALLY, REL_CONTAINS, REL_INTERSECTS,
+        LOGIC_AND, LOGIC_OR, LOGIC_NOT, LOGIC_EXISTS, LOGIC_FORALL, LOGIC_COUNT,
+        SHAPE_CIRCLE, SHAPE_SQUARE, SHAPE_TRIANGLE, SHAPE_STAR,
+        COLOR_RED, COLOR_BLUE, COLOR_GREEN, COLOR_BLACK, COLOR_WHITE,
+        FILL_SOLID, FILL_HOLLOW, FILL_STRIPED, FILL_DOTTED,
+        SIZE_SMALL, SIZE_MEDIUM, SIZE_LARGE,
+        ORIENTATION_UPRIGHT, ORIENTATION_INVERTED,
+        TEXTURE_NONE, TEXTURE_STRIPED, TEXTURE_DOTTED
+    )
+except ImportError:
+    logging.warning("Could not import bongard_rules. Using dummy RuleAtom and constants.")
+    # Dummy definitions if bongard_rules.py is not available, to allow DSL.py to run
+    class RuleAtom:
+        def __init__(self, name): self.name = name
+    ATTR_SHAPE = RuleAtom("shape")
+    ATTR_COLOR = RuleAtom("color")
+    ATTR_FILL = RuleAtom("fill")
+    ATTR_SIZE = RuleAtom("size")
+    ATTR_ORIENTATION = RuleAtom("orientation")
+    ATTR_TEXTURE = RuleAtom("texture")
+    REL_LEFT_OF = RuleAtom("left_of")
+    REL_RIGHT_OF = RuleAtom("right_of")
+    REL_ABOVE = RuleAtom("above")
+    REL_BELOW = RuleAtom("below")
+    REL_IS_CLOSE_TO = RuleAtom("is_close_to")
+    REL_ALIGNED_HORIZONTALLY = RuleAtom("aligned_horizontally")
+    REL_ALIGNED_VERTICALLY = RuleAtom("aligned_vertically")
+    REL_CONTAINS = RuleAtom("contains")
+    REL_INTERSECTS = RuleAtom("intersects")
+    LOGIC_AND = RuleAtom("AND")
+    LOGIC_OR = RuleAtom("OR")
+    LOGIC_NOT = RuleAtom("NOT")
+    LOGIC_EXISTS = RuleAtom("EXISTS")
+    LOGIC_FORALL = RuleAtom("FORALL")
+    LOGIC_COUNT = RuleAtom("COUNT")
+    SHAPE_CIRCLE = RuleAtom("circle")
+    SHAPE_SQUARE = RuleAtom("square")
+    SHAPE_TRIANGLE = RuleAtom("triangle")
+    SHAPE_STAR = RuleAtom("star")
+    COLOR_RED = RuleAtom("red")
+    COLOR_BLUE = RuleAtom("blue")
+    COLOR_GREEN = RuleAtom("green")
+    COLOR_BLACK = RuleAtom("black")
+    COLOR_WHITE = RuleAtom("white")
+    FILL_SOLID = RuleAtom("solid")
+    FILL_HOLLOW = RuleAtom("hollow")
+    FILL_STRIPED = RuleAtom("striped")
+    FILL_DOTTED = RuleAtom("dotted")
+    SIZE_SMALL = RuleAtom("small")
+    SIZE_MEDIUM = RuleAtom("medium")
+    SIZE_LARGE = RuleAtom("large")
+    ORIENTATION_UPRIGHT = RuleAtom("upright")
+    ORIENTATION_INVERTED = RuleAtom("inverted")
+    TEXTURE_NONE = RuleAtom("none_texture")
+    TEXTURE_STRIPED = RuleAtom("striped_texture")
+    TEXTURE_DOTTED = RuleAtom("dotted_texture")
+
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +212,7 @@ class ASTNode:
         """Converts the AST node to a dictionary representation."""
         node_dict = {"op": self.primitive.name}
         if self.primitive.is_terminal:
-            node_dict["value"] = self.value if self.value is not None else self.primitive.func() # For object_variable, value is 'O'
+            node_dict["value"] = self.value if self.value is not None else self.primitive.func # For object_variable, value is 'O'
         if self.children:
             node_dict["args"] = [child.to_dict() for child in self.children]
         return node_dict
@@ -205,12 +255,14 @@ class DSLProgramGenerator:
             if not eligible_primitives:
                 # Fallback: if no exact type match, try to find any terminal (e.g., if 'boolean' is expected but no bool terminals)
                 logger.debug(f"No exact terminal for {expected_type} at depth {current_depth}. Trying any terminal.")
-                eligible_primitives = [p for p in DSL_VALUES if p.type_signature in ["boolean", "integer"]] # Broaden search
+                eligible_primitives = [p for p in DSL_VALUES if p.type_signature in ["boolean", "integer", "object_variable"]] # Broaden search
             if not eligible_primitives:
                 raise ValueError(f"No terminal primitive found for type {expected_type} at max depth or no rule defined.")
             
             primitive = random.choice(eligible_primitives)
-            return ASTNode(primitive, value=primitive.func() if callable(primitive.func) else primitive.func) # Use func() for 'O', else its value
+            # For terminal nodes, the value is either directly from primitive.func (if callable) or primitive.func itself
+            value = primitive.func() if callable(primitive.func) and primitive.name == "object_variable" else primitive.func
+            return ASTNode(primitive, value=value)
 
         # Select a production rule from the grammar
         possible_ops = self.grammar_rules.get(expected_type, [])
@@ -219,7 +271,8 @@ class DSLProgramGenerator:
             eligible_primitives = [p for p in DSL_VALUES if p.type_signature == expected_type]
             if eligible_primitives:
                 primitive = random.choice(eligible_primitives)
-                return ASTNode(primitive, value=primitive.func() if callable(primitive.func) else primitive.func)
+                value = primitive.func() if callable(primitive.func) and primitive.name == "object_variable" else primitive.func
+                return ASTNode(primitive, value=value)
             raise ValueError(f"No production rules or terminal primitives for type {expected_type}.")
 
         chosen_op_name = random.choice(possible_ops)
@@ -264,6 +317,7 @@ class ASTToFactsTransducer:
         """Recursive helper to traverse AST and build a single fact string."""
         if node.primitive.is_terminal:
             # Terminal nodes represent values or variables
+            # For object_variable, the value is 'O'
             return str(node.value) if node.value is not None else node.primitive.name
 
         op_name = node.primitive.name.lower()
@@ -299,3 +353,53 @@ class ASTToFactsTransducer:
         else:
             # Attribute or relation predicates (e.g., shape(O, circle))
             return f"{op_name}({', '.join(child_fact_strings)})"
+
+class DSL:
+    """
+    Manages the collection of logical facts derived from perception or other sources.
+    This class is a singleton to maintain a global set of facts.
+    """
+    _instance = None
+    facts: set[str] = set() # Stores unique facts as strings
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(DSL, cls).__new__(cls)
+            cls.facts = set() # Initialize the set of facts
+            logger.info("DSL singleton instance created.")
+        return cls._instance
+
+    @classmethod
+    def add_fact(cls, fact_str: str, source: str = 'manual'):
+        """
+        Adds a new logical fact to the DSL's collection.
+        Args:
+            fact_str (str): The logical fact string to add (e.g., "SHAPE(obj_0,circle)").
+            source (str): The source of the fact (e.g., 'emergent', 'manual', 'ILP').
+        """
+        if fact_str not in cls.facts:
+            cls.facts.add(fact_str)
+            logger.info(f"[DSL][{source}] new fact: {fact_str}")
+        else:
+            logger.debug(f"[DSL][{source}] fact already exists: {fact_str}")
+
+    @classmethod
+    def get_facts(cls) -> List[str]:
+        """
+        Retrieves all currently stored logical facts.
+        Returns:
+            List[str]: A list of all unique facts.
+        """
+        return list(cls.facts)
+
+    @classmethod
+    def clear_facts(cls):
+        """
+        Clears all stored facts. Useful for resetting the DSL state between problems.
+        """
+        cls.facts.clear()
+        logger.info("DSL facts cleared.")
+
+# Instantiate the DSL class to ensure it's a singleton and `facts` is initialized
+DSL_instance = DSL()
+
