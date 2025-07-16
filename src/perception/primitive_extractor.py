@@ -8,48 +8,51 @@ import torch
 import torch.nn as nn
 import torchvision.transforms as T
 from typing import Tuple, Dict, Any, Optional, List
+from collections import Counter # For TTA majority vote
 
 # Import global configuration and model components
 try:
-    from config import CONFIG, IMAGENET_MEAN, IMAGENET_STD, DEVICE, YOLO_CLASS_MAP
-    from core_models.models import BongardPerceptionModel, PerceptionModule # Import both
+    from config import CONFIG, IMAGENET_MEAN, IMAGENET_STD, DEVICE, YOLO_CLASS_MAP, \
+                       ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_FILL_MAP, \
+                       ATTRIBUTE_SIZE_MAP, ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_TEXTURE_MAP
+    from core_models.models import BongardPerceptionModel, PerceptionModule  # Import both
+    from utils.augment import augment_image # Import augment_image for TTA
 except ImportError as e:
     logging.error(f"Failed to import from config or core_models.models: {e}. Using dummy values/classes.")
     CONFIG = {
         'model': {
-            'perception_model_path': None, # Path to the BongardPerceptionModel checkpoint
-            'detection_confidence_threshold': 0.1, 
+            'perception_model_path': None,  # Path to the BongardPerceptionModel checkpoint
+            'detection_confidence_threshold': 0.1,
             'image_size': [224, 224],
-            'attribute_classifier_config': { # Required for dummy PerceptionModule
+            'attribute_classifier_config': {  # Required for dummy PerceptionModule
                 'shape': 5, 'color': 7, 'size': 3, 'fill': 2, 'orientation': 4, 'texture': 2,
                 'mlp_dim': 256, 'head_dropout_prob': 0.3
             },
-            'relation_gnn_config': { # Required for dummy PerceptionModule
+            'relation_gnn_config': {  # Required for dummy PerceptionModule
                 'hidden_dim': 256, 'num_relations': 11
             },
-            'bongard_head_config': { # Required for dummy PerceptionModule
+            'bongard_head_config': {  # Required for dummy PerceptionModule
                 'num_classes': 2, 'hidden_dim': 256
             }
-        }, 
+        },
         'data': {'image_size': [224, 224]}
     }
     IMAGENET_MEAN = [0.485, 0.456, 0.406]
     IMAGENET_STD = [0.229, 0.224, 0.225]
     DEVICE = torch.device('cpu')
-    YOLO_CLASS_MAP = {0: 'circle', 1: 'square', 2: 'triangle', 3: 'pentagon', 4: 'star', 5: 'text_character'} # Dummy map
-
+    YOLO_CLASS_MAP = {0: 'circle', 1: 'square', 2: 'triangle', 3: 'pentagon', 4: 'star', 5: 'text_character'}  # Dummy map
     # Dummy BongardPerceptionModel for fallback
     class BongardPerceptionModel(nn.Module):
         def __init__(self, num_classes: int = 4):
             super().__init__()
             logging.warning("Dummy BongardPerceptionModel used in primitive_extractor.")
-            self.linear = nn.Linear(3, num_classes) # Dummy output
-            self.class_names = ['triangle', 'quadrilateral', 'filled', 'outlined'] # Example
+            self.linear = nn.Linear(3, num_classes)  # Dummy output
+            self.class_names = ['triangle', 'quadrilateral', 'filled', 'outlined']  # Example
         def forward(self, x):
             # Simulate a simple output based on random data
             # Assumes input x is (B, C, H, W)
-            dummy_features = torch.randn(x.shape[0], 3) # Dummy features
-            return self.linear(dummy_features) # Logits
+            dummy_features = torch.randn(x.shape[0], 3)  # Dummy features
+            return self.linear(dummy_features)  # Logits
 
     # Dummy PerceptionModule for fallback
     class PerceptionModule(nn.Module):
@@ -65,12 +68,11 @@ except ImportError as e:
                 if attr not in ['mlp_dim', 'head_dropout_prob']
             })
             self.dummy_bongard_head_output_dim = cfg['model']['bongard_head_config']['num_classes']
-
         def forward(self, images, ground_truth_json_strings=None, detected_bboxes_batch=None, detected_masks_batch=None, support_images=None, support_labels_flat=None, is_simclr_pretraining=False):
             # Simulate feature extraction
             batch_size = images.shape[0]
             # Dummy features (e.g., from a dummy backbone)
-            dummy_features = torch.randn(batch_size, 10, device=images.device) # Dummy feature vector
+            dummy_features = torch.randn(batch_size, 10, device=images.device)  # Dummy feature vector
             
             attribute_logits = {}
             for attr_name, head in self.dummy_heads.items():
@@ -78,7 +80,7 @@ except ImportError as e:
             
             # Dummy bongard_logits, relation_logits, etc.
             bongard_logits = torch.randn(batch_size, self.dummy_bongard_head_output_dim, device=images.device)
-            relation_logits = torch.randn(batch_size * 2, self.cfg['model']['relation_gnn_config']['num_relations'], device=images.device) # Assuming 2 relations per image
+            relation_logits = torch.randn(batch_size * 2, self.cfg['model']['relation_gnn_config']['num_relations'], device=images.device)  # Assuming 2 relations per image
             
             return {
                 'bongard_logits': bongard_logits,
@@ -90,6 +92,23 @@ except ImportError as e:
                 'simclr_features': None,
                 'support_graph_embeddings': torch.randn(batch_size, self.cfg['model']['relation_gnn_config']['hidden_dim'], device=images.device)
             }
+    
+    # Dummy augment_image
+    def augment_image(img_np: np.ndarray) -> np.ndarray:
+        return img_np
+
+# Inverse maps (index to name) - define globally or ensure they are imported/accessible
+SHAPE_MAP_INV = {v: k for k, v in ATTRIBUTE_SHAPE_MAP.items()} if 'ATTRIBUTE_SHAPE_MAP' in globals() else {0: 'circle', 1: 'square', 2: 'triangle', 3: 'pentagon', 4: 'star', 5: 'text_character'}
+COLOR_MAP_INV = {v: k for k, v in ATTRIBUTE_COLOR_MAP.items()} if 'ATTRIBUTE_COLOR_MAP' in globals() else {0: 'red', 1: 'blue', 2: 'green', 3: 'yellow', 4: 'black', 5: 'white'}
+FILL_MAP_INV = {v: k for k, v in ATTRIBUTE_FILL_MAP.items()} if 'ATTRIBUTE_FILL_MAP' in globals() else {0: 'solid', 1: 'outlined', 2: 'striped', 3: 'dotted'}
+SIZE_MAP_INV = {v: k for k, v in ATTRIBUTE_SIZE_MAP.items()} if 'ATTRIBUTE_SIZE_MAP' in globals() else {0: 'small', 1: 'medium', 2: 'large'}
+ORIENTATION_MAP_INV = {v: k for k, v in ATTRIBUTE_ORIENTATION_MAP.items()} if 'ATTRIBUTE_ORIENTATION_MAP' in globals() else {0: 'upright', 1: 'rotated_45', 2: 'rotated_90', 3: 'rotated_135'}
+TEXTURE_MAP_INV = {v: k for k, v in ATTRIBUTE_TEXTURE_MAP.items()} if 'ATTRIBUTE_TEXTURE_MAP' in globals() else {0: 'flat', 1: 'rough', 2: 'smooth'}
+
+attribute_maps_inv = {
+    'shape': SHAPE_MAP_INV, 'color': COLOR_MAP_INV, 'fill': FILL_MAP_INV,
+    'size': SIZE_MAP_INV, 'orientation': ORIENTATION_MAP_INV, 'texture': TEXTURE_MAP_INV
+}
 
 
 logger = logging.getLogger(__name__)
@@ -98,7 +117,7 @@ logger.setLevel(logging.INFO)
 # Preprocessing transform for CNN model input
 # Use the image size from CONFIG['data']['image_size']
 preprocess_transform = T.Compose([
-    T.Resize(tuple(CONFIG['data']['image_size'])), # Resize to model's expected input size (H, W)
+    T.Resize(tuple(CONFIG['data']['image_size'])),  # Resize to model's expected input size (H, W)
     T.ToTensor(),
     T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
 ])
@@ -110,7 +129,7 @@ def _load_cnn_model():
     """Loads the CNN model once."""
     global _CNN_MODEL
     if _CNN_MODEL is None:
-        model_path = CONFIG['model'].get('perception_model_path') # Use 'perception_model_path' for the main model
+        model_path = CONFIG['model'].get('perception_model_path')  # Use 'perception_model_path' for the main model
         
         if model_path and os.path.exists(model_path):
             try:
@@ -130,30 +149,29 @@ def _load_cnn_model():
                     # This depends on how the model was saved.
                     new_state_dict = {}
                     for k, v in state_dict.items():
-                        if k.startswith('feature_extractor.'): # From LitSimCLR direct encoder save
+                        if k.startswith('feature_extractor.'):  # From LitSimCLR direct encoder save
                             new_state_dict[k.replace('feature_extractor.', 'attribute_model.')] = v
-                        elif k.startswith('perception_module.attribute_model.'): # From LitBongard save
+                        elif k.startswith('perception_module.attribute_model.'):  # From LitBongard save
                             new_state_dict[k.replace('perception_module.', '')] = v
-                        elif k.startswith('module.perception_module.attribute_model.'): # From DDP LitBongard save
+                        elif k.startswith('module.perception_module.attribute_model.'):  # From DDP LitBongard save
                             new_state_dict[k.replace('module.perception_module.', '')] = v
-                        else: # Assume it's already correctly prefixed for PerceptionModule.attribute_model
+                        else:  # Assume it's already correctly prefixed for PerceptionModule.attribute_model
                             new_state_dict[f'attribute_model.{k}'] = v
-
                     # Load into the PerceptionModule
-                    _CNN_MODEL.load_state_dict(new_state_dict, strict=False) # strict=False for partial loads
+                    _CNN_MODEL.load_state_dict(new_state_dict, strict=False)  # strict=False for partial loads
                     logger.info(f"Loaded PerceptionModule (for feature extraction) from {model_path}.")
-                else: # Assume it's a full PerceptionModule or a simpler BongardPerceptionModel
-                    _CNN_MODEL = PerceptionModule(CONFIG).to(DEVICE) # Default to PerceptionModule
+                else:  # Assume it's a full PerceptionModule or a simpler BongardPerceptionModel
+                    _CNN_MODEL = PerceptionModule(CONFIG).to(DEVICE)  # Default to PerceptionModule
                     state_dict = torch.load(model_path, map_location=DEVICE)
                     
                     # Handle state_dict prefixes for PyTorch Lightning and DDP
-                    if 'state_dict' in state_dict: # If saved by PyTorch Lightning
+                    if 'state_dict' in state_dict:  # If saved by PyTorch Lightning
                         state_dict = state_dict['state_dict']
                     
                     # Remove 'model.' or 'perception_module.' prefix if present
                     state_dict = {k.replace('model.', ''): v for k, v in state_dict.items()}
                     state_dict = {k.replace('perception_module.', ''): v for k, v in state_dict.items()}
-                    state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()} # For DDP
+                    state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}  # For DDP
                     
                     _CNN_MODEL.load_state_dict(state_dict, strict=False)
                     logger.info(f"Loaded PerceptionModule from {model_path}.")
@@ -166,9 +184,46 @@ def _load_cnn_model():
                 _CNN_MODEL.eval()
         else:
             logger.warning(f"CNN model path '{model_path}' not found or not specified. Using dummy PerceptionModule.")
-            _CNN_MODEL = PerceptionModule(CONFIG).to(DEVICE) # Use dummy if path not found
+            _CNN_MODEL = PerceptionModule(CONFIG).to(DEVICE)  # Use dummy if path not found
             _CNN_MODEL.eval()
     return _CNN_MODEL
+
+def single_inference(img_pil: Image.Image) -> Dict[str, Tuple[str, float]]:
+    """
+    Performs a single inference pass on a cropped object image using the CNN model.
+    This function is a helper for extract_cnn_features to enable TTA.
+    """
+    model = _load_cnn_model()
+    input_tensor = preprocess_transform(img_pil).unsqueeze(0).to(DEVICE)
+    
+    with torch.no_grad():
+        dummy_gts_json_strings = [b'{}']
+        dummy_bboxes_batch = [[]]
+        dummy_masks_batch = [[]]
+        
+        model_output = model(
+            images=input_tensor,
+            ground_truth_json_strings=dummy_gts_json_strings,
+            detected_bboxes_batch=dummy_bboxes_batch,
+            detected_masks_batch=dummy_masks_batch,
+            support_images=None,
+            support_labels_flat=None,
+            is_simclr_pretraining=False
+        )
+        attribute_logits_dict = model_output.get('attribute_logits', {})
+        
+        extracted_features: Dict[str, Tuple[str, float]] = {}
+        for attr_type, logits in attribute_logits_dict.items():
+            if logits.numel() == 0:
+                extracted_features[attr_type] = (f"unknown_{attr_type}", 0.0)
+                continue
+            probs = torch.softmax(logits, dim=1).squeeze(0)
+            conf, idx = probs.max(0)
+            predicted_idx = idx.item()
+            
+            attr_name = attribute_maps_inv.get(attr_type, {}).get(predicted_idx, f"unknown_{attr_type}")
+            extracted_features[attr_type] = (attr_name, conf.item())
+    return extracted_features
 
 def extract_shape_conf(img_pil: Image.Image) -> Tuple[str, float]:
     """
@@ -178,7 +233,7 @@ def extract_shape_conf(img_pil: Image.Image) -> Tuple[str, float]:
     Returns:
         Tuple[str, float]: (shape_name, confidence_score)
     """
-    if img_pil.mode != 'L': # Convert to grayscale if not already
+    if img_pil.mode != 'L':  # Convert to grayscale if not already
         gray = np.array(img_pil.convert('L'))
     else:
         gray = np.array(img_pil)
@@ -207,40 +262,39 @@ def extract_shape_conf(img_pil: Image.Image) -> Tuple[str, float]:
     # Calculate area and perimeter for more robust shape analysis
     area = cv2.contourArea(main_contour)
     perimeter = cv2.arcLength(main_contour, True)
-
     if num_vertices == 3:
         shape = "triangle"
         # Confidence based on area ratio to convex hull or ideal triangle
         hull = cv2.convexHull(main_contour)
         hull_area = cv2.contourArea(hull)
         if hull_area > 0:
-            confidence = area / hull_area # How compact is the triangle
+            confidence = area / hull_area  # How compact is the triangle
         else:
-            confidence = 0.5 # Default if area is zero
+            confidence = 0.5  # Default if area is zero
     elif num_vertices == 4:
         # Check if it's a rectangle/square
         x, y, w, h = cv2.boundingRect(main_contour)
         aspect_ratio = float(w)/h
         rect_area = w * h
         
-        if 0.8 <= aspect_ratio <= 1.2 and rect_area > 0: # Check aspect ratio for square-like
+        if 0.8 <= aspect_ratio <= 1.2 and rect_area > 0:  # Check aspect ratio for square-like
             shape = "square"
-            confidence = area / rect_area # How much of the bounding rect is filled
+            confidence = area / rect_area  # How much of the bounding rect is filled
         else:
             shape = "quadrilateral"
-            confidence = 0.7 # General quadrilateral, lower confidence
+            confidence = 0.7  # General quadrilateral, lower confidence
     elif num_vertices > 4:
         # Check circularity
         (x, y), radius = cv2.minEnclosingCircle(main_contour)
         circle_area = np.pi * (radius ** 2)
         if circle_area > 0:
             circularity = area / circle_area
-            if circularity > 0.8: # Threshold for circularity
+            if circularity > 0.8:  # Threshold for circularity
                 shape = "circle"
                 confidence = circularity
             else:
-                shape = "polygon" # Generic polygon
-                confidence = 0.5 # Lower confidence for generic
+                shape = "polygon"  # Generic polygon
+                confidence = 0.5  # Lower confidence for generic
     
     # Ensure confidence is within [0, 1]
     confidence = max(0.0, min(1.0, confidence))
@@ -294,20 +348,20 @@ def extract_fill_conf(img_pil: Image.Image) -> Tuple[str, float]:
         # Outlined: high mean (light interior), possibly higher std dev at edges
         # Striped/Dotted: high std dev (variation in pixel values)
         
-        if mean_val < 100 and std_dev < 30: # Dark and uniform
+        if mean_val < 100 and std_dev < 30:  # Dark and uniform
             fill_type = "solid"
-            confidence = 1.0 - (mean_val / 100.0) # Higher confidence for darker solid
-        elif mean_val > 150 and std_dev < 30: # Light and uniform (likely background showing through outline)
+            confidence = 1.0 - (mean_val / 100.0)  # Higher confidence for darker solid
+        elif mean_val > 150 and std_dev < 30:  # Light and uniform (likely background showing through outline)
             fill_type = "outlined"
-            confidence = (mean_val - 150.0) / 105.0 # Higher confidence for lighter outlined
-        elif std_dev > 50: # High variance suggests pattern
+            confidence = (mean_val - 150.0) / 105.0  # Higher confidence for lighter outlined
+        elif std_dev > 50:  # High variance suggests pattern
             # Further analysis needed to distinguish striped vs dotted
             # For simplicity, let's just use a generic "patterned" for now
             # A more advanced method would use FFT or Hough lines for stripes, blob detection for dots
-            fill_type = "striped" if random.random() > 0.5 else "dotted" # Randomly assign for demo
-            confidence = min(1.0, std_dev / 100.0) # Scale std dev to confidence
+            fill_type = "striped" if random.random() > 0.5 else "dotted"  # Randomly assign for demo
+            confidence = min(1.0, std_dev / 100.0)  # Scale std dev to confidence
         
-    confidence = max(0.0, min(1.0, confidence)) # Clamp confidence
+    confidence = max(0.0, min(1.0, confidence))  # Clamp confidence
     
     logger.debug(f"CV Extracted Fill: {fill_type} with confidence {confidence:.4f}")
     return fill_type, confidence
@@ -315,80 +369,58 @@ def extract_fill_conf(img_pil: Image.Image) -> Tuple[str, float]:
 def extract_cnn_features(img_pil: Image.Image) -> Dict[str, Tuple[str, float]]:
     """
     Extracts features (shape, color, fill, etc.) and their confidences
-    using a pre-trained CNN model (PerceptionModule).
+    using a pre-trained CNN model (PerceptionModule) with Test-Time Augmentation (TTA).
     Args:
         img_pil (PIL.Image.Image): Cropped image of a single object.
     Returns:
         Dict[str, Tuple[str, float]]: A dictionary mapping feature type (e.g., 'shape')
-                                     to a tuple of (predicted_value_name, confidence).
+                                      to a tuple of (predicted_value_name, confidence).
     """
     model = _load_cnn_model()
     
-    # Preprocess image for the CNN
-    input_tensor = preprocess_transform(img_pil).unsqueeze(0).to(DEVICE) # Add batch dim, move to device
+    # Prepare crops for TTA: original + augmentation
+    # augment_image expects numpy array and returns numpy array
+    # Convert PIL to numpy, augment, convert back to PIL
+    img_np = np.array(img_pil)
+    augmented_img_np = augment_image(img_np) # This uses the utils.augment.py function
     
-    extracted_features: Dict[str, Tuple[str, float]] = {}
+    crops = [img_pil, Image.fromarray(augmented_img_np)] # List of PIL Images
     
-    with torch.no_grad():
-        # Call the PerceptionModule's forward method.
-        # It expects dummy ground_truth_json_strings, detected_bboxes_batch, detected_masks_batch
-        # as these are used for scene graph building, not directly for object attribute extraction.
-        dummy_gts_json_strings = [b'{}']
-        dummy_bboxes_batch = [[]] # Empty list for detected bboxes for a single image
-        dummy_masks_batch = [[]] # Empty list for detected masks for a single image
-        
-        # The PerceptionModule's forward method returns a dict including 'attribute_logits'
-        model_output = model(
-            images=input_tensor,
-            ground_truth_json_strings=dummy_gts_json_strings,
-            detected_bboxes_batch=dummy_bboxes_batch,
-            detected_masks_batch=dummy_masks_batch,
-            support_images=None, # Not relevant for single object feature extraction
-            support_labels_flat=None, # Not relevant
-            is_simclr_pretraining=False # Not in pretraining mode
-        )
-        
-        attribute_logits_dict = model_output.get('attribute_logits', {})
-        
-        # Process each attribute based on the logits
-        # You need a mapping from class index to name for each attribute type
-        # These mappings should ideally come from your config or a central place.
-        # For demonstration, let's use the ATTRIBUTE_MAPS from config.py if available,
-        # or define dummy ones.
-        
-        # Example mappings (ensure these are consistent with your model's output classes)
-        # Assuming ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_FILL_MAP, etc. are available globally
-        # and you can reverse them to get names from indices.
-        
-        # Inverse maps (index to name)
-        SHAPE_MAP_INV = {v: k for k, v in ATTRIBUTE_SHAPE_MAP.items()} if 'ATTRIBUTE_SHAPE_MAP' in globals() else {0: 'circle', 1: 'square', 2: 'triangle', 3: 'pentagon', 4: 'star', 5: 'text_character'}
-        COLOR_MAP_INV = {v: k for k, v in ATTRIBUTE_COLOR_MAP.items()} if 'ATTRIBUTE_COLOR_MAP' in globals() else {0: 'red', 1: 'blue', 2: 'green', 3: 'yellow', 4: 'black', 5: 'white'}
-        FILL_MAP_INV = {v: k for k, v in ATTRIBUTE_FILL_MAP.items()} if 'ATTRIBUTE_FILL_MAP' in globals() else {0: 'solid', 1: 'outlined', 2: 'striped', 3: 'dotted'}
-        SIZE_MAP_INV = {v: k for k, v in ATTRIBUTE_SIZE_MAP.items()} if 'ATTRIBUTE_SIZE_MAP' in globals() else {0: 'small', 1: 'medium', 2: 'large'}
-        ORIENTATION_MAP_INV = {v: k for k, v in ATTRIBUTE_ORIENTATION_MAP.items()} if 'ATTRIBUTE_ORIENTATION_MAP' in globals() else {0: 'upright', 1: 'rotated_45', 2: 'rotated_90', 3: 'rotated_135'}
-        TEXTURE_MAP_INV = {v: k for k, v in ATTRIBUTE_TEXTURE_MAP.items()} if 'ATTRIBUTE_TEXTURE_MAP' in globals() else {0: 'flat', 1: 'rough', 2: 'smooth'}
+    # Dictionary to store votes and confidences for each attribute type
+    # { 'shape': [val1, val2], 'color': [val1, val2], ... }
+    all_votes: Dict[str, List[str]] = collections.defaultdict(list)
+    all_confs: Dict[str, List[float]] = collections.defaultdict(list)
 
-        attribute_maps_inv = {
-            'shape': SHAPE_MAP_INV, 'color': COLOR_MAP_INV, 'fill': FILL_MAP_INV,
-            'size': SIZE_MAP_INV, 'orientation': ORIENTATION_MAP_INV, 'texture': TEXTURE_MAP_INV
-        }
+    for c in crops:
+        # Perform single inference for each crop
+        # single_inference returns a dict: {'attr_type': (value, confidence)}
+        inference_results = single_inference(c)
+        for attr_type, (val, conf) in inference_results.items():
+            all_votes[attr_type].append(val)
+            all_confs[attr_type].append(conf)
 
-        for attr_type, logits in attribute_logits_dict.items():
-            if logits.numel() == 0: # Skip if logits are empty (e.g., no objects detected)
-                extracted_features[attr_type] = (f"unknown_{attr_type}", 0.0)
-                continue
+    final_extracted_features: Dict[str, Tuple[str, float]] = {}
 
-            probs = torch.softmax(logits, dim=1).squeeze(0) # Remove batch dim
-            conf, idx = probs.max(0)
-            predicted_idx = idx.item()
-            
-            # Get the corresponding attribute name from the inverse map
-            attr_name = attribute_maps_inv.get(attr_type, {}).get(predicted_idx, f"unknown_{attr_type}")
-            
-            extracted_features[attr_type] = (attr_name, conf.item())
-            logger.debug(f"CNN Extracted {attr_type.capitalize()}: {attr_name} with confidence {conf.item():.4f}")
-        
-    return extracted_features
+    for attr_type in all_votes.keys():
+        votes = all_votes[attr_type]
+        confs = all_confs[attr_type]
+
+        if not votes: # Should not happen if single_inference always returns something
+            final_extracted_features[attr_type] = (f"unknown_{attr_type}", 0.0)
+            continue
+
+        # Majority vote on values
+        # Counter returns elements and their counts, most_common(1) gives the top one
+        most_common_val = Counter(votes).most_common(1)[0][0]
+
+        # Average confidence among those votes that match the majority value
+        matching_confs = [c for v, c in zip(votes, confs) if v == most_common_val]
+        avg_conf = sum(matching_confs) / len(matching_confs) if matching_confs else 0.0
+
+        final_extracted_features[attr_type] = (most_common_val, avg_conf)
+        logger.debug(f"CNN Extracted {attr_type.capitalize()} (TTA): {most_common_val} with confidence {avg_conf:.4f}")
+    
+    return final_extracted_features
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -396,7 +428,7 @@ if __name__ == '__main__':
     
     # Create a dummy image for testing
     img_size = 224
-    dummy_img_pil = Image.new('RGB', (img_size, img_size), (200, 200, 200)) # Gray background
+    dummy_img_pil = Image.new('RGB', (img_size, img_size), (200, 200, 200))  # Gray background
     draw = ImageDraw.Draw(dummy_img_pil)
     
     # Draw a filled red triangle
@@ -409,26 +441,25 @@ if __name__ == '__main__':
     fill, fill_conf = extract_fill_conf(dummy_img_pil)
     logger.info(f"CV Extraction: Shape='{shape}' ({shape_conf:.4f}), Fill='{fill}' ({fill_conf:.4f})")
 
-    # Test CNN feature extractor (will use dummy model if real not loaded)
-    logger.info("\n--- Testing CNN Feature Extraction ---")
+    # Test CNN feature extractor with TTA (will use dummy model if real not loaded)
+    logger.info("\n--- Testing CNN Feature Extraction with TTA ---")
     cnn_features = extract_cnn_features(dummy_img_pil)
-    logger.info(f"CNN Extraction Results:")
+    logger.info(f"CNN Extraction Results (with TTA):")
     for feat_type, (value, conf) in cnn_features.items():
         logger.info(f"  {feat_type}: '{value}' ({conf:.4f})")
 
     # Draw an outlined blue circle
     dummy_img_pil_circle = Image.new('RGB', (img_size, img_size), (255, 255, 255))
     draw_circle = ImageDraw.Draw(dummy_img_pil_circle)
-    draw_circle.ellipse([50, 50, 150, 150], outline=(0, 0, 255), width=5) # Outlined blue circle
+    draw_circle.ellipse([50, 50, 150, 150], outline=(0, 0, 255), width=5)  # Outlined blue circle
 
     logger.info("\n--- Testing Classical CV Extraction (Circle) ---")
     shape_c, shape_conf_c = extract_shape_conf(dummy_img_pil_circle)
     fill_c, fill_conf_c = extract_fill_conf(dummy_img_pil_circle)
     logger.info(f"CV Extraction: Shape='{shape_c}' ({shape_conf_c:.4f}), Fill='{fill_c}' ({fill_conf_c:.4f})")
 
-    logger.info("\n--- Testing CNN Feature Extraction (Circle) ---")
+    logger.info("\n--- Testing CNN Feature Extraction (Circle) with TTA ---")
     cnn_features_c = extract_cnn_features(dummy_img_pil_circle)
-    logger.info(f"CNN Extraction Results:")
+    logger.info(f"CNN Extraction Results (with TTA):")
     for feat_type, (value, conf) in cnn_features_c.items():
         logger.info(f"  {feat_type}: '{value}' ({conf:.4f})")
-
