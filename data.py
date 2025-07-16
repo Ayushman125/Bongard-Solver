@@ -29,20 +29,28 @@ except ImportError:
     logger = logging.getLogger(__name__)
     logger.warning("AutoAugment, RandAugment, RandomErasing not found. Rich augmentations will be disabled.")
 
-# DALI imports
-try:
-    from nvidia.dali.pipeline import Pipeline
-    import nvidia.dali.fn as fn
-    import nvidia.dali.types as types
-    from nvidia.dali.plugin.pytorch import DALIGenericIterator
-    from nvidia.dali.plugin.pytorch import performance  # Added for DALI timing
-    HAS_DALI = True
-    logger = logging.getLogger(__name__)
-    logger.info("NVIDIA DALI found and enabled.")
-except ImportError:
-    logger = logging.getLogger(__name__)
-    logger.warning("NVIDIA DALI not found. Falling back to PyTorch DataLoader for data loading.")
+
+# DALI imports (decommissioned by feature flag)
+from core_models.training_args import Config
+config = Config()
+if getattr(config, 'use_dallipipeline', False):
+    try:
+        from nvidia.dali.pipeline import Pipeline
+        import nvidia.dali.fn as fn
+        import nvidia.dali.types as types
+        from nvidia.dali.plugin.pytorch import DALIGenericIterator
+        from nvidia.dali.plugin.pytorch import performance  # Added for DALI timing
+        HAS_DALI = True
+        logger = logging.getLogger(__name__)
+        logger.info("NVIDIA DALI found and enabled.")
+    except ImportError:
+        logger = logging.getLogger(__name__)
+        logger.warning("NVIDIA DALI not found. Falling back to PyTorch DataLoader for data loading.")
+        HAS_DALI = False
+else:
     HAS_DALI = False
+    logger = logging.getLogger(__name__)
+    logger.info("DALI pipeline is disabled by config.use_dallipipeline = False.")
 
 # Import configuration (from project root)
 try:
@@ -551,9 +559,10 @@ def custom_collate_fn(batch: List[Tuple[Any, ...]]) -> Dict[str, Any]:
         'support_masks_flat': support_masks_flat,
     }
 
-# --- DALI Pipeline and Loader ---
-@fn.pipeline_def
-def dali_pipeline_synthetic(image_size: int, is_training: bool, curriculum_config: Dict[str, Any], augmentation_config: Dict[str, Any], cfg: Dict[str, Any]):
+if getattr(config, 'use_dallipipeline', False):
+    # --- DALI Pipeline and Loader ---
+    @fn.pipeline_def
+    def dali_pipeline_synthetic(image_size: int, is_training: bool, curriculum_config: Dict[str, Any], augmentation_config: Dict[str, Any], cfg: Dict[str, Any]):
     """
     DALI pipeline for synthetic Bongard problems.
     Uses fn.external_source to receive data generated on the Python side.
@@ -672,8 +681,8 @@ def dali_pipeline_synthetic(image_size: int, is_training: bool, curriculum_confi
             query_bboxes_view2, query_masks_view2,
             support_bboxes_flat, support_masks_flat)
 
-@fn.pipeline_def
-def dali_pipeline_real(cfg: Dict[str, Any], is_training: bool):
+    @fn.pipeline_def
+    def dali_pipeline_real(cfg: Dict[str, Any], is_training: bool):
     """
     DALI pipeline for real Bongard problems using FileReader.
     Includes image augmentations and normalization.

@@ -120,8 +120,31 @@ preprocess_transform = T.Compose([
     T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
 ])
 
-# Global variable for the loaded CNN model (PerceptionModule or BongardPerceptionModel)
-_CNN_MODEL: Optional[Union[BongardPerceptionModel, PerceptionModule]] = None
+
+# Expose MODEL for external use
+from core_models.training_args import Config
+config = Config()
+import torch
+MODEL = BongardPerceptionModel().to(config.device)
+import os
+if os.path.exists(config.best_model_path):
+    MODEL.load_state_dict(torch.load(config.best_model_path, map_location=config.device))
+MODEL.eval()
+
+def single_inference(img):
+    """Run single image inference and return (class_name, confidence)."""
+    preprocess = T.Compose([
+        T.Resize(tuple(config.data.image_size)),
+        T.ToTensor(),
+        T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+    x = preprocess(img).unsqueeze(0).to(config.device)
+    with torch.no_grad():
+        logits = MODEL(x)
+    probs = torch.softmax(logits, dim=1).cpu().squeeze(0)
+    idx = int(probs.argmax().item())
+    class_names = getattr(MODEL, 'class_names', [str(i) for i in range(probs.shape[0])])
+    return class_names[idx], float(probs[idx])
 
 def _load_cnn_model():
     """Loads the CNN model once."""

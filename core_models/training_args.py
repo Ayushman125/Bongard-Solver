@@ -225,6 +225,36 @@ class Config:
     training: TrainingConfig = field(default_factory=TrainingConfig)
     debug: DebugConfig = field(default_factory=DebugConfig)
 
+    # Phase 1 hyper-configs and checkpointing
+    # Perception CNN
+    perception_device: str = "cuda"
+    img_size: int = 128
+    batch_size: int = 64
+    epochs: int = 10
+    lr: float = 1e-3
+
+    # Replay-buffer fine-tuning
+    fine_tune_threshold: int = 500
+    fine_tune_epochs: int = 1
+
+    # Synthetic generator
+    textures_dir: str = "data/textures"
+
+    # Validation sets
+    synth_holdout_count: int = 200
+    real_holdout_root: str = "data/real_bongard/VAL"
+
+    # Checkpointing
+    checkpoint_dir: str = "checkpoints"
+    checkpoint_path: str = f"checkpoints/bongard_perception_last.pth"
+    best_model_path: str = f"checkpoints/bongard_perception_best.pth"
+
+    # Script mode
+    validate_bins: int = 10
+
+    # DALLIPipeline feature flag
+    use_dallipipeline: bool = False
+
     # MoCo-specific transform for combined dataset (added here for central management)
     # This transform needs to handle both RGB (synthetic) and grayscale (Bongard-LOGO) inputs.
     # For grayscale, convert to RGB before applying color jitter/normalize with 3 channels.

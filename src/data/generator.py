@@ -1,3 +1,30 @@
+    def sample_rule(self):
+        """Return a random rule object or dummy if not available."""
+        if not ALL_BONGARD_RULES:
+            # Dummy rule
+            rule_obj = type('Rule', (object,), {
+                'description': "SHAPE(TRIANGLE)",
+                'positive_features': {'shape': 'triangle'},
+                'negative_features': {'shape': 'square'},
+                'is_positive_rule': True
+            })()
+        else:
+            rule_obj = random.choice(ALL_BONGARD_RULES)
+        return rule_obj
+
+    def sample(self, rule_feat, rule_val):
+        """Draw positives, negatives, and return gt_rule string."""
+        gt_rule = f"{rule_feat.upper()}({rule_val.upper()})"
+        # For demonstration, use make_problem to generate examples
+        positives, negatives = [], []
+        rule_obj = self.sample_rule()
+        for _ in range(self.cfg.get('num_positive_examples', 6)):
+            img_np, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = self.make_problem(random.randint(0, 10000))
+            positives.append(img_np)
+        for _ in range(self.cfg.get('num_negative_examples', 6)):
+            _, img_np, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = self.make_problem(random.randint(0, 10000))
+            negatives.append(img_np)
+        return positives, negatives, gt_rule
 # Folder: bongard_solver/src/data/
 # File: generator.py
 import random

@@ -1,10 +1,38 @@
+import zipfile
+import gdown
+
+# Utility to download and extract Bongard-LOGO dataset if not present
+def ensure_bongardlogo_dataset(root_dir: str = 'data/Bongard-LOGO/data', zip_url: str = 'https://drive.google.com/uc?id=1-1j7EBriRpxI-xIVqE6UEXt-SzoWvwLx'):
+    """
+    Download and extract the Bongard-LOGO dataset from Google Drive if not already present.
+    Args:
+        root_dir (str): Target directory for extracted dataset.
+        zip_url (str): Direct download URL for the dataset zip file.
+    """
+    if os.path.exists(root_dir) and os.path.isdir(root_dir) and len(os.listdir(root_dir)) > 0:
+        print(f"Bongard-LOGO dataset already present at {root_dir}.")
+        return
+    os.makedirs(os.path.dirname(root_dir), exist_ok=True)
+    zip_path = os.path.join(os.path.dirname(root_dir), 'bongardlogo_dataset.zip')
+    if not os.path.exists(zip_path):
+        print(f"Downloading Bongard-LOGO dataset to {zip_path}...")
+        gdown.download(zip_url, zip_path, quiet=False)
+    else:
+        print(f"Found existing zip at {zip_path}.")
+    print(f"Extracting Bongard-LOGO dataset to {root_dir}...")
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extractall(os.path.dirname(root_dir))
+    print("Extraction complete.")
 # Folder: bongard_solver/data/
 # File: bongardlogo_dataset.py
 
+
 import os
+import torch
 from PIL import Image
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
+from typing import Tuple
 import logging
 
 logger = logging.getLogger(__name__)
@@ -15,6 +43,8 @@ class BongardLogoDataset(Dataset):
     Each problem contains 6 positive and 6 negative images.
     """
     def __init__(self, root_dir: str, split: str = "train", img_size: int = 128):
+        # Ensure dataset is present (download/unzip if needed)
+        ensure_bongardlogo_dataset(root_dir)
         """
         Initializes the BongardLogoDataset.
 
@@ -24,46 +54,35 @@ class BongardLogoDataset(Dataset):
             split (str): The dataset split to use ('train', 'val', 'test').
             img_size (int): The target size for the images (img_size x img_size).
         """
-        self.root = os.path.join(root_dir, split)
-        self.img_size = img_size
 
-        # Transformation pipeline for grayscale images
-        # ToTensor() converts PIL Image (H,W) to FloatTensor (1,H,W) in [0,1]
-        # Normalize((0.5,), (0.5,)) maps values from [0,1] to [-1,1] for grayscale
+        # For ShapeBongard_V2 structure: root_dir/ShapeBongard_V2/{hd,bd,ff}/.../images/*/{0,1}/*.png
+        self.root = root_dir
+        self.img_size = img_size
         self.transform = transforms.Compose([
             transforms.Resize((self.img_size, self.img_size)),
-            transforms.ToTensor(),                # yields [1,H,W], values 0..1
-            transforms.Normalize((0.5,), (0.5,))  # for gray channel, maps to [-1,1]
+            transforms.ToTensor(),
+            transforms.Normalize((0.5,), (0.5,))
         ])
-
         self.samples = []
-        if not os.path.isdir(self.root):
-            logger.error(f"Bongard-LOGO dataset root directory not found: {self.root}")
-            raise FileNotFoundError(f"Bongard-LOGO dataset root directory not found: {self.root}")
-
-        problem_dirs = sorted([d for d in os.listdir(self.root) if os.path.isdir(os.path.join(self.root, d))])
-        if not problem_dirs:
-            logger.warning(f"No problem directories found in {self.root}. Dataset will be empty.")
-
-        for prob_dir_name in problem_dirs:
-            problem_path = os.path.join(self.root, prob_dir_name)
-            images_dir = os.path.join(problem_path, "images") # Assuming 'images' subdirectory
-            
-            if not os.path.isdir(images_dir):
-                logger.warning(f"Skipping {problem_path}: 'images' subdirectory not found.")
+        # Find the ShapeBongard_V2 directory
+        shape_bongard_root = os.path.join(self.root, "ShapeBongard_V2")
+        if not os.path.isdir(shape_bongard_root):
+            logger.error(f"ShapeBongard_V2 directory not found in {self.root}")
+            raise FileNotFoundError(f"ShapeBongard_V2 directory not found in {self.root}")
+        # Only use hd, bd, ff
+        for split_folder in ["hd", "bd", "ff"]:
+            split_path = os.path.join(shape_bongard_root, split_folder)
+            if not os.path.isdir(split_path):
                 continue
-
-            for side, label in [("pos", 1), ("neg", 0)]:
-                side_path = os.path.join(images_dir, side)
-                if not os.path.isdir(side_path):
-                    logger.warning(f"Skipping {side_path}: Directory not found.")
-                    continue
-
-                for fn in os.listdir(side_path):
-                    if fn.lower().endswith((".png", ".jpg", ".jpeg", ".bmp")):
-                        self.samples.append((os.path.join(side_path, fn), label))
-        
-        logger.info(f"Initialized BongardLogoDataset for split '{split}' with {len(self.samples)} samples.")
+            # Recursively walk through all subfolders
+            for dirpath, dirnames, filenames in os.walk(split_path):
+                # Only look for folders named '0' or '1' directly under an 'images' folder
+                if os.path.basename(os.path.dirname(dirpath)) == "images" and os.path.basename(dirpath) in ["0", "1"]:
+                    label = 0 if os.path.basename(dirpath) == "0" else 1
+                    for fn in filenames:
+                        if fn.lower().endswith(".png"):
+                            self.samples.append((os.path.join(dirpath, fn), label))
+        logger.info(f"Initialized BongardLogoDataset (ShapeBongard_V2) with {len(self.samples)} samples.")
 
     def __len__(self):
         return len(self.samples)

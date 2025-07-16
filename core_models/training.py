@@ -1,3 +1,7 @@
+from pathlib import Path
+# --- Helper functions ---
+def ensure_dir(path):
+    Path(path).mkdir(parents=True, exist_ok=True)
 # Folder: bongard_solver/core_models/
 # File: training.py
 import torch
@@ -475,7 +479,7 @@ def train_perception_with_buffer(
             - Dictionary of best validation metrics.
     """
     set_seed(cfg['training']['seed']) # Use a different seed for each member
-    
+
     # Initialize data module and loaders
     dm = BongardDataModule(cfg)
     train_loader = dm.train_dataloader()
@@ -488,26 +492,48 @@ def train_perception_with_buffer(
 
     # Initialize optimizer and scheduler using centralized functions
     optimizer = get_optimizer(model.parameters(), cfg['training'])
-    
+
     # total_steps is needed for OneCycleLR
     num_epochs = cfg['training']['epochs']
     total_steps = num_epochs * len(train_loader)
     scheduler = get_scheduler(optimizer, cfg['training'], total_steps)
-    
+
     scaler = GradScaler() if cfg['training']['use_amp'] else None
-    
-    # Define checkpoint path
-    model_name_prefix = "best_perception_model"
-    checkpoint_dir = cfg['debug']['save_model_checkpoints']
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    best_model_path = os.path.join(checkpoint_dir, f"{model_name_prefix}.pt")
-    
+
+    # Checkpointing setup
+    from core_models.training_args import Config
+    config = Config()
+    ensure_dir(config.checkpoint_dir)
+    last_ckpt_path = config.checkpoint_path
+    best_ckpt_path = config.best_model_path
+    best_acc = 0.0
+
+    # ...existing early stopping setup...
     early_stopping = EarlyStopping(
         patience=cfg['training']['early_stop_patience'],
         delta=cfg['training']['early_stop_delta'],
         verbose=True,
-        path=best_model_path
+        path=best_ckpt_path
     )
+    for epoch in range(num_epochs):
+        # ...existing training logic...
+        avg_loss, avg_acc = 0.0, 0.0
+        steps = len(train_loader)
+        for _ in range(steps):
+            # ...backward, step, accumulate avg_loss, avg_acc...
+            pass
+        print(f"[Epoch {epoch}] Train Loss={avg_loss/steps:.4f} Acc={avg_acc/steps:.4f}")
+
+        # 2) validate on synthetic hold-out
+        # val_acc, _, _ = validate_on_synthetic_holdout(model)  # Implement as needed
+        val_acc = 0.0  # Placeholder
+        print(f"[Epoch {epoch}] Val (Synth) Acc={val_acc:.4f}")
+
+        # 3) checkpointing
+        torch.save(model.state_dict(), last_ckpt_path)  # last
+        if val_acc > best_acc:
+            best_acc = val_acc
+            torch.save(model.state_dict(), best_ckpt_path)  # best
     logger.info(f"Early Stopping initialized with patience={early_stopping.patience}, delta={early_stopping.delta}.")
     
     num_bongard_classes = cfg['model']['bongard_head_config']['num_classes']
