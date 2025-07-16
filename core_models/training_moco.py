@@ -1,5 +1,6 @@
 # Folder: bongard_solver/core_models/
 # File: training_moco.py
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -10,9 +11,10 @@ import argparse
 from typing import Dict, Any, Tuple, List
 import numpy as np
 import torchvision.transforms as T
-from PIL import Image # For loading real images
+from PIL import Image  # For loading real images
+from tqdm.auto import tqdm # For progress bars
 
-# Import PyTorch Lightning
+# Import PyTorch Lightning (if used for other parts, otherwise can be removed)
 import pytorch_lightning as pl
 
 # Import models (from current directory)
@@ -21,16 +23,15 @@ from .optimizers import get_optimizer # For train_moco_on_real
 from .losses import MoCoLoss # For train_moco_on_real
 
 # Import data module and loader (from parent directory's src folder)
-# Assuming data.py and its components are in `bongard_solver/data/`
-# and config.py is in `bongard_solver/`
 try:
     from ..data import get_loader, BongardDataModule, custom_collate_fn, RealBongardDataset # Import RealBongardDataset
     from ..data.generator import LogoGenerator # For synthetic data in MoCoDummyDataset
+    from ..data.bongardlogo_dataset import BongardLogoDataset # New: BongardLogoDataset
     HAS_DATA_MODULE = True
-except ImportError:
+except ImportError as e:
     HAS_DATA_MODULE = False
     logger = logging.getLogger(__name__)
-    logger.warning("Could not import BongardDataModule or get_loader from ..data. MoCo pretraining will use dummy dataset.")
+    logger.warning(f"Could not import BongardDataModule, get_loader, LogoGenerator, or BongardLogoDataset from ..data. MoCo pretraining will use dummy dataset. Error: {e}")
     # Dummy custom_collate_fn if not available
     def custom_collate_fn(batch):
         # This dummy collate function will just stack the first two elements (images)
@@ -53,7 +54,6 @@ except ImportError:
         dummy_bboxes = [[]] * batch_size
         dummy_masks = [[]] * batch_size
         dummy_confs = [0.0] * batch_size
-
         return (
             raw_query_images_view1_np, raw_query_images_view2_np, dummy_label,
             dummy_json, dummy_json, dummy_float, dummy_affine, dummy_affine, dummy_indices,
@@ -76,7 +76,6 @@ except ImportError:
             self.num_workers = cfg['data']['dataloader_workers']
             self.use_dali = cfg['training'].get('use_dali', False)
             self.dali_image_processor = None # Dummy processor
-
         def setup(self, stage: Optional[str] = None):
             if stage == 'fit' or stage is None:
                 if self._train_dataset is None:
@@ -99,7 +98,6 @@ except ImportError:
                         ])
                         self.mean = mean
                         self.std = std
-
                     def run(self, img1_np_batch, img2_np_batch, support_img_np_batch):
                         # Simulate DALI output: tensors on device
                         img1_tensors = torch.stack([self.transform(img) for img in img1_np_batch])
@@ -109,7 +107,7 @@ except ImportError:
                         return img1_tensors.to(DEVICE), img2_tensors.to(DEVICE), support_tensors.to(DEVICE)
                 
                 self.dali_image_processor = DummyDALIProcessor(
-                    self.image_size, 
+                    self.image_size[0], # Use height for square size
                     [0.485, 0.456, 0.406], # ImageNet stats for 3-channel images
                     [0.229, 0.224, 0.225]
                 )
@@ -123,7 +121,6 @@ except ImportError:
                 shuffle=True,
                 collate_fn=custom_collate_fn if not self.use_dali else None # DALI handles collation internally
             )
-
         def val_dataloader(self):
             if self._val_dataset:
                 return torch.utils.data.DataLoader(
@@ -139,9 +136,9 @@ except ImportError:
 try:
     from ..config import load_config, DEVICE, CONFIG, IMAGENET_MEAN, IMAGENET_STD, DATA_ROOT_PATH
     from ..src.utils.augment import augment_image # Import augment_image for real data
-except ImportError:
+except ImportError as e:
     logger = logging.getLogger(__name__)
-    logger.warning("Could not import config or augment_image. Using dummy CONFIG and DEVICE.")
+    logger.warning(f"Could not import config or augment_image. Using dummy CONFIG and DEVICE. Error: {e}")
     # Dummy CONFIG and DEVICE for standalone execution
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     CONFIG = {
@@ -175,7 +172,7 @@ except ImportError:
             }
         },
         'data': {
-            'image_size': 224,
+            'image_size': [224, 224],
             'dataloader_workers': 0, # Set to 0 for dummy dataset to avoid multiprocessing issues
             'use_synthetic_data': True,
             'synthetic_data_config': {
@@ -183,7 +180,8 @@ except ImportError:
                 'num_val_problems': 20, # Added for completeness
                 'max_support_images_per_problem': 0
             },
-            'real_data_path': './data/real_bongard' # Dummy path for real data
+            'real_data_path': './data/real_bongard', # Dummy path for real data
+            'bongardlogo_root': './data/Bongard-LOGO/data' # Dummy path for Bongard-LOGO
         },
         'training': {
             'batch_size': 64,
@@ -209,7 +207,25 @@ except ImportError:
         """Dummy load_config function."""
         return CONFIG
     def augment_image(img_pil): # Dummy augment_image
-        return T.ToTensor()(img_pil) # Just convert to tensor
+        # For grayscale, ensure it's converted to RGB before ToTensor for ImageNet normalization
+        # Or, handle single channel normalization explicitly.
+        # For MoCo, we usually want 3-channel input for ImageNet pretraining compatibility.
+        # If the input is 'L' (grayscale), convert to 'RGB'
+        if img_pil.mode == 'L':
+            img_pil = img_pil.convert('RGB')
+        
+        # Apply standard MoCo augmentations (RandomResizedCrop, ColorJitter, Grayscale, etc.)
+        # These should be defined in the main config or passed in.
+        # For this dummy, we'll use a basic set.
+        transform = T.Compose([
+            T.RandomResizedCrop(CONFIG['data']['image_size'][0], scale=(0.2, 1.0)),
+            T.RandomHorizontalFlip(),
+            T.RandomApply([T.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8),
+            T.RandomGrayscale(p=0.2),
+            T.ToTensor(),
+            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]) # ImageNet stats for 3 channels
+        ])
+        return transform(img_pil)
     IMAGENET_MEAN = [0.485, 0.456, 0.406]
     IMAGENET_STD = [0.229, 0.224, 0.225]
     DATA_ROOT_PATH = "./data"
@@ -235,10 +251,8 @@ class MoCoDummyDataset(torch.utils.data.Dataset):
             T.ToTensor(),
             T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD) # ImageNet stats
         ])
-
     def __len__(self):
         return self.num_samples
-
     def __getitem__(self, idx: int) -> Tuple[np.ndarray, np.ndarray, int, bytes, bytes, float, List[List[float]], List[List[float]], int, np.ndarray, int, bytes, int, int, float, List[List[List[float]]], List[List[np.ndarray]], List[List[List[float]]], List[List[np.ndarray]], List[List[List[float]]], List[List[np.ndarray]], float, float, List[float]]:
         """
         Returns a tuple matching the expected output of custom_collate_fn in data.py.
@@ -254,12 +268,10 @@ class MoCoDummyDataset(torch.utils.data.Dataset):
         # augment_image expects PIL Image, so convert from numpy
         img_view1 = augment_image(Image.fromarray(img_np)).cpu().numpy() # Convert back to numpy for DALI compatibility
         img_view2 = augment_image(Image.fromarray(img_np)).cpu().numpy()
-
         # Dummy bounding boxes and masks (empty lists for no detections)
         dummy_bboxes = []
         dummy_masks = []
         dummy_confs = [1.0] # Dummy confidence for synthetic images
-
         # The full tuple expected by custom_collate_fn:
         # (raw_query_images_view1_np, raw_query_images_view2_np, query_labels,
         #  query_gts_json_view1, query_gts_json_view2, difficulties, affine1, affine2, original_indices,
@@ -278,95 +290,131 @@ class MoCoDummyDataset(torch.utils.data.Dataset):
                 dummy_confs[0], dummy_confs[0], dummy_confs * self.cfg['data']['synthetic_data_config'].get('max_support_images_per_problem', 0) # Added dummy confidences
                 )
 
-def train_moco_on_real(config: Dict[str, Any]):
-    """
-    Performs MoCo-style self-supervised pretraining on unlabeled real Bongard images.
-    Args:
-        config (Dict[str, Any]): The configuration dictionary.
-    """
-    logger.info("Starting MoCo-V2 self-supervised pretraining on real Bongard images.")
+# New: SynthUnlabeledDataset to wrap synthetic images for MoCo
+class SynthUnlabeledDataset(torch.utils.data.Dataset):
+    def __init__(self, images: List[Image.Image], transform: Any):
+        self.images = images
+        self.transform = transform
 
-    # Initialize query and key encoders (BongardPerceptionModel as the backbone)
-    # The BongardPerceptionModel is the feature extractor part of PerceptionModule
-    # We create it directly for MoCo pretraining.
-    model_q = BongardPerceptionModel(config).to(DEVICE)
-    model_k = BongardPerceptionModel(config).to(DEVICE)
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, idx):
+        img_pil = self.images[idx]
+        # Apply the transform twice for MoCo
+        x1 = self.transform(img_pil)
+        x2 = self.transform(img_pil)
+        return x1, x2
+
+def train_moco_with_logo(cfg: Dict[str, Any]):
+    """
+    Performs MoCo-style self-supervised pretraining combining Bongard-LOGO and synthetic data.
+
+    Args:
+        cfg (Dict[str, Any]): The configuration dictionary.
+    """
+    logger.info("--- Starting MoCo-V2 Pretraining with Bongard-LOGO and Synthetic Data ---")
+
+    # 1) Bongard-LOGO unlabeled dataset
+    try:
+        logo_ds = BongardLogoDataset(cfg['data']['bongardlogo_root'],
+                                     split="train", # Use train split for pretraining
+                                     img_size=cfg['data']['image_size'][0]) # Use height for square size
+    except FileNotFoundError as e:
+        logger.error(f"Failed to load BongardLogoDataset for MoCo: {e}. Skipping pretraining.")
+        return
+
+    # 2) Synthetic unlabeled samples
+    # Ensure LogoGenerator is initialized with the full config for proper paths/sizes
+    gen = LogoGenerator(cfg=cfg, bg_textures_dir=cfg['data']['synthetic_data_config'].get('background_texture_path', './data/textures'))
+    
+    synth_imgs_pil = []
+    # Generate a fixed number of synthetic problems, each with pos/neg examples
+    num_synthetic_problems = cfg['data']['synthetic_data_config'].get('num_train_problems', 100) # Use num_train_problems from synthetic config
+    for i in tqdm(range(num_synthetic_problems), desc="Generating synthetic images for MoCo"):
+        # make_problem returns (query_img_v1_np, query_img_v2_np, query_label, ...)
+        # We need the raw PIL images for the SynthUnlabeledDataset
+        # LogoGenerator.make_problem returns numpy arrays, convert to PIL
+        (query_img_v1_np, query_img_v2_np, _, _, _, _, _, _, _,
+         support_imgs_np, _, _, _, _, _, _, _, _, _, _, _, _, _, _) = gen.make_problem(problem_id=i)
+        
+        # Convert numpy arrays to PIL Images for the dataset
+        synth_imgs_pil.append(Image.fromarray(query_img_v1_np).convert('RGB')) # Ensure RGB for augmentation
+        synth_imgs_pil.append(Image.fromarray(query_img_v2_np).convert('RGB'))
+        
+        # Also add support images if any
+        for s_img_np in support_imgs_np:
+            if s_img_np.sum() > 0: # Avoid adding empty padding images
+                synth_imgs_pil.append(Image.fromarray(s_img_np).convert('RGB'))
+
+    # Define the MoCo augmentation transform
+    # This transform needs to handle both RGB (synthetic) and grayscale (Bongard-LOGO) inputs.
+    # For grayscale, convert to RGB before applying color jitter/normalize with 3 channels.
+    moco_transform = T.Compose([
+        T.RandomResizedCrop(cfg['data']['image_size'][0], scale=(0.2, 1.0)),
+        T.RandomHorizontalFlip(),
+        T.RandomApply([T.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8),
+        T.RandomGrayscale(p=0.2),
+        T.ToTensor(),
+        T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
+    ])
+    
+    synth_ds = SynthUnlabeledDataset(synth_imgs_pil, transform=moco_transform)
+
+    # Combine datasets
+    combined_dataset = torch.utils.data.ConcatDataset([logo_ds, synth_ds])
+    loader = DataLoader(combined_dataset,
+                        batch_size=cfg['training']['batch_size'],
+                        shuffle=True,
+                        num_workers=cfg['data']['dataloader_workers'],
+                        pin_memory=True)
+
+    # 3) Initialize MoCo encoders
+    # BongardPerceptionModel as the backbone/feature extractor
+    model_q = BongardPerceptionModel(cfg['model']).to(DEVICE) # Pass model config
+    model_k = BongardPerceptionModel(cfg['model']).to(DEVICE) # Pass model config
     
     # Initialize key encoder with query encoder's weights
     for param_q, param_k in zip(model_q.parameters(), model_k.parameters()):
         param_k.data.copy_(param_q.data)
         param_k.requires_grad = False # Key encoder is not updated by backprop
 
-    optimizer = get_optimizer(model_q, config)
-    moco_loss_fn = MoCoLoss(temperature=config['model']['simclr_config']['temperature'],
-                            queue_size=config['model']['simclr_config']['moco_k']).to(DEVICE)
-
-    # Prepare data for real Bongard images
-    real_data_root = config['data']['real_data_path']
-    if not os.path.exists(real_data_root):
-        logger.error(f"Real data path '{real_data_root}' does not exist. Cannot perform MoCo pretraining on real data.")
-        return
-
-    # Get list of all image paths in the real data directory
-    real_image_paths = []
-    for root, _, files in os.walk(real_data_root):
-        for file in files:
-            if file.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp')):
-                real_image_paths.append(os.path.join(root, file))
+    optimizer = get_optimizer(model_q.parameters(), cfg['training']) # Pass model_q.parameters() and training config
     
-    if not real_image_paths:
-        logger.warning(f"No real images found in '{real_data_root}'. Skipping MoCo pretraining on real data.")
-        return
+    moco_loss_fn = MoCoLoss(
+        temperature=cfg['model']['simclr_config']['temperature'],
+        queue_size=cfg['model']['simclr_config']['moco_k']
+    ).to(DEVICE)
 
-    logger.info(f"Found {len(real_image_paths)} real images for MoCo pretraining.")
+    # 4) Pretraining loop
+    model_q.train()
+    model_k.eval() # Key encoder remains in eval mode
     
-    # Create a simple dataset for real images
-    class RealImageDataset(torch.utils.data.Dataset):
-        def __init__(self, image_paths: List[str], image_size: List[int]):
-            self.image_paths = image_paths
-            self.image_size = image_size
-            # No normalization here, augment_image handles it.
-            self.resize_transform = T.Resize(tuple(self.image_size))
+    moco_epochs = cfg['model']['simclr_config'].get('pretrain_epochs', 100)
+    moco_m = cfg['model']['simclr_config'].get('moco_m', 0.999)
 
-        def __len__(self):
-            return len(self.image_paths)
-
-        def __getitem__(self, idx):
-            img_path = self.image_paths[idx]
-            img_pil = Image.open(img_path).convert('RGB') # Ensure RGB for augment_image
-            img_pil = self.resize_transform(img_pil) # Resize before augmentation
-
-            # Apply two different augmentations for MoCo views
-            x1 = augment_image(img_pil) # augment_image returns a tensor (C, H, W)
-            x2 = augment_image(img_pil)
-            return x1, x2
-
-    real_dataset = RealImageDataset(real_image_paths, config['data']['image_size'])
-    real_loader = torch.utils.data.DataLoader(
-        real_dataset,
-        batch_size=config['training']['batch_size'],
-        shuffle=True,
-        num_workers=config['data']['dataloader_workers'],
-        pin_memory=True
-    )
-
-    moco_epochs = config['model']['simclr_config'].get('pretrain_epochs', 100)
-    moco_m = config['model']['simclr_config'].get('moco_m', 0.999)
-
+    logger.info(f"Starting MoCo pretraining for {moco_epochs} epochs.")
     for epoch in range(moco_epochs):
         total_loss = 0.0
-        for batch_idx, (x1, x2) in enumerate(real_loader):
+        train_loop = tqdm(loader, leave=True, desc=f"Epoch {epoch+1}/{moco_epochs} [MoCo Pretrain]")
+        for batch_idx, (x1, x2) in enumerate(train_loop): # expects __getitem__→(aug1, aug2)
+            # Handle grayscale images from BongardLogoDataset (1 channel)
+            # and synthetic images (3 channels)
+            # Ensure both are converted to 3 channels for the backbone if needed
+            if x1.shape[1] == 1: # If grayscale, convert to 3 channels by repeating
+                x1 = x1.repeat(1, 3, 1, 1)
+            if x2.shape[1] == 1: # If grayscale, convert to 3 channels by repeating
+                x2 = x2.repeat(1, 3, 1, 1)
+
             x1 = x1.to(DEVICE)
             x2 = x2.to(DEVICE)
 
             # Compute query features
-            # model_q (BongardPerceptionModel) expects a batch of images and returns features
-            # It does not need bboxes/masks for simple feature extraction
-            q_features = model_q(x1)
-
+            q_features = model_q(x1) # BongardPerceptionModel returns features
+            
             # Compute key features
             with torch.no_grad(): # No gradient for key encoder
-                # Update key encoder with momentum
+                # Momentum update for key encoder
                 for param_q, param_k in zip(model_q.parameters(), model_k.parameters()):
                     param_k.data = param_k.data * moco_m + param_q.data * (1. - moco_m)
                 k_features = model_k(x2)
@@ -379,19 +427,30 @@ def train_moco_on_real(config: Dict[str, Any]):
             optimizer.step()
             
             total_loss += loss.item()
-            
-            if (batch_idx + 1) % config['training']['log_every_n_steps'] == 0:
-                logger.info(f"MoCo Real Epoch {epoch+1}/{moco_epochs}, Batch {batch_idx+1}/{len(real_loader)}, Loss: {loss.item():.4f}")
+            train_loop.set_postfix(loss=loss.item())
 
-        avg_loss = total_loss / len(real_loader)
-        logger.info(f"MoCo Real Epoch {epoch+1} finished. Average Loss: {avg_loss:.4f}")
+        avg_loss = total_loss / len(loader)
+        logger.info(f"[MoCo][Epoch {epoch+1}] Average Loss={avg_loss:.4f}")
 
-    # Save the final query encoder (which is the main model being trained)
-    moco_real_ckpt_path = config['debug']['save_model_checkpoints']
-    os.makedirs(moco_real_ckpt_path, exist_ok=True)
-    final_moco_encoder_path = os.path.join(moco_real_ckpt_path, config['model']['simclr_config'].get('moco_real_ckpt_name', 'moco_real_encoder.pth'))
+    # 4) Save checkpoint
+    moco_ckpt_path = cfg['debug']['save_model_checkpoints']
+    os.makedirs(moco_ckpt_path, exist_ok=True)
+    final_moco_encoder_path = os.path.join(moco_ckpt_path, cfg['model']['simclr_config'].get('moco_ckpt_name', 'moco_combined_encoder.pth'))
     torch.save(model_q.state_dict(), final_moco_encoder_path)
-    logger.info(f"MoCo pretrained encoder on real data saved to: {final_moco_encoder_path}")
+    logger.info(f"MoCo pretrained encoder (combined) saved to: {final_moco_encoder_path}")
+    logger.info("--- MoCo-V2 Pretraining with Bongard-LOGO and Synthetic Data Completed ---")
+
+
+def train_moco_on_real(config: Dict[str, Any]):
+    """
+    Performs MoCo-style self-supervised pretraining on unlabeled real Bongard images.
+    This function is now deprecated in favor of `train_moco_with_logo` which combines
+    real Bongard-LOGO and synthetic data.
+    """
+    logger.warning("`train_moco_on_real` is deprecated. Use `train_moco_with_logo` for combined pretraining.")
+    # The original logic for train_moco_on_real would go here if still needed.
+    # For now, it will just log a warning and return.
+    return
 
 def main():
     """
@@ -406,21 +465,17 @@ def main():
     cfg = load_config(args.config)
     
     logger.info("--- Starting MoCo-V2 Pretraining (Synthetic Data) ---")
-
     # Initialize the LitSimCLR module, which internally handles SimCLREncoder and MoCo
     model = LitSimCLR(cfg)
-
     # Initialize data module with the dummy dataset
     moco_dataset = MoCoDummyDataset(cfg)
     
     # The BongardDataModule will wrap this dataset and create loaders
     data_module = BongardDataModule(cfg, train_dataset=moco_dataset, val_dataset=None)
     data_module.setup(stage='fit') # Call setup to prepare data loaders
-
     # Setup PyTorch Lightning Trainer
     checkpoint_dir = cfg['debug']['save_model_checkpoints']
     os.makedirs(checkpoint_dir, exist_ok=True)
-
     # Define callbacks
     callbacks = []
     # Add ModelCheckpoint to save the best model
@@ -432,7 +487,6 @@ def main():
         save_top_k=1,
         verbose=True
     ))
-
     # Initialize PyTorch Lightning Trainer
     trainer = pl.Trainer(
         accelerator='gpu' if torch.cuda.is_available() else 'cpu',
@@ -444,7 +498,6 @@ def main():
         enable_progress_bar=True,
         log_every_n_steps=cfg['training'].get('log_every_n_steps', 50)
     )
-
     # Train the model
     trainer.fit(model, data_module)
     logger.info("--- MoCo-V2 Pretraining on Synthetic Data finished. ---")
@@ -462,7 +515,6 @@ def main():
         final_encoder_path = os.path.join(checkpoint_dir, "moco_final_encoder_synthetic.pth")
         torch.save(model.feature_extractor.state_dict(), final_encoder_path)
         logger.info(f"Final MoCo encoder (AttributeClassifier) on synthetic data saved to: {final_encoder_path}")
-
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -488,7 +540,7 @@ if __name__ == "__main__":
                     'moco_m': 0.999,
                     'temperature': 0.07,
                     'pretrain_epochs': 5, # Reduced for quick test
-                    'moco_real_ckpt_name': 'moco_real_encoder.pth' # Name for real data checkpoint
+                    'moco_ckpt_name': 'moco_combined_encoder.pth' # Name for combined data checkpoint
                 },
                 'bongard_head_config': {
                     'num_classes': 2,
@@ -521,7 +573,8 @@ if __name__ == "__main__":
                     'jitter_width_range': [1, 3],
                     'jitter_dash_options': [None, (4,2), (2,2,2)]
                 },
-                'real_data_path': './data/real_bongard' # Dummy path for real data
+                'real_data_path': './data/real_bongard', # Dummy path for real data
+                'bongardlogo_root': './data/Bongard-LOGO/data' # Dummy path for Bongard-LOGO
             },
             'training': {
                 'batch_size': 64,
@@ -548,12 +601,17 @@ if __name__ == "__main__":
         # Create dummy data/textures and data/real_bongard for testing
         os.makedirs('./data/textures', exist_ok=True)
         os.makedirs('./data/real_bongard', exist_ok=True)
+        os.makedirs('./data/Bongard-LOGO/data/train/problem_0001/images/pos', exist_ok=True)
+        os.makedirs('./data/Bongard-LOGO/data/train/problem_0001/images/neg', exist_ok=True)
         # Create a dummy texture image
         dummy_texture = Image.new('RGB', (128, 128), color = (100, 100, 100))
         dummy_texture.save('./data/textures/dummy_texture.png')
         # Create a dummy real image
         dummy_real_img = Image.new('RGB', (224, 224), color = (50, 50, 50))
         dummy_real_img.save('./data/real_bongard/dummy_real_image.png')
+        # Create dummy Bongard-LOGO images (grayscale)
+        Image.new('L', (224, 224), color=0).save('./data/Bongard-LOGO/data/train/problem_0001/images/pos/pos_01.png')
+        Image.new('L', (224, 224), color=255).save('./data/Bongard-LOGO/data/train/problem_0001/images/neg/neg_01.png')
 
         with open(config_path, 'w') as f:
             import yaml
@@ -562,9 +620,8 @@ if __name__ == "__main__":
     
     # Run the main function for synthetic data pretraining
     main()
-
-    # Example of how to call train_moco_on_real separately
-    logger.info("\n--- Running MoCo Pretraining on Real Data ---")
+    
+    # Example of how to call train_moco_with_logo separately
+    logger.info("\n--- Running MoCo Pretraining with Bongard-LOGO and Synthetic Data ---")
     cfg = load_config(config_path) # Reload config to ensure it's up-to-date
-    train_moco_on_real(cfg)
-
+    train_moco_with_logo(cfg)
