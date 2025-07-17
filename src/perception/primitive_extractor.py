@@ -19,8 +19,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 # --- Import configuration and attribute maps ---
-# These imports bring in global configuration settings, image normalization parameters,
-# device settings (CPU/GPU), and mappings for various object attributes.
+# Always import config from core_models.training_args (dataclass), and all other constants from config.py
 try:
     from core_models.training_args import config
     from config import (
@@ -28,17 +27,13 @@ try:
         ATTRIBUTE_SIZE_MAP, ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_TEXTURE_MAP,
         IMAGENET_MEAN, IMAGENET_STD, DEVICE
     )
-    # Import the core perception models.
     from core_models.models import BongardPerceptionModel, PerceptionModule
-    # Attempt to import the image augmentation utility for Test-Time Augmentation (TTA).
     try:
         from utils.augment import augment_image
     except ImportError:
         logging.warning("utils.augment not found, TTA functionality may be limited.")
         augment_image = None
 except ImportError as e:
-    # If essential configuration or model components cannot be imported,
-    # print an error and re-raise the exception to halt execution.
     print(f"Error importing core modules or config: {e}")
     raise
 
@@ -121,6 +116,7 @@ def single_inference(img_pil: Image.Image, model: Optional[nn.Module] = None) ->
     if current_model is None:
         logger.error("CNN model not available for inference.")
         # Return 'unknown' for all expected attributes if the model is not loaded.
+        # Return as a tuple of (dict, ) to match the expected tuple return in extract_cnn_features fallback.
         return {attr_type: (f"unknown_{attr_type}", 0.0) for attr_type in attribute_maps_inv.keys()}
 
     # Preprocess the PIL image: resize, convert to tensor, and normalize.
@@ -364,34 +360,26 @@ def extract_cnn_features(img_pil: Image.Image) -> Dict[str, Tuple[str, float]]:
     # If the `augment_image` function is available (successfully imported), apply TTA.
     if augment_image:
         try:
-            # `augment_image` expects a PIL Image and returns a normalized PyTorch tensor.
             augmented_tensor = augment_image(img_pil)
-
-            # Denormalize the augmented tensor and convert it back to a PIL Image.
-            # This is necessary because `single_inference` expects a PIL Image.
             mean_tensor = torch.tensor(IMAGENET_MEAN, device=DEVICE).view(3, 1, 1)
             std_tensor = torch.tensor(IMAGENET_STD, device=DEVICE).view(3, 1, 1)
-
-            # Move the tensor to the correct device (CPU/GPU) for operations.
             augmented_tensor_denorm = augmented_tensor.to(DEVICE) * std_tensor + mean_tensor
-            # Scale pixel values to 0-255 range and convert to byte type for PIL compatibility.
             augmented_tensor_denorm = torch.clamp(augmented_tensor_denorm * 255, 0, 255).byte()
-
-            # Convert the PyTorch tensor (CHW format) to a NumPy array (HWC format),
-            # then create a PIL Image from the NumPy array.
             augmented_img_pil = Image.fromarray(augmented_tensor_denorm.permute(1, 2, 0).cpu().numpy())
-            crops_pil.append(augmented_img_pil)  # Add the augmented image to the list of crops.
+            crops_pil.append(augmented_img_pil)
         except Exception as e:
             logger.warning(f"Error during TTA augmentation: {e}. Proceeding without augmentation.")
 
-    # Dictionaries to store all predicted votes and their confidences for each attribute type.
-    # `defaultdict(list)` automatically creates an empty list for a key if it doesn't exist.
     all_votes: Dict[str, List[str]] = defaultdict(list)
     all_confs: Dict[str, List[float]] = defaultdict(list)
 
-    # Iterate through each image (original and augmented) and perform single inference.
+    # If the model is not loaded, return a tuple of (dict, ) to match expected unpacking in callers.
+    if MODEL is None:
+        dummy_result = {attr_type: (f"unknown_{attr_type}", 0.0) for attr_type in attribute_maps_inv.keys()}
+        return (dummy_result, )
+
     for c in crops_pil:
-        inference_results = single_inference(c)  # `single_inference` expects a PIL Image.
+        inference_results = single_inference(c)
         for attr_type, (val, conf) in inference_results.items():
             all_votes[attr_type].append(val)
             all_confs[attr_type].append(conf)
