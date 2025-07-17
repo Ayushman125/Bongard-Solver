@@ -117,7 +117,11 @@ def eval_set(imgs, labels):
     fallback_class_names = ['triangle', 'quadrilateral', 'filled', 'outlined']
     class_names = getattr(MODEL, 'class_names', fallback_class_names)
     for img in tqdm(imgs, desc="Inferencing"):
-        v, c = extract_cnn_features(img)
+        result = extract_cnn_features(img)
+        if isinstance(result, tuple) and len(result) >= 2:
+            v, c = result[:2]
+        else:
+            raise ValueError(f"Unexpected output from extract_cnn_features: {result}")
         try:
             preds.append(class_names.index(v))
         except ValueError:

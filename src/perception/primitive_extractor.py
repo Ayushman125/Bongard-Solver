@@ -22,10 +22,11 @@ if ROOT not in sys.path:
 # These imports bring in global configuration settings, image normalization parameters,
 # device settings (CPU/GPU), and mappings for various object attributes.
 try:
+    from core_models.training_args import config
     from config import (
         ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_FILL_MAP,
         ATTRIBUTE_SIZE_MAP, ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_TEXTURE_MAP,
-        CONFIG, IMAGENET_MEAN, IMAGENET_STD, DEVICE
+        IMAGENET_MEAN, IMAGENET_STD, DEVICE
     )
     # Import the core perception models.
     from core_models.models import BongardPerceptionModel, PerceptionModule
@@ -33,8 +34,6 @@ try:
     try:
         from utils.augment import augment_image
     except ImportError:
-        # If augment_image is not found, log a warning and set it to None,
-        # which will disable TTA functionality.
         logging.warning("utils.augment not found, TTA functionality may be limited.")
         augment_image = None
 except ImportError as e:
@@ -78,7 +77,7 @@ if not logger.handlers:
 # This torchvision transform pipeline prepares PIL images for input into the CNN.
 # It resizes images to a standard size and normalizes pixel values using ImageNet statistics.
 preprocess_transform = T.Compose([
-    T.Resize(tuple(CONFIG['data']['image_size']) if 'data' in CONFIG and 'image_size' in CONFIG['data'] else (224, 224)),
+    T.Resize(tuple(getattr(config.data, 'image_size', (224, 224)))),
     T.ToTensor(),  # Converts PIL Image to PyTorch Tensor (HWC to CHW, 0-255 to 0.0-1.0)
     T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)  # Normalizes with ImageNet stats
 ])
@@ -88,10 +87,11 @@ preprocess_transform = T.Compose([
 # The model is loaded once globally to avoid repeated loading overhead.
 MODEL: Optional[nn.Module] = None
 try:
-    _model = PerceptionModule(CONFIG).to(DEVICE)
+    _model = PerceptionModule(config).to(DEVICE)
     # Load the model's weights if a path is specified in the configuration.
-    if 'best_model_path' in CONFIG and CONFIG['best_model_path']:
-        _model.load_state_dict(torch.load(CONFIG['best_model_path'], map_location=DEVICE))
+    best_model_path = getattr(config, 'best_model_path', None)
+    if best_model_path:
+        _model.load_state_dict(torch.load(best_model_path, map_location=DEVICE))
     _model.eval()  # Set the model to evaluation mode (disables dropout, batch normalization updates).
     MODEL = _model  # Assign the loaded model to the global variable.
     logger.info("PerceptionModel loaded successfully.")
