@@ -117,28 +117,33 @@ def detect_and_segment_image(image_np: np.ndarray, max_objects: int = 10) -> Tup
     return bboxes, masks, scene_graph_objects
 
 
-def get_masked_crop(image_tensor: torch.Tensor, bbox: List[float], mask_np: np.ndarray, target_size: Tuple[int, int]) -> torch.Tensor:
+def get_masked_crop(image_tensor: torch.Tensor, mask_np: np.ndarray, bbox, target_size: Tuple[int, int]) -> torch.Tensor:
     """
     Extracts a masked crop from an image tensor, resizes it, and returns it.
-
-    Args:
-        image_tensor (torch.Tensor): The original image tensor (C, H, W).
-        bbox (List[float]): Bounding box [x1, y1, x2, y2].
-        mask_np (np.ndarray): Binary mask (H, W) for the object.
-        target_size (Tuple[int, int]): Desired output size (H_out, W_out).
-
-    Returns:
-        torch.Tensor: The masked and resized crop (C, H_out, W_out).
+    bbox: can be Tensor, list, tuple or anything convertible to 4 ints.
+    target_size: (H, W)
     """
+    logger.debug(f"get_masked_crop called with bbox={bbox} ({type(bbox)}), mask shape={getattr(mask_np, 'shape', None)}, target_size={target_size}")
+    # Normalize bbox to a Python list of 4 ints
+    import torch
+    if isinstance(bbox, torch.Tensor):
+        b_list = bbox.flatten().cpu().long().tolist()
+    elif isinstance(bbox, (list, tuple)):
+        b_list = [int(b.item() if isinstance(b, torch.Tensor) else b) for b in bbox]
+    else:
+        raise TypeError(f"get_masked_crop(): expected bbox Tensor/list/tuple, got {type(bbox)}")
+    logger.debug(f"get_masked_crop: b_list after normalization: {b_list}")
+    if len(b_list) != 4:
+        raise ValueError(f"get_masked_crop(): expected 4 coords, got {b_list}")
+    x1, y1, x2, y2 = b_list
     _, img_h, img_w = image_tensor.shape
-    x1, y1, x2, y2 = [int(b) for b in bbox]
     # Clamp bbox coordinates to image bounds
     x1 = max(0, x1)
     y1 = max(0, y1)
     x2 = min(img_w, x2)
     y2 = min(img_h, y2)
     if x2 <= x1 or y2 <= y1:
-        logger.warning(f"Invalid bounding box for cropping: {bbox}. Returning black image.")
+        logger.warning(f"Invalid bounding box for cropping: {b_list}. Returning black image.")
         return torch.zeros(image_tensor.shape[0], *target_size, device=image_tensor.device)
     # Crop the image using the bounding box
     cropped_image = image_tensor[:, y1:y2, x1:x2]  # (C, crop_H, crop_W)

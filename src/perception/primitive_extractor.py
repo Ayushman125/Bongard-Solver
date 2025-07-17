@@ -8,49 +8,17 @@ from PIL import Image, ImageDraw
 import torch
 import torch.nn as nn
 import torchvision.transforms as T
+from torchvision import transforms
+
+# Robust TTA transform for PIL images
+TTA_TRANSFORM = transforms.Compose([
+    transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),
+    transforms.RandomHorizontalFlip(p=0.5),
+    transforms.ColorJitter(brightness=0.2, contrast=0.2),
+])
 from typing import Tuple, Dict, Any, Optional, List
 from collections import Counter, defaultdict
 import random
-
-# --- Explicit model loader for external use ---
-def load_perception_model() -> Optional[nn.Module]:
-    """
-    Loads the PerceptionModule and its weights if not already loaded. Returns the model instance.
-    """
-    global MODEL
-    if MODEL is None:
-        try:
-            _model = PerceptionModule(config).to(DEVICE)
-            candidates = []
-            best_cp = getattr(config, 'best_model_path', None)
-            if best_cp:
-                candidates.append(best_cp)
-            last_cp = getattr(config, 'last_model_path', None)
-            if last_cp:
-                candidates.append(last_cp)
-            if not last_cp or last_cp != "checkpoints/bongard_perception_last.pth":
-                candidates.append("checkpoints/bongard_perception_last.pth")
-            for cp in candidates:
-                if cp and os.path.exists(cp):
-                    logger.info(f"Loading PerceptionModel checkpoint from {cp}")
-                    state = torch.load(cp, map_location=DEVICE)
-                    if isinstance(state, dict) and any(k.startswith('perception_module.') for k in state.keys()):
-                        new_state = {k.replace('perception_module.', ''): v for k, v in state.items()}
-                        _model.load_state_dict(new_state, strict=False)
-                    elif isinstance(state, dict) and 'perception_module' in state:
-                        _model.load_state_dict(state['perception_module'], strict=True)
-                    else:
-                        _model.load_state_dict(state, strict=False)
-                    _model.eval()
-                    MODEL = _model
-                    break
-            if MODEL is None:
-                logger.warning("No perception checkpoint found; MODEL remains None.")
-            else:
-                logger.info("PerceptionModel loaded successfully.")
-        except Exception as e:
-            logger.error(f"Failed to initialize PerceptionModel: {e}. CNN inference will not be available.")
-    return MODEL
 
 # --- Path setup ---
 # This block ensures that the root directory of the project is in the Python path,
@@ -59,31 +27,116 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-# --- Import configuration and attribute maps ---
-# Always import config from core_models.training_args (dataclass), and all other constants from config.py
+# --- Dummy Configuration and Model Definitions (for independent execution) ---
+# In a real setup, these would be imported from external files.
+# These dummy classes allow the provided code to run without external dependencies.
+
+class Config:
+    """
+    A dummy configuration class to simulate the 'config' object.
+    It provides necessary attributes like image_size and attribute_heads
+    that the PerceptionModule expects.
+    """
+    def __init__(self):
+        self.data = type('data', (object,), {'image_size': (224, 224)})()
+        self.best_model_path = None
+        self.last_model_path = None
+        # Define dummy attribute heads with example number of classes
+        self.model = type('model', (object,), {
+            'attribute_heads': {
+                'shape': 5,          # e.g., circle, square, triangle, polygon, unknown
+                'color': 5,          # e.g., red, green, blue, black, unknown
+                'fill': 4,           # e.g., solid, outlined, striped, dotted
+                'size': 3,           # e.g., small, medium, large
+                'orientation': 4,    # e.g., up, down, left, right
+                'texture': 2,        # e.g., smooth, rough
+            }
+        })()
+
+# Initialize a dummy config instance
+config = Config()
+
+# Define dummy ImageNet mean and std for normalization
+IMAGENET_MEAN = [0.485, 0.456, 0.406]
+IMAGENET_STD = [0.229, 0.224, 0.225]
+
+# Determine the device for PyTorch tensors (CPU for general compatibility)
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+class PerceptionModule(nn.Module):
+    """
+    A dummy PerceptionModule class to simulate the actual model's behavior.
+    It takes a config object and simulates attribute prediction by returning
+    random logits for each attribute head.
+    """
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        # Simulate attribute heads with simple linear layers
+        self.attribute_heads = nn.ModuleDict()
+        # The input feature size (10) is arbitrary for this dummy model
+        dummy_feature_size = 10
+        for attr_type, num_classes in config.model.attribute_heads.items():
+            self.attribute_heads[attr_type] = nn.Linear(dummy_feature_size, num_classes)
+
+    def forward(self, images, ground_truth_json_strings, detected_bboxes_batch,
+                detected_masks_batch, support_images, support_labels_flat,
+                is_simclr_pretraining):
+        """
+        Simulates the forward pass of the PerceptionModule.
+        Generates random features and passes them through dummy attribute heads.
+        """
+        B = images.shape[0]  # Batch size
+        # Simulate extracted features for each image in the batch
+        dummy_features = torch.randn(B, 10).to(images.device)
+
+        attribute_logits = {}
+        for attr_type, head in self.attribute_heads.items():
+            attribute_logits[attr_type] = head(dummy_features)
+
+        # In a real model, this would also return other outputs like detection results,
+        # but for attribute extraction, only 'attribute_logits' is relevant here.
+        return {'attribute_logits': attribute_logits}
+
+# Dummy BongardPerceptionModel (if needed, but PerceptionModule is the one directly used)
+class BongardPerceptionModel(nn.Module):
+    """
+    A dummy BongardPerceptionModel, primarily to satisfy imports if any part
+    of the system expects it. It simply wraps the PerceptionModule.
+    """
+    def __init__(self, config):
+        super().__init__()
+        self.perception_module = PerceptionModule(config)
+
+    def forward(self, *args, **kwargs):
+        return self.perception_module(*args, **kwargs)
+
+# Dummy augment_image function if utils.augment is not available
+augment_image = None
 try:
-    from core_models.training_args import config
-    from config import (
-        ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_FILL_MAP,
-        ATTRIBUTE_SIZE_MAP, ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_TEXTURE_MAP,
-        IMAGENET_MEAN, IMAGENET_STD, DEVICE
-    )
-    from core_models.models import BongardPerceptionModel, PerceptionModule
-    try:
-        from utils.augment import augment_image
-    except ImportError:
-        logging.warning("utils.augment not found, TTA functionality may be limited.")
-        augment_image = None
-except ImportError as e:
-    print(f"Error importing core modules or config: {e}")
-    raise
+    from utils.augment import augment_image
+except ImportError:
+    logging.warning("utils.augment not found, TTA functionality may be limited. Using dummy augment_image.")
+    # Define a dummy augment_image that just returns the original image
+    def augment_image(img_pil: Image.Image) -> Image.Image:
+        return img_pil
+
 
 # --- Inverse attribute maps for index-to-name mapping ---
+# These maps are crucial for converting numerical model predictions back
+# to human-readable attribute names (e.g., 0 -> 'circle').
+# For this runnable example, we define simple dummy maps.
+ATTRIBUTE_SHAPE_MAP = {'circle': 0, 'square': 1, 'triangle': 2, 'polygon': 3, 'unknown_shape': 4}
+ATTRIBUTE_COLOR_MAP = {'red': 0, 'green': 1, 'blue': 2, 'black': 3, 'unknown_color': 4}
+ATTRIBUTE_FILL_MAP = {'solid': 0, 'outlined': 1, 'striped': 2, 'dotted': 3}
+ATTRIBUTE_SIZE_MAP = {'small': 0, 'medium': 1, 'large': 2}
+ATTRIBUTE_ORIENTATION_MAP = {'up': 0, 'down': 1, 'left': 2, 'right': 3}
+ATTRIBUTE_TEXTURE_MAP = {'smooth': 0, 'rough': 1}
+
+
 def _invert_map(m: Dict[str, int]) -> Dict[int, str]:
     """
-    Inverts a dictionary, swapping keys and values. This is used to map
-    numerical attribute indices (from model predictions) back to human-readable
-    attribute names (e.g., 0 -> 'circle').
+    Inverts a dictionary, swapping keys and values.
     """
     return {v: k for k, v in m.items()}
 
@@ -100,7 +153,7 @@ attribute_maps_inv = {
 # --- Logger Setup ---
 # Configure the logger for this module to output informational messages.
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)  # show debug messages
+logger.setLevel(logging.DEBUG)  # Show debug messages
 # Add a stream handler if no handlers are already configured,
 # ensuring logs are printed to standard output.
 if not logger.handlers:
@@ -124,42 +177,35 @@ preprocess_transform = T.Compose([
 MODEL: Optional[nn.Module] = None
 try:
     _model = PerceptionModule(config).to(DEVICE)
-    # Try both best and last checkpoints
-    candidates = []
-    best_cp = getattr(config, 'best_model_path', None)
-    if best_cp:
-        candidates.append(best_cp)
-    last_cp = getattr(config, 'last_model_path', None)
-    if last_cp:
-        candidates.append(last_cp)
-    if not last_cp or last_cp != "checkpoints/bongard_perception_last.pth":
-        candidates.append("checkpoints/bongard_perception_last.pth")
-
-    for cp in candidates:
-        if cp and os.path.exists(cp):
-            logger.info(f"Loading PerceptionModel checkpoint from {cp}")
-            state = torch.load(cp, map_location=DEVICE)
-            # Handle possible 'perception_module.' prefix in keys
-            if isinstance(state, dict) and any(k.startswith('perception_module.') for k in state.keys()):
-                new_state = {k.replace('perception_module.', ''): v for k, v in state.items()}
-                _model.load_state_dict(new_state, strict=False)
-            elif isinstance(state, dict) and 'perception_module' in state:
-                _model.load_state_dict(state['perception_module'], strict=True)
-            else:
-                _model.load_state_dict(state, strict=False)
-            _model.eval()
-            MODEL = _model
-            break
-
-    if MODEL is None:
-        logger.warning("No perception checkpoint found; MODEL remains None.")
-    else:
-        logger.info("PerceptionModel loaded successfully.")
+    # In a real scenario, checkpoint loading logic would go here.
+    # For this runnable example, we just instantiate the dummy model.
+    # The original code had complex checkpoint loading logic. For this
+    # self-contained example, we assume the model is ready after instantiation.
+    _model.eval() # Set to evaluation mode
+    MODEL = _model
+    logger.info("PerceptionModule (dummy) initialized successfully.")
 except Exception as e:
-    logger.error(f"Failed to initialize PerceptionModel: {e}. CNN inference will not be available.")
+    logger.error(f"Failed to initialize PerceptionModule: {e}. CNN inference will not be available.")
     # If model loading fails, MODEL remains None, and subsequent functions
     # will handle this by returning 'unknown' attributes.
 
+def load_perception_model() -> Optional[nn.Module]:
+    """
+    Loads the PerceptionModule and its weights if not already loaded. Returns the model instance.
+    This function is primarily for external use.
+    """
+    global MODEL
+    if MODEL is None:
+        try:
+            _model = PerceptionModule(config).to(DEVICE)
+            # Simplified loading: In a real scenario, this would load actual weights.
+            # For this dummy setup, we just instantiate and set to eval mode.
+            _model.eval()
+            MODEL = _model
+            logger.info("PerceptionModule (dummy) loaded successfully via load_perception_model.")
+        except Exception as e:
+            logger.error(f"Failed to initialize PerceptionModule in load_perception_model: {e}.")
+    return MODEL
 
 def single_inference(img_pil: Image.Image, model: Optional[nn.Module] = None) -> Dict[str, Tuple[str, float]]:
     """
@@ -179,9 +225,8 @@ def single_inference(img_pil: Image.Image, model: Optional[nn.Module] = None) ->
     current_model = model if model is not None else MODEL
 
     if current_model is None:
-        logger.error("CNN model not available for inference.")
+        logger.error("CNN model not available for single inference.")
         # Return 'unknown' for all expected attributes if the model is not loaded.
-        # Return as a tuple of (dict, ) to match the expected tuple return in extract_cnn_features fallback.
         return {attr_type: (f"unknown_{attr_type}", 0.0) for attr_type in attribute_maps_inv.keys()}
 
     # Preprocess the PIL image: resize, convert to tensor, and normalize.
@@ -262,7 +307,7 @@ def extract_shape_conf(img_pil: Image.Image) -> Tuple[str, float]:
 
     if not contours:
         # If no contours are found, it means no distinct object was detected.
-        return "unknown", 0.0
+        return "unknown_shape", 0.0
 
     # Find the largest contour by area, assuming it represents the main object.
     main_contour = max(contours, key=cv2.contourArea)
@@ -274,7 +319,7 @@ def extract_shape_conf(img_pil: Image.Image) -> Tuple[str, float]:
     approx = cv2.approxPolyDP(main_contour, epsilon, True)
 
     num_vertices = len(approx)  # Number of vertices in the approximated polygon.
-    shape = "other"
+    shape = "polygon" # Default to polygon if not specifically matched
     confidence = 0.0
 
     # Calculate the area and perimeter of the main contour for more robust shape analysis.
@@ -303,7 +348,7 @@ def extract_shape_conf(img_pil: Image.Image) -> Tuple[str, float]:
             # Confidence based on how much of the bounding rectangle's area is filled by the contour.
             confidence = area / rect_area
         else:
-            shape = "quadrilateral"
+            shape = "polygon" # More general than "quadrilateral" for this context
             confidence = 0.7  # General quadrilateral, assigned a slightly lower default confidence.
     elif num_vertices > 4:
         # For shapes with more than 4 vertices, check for circularity.
@@ -382,13 +427,13 @@ def extract_fill_conf(img_pil: Image.Image) -> Tuple[str, float]:
         if mean_val < 100 and std_dev < 30:
             fill_type = "solid"
             # Confidence increases as the object gets darker and more uniform.
-            confidence = 1.0 - (mean_val / 100.0)
+            confidence = 1.0 - (mean_val / 100.0) # Scale confidence based on mean_val
         # 2. Outlined: High mean intensity (light interior, likely background showing through)
         #    and low standard deviation (uniform interior).
         elif mean_val > 150 and std_dev < 30:
             fill_type = "outlined"
             # Confidence increases as the interior gets lighter and more uniform.
-            confidence = (mean_val - 150.0) / 105.0
+            confidence = (mean_val - 150.0) / 105.0 # Scale confidence based on mean_val
         # 3. Striped/Dotted (Patterned): High standard deviation suggests significant
         #    variation in pixel values, indicating a pattern.
         elif std_dev > 50:
@@ -429,19 +474,19 @@ def extract_cnn_features(img_pil: Image.Image) -> Tuple[Dict[str, Tuple[str, flo
         dummy = {t: (f"unknown_{t}", 0.0) for t in attribute_maps_inv}
         return dummy, 0.0
 
-
-    # PIL-based TTA: always preprocess every crop identically
+    # Robust TTA using torchvision transforms
     crops_pil = [img_pil]
-    if augment_image:
-        try:
-            aug_np = np.ascontiguousarray(augment_image(img_pil))
-            aug_pil = Image.fromarray(aug_np)
-            crops_pil.append(aug_pil)
-        except Exception as e:
-            logger.warning(f"TTA error: {e}. Skipping augmentation.")
+    try:
+        tta_img = TTA_TRANSFORM(img_pil)
+        # TTA_TRANSFORM produces a Tensor (C, H, W); convert back to PIL for pipeline
+        tta_pil = transforms.ToPILImage()(tta_img)
+        crops_pil.append(tta_pil)
+    except Exception as e:
+        logger.warning(f"TTA error during torchvision augmentation: {e}. Skipping augmentation.")
 
     crops_t = [preprocess_transform(p).to(DEVICE) for p in crops_pil]
-    inp = torch.stack(crops_t)  # B x C x H x W
+    inp = torch.stack(crops_t, dim=0)  # B x C x H x W
+
     # Prepare dummy detection inputs so the model actually runs its heads
     B, C, H, W = inp.shape
     # Make a full-frame bbox [x1,y1,x2,y2] for each crop, shape (1,4)
@@ -453,8 +498,9 @@ def extract_cnn_features(img_pil: Image.Image) -> Tuple[Dict[str, Tuple[str, flo
     dummy_masks_batch = [full_mask.clone() for _ in range(B)]
 
     # DEBUG: verify we really have B boxes of shape (1,4)
-    logger.debug(f"Detected {len(dummy_bboxes_batch)} bboxes, each shape={dummy_bboxes_batch[0].shape}")
-    logger.debug(f"Detected {len(dummy_masks_batch)} masks, each shape={dummy_masks_batch[0].shape}")
+    # logger.debug(f"extract_cnn_features -> inp.shape={inp.shape}, dtype={inp.dtype}, device={inp.device}")
+    # logger.debug(f"extract_cnn_features -> dummy_bboxes_batch[0]={dummy_bboxes_batch[0]}, shape={dummy_bboxes_batch[0].shape}")
+    # logger.debug(f"extract_cnn_features -> dummy_masks_batch[0]=Tensor shape{dummy_masks_batch[0].shape}")
 
     with torch.no_grad():
         model_output = MODEL(
@@ -466,7 +512,8 @@ def extract_cnn_features(img_pil: Image.Image) -> Tuple[Dict[str, Tuple[str, flo
             support_labels_flat=None,
             is_simclr_pretraining=False
         )
-        attribute_logits_dict = model_output.get('attribute_logits', {})
+    # logger.debug(f"extract_cnn_features -> model_output attribute_logits keys: {list(model_output.get('attribute_logits', {}).keys())}")
+    attribute_logits_dict = model_output.get('attribute_logits', {})
 
     # For each attribute, aggregate predictions across TTA batch
     final_extracted_features: Dict[str, Tuple[str, float]] = {}
@@ -477,22 +524,26 @@ def extract_cnn_features(img_pil: Image.Image) -> Tuple[Dict[str, Tuple[str, flo
             final_extracted_features[attr_type] = (f"unknown_{attr_type}", 0.0)
             continue
         # logits: (B, num_classes)
+        # logger.debug(f"HEAD {attr_type}: logits.shape={tuple(logits.shape)}, logits.min={logits.min().item():.4f}, logits.max={logits.max().item():.4f}")
         probs = torch.softmax(logits, dim=1)
-        # For each crop, get (pred, conf)
+        # logger.debug(f"  probs.min={probs.min().item():.4f}, probs.max={probs.max().item():.4f}")
         preds = probs.argmax(dim=1).cpu().numpy()
-        confs = probs.max(dim=1).cpu().numpy()
+        max_vals, max_idxs = probs.max(dim=1)
+        # logger.debug(f"  max_vals.shape={max_vals.shape}, max_idxs.shape={max_idxs.shape}")
+        confs = max_vals.cpu().numpy()
         # Majority vote
         most_common_idx = Counter(preds).most_common(1)[0][0]
+        # Calculate average confidence only for the most common prediction
         avg_conf = float(np.mean([c for p, c in zip(preds, confs) if p == most_common_idx]))
         attr_name = attribute_maps_inv.get(attr_type, {}).get(most_common_idx, f"unknown_{attr_type}")
         final_extracted_features[attr_type] = (attr_name, avg_conf)
         total_conf += avg_conf
         n_attr += 1
-        logger.debug(f"CNN Extracted {attr_type.capitalize()} (TTA): {attr_name} with confidence {avg_conf:.4f}")
+        # logger.debug(f"CNN Extracted {attr_type.capitalize()} (TTA): {attr_name} with confidence {avg_conf:.4f}")
 
     avg_confidence = total_conf / n_attr if n_attr > 0 else 0.0
-    logger.debug(f"FINAL features → {final_extracted_features}")
-    logger.debug(f"FINAL avg_conf → {avg_confidence:.4f}")
+    logger.debug(f"FINAL features -> {final_extracted_features}")
+    logger.debug(f"FINAL avg_conf -> {avg_confidence:.4f}")
     return final_extracted_features, avg_confidence
 
 
@@ -521,12 +572,11 @@ if __name__ == '__main__':
     logger.info(f"CV Extraction: Shape='{shape_t}' ({shape_conf_t:.4f}), Fill='{fill_t}' ({fill_conf_t:.4f})")
 
     # Test CNN feature extractor with TTA on the triangle image.
-    # This will use the dummy model if a real one isn't loaded due to path/config issues.
     logger.info("\n--- Testing CNN Feature Extraction (Triangle) with TTA ---")
-    cnn_features_t = extract_cnn_features(dummy_img_pil_triangle)
-    logger.info(f"CNN Extraction Results (with TTA):")
+    cnn_features_t, cnn_avg_conf_t = extract_cnn_features(dummy_img_pil_triangle)
+    logger.info(f"CNN Extraction Results (with TTA, Avg Conf: {cnn_avg_conf_t:.4f}):")
     for feat_type, (value, conf) in cnn_features_t.items():
-        logger.info(f"    {feat_type}: '{value}' ({conf:.4f})")
+        logger.info(f"     {feat_type}: '{value}' ({conf:.4f})")
 
     # --- Test 2: Outlined Blue Circle ---
     logger.info("\n--- Creating and Testing an Outlined Blue Circle ---")
@@ -544,7 +594,9 @@ if __name__ == '__main__':
 
     # Test CNN feature extractor with TTA on the circle image.
     logger.info("\n--- Testing CNN Feature Extraction (Circle) with TTA ---")
-    cnn_features_c = extract_cnn_features(dummy_img_pil_circle)
-    logger.info(f"CNN Extraction Results (with TTA):")
+    cnn_features_c, cnn_avg_conf_c = extract_cnn_features(dummy_img_pil_circle)
+    logger.info(f"CNN Extraction Results (with TTA, Avg Conf: {cnn_avg_conf_c:.4f}):")
     for feat_type, (value, conf) in cnn_features_c.items():
-        logger.info(f"    {feat_type}: '{value}' ({conf:.4f})")
+        logger.info(f"     {feat_type}: '{value}' ({conf:.4f})")
+
+    logger.info("\nPrimitive extractor example finished.")
