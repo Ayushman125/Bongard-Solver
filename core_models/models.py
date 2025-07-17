@@ -799,14 +799,24 @@ class PerceptionModule(nn.Module):
             # Use pre-detected bboxes and masks for the current image in the batch
             current_image_bboxes = detected_bboxes_batch[i]
             current_image_masks = detected_masks_batch[i]
-            
             # Handle cases where no objects are detected in an image or SceneGraphBuilder is not available
-            if not current_image_bboxes or not self.scene_graph_builder:
+            no_bboxes = False
+            if isinstance(current_image_bboxes, torch.Tensor):
+                no_bboxes = current_image_bboxes.numel() == 0
+            elif isinstance(current_image_bboxes, (list, tuple)):
+                no_bboxes = len(current_image_bboxes) == 0
+            if no_bboxes or self.scene_graph_builder is None:
                 logger.debug(f"No objects detected or SceneGraphBuilder not initialized for query image {i}. Skipping scene graph for this image.")
                 # Append dummy (empty or zero) outputs for this image to maintain batch consistency
                 first_attr_head_name = next(iter(self.config.model.attribute_classifier_config.keys()))
                 dummy_attr_logits_shape = (0, self.config.model.attribute_classifier_config[first_attr_head_name])
-                dummy_relation_logits_shape = (0, self.config.model.relation_gnn_config.num_relations)
+                # support both dataclass and dict for relation_gnn_config
+                rg_cfg = self.config.model.relation_gnn_config
+                if isinstance(rg_cfg, dict):
+                    num_rel = rg_cfg.get("num_relations", 0)
+                else:
+                    num_rel = getattr(rg_cfg, "num_relations", 0)
+                dummy_relation_logits_shape = (0, num_rel)
                 
                 all_inferred_scene_graphs.append({'objects': [], 'relations': []})
                 for attr_name in self.config.model.attribute_classifier_config.keys():
@@ -816,7 +826,11 @@ class PerceptionModule(nn.Module):
                 all_relation_logits_list.append(torch.empty(dummy_relation_logits_shape, device=DEVICE))
                 all_attribute_features_list.append(torch.empty(0, self.attribute_model.feature_dim, device=DEVICE))
                 
-                gnn_hidden_dim = self.config.model.relation_gnn_config.hidden_dim
+                rg_cfg = self.config.model.relation_gnn_config
+                if isinstance(rg_cfg, dict):
+                    gnn_hidden_dim = rg_cfg.get("hidden_dim", 0)
+                else:
+                    gnn_hidden_dim = getattr(rg_cfg, "hidden_dim", 0)
                 all_global_graph_embeddings_list.append(torch.zeros(1, gnn_hidden_dim, device=DEVICE))
                 all_support_graph_embeddings_list.append(torch.zeros(1, gnn_hidden_dim, device=DEVICE))
                 continue # Move to the next image in the batch

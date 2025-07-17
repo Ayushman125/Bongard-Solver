@@ -188,13 +188,16 @@ def single_inference(img_pil: Image.Image, model: Optional[nn.Module] = None) ->
     # `unsqueeze(0)` adds a batch dimension (B, C, H, W).
     input_tensor = preprocess_transform(img_pil).unsqueeze(0).to(DEVICE)
 
-    with torch.no_grad():  # Disable gradient calculation for efficient inference.
+    with torch.no_grad():
         # Provide dummy inputs for parameters typically used during training
         # but required by the `PerceptionModule`'s forward method signature.
-        dummy_gts_json_strings = [b'{}']  # Empty JSON string as bytes
-        # Empty tensors for detected bounding boxes and masks.
-        dummy_bboxes_batch = [torch.empty(0, 4, dtype=torch.float32, device=DEVICE)]
-        dummy_masks_batch = [torch.empty(0, 1, input_tensor.shape[2], input_tensor.shape[3], dtype=torch.float32, device=DEVICE)]
+        dummy_gts_json_strings = [b'{}']
+        # Provide a full-image bbox so attribute_model sees an object
+        H, W = input_tensor.shape[2:]
+        full_bbox = torch.tensor([[0, 0, W, H]], dtype=torch.float32, device=DEVICE)
+        dummy_bboxes_batch = [full_bbox]
+        # Full-mask covering the entire image
+        dummy_masks_batch = [torch.ones(1, 1, H, W, dtype=torch.float32, device=DEVICE)]
 
         # Perform the forward pass through the model.
         model_output = current_model(
@@ -214,16 +217,12 @@ def single_inference(img_pil: Image.Image, model: Optional[nn.Module] = None) ->
         # Process the logits for each attribute type (e.g., 'shape', 'color').
         for attr_type, logits in attribute_logits_dict.items():
             if logits.numel() == 0:
-                # If no logits are present for an attribute, mark it as unknown.
                 extracted_features[attr_type] = (f"unknown_{attr_type}", 0.0)
                 continue
-
             # Apply softmax to convert logits to probabilities, then get the most confident prediction.
             probs = torch.softmax(logits, dim=1).squeeze(0)
-            conf, idx = probs.max(0)  # `conf` is the confidence, `idx` is the predicted class index.
+            conf, idx = probs.max(0)
             predicted_idx = idx.item()
-
-            # Map the predicted numerical index back to its human-readable attribute name.
             attr_name = attribute_maps_inv.get(attr_type, {}).get(predicted_idx, f"unknown_{attr_type}")
             extracted_features[attr_type] = (attr_name, conf.item())
 
@@ -429,7 +428,13 @@ def extract_cnn_features(img_pil: Image.Image) -> Tuple[Dict[str, Tuple[str, flo
         dummy = {t: (f"unknown_{t}", 0.0) for t in attribute_maps_inv}
         return dummy, 0.0
 
-    crops_pil = [img_pil]
+
+    # Build a list of tensors for TTA: original and (if available) augmented
+    crops_t = []
+    # Original
+    x0 = preprocess_transform(img_pil).to(DEVICE)
+    crops_t.append(x0)
+    # Augmented
     if augment_image:
         try:
             aug_np = augment_image(img_pil)
@@ -441,52 +446,52 @@ def extract_cnn_features(img_pil: Image.Image) -> Tuple[Dict[str, Tuple[str, flo
             if aug_t.ndim == 3 and aug_t.shape[2] == 3:
                 aug_t = aug_t.permute(2, 0, 1)
                 logger.debug(f"Permuted to C×H×W: shape={aug_t.shape}")
-            aug_t = aug_t.float().to(DEVICE)
-            logger.debug(f"Moved to device {DEVICE}: shape={aug_t.shape}, dtype={aug_t.dtype}")
-            # For now, keep the PIL path for compatibility:
-            img_for_pil = aug_t.cpu().clamp(0,255).byte().permute(1,2,0).numpy() if aug_t.max() > 1.5 else (aug_t.cpu() * 255).clamp(0,255).byte().permute(1,2,0).numpy()
-            crops_pil.append(Image.fromarray(img_for_pil))
+            aug_t = aug_t.float() / 255.0 if aug_t.max() > 1.5 else aug_t.float()
+            aug_t = T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)(aug_t)
+            aug_t = aug_t.to(DEVICE)
+            crops_t.append(aug_t)
         except Exception as e:
             logger.warning(f"TTA error: {e}. Skipping augmentation.")
 
-    all_votes: Dict[str, List[str]] = defaultdict(list)
-    all_confs: Dict[str, List[float]] = defaultdict(list)
+    # Stack all crops for batch inference
+    inp = torch.stack(crops_t)  # B x C x H x W
+    with torch.no_grad():
+        dummy_gts_json_strings = [b'{}'] * inp.shape[0]
+        dummy_bboxes_batch = [torch.zeros(1, 4, dtype=torch.float32, device=DEVICE)] * inp.shape[0]
+        dummy_masks_batch = [torch.zeros(1, 1, inp.shape[2], inp.shape[3], dtype=torch.float32, device=DEVICE)] * inp.shape[0]
+        model_output = MODEL(
+            images=inp,
+            ground_truth_json_strings=dummy_gts_json_strings,
+            detected_bboxes_batch=dummy_bboxes_batch,
+            detected_masks_batch=dummy_masks_batch,
+            support_images=None,
+            support_labels_flat=None,
+            is_simclr_pretraining=False
+        )
+        attribute_logits_dict = model_output.get('attribute_logits', {})
 
-
-    for c in crops_pil:
-        logger.debug(f"FEEDING to single_inference: type={type(c)}, mode={getattr(c, 'mode', None)}, size={getattr(c, 'size', None)}")
-        inference_results = single_inference(c)
-        for attr_type, (val, conf) in inference_results.items():
-            all_votes[attr_type].append(val)
-            all_confs[attr_type].append(conf)
-
+    # For each attribute, aggregate predictions across TTA batch
     final_extracted_features: Dict[str, Tuple[str, float]] = {}
-
-    # Aggregate the results for each attribute type using majority voting and average confidence.
     total_conf = 0.0
     n_attr = 0
-    for attr_type in all_votes.keys():
-        votes = all_votes[attr_type]
-        confs = all_confs[attr_type]
-
-        if not votes:
-            # If no votes were collected for an attribute, mark it as unknown.
+    for attr_type, logits in attribute_logits_dict.items():
+        if logits.numel() == 0:
             final_extracted_features[attr_type] = (f"unknown_{attr_type}", 0.0)
             continue
-
-        # Determine the most common predicted value (majority vote).
-        most_common_val = Counter(votes).most_common(1)[0][0]
-
-        # Calculate the average confidence only for those predictions that match the majority value.
-        matching_confs = [c for v, c in zip(votes, confs) if v == most_common_val]
-        avg_conf = sum(matching_confs) / len(matching_confs) if matching_confs else 0.0
-
-        final_extracted_features[attr_type] = (most_common_val, avg_conf)
+        # logits: (B, num_classes)
+        probs = torch.softmax(logits, dim=1)
+        # For each crop, get (pred, conf)
+        preds = probs.argmax(dim=1).cpu().numpy()
+        confs = probs.max(dim=1).cpu().numpy()
+        # Majority vote
+        most_common_idx = Counter(preds).most_common(1)[0][0]
+        avg_conf = float(np.mean([c for p, c in zip(preds, confs) if p == most_common_idx]))
+        attr_name = attribute_maps_inv.get(attr_type, {}).get(most_common_idx, f"unknown_{attr_type}")
+        final_extracted_features[attr_type] = (attr_name, avg_conf)
         total_conf += avg_conf
         n_attr += 1
-        logger.debug(f"CNN Extracted {attr_type.capitalize()} (TTA): {most_common_val} with confidence {avg_conf:.4f}")
+        logger.debug(f"CNN Extracted {attr_type.capitalize()} (TTA): {attr_name} with confidence {avg_conf:.4f}")
 
-    # Compute average confidence across all attributes
     avg_confidence = total_conf / n_attr if n_attr > 0 else 0.0
     logger.debug(f"FINAL features → {final_extracted_features}")
     logger.debug(f"FINAL avg_conf → {avg_confidence:.4f}")
