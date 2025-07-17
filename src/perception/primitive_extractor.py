@@ -1,3 +1,42 @@
+# --- Explicit model loader for external use ---
+def load_perception_model() -> Optional[nn.Module]:
+    """
+    Loads the PerceptionModule and its weights if not already loaded. Returns the model instance.
+    """
+    global MODEL
+    if MODEL is None:
+        try:
+            _model = PerceptionModule(config).to(DEVICE)
+            candidates = []
+            best_cp = getattr(config, 'best_model_path', None)
+            if best_cp:
+                candidates.append(best_cp)
+            last_cp = getattr(config, 'last_model_path', None)
+            if last_cp:
+                candidates.append(last_cp)
+            if not last_cp or last_cp != "checkpoints/bongard_perception_last.pth":
+                candidates.append("checkpoints/bongard_perception_last.pth")
+            for cp in candidates:
+                if cp and os.path.exists(cp):
+                    logger.info(f"Loading PerceptionModel checkpoint from {cp}")
+                    state = torch.load(cp, map_location=DEVICE)
+                    if isinstance(state, dict) and any(k.startswith('perception_module.') for k in state.keys()):
+                        new_state = {k.replace('perception_module.', ''): v for k, v in state.items()}
+                        _model.load_state_dict(new_state, strict=False)
+                    elif isinstance(state, dict) and 'perception_module' in state:
+                        _model.load_state_dict(state['perception_module'], strict=True)
+                    else:
+                        _model.load_state_dict(state, strict=False)
+                    _model.eval()
+                    MODEL = _model
+                    break
+            if MODEL is None:
+                logger.warning("No perception checkpoint found; MODEL remains None.")
+            else:
+                logger.info("PerceptionModel loaded successfully.")
+        except Exception as e:
+            logger.error(f"Failed to initialize PerceptionModel: {e}. CNN inference will not be available.")
+    return MODEL
 import sys
 import os
 import logging
