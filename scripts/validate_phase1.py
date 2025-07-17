@@ -4,12 +4,13 @@
 #   1) core_models   (living at project root)
 #   2) anything under src/
 # -----------------------------------------------------------
+
 import os, sys
-script_dir   = os.path.dirname(__file__)
-project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
-src_dir      = os.path.join(project_root, "src")
-sys.path.insert(0, project_root)
-sys.path.insert(0, src_dir)
+SCRIPT_DIR = os.path.dirname(__file__)
+REPO_ROOT  = os.path.dirname(SCRIPT_DIR)
+SRC_ROOT   = os.path.join(REPO_ROOT, "src")
+sys.path.insert(0, REPO_ROOT)     # for core_models/
+sys.path.insert(0, SRC_ROOT)      # for src/data, src/perception, src/utils
 
 #!/usr/bin/env python3
 
@@ -26,13 +27,11 @@ from sklearn.calibration import calibration_curve
 import torch
 from torchvision.transforms.functional import to_tensor
 
-from src.data.generator import LogoGenerator
-from src.perception.primitive_extractor import extract_cnn_feature, load_model, MODEL
-from core_models.training import fine_tune_perception, train_perception_with_buffer
 
-# Use Config class and instantiate config
-from core_models.training_args import Config
-config = Config()
+from core_models.training_args import config
+from core_models.training      import train_perception_with_buffer, fine_tune_perception
+from src.data.generator        import LogoGenerator
+from src.perception.primitive_extractor import extract_cnn_features, MODEL
 
 
 # 1) If no checkpoint yet, train model first (only if not already present)
@@ -56,7 +55,7 @@ Path(config.checkpoint_dir).mkdir(parents=True, exist_ok=True)
 ckpt = config.best_model_path if os.path.exists(config.best_model_path) else config.last_model_path
 if os.path.exists(ckpt):
     logger.info(f"Loading model checkpoint: {ckpt}")
-    load_model()
+    # Model is loaded automatically in primitive_extractor; no need to call load_model()
 else:
     logger.error(f"No checkpoint found at {ckpt} after attempted training. Model may be uninitialized!")
 
@@ -118,7 +117,7 @@ def eval_set(imgs, labels):
     fallback_class_names = ['triangle', 'quadrilateral', 'filled', 'outlined']
     class_names = getattr(MODEL, 'class_names', fallback_class_names)
     for img in tqdm(imgs, desc="Inferencing"):
-        v, c = extract_cnn_feature(img)
+        v, c = extract_cnn_features(img)
         try:
             preds.append(class_names.index(v))
         except ValueError:

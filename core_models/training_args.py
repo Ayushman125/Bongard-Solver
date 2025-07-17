@@ -357,3 +357,6 @@ if __name__ == "__main__":
     loaded_config.data.image_size = [256, 256]
     save_config(loaded_config, "modified_config.yaml")
     logger.info("Modified config saved to modified_config.yaml")
+
+# --- Expose a module-level config instance for direct import ---
+config = Config()
