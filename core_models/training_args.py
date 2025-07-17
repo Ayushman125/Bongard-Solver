@@ -248,6 +248,7 @@ class Config:
     checkpoint_dir: str = "checkpoints"
     checkpoint_path: str = f"checkpoints/bongard_perception_last.pth"
     best_model_path: str = f"checkpoints/bongard_perception_best.pth"
+    last_model_path: str = f"checkpoints/bongard_perception_last.pth"
 
     # Script mode
     validate_bins: int = 10
