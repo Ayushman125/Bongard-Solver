@@ -74,59 +74,20 @@ class LogoGenerator(Dataset):
     Generates synthetic Bongard-like problems with various attributes and relations.
     Supports domain randomization techniques like background textures, jitter, occluders, and blur.
     """
-    def __init__(self, cfg: Dict[str, Any], bg_textures_dir: str = "data/textures"):
+    def __init__(self, image_size, bg_textures_dir=None):
         """
-        Initializes the LogoGenerator.
         Args:
-            cfg (Dict[str, Any]): Configuration dictionary.
-            bg_textures_dir (str): Directory containing background texture images.
+            image_size: target height & width for generated images.
+            bg_textures_dir: optional directory of background textures.
         """
-        self.cfg = cfg['data']['synthetic_data_config']
-        self.image_size = cfg['data']['image_size']  # [height, width]
-        self.canvas_width, self.canvas_height = self.image_size[1], self.image_size[0]
-        self.min_obj_size_pixels, self.max_obj_size_pixels = self.cfg['object_size_range']  # Pixel sizes
-        self.padding = self.cfg['padding']
-        self.min_dist_objects_normalized = self.cfg['min_dist_objects']  # Normalized distance
-        self.relation_density = self.cfg['relation_density']
-        self.font = None
-        if self.cfg['font_path'] and os.path.exists(self.cfg['font_path']):
-            try:
-                self.font = ImageFont.truetype(self.cfg['font_path'], size=int(self.max_obj_size_pixels * 0.7))
-            except Exception as e:
-                logger.warning(f"Could not load font from {self.cfg['font_path']}: {e}. Text objects will not be generated.")
-        
-        self.all_shapes = list(ATTRIBUTE_SHAPE_MAP.keys())
-        self.all_colors = list(ATTRIBUTE_COLOR_MAP.keys())
-        self.all_fills = list(ATTRIBUTE_FILL_MAP.keys())
-        self.all_sizes = list(ATTRIBUTE_SIZE_MAP.keys())
-        self.all_orientations = list(ATTRIBUTE_ORIENTATION_MAP.keys())
-        self.all_textures = list(ATTRIBUTE_TEXTURE_MAP.keys())
-        self.all_relations = [k for k in RELATION_MAP.keys() if k != 'unrelated']  # Exclude 'unrelated' for explicit generation
-        # Map symbolic sizes to pixel size ranges
-        self.size_to_pixel_range = {
-            'small': (self.min_obj_size_pixels, self.min_obj_size_pixels + (self.max_obj_size_pixels - self.min_obj_size_pixels) / 3),
-            'medium': (self.min_obj_size_pixels + (self.max_obj_size_pixels - self.min_obj_size_pixels) / 3, self.max_obj_size_pixels - (self.max_obj_size_pixels - self.min_obj_size_pixels) / 3),
-            'large': (self.max_obj_size_pixels - (self.max_obj_size_pixels - self.min_obj_size_pixels) / 3, self.max_obj_size_pixels)
-        }
-        # Color mapping from symbolic name to RGB tuple
-        self.color_rgb_map = {
-            'red': (255, 0, 0), 'blue': (0, 0, 255), 'green': (0, 255, 0),
-            'yellow': (255, 255, 0), 'black': (0, 0, 0), 'white': (255, 255, 255),
-            'gray': (128, 128, 128), 'orange': (255, 165, 0), 'purple': (128, 0, 128)
-        }
-        
-        # Load background textures directly in constructor as requested
+        self.size = image_size
+        self.bg_textures_dir = bg_textures_dir
         self.bg_textures = []
-        if self.cfg.get('use_background_textures', False) and bg_textures_dir and os.path.exists(bg_textures_dir):
-            texture_paths = glob.glob(os.path.join(bg_textures_dir, "*.*"))
-            for p in texture_paths:
-                try:
-                    # Convert to RGB to handle various image types, then resize to canvas size
-                    img = Image.open(p).convert("RGB").resize((self.canvas_width, self.canvas_height))
-                    self.bg_textures.append(img)
-                except Exception as e:
-                    logger.warning(f"Could not load background texture {p}: {e}")
-        logger.info(f"LogoGenerator initialized with canvas size {self.image_size}. Loaded {len(self.bg_textures)} background textures.")
+        if bg_textures_dir:
+            from PIL import Image
+            import glob
+            paths = glob.glob(f"{bg_textures_dir}/*.*")
+            self.bg_textures = [Image.open(p).convert('L') for p in paths]
 
     def _randomize_canvas(self) -> Tuple[Image.Image, ImageDraw.ImageDraw]:
         """

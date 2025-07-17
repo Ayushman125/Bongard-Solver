@@ -13,7 +13,7 @@ from sklearn.calibration import calibration_curve
 import torch
 from torchvision.transforms.functional import to_tensor
 
-from src.data.generator import LogoGenerator
+from data.generator import LogoGenerator
 from src.perception.primitive_extractor import extract_cnn_feature, MODEL
 from core_models.training import fine_tune_perception
 from core_models.training_args import Config
@@ -42,7 +42,7 @@ def build_synth_holdout(n=config.synth_holdout_count, cache_path="synth_holdout.
         labels = arr['labels'].tolist()
         return imgs, labels
     logger.info(f"Generating {n} synthetic holdout samples...")
-    gen = LogoGenerator(config, config.textures_dir)
+    gen = LogoGenerator(config.img_size, config.textures_dir)
     imgs, labels = [], []
     for _ in tqdm(range(n), desc="Synth Holdout Generation"):
         feat, val = gen.sample_rule()
