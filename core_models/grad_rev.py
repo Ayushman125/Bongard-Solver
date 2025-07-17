@@ -1,8 +1,10 @@
 # Folder: bongard_solver/core_models/
 # File: grad_rev.py
+
 import torch
 from torch.autograd import Function
 import logging
+from typing import Tuple
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
