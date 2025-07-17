@@ -59,7 +59,7 @@ attribute_maps_inv = {
 # --- Logger Setup ---
 # Configure the logger for this module to output informational messages.
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)  # show debug messages
 # Add a stream handler if no handlers are already configured,
 # ensuring logs are printed to standard output.
 if not logger.handlers:
@@ -379,6 +379,9 @@ def extract_cnn_features(img_pil: Image.Image) -> Tuple[Dict[str, Tuple[str, flo
             - A dictionary mapping feature type (e.g., 'shape') to a tuple of (predicted_value_name, confidence).
             - The average confidence across all features.
     """
+    # Inspect the original PIL crop
+    logger.debug(f"INPUT PIL image: type={type(img_pil)}, mode={getattr(img_pil, 'mode', None)}, size={getattr(img_pil, 'size', None)}")
+
     # If the model is not loaded, return a tuple matching the normal return type.
     if MODEL is None:
         logger.error("CNN model not available for inference.")
@@ -389,49 +392,28 @@ def extract_cnn_features(img_pil: Image.Image) -> Tuple[Dict[str, Tuple[str, flo
     if augment_image:
         try:
             aug_np = augment_image(img_pil)
+            logger.debug(f"augment_image → type={type(aug_np)}, shape={getattr(aug_np,'shape', None)}, dtype={getattr(aug_np,'dtype', None)}, strides={getattr(aug_np,'strides', None)}")
+            aug_np = np.ascontiguousarray(aug_np)
+            logger.debug(f"After ascontiguousarray: strides={aug_np.strides}")
             aug_t = torch.from_numpy(aug_np)
-            if aug_t.ndim == 3 and aug_t.shape[-1] == 3:
+            logger.debug(f"torch.from_numpy → type={type(aug_t)}, shape={aug_t.shape}, dtype={aug_t.dtype}")
+            if aug_t.ndim == 3 and aug_t.shape[2] == 3:
                 aug_t = aug_t.permute(2, 0, 1)
-            if aug_t.shape[0] != 3:
-                raise ValueError(f"Augmented tensor shape {aug_t.shape} does not have 3 channels in first dim")
+                logger.debug(f"Permuted to C×H×W: shape={aug_t.shape}")
             aug_t = aug_t.float().to(DEVICE)
-            mean_t = torch.tensor(IMAGENET_MEAN, device=DEVICE).view(3,1,1)
-            std_t  = torch.tensor(IMAGENET_STD,  device=DEVICE).view(3,1,1)
-            img_denorm = (aug_t * std_t + mean_t) * 255
-            img_denorm = img_denorm.clamp(0,255).byte().permute(1,2,0).cpu().numpy()
-            crops_pil.append(Image.fromarray(img_denorm))
+            logger.debug(f"Moved to device {DEVICE}: shape={aug_t.shape}, dtype={aug_t.dtype}")
+            # For now, keep the PIL path for compatibility:
+            img_for_pil = aug_t.cpu().clamp(0,255).byte().permute(1,2,0).numpy() if aug_t.max() > 1.5 else (aug_t.cpu() * 255).clamp(0,255).byte().permute(1,2,0).numpy()
+            crops_pil.append(Image.fromarray(img_for_pil))
         except Exception as e:
-            logger.warning(f"Error during TTA augmentation: {e}. Proceeding without augmentation.")
-# --- Model Loader for Validation/Fine-tune ---
-def load_perception_model():
-    """
-    Loads the PerceptionModule and its weights, returns the model instance.
-    Also sets the global MODEL variable.
-    """
-    global MODEL
-    try:
-        m = PerceptionModule(config).to(DEVICE)
-        ckpt = getattr(config, 'best_model_path', None) or "checkpoints/bongard_perception_last.pth"
-        state = torch.load(ckpt, map_location=DEVICE)
-        m.load_state_dict(state)
-        m.eval()
-        MODEL = m
-        logger.info(f"Loaded PerceptionModel from {ckpt}")
-    except Exception as e:
-        logger.error(f"Failed to load PerceptionModel: {e}")
-        MODEL = None
-    return MODEL
+            logger.warning(f"TTA error: {e}. Skipping augmentation.")
 
     all_votes: Dict[str, List[str]] = defaultdict(list)
     all_confs: Dict[str, List[float]] = defaultdict(list)
 
-    # If the model is not loaded, return a tuple matching the normal return type.
-    if MODEL is None:
-        dummy_result = {attr_type: (f"unknown_{attr_type}", 0.0) for attr_type in attribute_maps_inv.keys()}
-        avg_conf = 0.0
-        return dummy_result, avg_conf
 
     for c in crops_pil:
+        logger.debug(f"FEEDING to single_inference: type={type(c)}, mode={getattr(c, 'mode', None)}, size={getattr(c, 'size', None)}")
         inference_results = single_inference(c)
         for attr_type, (val, conf) in inference_results.items():
             all_votes[attr_type].append(val)
@@ -465,6 +447,8 @@ def load_perception_model():
 
     # Compute average confidence across all attributes
     avg_confidence = total_conf / n_attr if n_attr > 0 else 0.0
+    logger.debug(f"FINAL features → {final_extracted_features}")
+    logger.debug(f"FINAL avg_conf → {avg_confidence:.4f}")
     return final_extracted_features, avg_confidence
 
 
