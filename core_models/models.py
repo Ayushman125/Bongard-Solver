@@ -137,6 +137,13 @@ except ImportError:
                 self.global_pool = 'mean'
                 self.simclr_config = {'temperature': 0.07, 'projection_dim': 128, 'mlp_hidden_size': 256, 'use_moco': False, 'pretrain_epochs': 10}
                 self.feature_dim = 512 # Will be updated by AttributeClassifier
+                self.lora_config = {'r': 8, 'lora_alpha': 16, 'lora_dropout': 0.1, 'target_modules': ["q_proj", "v_proj"]}
+                self.dropblock_config = {'block_size': 7, 'drop_prob': 0.1}
+                self.drop_path_layers = 0
+                self.drop_path_max = 0.1
+                self.use_glu = False
+                self.use_scene_gnn = False
+
 
         class DataConfig:
             def __init__(self):
@@ -161,6 +168,10 @@ except ImportError:
                 self.epochs = 10
                 self.scheduler = None
                 self.weight_decay = 1e-4
+                self.distillation_config = {'temperature': 2.0, 'alpha': 0.5, 'loss_weight': 1.0, 'use_mask_distillation': False}
+                self.mean_teacher_config = {'alpha': 0.99}
+                self.scheduler_config = {'OneCycleLR': {'steps_per_epoch': 1000}}
+
 
         class FewShotConfig:
             def __init__(self):
@@ -277,7 +288,7 @@ except ImportError:
 HAS_MOCO = False
 try:
     # Fixed: Use hasattr for checking attributes on CONFIG object
-    if hasattr(CONFIG, 'model') and hasattr(CONFIG.model, 'simclr_config') and CONFIG.model.simclr_config.get('use_moco', False):
+    if hasattr(CONFIG, 'model') and hasattr(CONFIG.model, 'simclr_config') and getattr(CONFIG.model.simclr_config, 'use_moco', False):
         from moco.builder import MoCo
         HAS_MOCO = True
         logger.info("MoCo builder found and enabled.")
@@ -391,11 +402,11 @@ class AttributeClassifier(nn.Module):
         if self.use_lora:
             lora_config = LoraConfig(
                 task_type=TaskType.FEATURE_EXTRACTION,
-                r=config.model.lora_config.get('r', 8), # Fixed: attribute access
-                lora_alpha=config.model.lora_config.get('lora_alpha', 16), # Fixed: attribute access
-                lora_dropout=config.model.lora_config.get('lora_dropout', 0.1), # Fixed: attribute access
+                r=getattr(config.model.lora_config, 'r', 8), # Fixed: attribute access
+                lora_alpha=getattr(config.model.lora_config, 'lora_alpha', 16), # Fixed: attribute access
+                lora_dropout=getattr(config.model.lora_config, 'lora_dropout', 0.1), # Fixed: attribute access
                 bias="none",
-                target_modules=config.model.lora_config.get('target_modules', ["q_proj", "v_proj"]) # Fixed: attribute access
+                target_modules=getattr(config.model.lora_config, 'target_modules', ["q_proj", "v_proj"]) # Fixed: attribute access
             )
             self.feature_extractor = get_peft_model(self.feature_extractor, lora_config)
             logger.info(f"LoRA enabled for backbone. Trainable parameters: {self.feature_extractor.print_trainable_parameters()}")
@@ -414,15 +425,15 @@ class AttributeClassifier(nn.Module):
         self.dropblock = None
         if getattr(config.model, 'use_dropblock', False) and HAS_DROPBLOCK: # Fixed: attribute access
             self.dropblock = DropBlock2D(
-                block_size=config.model.dropblock_config.get('block_size', 7), # Fixed: attribute access
-                drop_prob=config.model.dropblock_config.get('drop_prob', 0.1) # Fixed: attribute access
+                block_size=getattr(config.model.dropblock_config, 'block_size', 7), # Fixed: attribute access
+                drop_prob=getattr(config.model.dropblock_config, 'drop_prob', 0.1) # Fixed: attribute access
             )
             logger.info(f"DropBlock enabled with block_size={self.dropblock.block_size}, drop_prob={self.dropblock.drop_prob}")
 
         # Parameterized Stochastic-Depth Schedule (DropPath)
         self.drop_paths = nn.ModuleList()
         if getattr(config.model, 'use_stochastic_depth', False) and HAS_DROPPATH: # Fixed: attribute access
-            num_droppath_layers = config.model.get('drop_path_layers', 0) # Fixed: attribute access
+            num_droppath_layers = getattr(config.model, 'drop_path_layers', 0) # Fixed: attribute access
             
             # Attempt to find actual number of blocks/layers in the feature extractor
             if hasattr(self.feature_extractor, 'blocks') and isinstance(self.feature_extractor.blocks, nn.ModuleList):
@@ -433,7 +444,7 @@ class AttributeClassifier(nn.Module):
                 num_droppath_layers = sum(1 for _ in self.feature_extractor.features if isinstance(_, (nn.Conv2d, nn.Linear)))
                 logger.info(f"Estimated {num_droppath_layers} feature layers for DropPath scheduling.")
             
-            drop_path_max = config.model.get('drop_path_max', 0.1) # Fixed: attribute access
+            drop_path_max = getattr(config.model, 'drop_path_max', 0.1) # Fixed: attribute access
             drop_rates = np.linspace(0.0, drop_path_max, num=num_droppath_layers)
             self.drop_paths = nn.ModuleList([
                 DropPath(p=dr) for dr in drop_rates
@@ -494,7 +505,7 @@ class AttributeClassifier(nn.Module):
                 flat = self.dropblock(flat)
         
         # Apply Stochastic Depth (DropPath)
-        if self.config.model.get('use_stochastic_depth', False) and HAS_DROPPATH and self.drop_paths: # Fixed: attribute access
+        if getattr(self.config.model, 'use_stochastic_depth', False) and HAS_DROPPATH and self.drop_paths: # Fixed: attribute access
             flat = self.drop_paths[-1](flat) + flat # Apply DropPath with residual connection
 
         attribute_logits = {}
@@ -543,12 +554,12 @@ class RelationGNN(nn.Module):
     def __init__(self, config: Any): # Use Any for config type hint
         super().__init__()
         self.config = config
-        gnn_config = config.model.relation_gnn_config # Fixed: attribute access
-        self.hidden_dim = gnn_config.hidden_dim # Fixed: attribute access
-        self.num_layers = gnn_config.num_layers # Fixed: attribute access
-        self.num_relations = gnn_config.num_relations # Fixed: attribute access
-        self.dropout_prob = gnn_config.dropout_prob # Fixed: attribute access
-        self.use_edge_features = gnn_config.use_edge_features # Fixed: attribute access
+        gnn_config = config.model.relation_gnn_config
+        self.hidden_dim = gnn_config["hidden_dim"]
+        self.num_layers = gnn_config["num_layers"]
+        self.num_relations = gnn_config["num_relations"]
+        self.dropout_prob = gnn_config["dropout_prob"]
+        self.use_edge_features = gnn_config["use_edge_features"]
         
         # Input dimension for the GNN nodes. This comes from the AttributeClassifier's output.
         input_dim = getattr(config.model, 'feature_dim', 512) # Fixed: attribute access
@@ -578,7 +589,7 @@ class RelationGNN(nn.Module):
             self._is_dummy = False
 
         # Global pooling mechanism for graph embedding
-        self.global_pool_type = config.model.get('global_pool', 'mean') # Fixed: attribute access
+        self.global_pool_type = getattr(config.model, 'global_pool', 'mean') # Fixed: attribute access
         if self.global_pool_type == 'attention':
             # Gate network for attention pooling
             self.gate_nn = nn.Sequential(nn.Linear(self.hidden_dim, 1), nn.Sigmoid())
@@ -699,7 +710,7 @@ class BongardHead(nn.Module):
         
         # Feature dimension for the head, typically GNN's hidden_dim
         feat_dim = config.model.relation_gnn_config.hidden_dim # Fixed: attribute access
-        attn_dim = head_config.get('attn_dim', feat_dim)
+        attn_dim = getattr(head_config, 'attn_dim', feat_dim)
         n_classes = head_config.num_classes # Fixed: attribute access
         
         # FiLM (Feature-wise Linear Modulation) conditioning network
@@ -713,14 +724,14 @@ class BongardHead(nn.Module):
         logger.info("BongardHead: FiLM conditioning MLP initialized.")
         
         # Mixer-style MLP for processing the conditioned query features
-        self.use_glu = config.model.get('use_glu', False) # Fixed: attribute access
+        self.use_glu = getattr(config.model, 'use_glu', False) # Fixed: attribute access
         if self.use_glu:
             self.mixer = nn.Sequential(
                 nn.Linear(feat_dim, feat_dim * 2), # Output 2*feat_dim for GLU
                 nn.GLU(dim=-1), # GLU halves the dimension
                 nn.Linear(feat_dim, feat_dim),
                 nn.GELU(),
-                nn.Dropout(head_config.get('dropout_prob', 0.3))
+                nn.Dropout(getattr(head_config, 'dropout_prob', 0.3))
             )
             logger.info("BongardHead: GLU Mixer initialized.")
         else:
@@ -729,7 +740,7 @@ class BongardHead(nn.Module):
                 nn.GELU(),
                 nn.Linear(feat_dim, feat_dim),
                 nn.GELU(),
-                nn.Dropout(head_config.get('dropout_prob', 0.3))
+                nn.Dropout(getattr(head_config, 'dropout_prob', 0.3))
             )
             logger.info("BongardHead: Standard Mixer MLP initialized.")
         
@@ -780,7 +791,7 @@ class PerceptionModule(nn.Module):
         config.model.feature_dim = self.attribute_model.feature_dim # Fixed: attribute access
         
         # GNN module (RelationGNN or SceneGNN)
-        self.use_scene_gnn = config.model.get('use_scene_gnn', False) # Fixed: attribute access
+        self.use_scene_gnn = getattr(config.model, 'use_scene_gnn', False) # Fixed: attribute access
         if self.use_scene_gnn:
             self.gnn_module = SceneGNN(
                 in_dim=config.model.feature_dim, # Fixed: attribute access
@@ -1086,7 +1097,7 @@ class LitBongard(pl.LightningModule):
         self.cfg = cfg
         self.perception_module = PerceptionModule(cfg)
         
-        label_smoothing_val = cfg.training.get('label_smoothing', 0.0) # Fixed: attribute access
+        label_smoothing_val = getattr(cfg.training, 'label_smoothing', 0.0) # Fixed: attribute access
         self.bongard_criterion = LabelSmoothingCrossEntropy(smoothing=label_smoothing_val, reduction='none' if (cfg.training.curriculum_learning and cfg.training.curriculum_config.difficulty_sampling) else 'mean') # Fixed: attribute access
         
         self.attribute_criterion = nn.CrossEntropyLoss(reduction='mean')
@@ -1096,7 +1107,7 @@ class LitBongard(pl.LightningModule):
         
         self.symbolic_consistency_criterion = None
         self.HAS_SYMBOLIC_CONSISTENCY = False
-        if cfg.training.symbolic_consistency_weight > 0: # Fixed: attribute access
+        if getattr(cfg.training, 'symbolic_consistency_weight', 0) > 0: # Fixed: attribute access
             try:
                 from src.bongard_rules import ALL_BONGARD_RULES
                 from src.symbolic_engine import SymbolicEngine
@@ -1116,7 +1127,7 @@ class LitBongard(pl.LightningModule):
         
         self.distillation_criterion = None
         self.teacher_models = nn.ModuleList() # This will be populated externally if distillation is used
-        if cfg.training.use_knowledge_distillation: # Fixed: attribute access
+        if getattr(cfg.training, 'use_knowledge_distillation', False): # Fixed: attribute access
             self.distillation_criterion = DistillationLoss(
                 temperature=cfg.training.distillation_config.temperature, # Fixed: attribute access
                 alpha=cfg.training.distillation_config.alpha, # Fixed: attribute access
@@ -1125,7 +1136,7 @@ class LitBongard(pl.LightningModule):
             logger.info("Knowledge Distillation enabled.")
         
         self.ema_model = None
-        if cfg.training.get('use_mean_teacher', False): # Fixed: attribute access
+        if getattr(cfg.training, 'use_mean_teacher', False): # Fixed: attribute access
             self.ema_model = copy.deepcopy(self.perception_module)
             for param in self.ema_model.parameters():
                 param.requires_grad = False # EMA model parameters are not updated by gradient descent
@@ -1190,7 +1201,7 @@ class LitBongard(pl.LightningModule):
         support_labels_reshaped = support_labels_flat.view(batch_size_actual, max_support_imgs)
         
         # Apply Mixup/Cutmix if enabled
-        if self.cfg.training.get('use_mixup_cutmix', False) and HAS_TRAINING_UTILS: # Fixed: attribute access
+        if getattr(self.cfg.training, 'use_mixup_cutmix', False) and HAS_TRAINING_UTILS: # Fixed: attribute access
             num_bongard_classes = self.cfg.model.bongard_head_config.num_classes # Fixed: attribute access
             mixup_cutmix_augmenter = MixupCutmixAugmenter(self.cfg.training, num_bongard_classes) # Fixed: attribute access
             images_view1_aug, labels_mixed = mixup_cutmix_augmenter(processed_query_images_view1, query_labels)
@@ -1225,7 +1236,7 @@ class LitBongard(pl.LightningModule):
         total_loss = 0.0
         
         # Bongard classification loss
-        if self.cfg.training.get('use_mixup_cutmix', False) and HAS_TRAINING_UTILS: # Fixed: attribute access
+        if getattr(self.cfg.training, 'use_mixup_cutmix', False) and HAS_TRAINING_UTILS: # Fixed: attribute access
             # For Mixup/Cutmix, use KLDivLoss with mixed labels
             per_sample_bongard_losses = F.kl_div(F.log_softmax(bongard_logits1, dim=-1), labels_mixed, reduction='none').sum(dim=1)
         else:
@@ -1284,7 +1295,7 @@ class LitBongard(pl.LightningModule):
         
         if num_attribute_losses > 0:
             loss_attribute /= num_attribute_losses
-            total_loss += self.cfg.training.get('attribute_loss_weight', 1.0) * loss_attribute # Fixed: attribute access
+            total_loss += getattr(self.cfg.training, 'attribute_loss_weight', 1.0) * loss_attribute # Fixed: attribute access
         self.log("train/attribute_loss", loss_attribute, on_step=True, prog_bar=True, logger=True)
         
         # Relation classification loss
@@ -1316,7 +1327,7 @@ class LitBongard(pl.LightningModule):
             if all_gt_edge_labels_flat:
                 labels_flat = torch.cat(all_gt_edge_labels_flat, dim=0)
                 loss_relation = self.relation_criterion(relation_logits1, labels_flat)
-                total_loss += self.cfg.training.get('relation_loss_weight', 1.0) * loss_relation # Fixed: attribute access
+                total_loss += getattr(self.cfg.training, 'relation_loss_weight', 1.0) * loss_relation # Fixed: attribute access
             else:
                 logger.debug("No relations in ground truth for this batch. Skipping relation loss.")
         elif self.perception_module.use_scene_gnn:
@@ -1326,9 +1337,9 @@ class LitBongard(pl.LightningModule):
         
         # Consistency losses (feature-level and symbolic-level)
         loss_consistency = torch.tensor(0.0, device=self.device)
-        if self.cfg.training.consistency_loss_weight > 0: # Fixed: attribute access
+        if getattr(self.cfg.training, 'consistency_loss_weight', 0) > 0: # Fixed: attribute access
             # Feature consistency loss (between two views' object features)
-            if self.cfg.training.feature_consistency_weight > 0: # Fixed: attribute access
+            if getattr(self.cfg.training, 'feature_consistency_weight', 0) > 0: # Fixed: attribute access
                 if attribute_features1.numel() > 0 and attribute_features2.numel() > 0:
                     loss_feature_consistency = self.feature_consistency_criterion(attribute_features1, attribute_features2)
                     loss_consistency += self.cfg.training.feature_consistency_weight * loss_feature_consistency # Fixed: attribute access
@@ -1336,7 +1347,7 @@ class LitBongard(pl.LightningModule):
                     logger.debug("Skipping feature consistency loss: no objects detected in one or both views.")
             
             # Symbolic consistency loss (between inferred scene graphs and GT rules)
-            if self.cfg.training.symbolic_consistency_weight > 0 and self.HAS_SYMBOLIC_CONSISTENCY and self.symbolic_consistency_criterion: # Fixed: attribute access
+            if getattr(self.cfg.training, 'symbolic_consistency_weight', 0) > 0 and self.HAS_SYMBOLIC_CONSISTENCY and self.symbolic_consistency_criterion: # Fixed: attribute access
                 loss_symbolic_consistency = self.symbolic_consistency_criterion(
                     scene_graphs1=scene_graphs1,
                     scene_graphs2=scene_graphs2,
@@ -1346,12 +1357,12 @@ class LitBongard(pl.LightningModule):
                 loss_consistency += self.cfg.training.symbolic_consistency_weight * loss_symbolic_consistency # Fixed: attribute access
                 self.log("train/symbolic_consistency_loss", loss_symbolic_consistency, on_step=True, prog_bar=True, logger=True)
         
-        total_loss += self.cfg.training.consistency_loss_weight * loss_consistency # Fixed: attribute access
+        total_loss += getattr(self.cfg.training, 'consistency_loss_weight', 0) * loss_consistency # Fixed: attribute access
         self.log("train/consistency_loss", loss_consistency, on_step=True, prog_bar=True, logger=True)
         
         # Knowledge Distillation loss
         loss_distillation = torch.tensor(0.0, device=self.device)
-        if self.distillation_criterion and self.cfg.training.use_knowledge_distillation and self.teacher_models: # Fixed: attribute access
+        if self.distillation_criterion and getattr(self.cfg.training, 'use_knowledge_distillation', False) and self.teacher_models: # Fixed: attribute access
             # Get teacher logits from ensemble (defined in training.py)
             teacher_logits_batch, distillation_mask = _get_ensemble_teacher_logits(
                 teacher_models=self.teacher_models,
@@ -1369,7 +1380,7 @@ class LitBongard(pl.LightningModule):
                 )
                 
                 # Apply distillation mask if enabled (e.g., only distill on certain samples)
-                if distillation_mask is not None and self.cfg.training.distillation_config.use_mask_distillation: # Fixed: attribute access
+                if distillation_mask is not None and getattr(self.cfg.training.distillation_config, 'use_mask_distillation', False): # Fixed: attribute access
                     masked_soft_loss = per_sample_soft_loss * distillation_mask.to(self.device)
                     masked_hard_loss = per_sample_hard_loss * distillation_mask.to(self.device)
                     # Combine soft and hard losses with alpha
@@ -1380,7 +1391,7 @@ class LitBongard(pl.LightningModule):
                     loss_distillation = (self.cfg.training.distillation_config.alpha * per_sample_soft_loss + \
                                          (1. - self.cfg.training.distillation_config.alpha) * per_sample_hard_loss).mean() # Fixed: attribute access
                 
-                total_loss += loss_distillation * self.cfg.training.distillation_config.get('loss_weight', 1.0) # Fixed: attribute access
+                total_loss += getattr(self.cfg.training.distillation_config, 'loss_weight', 1.0) * loss_distillation # Fixed: attribute access
             else:
                 logger.warning("No teacher logits generated for distillation in this batch.")
         self.log("train/distillation_loss", loss_distillation, on_step=True, prog_bar=True, logger=True)
@@ -1405,15 +1416,15 @@ class LitBongard(pl.LightningModule):
                 logger.warning("Replay buffer not found in datamodule. Skipping async priority update.")
         
         # Gradient clipping
-        if self.cfg.training.get('max_grad_norm', 0.0) > 0: # Fixed: attribute access
+        if getattr(self.cfg.training, 'max_grad_norm', 0.0) > 0: # Fixed: attribute access
             torch.nn.utils.clip_grad_norm_(self.parameters(), self.cfg.training.max_grad_norm) # Fixed: attribute access
         
         return total_loss
 
     def on_train_batch_end(self, outputs, batch: Any, batch_idx: int) -> None:
         # Mean Teacher EMA update
-        if self.ema_model and self.cfg.training.get('use_mean_teacher', False): # Fixed: attribute access
-            ema_decay = self.cfg.training.mean_teacher_config.get('alpha', 0.99) # Fixed: attribute access
+        if self.ema_model and getattr(self.cfg.training, 'use_mean_teacher', False): # Fixed: attribute access
+            ema_decay = getattr(self.cfg.training.mean_teacher_config, 'alpha', 0.99) # Fixed: attribute access
             # Iterate over parameters and apply EMA update
             for student_param, ema_param in zip(self.perception_module.parameters(), self.ema_model.parameters()):
                 ema_param.data.mul_(ema_decay).add_(student_param.data * (1 - ema_decay))
@@ -1507,7 +1518,7 @@ class LitBongard(pl.LightningModule):
         
         if num_attribute_losses > 0:
             loss_attribute /= num_attribute_losses
-            total_val_loss += self.cfg.training.get('attribute_loss_weight', 1.0) * loss_attribute # Fixed: attribute access
+            total_val_loss += getattr(self.cfg.training, 'attribute_loss_weight', 1.0) * loss_attribute # Fixed: attribute access
         self.log("val/attribute_loss", loss_attribute, on_epoch=True, prog_bar=True, logger=True)
         
         # Relation classification loss (similar to training step)
@@ -1536,7 +1547,7 @@ class LitBongard(pl.LightningModule):
             if all_gt_edge_labels_flat:
                 labels_flat = torch.cat(all_gt_edge_labels_flat, dim=0)
                 loss_relation = self.relation_criterion(relation_logits, labels_flat)
-                total_val_loss += self.cfg.training.get('relation_loss_weight', 1.0) * loss_relation # Fixed: attribute access
+                total_val_loss += getattr(self.cfg.training, 'relation_loss_weight', 1.0) * loss_relation # Fixed: attribute access
             else:
                 logger.debug("No relations in ground truth for this batch. Skipping relation loss.")
         elif self.perception_module.use_scene_gnn:
@@ -1560,11 +1571,11 @@ class LitBongard(pl.LightningModule):
         
         # Calculate total_steps for OneCycleLR
         total_steps = -1 # Default to -1 if not using OneCycleLR
-        if self.hparams.cfg.training.get('scheduler') == 'OneCycleLR': # Fixed: attribute access
+        if getattr(self.hparams.cfg.training, 'scheduler', None) == 'OneCycleLR': # Fixed: attribute access
             # This requires knowing the number of batches per epoch.
             # In Lightning, `trainer.estimated_stepping_batches` can be used, but not available here.
             # So, we'll rely on `steps_per_epoch` from config or a large default.
-            steps_per_epoch = self.hparams.cfg.training.scheduler_config.OneCycleLR.get('steps_per_epoch', 1000) # Fixed: attribute access
+            steps_per_epoch = getattr(self.hparams.cfg.training.scheduler_config.OneCycleLR, 'steps_per_epoch', 1000) # Fixed: attribute access
             total_steps = steps_per_epoch * self.hparams.cfg.training.epochs # Fixed: attribute access
             logger.info(f"Calculated total_steps for OneCycleLR: {total_steps}")
         
@@ -1572,10 +1583,10 @@ class LitBongard(pl.LightningModule):
         
         # Determine scheduler interval based on type
         scheduler_interval = 'epoch'
-        if self.hparams.cfg.training.get('scheduler') == 'OneCycleLR': # Fixed: attribute access
+        if getattr(self.hparams.cfg.training, 'scheduler', None) == 'OneCycleLR': # Fixed: attribute access
             scheduler_interval = 'step'
         
-        return [optimizer], ([{'scheduler': scheduler, 'interval': scheduler_interval, 'monitor': 'val/total_loss' if self.hparams.cfg.training.get('scheduler') == 'ReduceLROnPlateau' else None}] if scheduler else []) # Fixed: attribute access
+        return [optimizer], ([{'scheduler': scheduler, 'interval': scheduler_interval, 'monitor': 'val/total_loss' if getattr(self.hparams.cfg.training, 'scheduler', None) == 'ReduceLROnPlateau' else None}] if scheduler else []) # Fixed: attribute access
 
 class LitSimCLR(pl.LightningModule):
     """
@@ -1590,19 +1601,19 @@ class LitSimCLR(pl.LightningModule):
         self.temperature = simclr_cfg.temperature # Fixed: attribute access
         self.projection_dim = simclr_cfg.projection_dim # Fixed: attribute access
         self.mlp_hidden_size = simclr_cfg.mlp_hidden_size # Fixed: attribute access
-        self.use_moco = simclr_cfg.get('use_moco', False) # Fixed: attribute access
+        self.use_moco = getattr(simclr_cfg, 'use_moco', False) # Fixed: attribute access
         
         # Projection head for SimCLR (if not using MoCo's internal MLP)
         layers = []
         in_dim = self.feature_extractor.feature_dim # Input to projection head is backbone's output feature dim
-        head_layers = simclr_cfg.get('head_layers', 4) # Fixed: attribute access
+        head_layers = getattr(simclr_cfg, 'head_layers', 4) # Fixed: attribute access
         
         for i in range(head_layers - 1):
             layers += [
                 nn.Linear(in_dim, self.mlp_hidden_size),
                 nn.BatchNorm1d(self.mlp_hidden_size),
                 nn.GELU(),
-                nn.Dropout(simclr_cfg.get('head_dropout_prob', 0.2)) # Fixed: attribute access
+                nn.Dropout(getattr(simclr_cfg, 'head_dropout_prob', 0.2)) # Fixed: attribute access
             ]
             in_dim = self.mlp_hidden_size
         layers += [nn.Linear(in_dim, self.projection_dim)]
@@ -1615,8 +1626,8 @@ class LitSimCLR(pl.LightningModule):
             self.moco = MoCo(
                 base_encoder=self.feature_extractor, # Pass the AttributeClassifier as base encoder
                 dim=self.projection_dim,
-                K=simclr_cfg.get('moco_k', 65536), # Fixed: attribute access
-                m=simclr_cfg.get('moco_m', 0.999), # Fixed: attribute access
+                K=getattr(simclr_cfg, 'moco_k', 65536), # Fixed: attribute access
+                m=getattr(simclr_cfg, 'moco_m', 0.999), # Fixed: attribute access
                 T=self.temperature,
                 mlp=True # Use MLP projection head for MoCo
             )
@@ -1697,8 +1708,8 @@ class LitSimCLR(pl.LightningModule):
         
         # Calculate total_steps for OneCycleLR if applicable
         total_steps = -1
-        if self.cfg.training.get('scheduler') == 'OneCycleLR': # Fixed: attribute access
-            steps_per_epoch = self.cfg.training.scheduler_config.OneCycleLR.get('steps_per_epoch', 1000) # Fixed: attribute access
+        if getattr(self.cfg.training, 'scheduler', None) == 'OneCycleLR': # Fixed: attribute access
+            steps_per_epoch = getattr(self.cfg.training.scheduler_config.OneCycleLR, 'steps_per_epoch', 1000) # Fixed: attribute access
             total_steps = steps_per_epoch * self.cfg.model.simclr_config.pretrain_epochs # Fixed: attribute access
             logger.info(f"Calculated total_steps for OneCycleLR in SimCLR: {total_steps}")
         
@@ -1706,7 +1717,7 @@ class LitSimCLR(pl.LightningModule):
         
         # Determine scheduler interval based on type
         scheduler_interval = 'epoch'
-        if self.cfg.training.get('scheduler') == 'OneCycleLR': # Fixed: attribute access
+        if getattr(self.cfg.training, 'scheduler', None) == 'OneCycleLR': # Fixed: attribute access
             scheduler_interval = 'step'
         
         return [optimizer], ([{'scheduler': scheduler, 'interval': scheduler_interval, 'monitor': 'simclr_train_loss'}] if scheduler else [])
