@@ -89,6 +89,9 @@ def build_synth_holdout(n=None, cache_path="synth_holdout.npz"):
 @functools.lru_cache(maxsize=2)
 def load_real_holdout(root=None, cache_path="real_holdout.npz"):
     root = root or config.real_holdout_root
+    if not os.path.isdir(root) or not os.listdir(root):
+        logger.warning(f"No files in real holdout dir {root}, skipping real validation.")
+        return None, None
     if os.path.exists(cache_path):
         logger.info(f"Loading cached real holdout from {cache_path}")
         arr = np.load(cache_path, allow_pickle=True)
@@ -104,6 +107,9 @@ def load_real_holdout(root=None, cache_path="real_holdout.npz"):
                 img = Image.open(fn).convert("L")
                 imgs.append(img)
                 labels.append(int(lbl_folder))
+    if not imgs:
+        logger.warning(f"No images found in real holdout dir {root}, skipping real validation.")
+        return None, None
     arr_imgs = np.stack([np.array(img) for img in imgs])
     np.savez_compressed(cache_path, imgs=arr_imgs, labels=np.array(labels))
     logger.info(f"Saved real holdout to {cache_path}")
@@ -164,18 +170,37 @@ def online_finetune_test(imgs, labels):
 
 
 if __name__ == "__main__":
-    logger.info("==== Phase 1 Validation: Synthetic Holdout ====")
-    s_imgs, s_lbls = build_synth_holdout()
-    s_acc, s_pp, s_pt = eval_set(s_imgs, s_lbls)
-    logger.info(f"Synth Acc: {s_acc:.4f}")
-    plot_calibration(s_pp, s_pt, "Synthetic Calibration")
+    # Determine synthetic holdout cache path from config if present
+    synth_cache = None
+    if hasattr(config, 'data') and hasattr(config.data, 'synthetic_data_config'):
+        synth_cache = config.data.synthetic_data_config.get('holdout_cache', None)
+    if synth_cache is None:
+        synth_cache = 'synth_holdout.npz'
 
-    logger.info("==== Phase 1 Validation: Real Holdout ====")
-    r_imgs, r_lbls = load_real_holdout()
-    r_acc, r_pp, r_pt = eval_set(r_imgs, r_lbls)
-    logger.info(f"Real Acc: {r_acc:.4f}")
-    plot_calibration(r_pp, r_pt, "Real Calibration")
+    if hasattr(config.data, 'use_synthetic_data') and config.data.use_synthetic_data:
+        logger.info("==== Phase 1 Validation: Synthetic Holdout ====")
+        s_imgs, s_lbls = build_synth_holdout(cache_path=synth_cache)
+        s_acc, s_pp, s_pt = eval_set(s_imgs, s_lbls)
+        logger.info(f"Synth Acc: {s_acc:.4f}")
+        plot_calibration(s_pp, s_pt, "Synthetic Calibration")
+    else:
+        logger.info("==== Phase 1 Validation: Real Holdout ====")
+        r_imgs, r_lbls = load_real_holdout()
+        if r_imgs is not None:
+            r_acc, r_pp, r_pt = eval_set(r_imgs, r_lbls)
+            logger.info(f"Real Acc: {r_acc:.4f}")
+            plot_calibration(r_pp, r_pt, "Real Calibration")
+        else:
+            logger.info("No real holdout data found. Skipping real validation.")
 
     logger.info("==== Phase 1: Online Fine-tune Test (first 100 synth) ====")
-    pre, post, t = online_finetune_test(s_imgs[:100], s_lbls[:100])
-    logger.info(f"Online FT: Pre {pre:.4f} → Post {post:.4f} in {t:.1f}s")
+    # Use synthetic for fine-tune if available, else real
+    if 's_imgs' in locals() and 's_lbls' in locals():
+        pre, post, t = online_finetune_test(s_imgs[:100], s_lbls[:100])
+    elif 'r_imgs' in locals() and r_imgs is not None:
+        pre, post, t = online_finetune_test(r_imgs[:100], r_lbls[:100])
+    else:
+        logger.info("No data available for online fine-tune test.")
+        pre = post = t = None
+    if pre is not None:
+        logger.info(f"Online FT: Pre {pre:.4f} → Post {post:.4f} in {t:.1f}s")
