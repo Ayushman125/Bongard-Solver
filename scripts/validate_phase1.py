@@ -36,14 +36,15 @@ from src.perception.primitive_extractor import extract_cnn_features, MODEL, load
 
 # 1) If no checkpoint yet, train model first (only if not already present)
 def checkpoint_exists():
-    return os.path.exists(config.best_model_path) or os.path.exists(config.last_model_path)
+    return os.path.exists(config['phase1']['best_model_path']) or os.path.exists(config['phase1']['last_model_path'])
 
 if not checkpoint_exists():
-    print(f">>> No checkpoint found at {config.best_model_path} or {config.last_model_path}\n>>> Training Phase-1 perception model...")
+    print(f">>> No checkpoint found at {config['phase1']['best_model_path']} or {config['phase1']['last_model_path']}\n>>> Training Phase-1 perception model...")
     train_perception_with_buffer(config)
     print(">>> Training done. Now proceeding to validation.")
 else:
-    print(f"Checkpoint found at {config.best_model_path if os.path.exists(config.best_model_path) else config.last_model_path}. Skipping training.")
+    ckpt_path = config['phase1']['best_model_path'] if os.path.exists(config['phase1']['best_model_path']) else config['phase1']['last_model_path']
+    print(f"Checkpoint found at {ckpt_path}. Skipping training.")
 
 
 # Setup logging
@@ -51,8 +52,9 @@ logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(m
 logger = logging.getLogger("validate_phase1")
 
 # Ensure checkpoints exist and resume if interrupted
-Path(config.checkpoint_dir).mkdir(parents=True, exist_ok=True)
-ckpt = config.best_model_path if os.path.exists(config.best_model_path) else config.last_model_path
+from pathlib import Path
+Path(config['phase1']['checkpoint_dir']).mkdir(parents=True, exist_ok=True)
+ckpt = config['phase1']['best_model_path'] if os.path.exists(config['phase1']['best_model_path']) else config['phase1']['last_model_path']
 if os.path.exists(ckpt):
     logger.info(f"Loading model checkpoint: {ckpt}")
     # Model is loaded automatically in primitive_extractor; no need to call load_model()
@@ -63,7 +65,7 @@ else:
 import functools
 @functools.lru_cache(maxsize=2)
 def build_synth_holdout(n=None, cache_path="synth_holdout.npz"):
-    n = n or config.synth_holdout_count
+    n = n or config['phase1']['synth_holdout_count']
     if os.path.exists(cache_path):
         logger.info(f"Loading cached synthetic holdout from {cache_path}")
         arr = np.load(cache_path, allow_pickle=True)
@@ -71,7 +73,7 @@ def build_synth_holdout(n=None, cache_path="synth_holdout.npz"):
         labels = arr['labels'].tolist()
         return imgs, labels
     logger.info(f"Generating {n} synthetic holdout samples...")
-    gen = LogoGenerator(config.img_size, config.textures_dir)
+    gen = LogoGenerator(config['phase1']['img_size'], config['phase1']['textures_dir'])
     imgs, labels = [], []
     for _ in tqdm(range(n), desc="Synth Holdout Generation"):
         feat, val = gen.sample_rule()
@@ -88,7 +90,7 @@ def build_synth_holdout(n=None, cache_path="synth_holdout.npz"):
 
 @functools.lru_cache(maxsize=2)
 def load_real_holdout(root=None, cache_path="real_holdout.npz"):
-    root = root or config.real_holdout_root
+    root = root or config['phase1']['real_holdout_root']
     if not os.path.isdir(root) or not os.listdir(root):
         logger.warning(f"No files in real holdout dir {root}, skipping real validation.")
         return None, None
@@ -138,7 +140,7 @@ def eval_set(imgs, labels):
     logger.info(f"Accuracy: {acc:.4f}")
     prob_true, prob_pred = calibration_curve(
         [int(p==t) for p,t in zip(preds, labels)],
-        confs, n_bins=config.validate_bins
+        confs, n_bins=config['phase1']['validate_bins']
     )
     return acc, prob_pred, prob_true
 
@@ -175,13 +177,12 @@ def online_finetune_test(imgs, labels):
 
 if __name__ == "__main__":
     # Determine synthetic holdout cache path from config if present
-    synth_cache = None
-    if hasattr(config, 'data') and hasattr(config.data, 'synthetic_data_config'):
-        synth_cache = config.data.synthetic_data_config.get('holdout_cache', None)
-    if synth_cache is None:
-        synth_cache = 'synth_holdout.npz'
 
-    if hasattr(config.data, 'use_synthetic_data') and config.data.use_synthetic_data:
+    synth_cache = 'synth_holdout.npz'
+    if 'holdout_cache' in config['data'].get('synthetic_data_config', {}):
+        synth_cache = config['data']['synthetic_data_config']['holdout_cache']
+
+    if config['data'].get('use_synthetic_data', True):
         logger.info("==== Phase 1 Validation: Synthetic Holdout ====")
         s_imgs, s_lbls = build_synth_holdout(cache_path=synth_cache)
         s_acc, s_pp, s_pt = eval_set(s_imgs, s_lbls)

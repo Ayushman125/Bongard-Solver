@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 import dataclasses
 import os
-import yaml
+import config as cfg
 import torch
 import logging
 import torchvision.transforms as T # For mo_transform
@@ -287,81 +287,6 @@ class Config:
         ])
 
 
-def load_config(config_path: str) -> Config:
-    """
-    Loads configuration from a YAML file and creates a Config object.
-    Args:
-        config_path (str): Path to the YAML configuration file.
-    Returns:
-        Config: A Config object populated with values from the YAML file.
-    """
-    if not os.path.exists(config_path):
-        logger.warning(f"Config file not found at {config_path}. Using default configuration.")
-        return Config()
-    with open(config_path, 'r') as f:
-        yaml_config = yaml.safe_load(f)
-    
-    # Create instances of nested dataclasses, handling potential missing keys
-    model_config = ModelConfig(**yaml_config.get('model', {}))
-    data_config = DataConfig(**yaml_config.get('data', {}))
-    training_config = TrainingConfig(**yaml_config.get('training', {}))
-    debug_config = DebugConfig(**yaml_config.get('debug', {}))
-    
-    # Populate the main Config object
-    config = Config(
-        device=yaml_config.get('device', "cuda" if torch.cuda.is_available() else "cpu"),
-        model=model_config,
-        data=data_config,
-        training=training_config,
-        debug=debug_config
-    )
-    logger.info(f"Configuration loaded from {config_path}.")
-    return config
-
-def save_config(config: Config, save_path: str):
-    """
-    Saves the current Config object to a YAML file.
-    Args:
-        config (Config): The Config object to save.
-        save_path (str): The path to save the YAML file.
-    """
-    try:
-        # Convert dataclass to dictionary
-        config_dict = dataclasses.asdict(config)
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        with open(save_path, 'w') as f:
-            yaml.dump(config_dict, f, indent=4)
-        logger.info(f"Configuration saved to {save_path}.")
-    except Exception as e:
-        logger.error(f"Error saving configuration to {save_path}: {e}")
-
-if __name__ == "__main__":
-    # Example usage:
-    # Create a default config
-    default_config = Config()
-    
-    # Define a path to save a sample config
-    sample_config_path = "sample_config.yaml"
-    save_config(default_config, sample_config_path)
-    # Load the config back
-    loaded_config = load_config(sample_config_path)
-    
-    # Access parameters
-    logger.info(f"Loaded device: {loaded_config.device}")
-    logger.info(f"Loaded backbone: {loaded_config.model.backbone}")
-    logger.info(f"Loaded batch size: {loaded_config.training.batch_size}")
-    logger.info(f"Loaded SimCLR pretrain epochs: {loaded_config.model.simclr_config['pretrain_epochs']}")
-    logger.info(f"Loaded Bongard-LOGO root: {loaded_config.data.bongardlogo_root}")
-    logger.info(f"Loaded Bongard-LOGO checkpoint: {loaded_config.training.bongardlogo_ckpt}")
-    logger.info(f"Loaded MoCo synthetic count: {loaded_config.data.synthetic_data_config['num_train_problems']}")
-    logger.info(f"Loaded MoCo transform (first element): {loaded_config.mo_transform.transforms[0]}")
-
-    # You can also modify and save
-    loaded_config.training.epochs = 100
-    loaded_config.model.backbone = "resnet50"
-    loaded_config.data.image_size = [256, 256]
-    save_config(loaded_config, "modified_config.yaml")
-    logger.info("Modified config saved to modified_config.yaml")
 
 # --- Expose a module-level config instance for direct import ---
-config = Config()
+config = cfg.CONFIG_OBJECT

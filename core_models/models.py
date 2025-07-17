@@ -219,7 +219,7 @@ except ImportError:
 # --- Import MoCo builder if use_moco is enabled in config ---
 HAS_MOCO = False
 try:
-    if config.model.simclr_config.get('use_moco', False):
+    if config['model']['simclr_config'].get('use_moco', False):
         from moco.builder import MoCo
         HAS_MOCO = True
         logger.info("MoCo builder found and enabled.")

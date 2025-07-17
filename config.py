@@ -20,7 +20,7 @@ logger.info(f"Using device: {DEVICE}")
 IMAGENET_MEAN = [0.485 * 255, 0.456 * 255, 0.406 * 255]   # For 0-255 range
 IMAGENET_STD = [0.229 * 255, 0.224 * 255, 0.225 * 255]   # For 0-255 range
 
-# --- Global Configuration Dictionary ---
+ # --- Global Configuration Dictionary ---
 # This dictionary will hold all hyperparameters and settings.
 # It can be loaded from a YAML file.
 CONFIG: Dict[str, Any] = {
@@ -348,11 +348,27 @@ CONFIG: Dict[str, Any] = {
         'cache_dir': './.cache',
         'mlflow_artifact_dir': './mlruns'
     },
+
     'rule_engine': {
         'n_workers': 8,   # Number of parallel workers for rule scoring
         'max_rules': 1000   # Maximum number of candidate rules to score
     },
+
+    # --- Phase 1 Validation/Training Script Configs ---
+    'phase1': {
+        'best_model_path': 'checkpoints/bongard_perception_best.pth',
+        'last_model_path': 'checkpoints/bongard_perception_last.pth',
+        'checkpoint_dir': 'checkpoints',
+        'synth_holdout_count': 200,
+        'img_size': 128,
+        'textures_dir': 'data/textures',
+        'real_holdout_root': 'data/real_bongard/VAL',
+        'validate_bins': 10
+    },
 }
+
+# --- Expose CONFIG_OBJECT for compatibility with dataclass config imports ---
+CONFIG_OBJECT = CONFIG
 
 # --- Attribute and Relation Mappings (for symbolic representations) ---
 # These are used by BongardGenerator and SymbolicEngine
