@@ -1,11 +1,17 @@
-# Minimal loader for external scripts
-def load_perception_model() -> Optional[nn.Module]:
-    """
-    Return the globally initialized MODEL (or None).
-    This lets external scripts explicitly re-load or fetch it.
-    """
-    global MODEL
-    return MODEL
+# --- Imports (must be at the very top) ---
+import sys
+import os
+import logging
+import cv2
+import numpy as np
+from PIL import Image, ImageDraw
+import torch
+import torch.nn as nn
+import torchvision.transforms as T
+from typing import Tuple, Dict, Any, Optional, List
+from collections import Counter, defaultdict
+import random
+
 # --- Explicit model loader for external use ---
 def load_perception_model() -> Optional[nn.Module]:
     """
@@ -45,18 +51,6 @@ def load_perception_model() -> Optional[nn.Module]:
         except Exception as e:
             logger.error(f"Failed to initialize PerceptionModel: {e}. CNN inference will not be available.")
     return MODEL
-import sys
-import os
-import logging
-import cv2
-import numpy as np
-from PIL import Image, ImageDraw
-import torch
-import torch.nn as nn
-import torchvision.transforms as T
-from typing import Tuple, Dict, Any, Optional, List
-from collections import Counter, defaultdict
-import random
 
 # --- Path setup ---
 # This block ensures that the root directory of the project is in the Python path,
