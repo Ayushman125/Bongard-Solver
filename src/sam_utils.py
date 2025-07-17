@@ -124,7 +124,8 @@ def get_masked_crop(image_tensor: torch.Tensor, mask_np: np.ndarray, bbox, targe
     target_size: (H, W)
     """
     logger.debug(f"get_masked_crop called with bbox={bbox} ({type(bbox)}), mask shape={getattr(mask_np, 'shape', None)}, target_size={target_size}")
-    # Normalize bbox to a Python list of 4 ints
+    logger.debug(f"get_masked_crop: bbox={bbox}, type={type(bbox)}, mask.shape={getattr(mask_np, 'shape', None)}")
+    # Normalize bbox to [x1,y1,x2,y2]
     import torch
     if isinstance(bbox, torch.Tensor):
         b_list = bbox.flatten().cpu().long().tolist()

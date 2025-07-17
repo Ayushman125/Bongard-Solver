@@ -11,11 +11,32 @@ import torchvision.transforms as T
 from torchvision import transforms
 
 
-# Robust PIL-based TTA transform (PIL in, PIL out)
+
+# --- Canonical Preprocessing and TTA Transforms ---
+try:
+    from core_models.training_args import get_config
+    config = get_config()
+except ImportError:
+    from config import config
+
+IMAGENET_MEAN = [0.485, 0.456, 0.406]
+IMAGENET_STD = [0.229, 0.224, 0.225]
+
+# Canonical preprocess: Resize, ToTensor, Normalize
+PREPROCESS = transforms.Compose([
+    transforms.Resize(tuple(getattr(config.data, 'image_size', (224, 224)))),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+])
+
+# Canonical PIL-based TTA (configurable)
 TTA_PIL = transforms.Compose([
-    transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),
-    transforms.RandomHorizontalFlip(0.5),
-    transforms.ColorJitter(brightness=0.2, contrast=0.2),
+    transforms.RandomResizedCrop(
+        getattr(config, 'tta', {}).get('resize', 224),
+        scale=tuple(getattr(config, 'tta', {}).get('random_resized_crop', {'scale': (0.8, 1.0)})['scale'])
+    ),
+    transforms.RandomHorizontalFlip(getattr(config, 'tta', {}).get('horizontal_flip_p', 0.5)),
+    transforms.ColorJitter(**getattr(config, 'tta', {}).get('color_jitter', {'brightness': 0.2, 'contrast': 0.2})),
 ])
 from typing import Tuple, Dict, Any, Optional, List
 from collections import Counter, defaultdict
@@ -475,75 +496,61 @@ def extract_cnn_features(img_pil: Image.Image) -> Tuple[Dict[str, Tuple[str, flo
         dummy = {t: (f"unknown_{t}", 0.0) for t in attribute_maps_inv}
         return dummy, 0.0
 
-    # PIL-based TTA: all transforms are PIL in, PIL out
+    # --- Robust TTA and Preprocessing ---
     crops_pil = [img_pil]
-    try:
-        aug_pil = TTA_PIL(img_pil)  # returns PIL.Image.Image
-        crops_pil.append(aug_pil)
-    except Exception as e:
-        logger.warning(f"TTA error during PIL-based augmentation: {e}. Skipping augmentation.")
+    tta_enabled = getattr(config, 'tta', {}).get('enabled', True)
+    if tta_enabled:
+        try:
+            crops_pil.append(TTA_PIL(img_pil))
+        except Exception as e:
+            logger.warning(f"TTA error: {e}. Using only original crop.")
 
-    crops_t = [preprocess_transform(p).to(DEVICE) for p in crops_pil]
-    inp = torch.stack(crops_t, dim=0)  # B x C x H x W
+    crops_tensor = [PREPROCESS(p).to(DEVICE) for p in crops_pil]
+    inp = torch.stack(crops_tensor, dim=0)  # (B,3,H,W)
+    logger.debug(f"extract_cnn_features → inp.shape={inp.shape}, device={inp.device}")
 
     # Prepare dummy detection inputs so the model actually runs its heads
     B, C, H, W = inp.shape
-    # Make a full-frame bbox [x1,y1,x2,y2] for each crop, shape (1,4)
     full_bbox = torch.tensor([[0, 0, W, H]], dtype=torch.float32, device=DEVICE)
-    dummy_bboxes_batch = [full_bbox.clone() for _ in range(B)]
-
-    # Make a full-frame mask (1×1×H×W) for each crop
+    dummy_bboxes = [full_bbox.clone() for _ in range(B)]
     full_mask = torch.ones((1, 1, H, W), dtype=torch.float32, device=DEVICE)
-    dummy_masks_batch = [full_mask.clone() for _ in range(B)]
+    dummy_masks = [full_mask.clone() for _ in range(B)]
+    logger.debug(f"extract_cnn_features → bboxes[0].shape={dummy_bboxes[0].shape}, mask.shape={dummy_masks[0].shape}")
 
     # DEBUG: verify we really have B boxes of shape (1,4)
     # logger.debug(f"extract_cnn_features -> inp.shape={inp.shape}, dtype={inp.dtype}, device={inp.device}")
     # logger.debug(f"extract_cnn_features -> dummy_bboxes_batch[0]={dummy_bboxes_batch[0]}, shape={dummy_bboxes_batch[0].shape}")
     # logger.debug(f"extract_cnn_features -> dummy_masks_batch[0]=Tensor shape{dummy_masks_batch[0].shape}")
 
+
     with torch.no_grad():
         model_output = MODEL(
-            images=inp,  # B×C×H×W
+            images=inp,
             ground_truth_json_strings=[b'{}'] * B,
-            detected_bboxes_batch=dummy_bboxes_batch,
-            detected_masks_batch=dummy_masks_batch,
+            detected_bboxes_batch=dummy_bboxes,
+            detected_masks_batch=dummy_masks,
             support_images=None,
             support_labels_flat=None,
             is_simclr_pretraining=False
         )
-    # logger.debug(f"extract_cnn_features -> model_output attribute_logits keys: {list(model_output.get('attribute_logits', {}).keys())}")
     attribute_logits_dict = model_output.get('attribute_logits', {})
 
     # For each attribute, aggregate predictions across TTA batch
-    final_extracted_features: Dict[str, Tuple[str, float]] = {}
-    total_conf = 0.0
-    n_attr = 0
-    for attr_type, logits in attribute_logits_dict.items():
-        if logits.numel() == 0:
-            final_extracted_features[attr_type] = (f"unknown_{attr_type}", 0.0)
-            continue
-        # logits: (B, num_classes)
-        # logger.debug(f"HEAD {attr_type}: logits.shape={tuple(logits.shape)}, logits.min={logits.min().item():.4f}, logits.max={logits.max().item():.4f}")
+    final_feats, avg_conf_list = {}, []
+    for attr, logits in attribute_logits_dict.items():
+        logger.debug(f"HEAD {attr}: logits={logits.shape}, min={logits.min().item():.4f}, max={logits.max().item():.4f}")
         probs = torch.softmax(logits, dim=1)
-        # logger.debug(f"  probs.min={probs.min().item():.4f}, probs.max={probs.max().item():.4f}")
-        preds = probs.argmax(dim=1).cpu().numpy()
         max_vals, max_idxs = probs.max(dim=1)
-        # logger.debug(f"  max_vals.shape={max_vals.shape}, max_idxs.shape={max_idxs.shape}")
-        confs = max_vals.cpu().numpy()
-        # Majority vote
-        most_common_idx = Counter(preds).most_common(1)[0][0]
-        # Calculate average confidence only for the most common prediction
-        avg_conf = float(np.mean([c for p, c in zip(preds, confs) if p == most_common_idx]))
-        attr_name = attribute_maps_inv.get(attr_type, {}).get(most_common_idx, f"unknown_{attr_type}")
-        final_extracted_features[attr_type] = (attr_name, avg_conf)
-        total_conf += avg_conf
-        n_attr += 1
-        # logger.debug(f"CNN Extracted {attr_type.capitalize()} (TTA): {attr_name} with confidence {avg_conf:.4f}")
+        choice = max_idxs[0].item()
+        conf = max_vals.float().mean().item()
+        attr_name = attribute_maps_inv.get(attr, {}).get(choice, f"unknown_{attr}")
+        final_feats[attr] = (attr_name, conf)
+        avg_conf_list.append(conf)
 
-    avg_confidence = total_conf / n_attr if n_attr > 0 else 0.0
-    logger.debug(f"FINAL features -> {final_extracted_features}")
+    avg_confidence = float(sum(avg_conf_list) / len(avg_conf_list)) if avg_conf_list else 0.0
+    logger.debug(f"FINAL features -> {final_feats}")
     logger.debug(f"FINAL avg_conf -> {avg_confidence:.4f}")
-    return final_extracted_features, avg_confidence
+    return final_feats, avg_confidence
 
 
 if __name__ == '__main__':
