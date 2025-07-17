@@ -85,13 +85,17 @@ def augment_image(img_pil: Image.Image) -> torch.Tensor:
     """
     # Albumentations expects numpy array (H, W, C)
     img_np = np.array(img_pil)
-    
     if HAS_ALBUMENTATIONS:
         return augmenter(image=img_np)['image']
     else:
-        # If Albumentations is not installed, the dummy augmenter is used.
-        # It will perform basic conversion and normalization.
-        return augmenter(image=img_np)
+        # Simple fallback: random horizontal flip, keep as numpy array in [0,1]
+        arr = img_np.astype(np.float32) / 255.0
+        if arr.ndim == 2:
+            arr = arr[..., None]  # Ensure (H, W, 1) for grayscale
+        if np.random.rand() < 0.5:
+            arr = np.fliplr(arr)
+        # Return as float32 numpy array, caller can convert to tensor if needed
+        return arr
 
 if __name__ == '__main__':
     # Example Usage

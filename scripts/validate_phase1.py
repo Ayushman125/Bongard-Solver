@@ -1,11 +1,17 @@
 
 # Ensure repo root is on sys.path so 'src' is importable as a package
+
+# Ensure repo root and src/ are on sys.path so 'src' is importable as a package
 import sys, os
 ROOT = os.path.dirname(os.path.dirname(__file__))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
+SRC = os.path.join(ROOT, "src")
+if SRC not in sys.path:
+    sys.path.insert(0, SRC)
 
 #!/usr/bin/env python3
+
 
 import os, time, glob, logging
 from pathlib import Path
@@ -19,12 +25,16 @@ from sklearn.calibration import calibration_curve
 import torch
 from torchvision.transforms.functional import to_tensor
 
-
 from src.data.generator import LogoGenerator
 from src.perception.primitive_extractor import extract_cnn_feature, MODEL
-from core_models.training import fine_tune_perception
-from core_models.training_args import Config
-config = Config()
+from core_models.training import fine_tune_perception, train_perception_with_buffer
+from core_models.training_args import config
+
+# 1) If no checkpoint yet, train model first
+if not os.path.exists(config.best_model_path):
+    print(f">>> No checkpoint found at {config.best_model_path}\n>>> Training Phase-1 perception model...")
+    train_perception_with_buffer()
+    print(">>> Training done. Now proceeding to validation.")
 
 
 # Setup logging
@@ -38,7 +48,7 @@ if os.path.exists(ckpt):
     logger.info(f"Loading model checkpoint: {ckpt}")
     MODEL.load_state_dict(torch.load(ckpt, map_location=config.device))
 else:
-    logger.warning(f"No checkpoint found at {ckpt}, model may be uninitialized!")
+    logger.error(f"No checkpoint found at {ckpt} after attempted training. Model may be uninitialized!")
 
 
 def build_synth_holdout(n=config.synth_holdout_count, cache_path="synth_holdout.npz"):

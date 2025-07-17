@@ -19,58 +19,15 @@ import json
 import math  # For geometric calculations
 import glob  # Added for background textures loader
 
-# Import global configuration and Bongard rules from the project root
-try:
-    from config import CONFIG, ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_COLOR_MAP, \
-                         ATTRIBUTE_FILL_MAP, ATTRIBUTE_SIZE_MAP, \
-                         ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_TEXTURE_MAP, \
-                         RELATION_MAP, IMAGENET_MEAN, IMAGENET_STD, NUM_CHANNELS, DATA_ROOT_PATH
-    from src.bongard_rules import ALL_BONGARD_RULES  # Assuming bongard_rules.py is in src/
-    from src.utils.augment import augment_image  # Import augmentation function
-    HAS_CONFIG = True
-except ImportError as e:
-    logging.error(f"Failed to import from config or src.bongard_rules/augment: {e}. Using dummy values.")
-    CONFIG = {
-        'data': {
-            'image_size': [128, 128],
-            'num_channels': 3,
-            'synthetic_data_config': {
-                'min_objects_per_image': 1,
-                'max_objects_per_image': 3,
-                'object_size_range': [20, 80],
-                'padding': 10,
-                'font_path': None,
-                'max_support_images_per_problem': 5,
-                'min_dist_objects': 0.1,  # Normalized minimum distance
-                'relation_density': 0.5,
-                'background_texture_path': './data/textures',  # Dummy path
-                'num_positive_examples': 6,
-                'num_negative_examples': 6,
-                'occluder_prob': 0.3,
-                'blur_prob': 0.2,
-                'min_occluder_size': 5,
-                'max_occluder_size': 20,
-                'jitter_width_range': [1, 3],
-                'jitter_dash_options': [None, (4,2), (2,2,2)],
-                'use_background_textures': True # Added for dummy config to enable texture loading
-            }
-        },
-        'training': {'augmentation_config': {}}
-    }
-    ATTRIBUTE_SHAPE_MAP = {'circle':0, 'square':1, 'triangle':2, 'pentagon':3, 'star':4, 'text_character':5}
-    ATTRIBUTE_COLOR_MAP = {'red':0, 'blue':1, 'green':2, 'yellow':3, 'black':4, 'white':5}
-    ATTRIBUTE_FILL_MAP = {'solid':0, 'outlined':1, 'striped':2, 'dotted':3}
-    ATTRIBUTE_SIZE_MAP = {'small':0, 'medium':1, 'large':2}
-    ATTRIBUTE_ORIENTATION_MAP = {'upright':0, 'rotated_45':1, 'rotated_90':2, 'rotated_135':3}
-    ATTRIBUTE_TEXTURE_MAP = {'flat':0, 'rough':1, 'smooth':2}
-    RELATION_MAP = {'above':0, 'left_of':1, 'inside':2, 'overlapping':3, 'touching':4, 'unrelated':5}
-    ALL_BONGARD_RULES = []  # Empty list for dummy rules
-    def augment_image(img): return img  # Dummy augment function
-    IMAGENET_MEAN = [0.5, 0.5, 0.5]  # For RGB images
-    IMAGENET_STD = [0.5, 0.5, 0.5]  # For RGB images
-    NUM_CHANNELS = 3  # Default to 3 channels
-    DATA_ROOT_PATH = "./data"
-    HAS_CONFIG = False
+
+# Import global configuration and Bongard rules from the project root (real logic only)
+from config import CONFIG, ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_COLOR_MAP, \
+                     ATTRIBUTE_FILL_MAP, ATTRIBUTE_SIZE_MAP, \
+                     ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_TEXTURE_MAP, \
+                     RELATION_MAP, IMAGENET_MEAN, IMAGENET_STD, NUM_CHANNELS, DATA_ROOT_PATH
+from src.bongard_rules import ALL_BONGARD_RULES  # Assuming bongard_rules.py is in src/
+from src.utils.augment import augment_image  # Import augmentation function
+HAS_CONFIG = True
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)

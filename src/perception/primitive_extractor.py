@@ -2,41 +2,26 @@
 def _invert_map(m):
     return {v: k for k, v in m.items()}
 
-try:
-    attribute_maps_inv = {
-        'shape': _invert_map(ATTRIBUTE_SHAPE_MAP),
-        'color': _invert_map(ATTRIBUTE_COLOR_MAP),
-        'fill': _invert_map(ATTRIBUTE_FILL_MAP),
-        'size': _invert_map(ATTRIBUTE_SIZE_MAP),
-        'orientation': _invert_map(ATTRIBUTE_ORIENTATION_MAP),
-        'texture': _invert_map(ATTRIBUTE_TEXTURE_MAP),
-    }
-except Exception:
-    # Fallback dummy mapping for dummy configs
-    attribute_maps_inv = {
-        'shape': {0: 'triangle', 1: 'quadrilateral', 2: 'circle', 3: 'polygon', 4: 'other'},
-        'color': {i: f'color_{i}' for i in range(7)},
-        'fill': {0: 'filled', 1: 'outlined'},
-        'size': {0: 'small', 1: 'medium', 2: 'large'},
-        'orientation': {i: f'orientation_{i}' for i in range(4)},
-        'texture': {0: 'solid', 1: 'striped'},
-    }
+attribute_maps_inv = {
+    'shape': _invert_map(ATTRIBUTE_SHAPE_MAP),
+    'color': _invert_map(ATTRIBUTE_COLOR_MAP),
+    'fill': _invert_map(ATTRIBUTE_FILL_MAP),
+    'size': _invert_map(ATTRIBUTE_SIZE_MAP),
+    'orientation': _invert_map(ATTRIBUTE_ORIENTATION_MAP),
+    'texture': _invert_map(ATTRIBUTE_TEXTURE_MAP),
+}
 
 # --- Expose a global MODEL for import (after all dependencies are defined) ---
-MODEL = None
-try:
-    from core_models.models import BongardPerceptionModel
-    from core_models.training_args import config as _config
-    _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    _model = BongardPerceptionModel().to(_device)
-    _model.load_state_dict(torch.load(_config.best_model_path, map_location=_device))
-    _model.eval()
-    MODEL = _model
-    DEVICE = _device
-except Exception as e:
-    import logging
-    logger = logging.getLogger(__name__)
-    logger.warning(f"Could not load BongardPerceptionModel: {e}")
+# Expose a global MODEL for import (after all dependencies are defined)
+from core_models.models import BongardPerceptionModel
+from core_models.training_args import config as _config
+import torch
+_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+_model = BongardPerceptionModel().to(_device)
+_model.load_state_dict(torch.load(_config.best_model_path, map_location=_device))
+_model.eval()
+MODEL = _model
+DEVICE = _device
 # Folder: bongard_solver/src/perception/
 # File: primitive_extractor.py
 
@@ -59,88 +44,12 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
  # Import global configuration and model components
 
-# --- MOVE THESE DEFINITIONS AFTER THE TRY/EXCEPT THAT DEFINES CONFIG AND ATTRIBUTE MAPS ---
-try:
-    from config import CONFIG, IMAGENET_MEAN, IMAGENET_STD, DEVICE
-    from config import ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_FILL_MAP
-    from config import ATTRIBUTE_SIZE_MAP, ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_TEXTURE_MAP
-    from core_models.models import BongardPerceptionModel, PerceptionModule   # Import both
-    from utils.augment import augment_image  # Import augment_image for TTA
-except ImportError as e:
-    logging.error(f"Failed to import from config or core_models.models: {e}. Using dummy values/classes.")
-    CONFIG = {
-        'model': {
-            'perception_model_path': None,   # Path to the BongardPerceptionModel checkpoint
-            'detection_confidence_threshold': 0.1,
-            'image_size': [224, 224],
-            'attribute_classifier_config': {   # Required for dummy PerceptionModule
-                'shape': 5, 'color': 7, 'size': 3, 'fill': 2, 'orientation': 4, 'texture': 2,
-                'mlp_dim': 256, 'head_dropout_prob': 0.3
-            },
-            'relation_gnn_config': {   # Required for dummy PerceptionModule
-                'hidden_dim': 256, 'num_relations': 11
-            },
-            'bongard_head_config': {   # Required for dummy PerceptionModule
-                'num_classes': 2, 'hidden_dim': 256
-            }
-        },
-        'data': {'image_size': [224, 224]}
-    }
-    IMAGENET_MEAN = [0.485, 0.456, 0.406]
-    IMAGENET_STD = [0.229, 0.224, 0.225]
-    DEVICE = torch.device('cpu')
 
-    # Dummy BongardPerceptionModel for fallback
-    class BongardPerceptionModel(nn.Module):
-        def __init__(self, num_classes: int = 4):
-            super().__init__()
-            logging.warning("Dummy BongardPerceptionModel used in primitive_extractor.")
-            self.linear = nn.Linear(3, num_classes)   # Dummy output
-            self.class_names = ['triangle', 'quadrilateral', 'filled', 'outlined']   # Example
-        def forward(self, x):
-            # Simulate a simple output based on random data
-            # Assumes input x is (B, C, H, W)
-            dummy_features = torch.randn(x.shape[0], 3)   # Dummy features
-            return self.linear(dummy_features)   # Logits
-    # Dummy PerceptionModule for fallback
-    class PerceptionModule(nn.Module):
-        def __init__(self, cfg):
-            super().__init__()
-            logging.warning("Dummy PerceptionModule used in primitive_extractor.")
-            self.cfg = cfg
-            # Simulate outputs expected by primitive_extractor's extract_cnn_features
-            # This dummy will return a dictionary with attribute logits
-            self.attribute_classifier_config = cfg['model']['attribute_classifier_config']
-            self.dummy_heads = nn.ModuleDict({
-                attr: nn.Linear(10, count) for attr, count in self.attribute_classifier_config.items()
-                if attr not in ['mlp_dim', 'head_dropout_prob']
-            })
-            self.dummy_bongard_head_output_dim = cfg['model']['bongard_head_config']['num_classes']
-        def forward(self, images, ground_truth_json_strings=None, detected_bboxes_batch=None, detected_masks_batch=None, support_images=None, support_labels_flat=None, is_simclr_pretraining=False):
-            # Simulate feature extraction
-            batch_size = images.shape[0]
-            # Dummy features (e.g., from a dummy backbone)
-            dummy_features = torch.randn(batch_size, 10, device=images.device)   # Dummy feature vector
-            
-            attribute_logits = {}
-            for attr_name, head in self.dummy_heads.items():
-                attribute_logits[attr_name] = head(dummy_features)
-            
-            # Dummy bongard_logits, relation_logits, etc.
-            bongard_logits = torch.randn(batch_size, self.dummy_bongard_head_output_dim, device=images.device)
-            relation_logits = torch.randn(batch_size * 2, self.cfg['model']['relation_gnn_config']['num_relations'], device=images.device)   # Assuming 2 relations per image
-            
-            return {
-                'bongard_logits': bongard_logits,
-                'attribute_logits': attribute_logits,
-                'relation_logits': relation_logits,
-                'attribute_features': dummy_features,
-                'global_graph_embeddings': torch.randn(batch_size, self.cfg['model']['relation_gnn_config']['hidden_dim'], device=images.device),
-                'scene_graphs': [{'objects': [], 'relations': []}] * batch_size,
-                'simclr_features': None,
-                'support_graph_embeddings': torch.randn(batch_size, self.cfg['model']['relation_gnn_config']['hidden_dim'], device=images.device)
-            }
-        
+from config import CONFIG, IMAGENET_MEAN, IMAGENET_STD, DEVICE
+from config import ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_FILL_MAP
+from config import ATTRIBUTE_SIZE_MAP, ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_TEXTURE_MAP
+from core_models.models import BongardPerceptionModel, PerceptionModule   # Import both
+from utils.augment import augment_image  # Import augment_image for TTA
 
 # --- Preprocessing transform for CNN input ---
 preprocess_transform = T.Compose([
