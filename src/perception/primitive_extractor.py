@@ -194,6 +194,7 @@ def single_inference(img_pil: Image.Image, model: Optional[nn.Module] = None) ->
         dummy_gts_json_strings = [b'{}']
         # Provide a full-image bbox so attribute_model sees an object
         H, W = input_tensor.shape[2:]
+        # full-image bbox as a (1,4) Tensor
         full_bbox = torch.tensor([[0, 0, W, H]], dtype=torch.float32, device=DEVICE)
         dummy_bboxes_batch = [full_bbox]
         # Full-mask covering the entire image
@@ -429,36 +430,25 @@ def extract_cnn_features(img_pil: Image.Image) -> Tuple[Dict[str, Tuple[str, flo
         return dummy, 0.0
 
 
-    # Build a list of tensors for TTA: original and (if available) augmented
-    crops_t = []
-    # Original
-    x0 = preprocess_transform(img_pil).to(DEVICE)
-    crops_t.append(x0)
-    # Augmented
+    # PIL-based TTA: always preprocess every crop identically
+    crops_pil = [img_pil]
     if augment_image:
         try:
-            aug_np = augment_image(img_pil)
-            logger.debug(f"augment_image → type={type(aug_np)}, shape={getattr(aug_np,'shape', None)}, dtype={getattr(aug_np,'dtype', None)}, strides={getattr(aug_np,'strides', None)}")
-            aug_np = np.ascontiguousarray(aug_np)
-            logger.debug(f"After ascontiguousarray: strides={aug_np.strides}")
-            aug_t = torch.from_numpy(aug_np)
-            logger.debug(f"torch.from_numpy → type={type(aug_t)}, shape={aug_t.shape}, dtype={aug_t.dtype}")
-            if aug_t.ndim == 3 and aug_t.shape[2] == 3:
-                aug_t = aug_t.permute(2, 0, 1)
-                logger.debug(f"Permuted to C×H×W: shape={aug_t.shape}")
-            aug_t = aug_t.float() / 255.0 if aug_t.max() > 1.5 else aug_t.float()
-            aug_t = T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)(aug_t)
-            aug_t = aug_t.to(DEVICE)
-            crops_t.append(aug_t)
+            aug_np = np.ascontiguousarray(augment_image(img_pil))
+            aug_pil = Image.fromarray(aug_np)
+            crops_pil.append(aug_pil)
         except Exception as e:
             logger.warning(f"TTA error: {e}. Skipping augmentation.")
 
-    # Stack all crops for batch inference
+    crops_t = [preprocess_transform(p).to(DEVICE) for p in crops_pil]
     inp = torch.stack(crops_t)  # B x C x H x W
     with torch.no_grad():
         dummy_gts_json_strings = [b'{}'] * inp.shape[0]
-        dummy_bboxes_batch = [torch.zeros(1, 4, dtype=torch.float32, device=DEVICE)] * inp.shape[0]
-        dummy_masks_batch = [torch.zeros(1, 1, inp.shape[2], inp.shape[3], dtype=torch.float32, device=DEVICE)] * inp.shape[0]
+        # Provide a full-image bbox as a (1,4) Tensor for each crop
+        H, W = inp.shape[2:]
+        full_bbox = torch.tensor([[0, 0, W, H]], dtype=torch.float32, device=DEVICE)
+        dummy_bboxes_batch = [full_bbox for _ in range(inp.shape[0])]
+        dummy_masks_batch = [torch.ones(1, 1, H, W, dtype=torch.float32, device=DEVICE) for _ in range(inp.shape[0])]
         model_output = MODEL(
             images=inp,
             ground_truth_json_strings=dummy_gts_json_strings,

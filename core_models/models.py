@@ -837,12 +837,22 @@ class PerceptionModule(nn.Module):
             
             # Prepare object crops for the attribute classifier
             object_crops_query = []
+            H, W = self.config.data.image_size if hasattr(self.config.data, 'image_size') else (224, 224)
             for bbox, mask in zip(current_image_bboxes, current_image_masks):
-                crop = get_masked_crop(image_np, mask, bbox)
+                # Ensure bbox is a flat [x1,y1,x2,y2] list of ints
+                if isinstance(bbox, torch.Tensor):
+                    b_list = bbox.flatten().cpu().long().tolist()
+                elif isinstance(bbox, (list, tuple)):
+                    b_list = [int(x) for x in bbox]
+                else:
+                    raise TypeError(f"Expected bbox Tensor/list/tuple, got {type(bbox)}")
+                if len(b_list) != 4:
+                    raise ValueError(f"Expected bbox of length 4, got {b_list}")
+                crop = get_masked_crop(image_np, mask, b_list, target_size=(H, W))
                 # Apply same normalization as training data
                 crop_tensor = T.Compose([
                     T.ToPILImage(), # Convert numpy to PIL for torchvision transforms
-                    T.Resize((self.config.data.image_size, self.config.data.image_size)),
+                    T.Resize((H, W)),
                     T.ToTensor(),
                     T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
                 ])(crop).to(DEVICE)
@@ -938,10 +948,16 @@ class PerceptionModule(nn.Module):
                         
                         if s_filtered_bboxes_from_sg:
                             for s_bbox, s_mask in zip(s_filtered_bboxes_from_sg, s_filtered_masks_from_sg):
-                                s_crop = get_masked_crop(s_img_np, s_mask, s_bbox)
+                                H, W = self.config.data.image_size if hasattr(self.config.data, 'image_size') else (224, 224)
+                                # ensure bbox is a flat [x1,y1,x2,y2] list of ints
+                                if isinstance(s_bbox, torch.Tensor):
+                                    sb = s_bbox.flatten().cpu().int().tolist()
+                                else:
+                                    sb = list(s_bbox)
+                                s_crop = get_masked_crop(s_img_np, s_mask, sb, target_size=(H, W))
                                 s_crop_tensor = T.Compose([
                                     T.ToPILImage(),
-                                    T.Resize((self.config.data.image_size, self.config.data.image_size)),
+                                    T.Resize((H, W)),
                                     T.ToTensor(),
                                     T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
                                 ])(s_crop).to(DEVICE)
