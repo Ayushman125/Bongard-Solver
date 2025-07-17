@@ -42,7 +42,7 @@ def build_synth_holdout(n=config.synth_holdout_count, cache_path="synth_holdout.
         labels = arr['labels'].tolist()
         return imgs, labels
     logger.info(f"Generating {n} synthetic holdout samples...")
-    gen = LogoGenerator(size=config.img_size, bg_textures_dir=config.textures_dir)
+    gen = LogoGenerator(config, config.textures_dir)
     imgs, labels = [], []
     for _ in tqdm(range(n), desc="Synth Holdout Generation"):
         feat, val = gen.sample_rule()
