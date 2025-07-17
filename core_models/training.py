@@ -479,7 +479,15 @@ def train_perception_with_buffer(
             - List of true validation labels (flattened).
             - Dictionary of best validation metrics.
     """
-    set_seed(cfg['training']['seed']) # Use a different seed for each member
+    # Support both dict and Config object
+    if hasattr(cfg, 'training') and hasattr(cfg.training, 'seed'):
+        set_seed(cfg.training.seed)
+        num_epochs = cfg.training.epochs
+    elif isinstance(cfg, dict) and 'training' in cfg and 'seed' in cfg['training']:
+        set_seed(cfg['training']['seed'])
+        num_epochs = cfg['training']['epochs']
+    else:
+        raise ValueError("Config object must have 'training.seed' or dict['training']['seed']")
 
     # Initialize data module and loaders
     dm = BongardDataModule(cfg)
@@ -492,12 +500,14 @@ def train_perception_with_buffer(
         model = DDP(model, device_ids=[current_rank], output_device=current_rank, find_unused_parameters=False)
 
     # Initialize optimizer and scheduler using centralized functions
-    optimizer = get_optimizer(model.parameters(), cfg['training'])
-
-    # total_steps is needed for OneCycleLR
-    num_epochs = cfg['training']['epochs']
-    total_steps = num_epochs * len(train_loader)
-    scheduler = get_scheduler(optimizer, cfg['training'], total_steps)
+    if hasattr(cfg, 'training'):
+        optimizer = get_optimizer(model.parameters(), cfg.training)
+        total_steps = num_epochs * len(train_loader)
+        scheduler = get_scheduler(optimizer, cfg.training, total_steps)
+    else:
+        optimizer = get_optimizer(model.parameters(), cfg['training'])
+        total_steps = num_epochs * len(train_loader)
+        scheduler = get_scheduler(optimizer, cfg['training'], total_steps)
 
     scaler = GradScaler() if cfg['training']['use_amp'] else None
 

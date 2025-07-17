@@ -1,10 +1,18 @@
 
+import sys, os
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 # --- Import config and attribute maps first ---
-from config import (
-    ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_FILL_MAP,
-    ATTRIBUTE_SIZE_MAP, ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_TEXTURE_MAP,
-    CONFIG, IMAGENET_MEAN, IMAGENET_STD, DEVICE
-)
+try:
+    from config import (
+        ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_FILL_MAP,
+        ATTRIBUTE_SIZE_MAP, ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_TEXTURE_MAP,
+        CONFIG, IMAGENET_MEAN, IMAGENET_STD, DEVICE
+    )
+except ImportError as e:
+    print(f"Error importing config: {e}")
+    raise
 
 # --- Inverse attribute maps for index-to-name mapping ---
 def _invert_map(m):
@@ -19,15 +27,20 @@ attribute_maps_inv = {
     'texture': _invert_map(ATTRIBUTE_TEXTURE_MAP),
 }
 
+
 # --- Expose a global MODEL for import (after all dependencies are defined) ---
-# Expose a global MODEL for import (after all dependencies are defined)
 import torch
-from core_models.models import BongardPerceptionModel
-from core_models.training_args import Config
-_config = Config()
-_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-MODEL = None
-DEVICE = _device
+try:
+    from core_models.models import BongardPerceptionModel
+    from core_models.training_args import Config
+    _config = Config()
+    _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    MODEL = None
+    DEVICE = _device
+except ImportError as e:
+    print(f"Error importing core_models: {e}")
+    print("Make sure the src directory is in your Python path")
+    raise
 
 def load_model():
     global MODEL
@@ -62,7 +75,10 @@ from config import CONFIG, IMAGENET_MEAN, IMAGENET_STD, DEVICE
 from config import ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_FILL_MAP
 from config import ATTRIBUTE_SIZE_MAP, ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_TEXTURE_MAP
 from core_models.models import BongardPerceptionModel, PerceptionModule   # Import both
-from utils.augment import augment_image  # Import augment_image for TTA
+try:
+    from utils.augment import augment_image  # Import augment_image for TTA
+except ImportError:
+    logger.warning("utils.augment not found, TTA functionality may be limited")
 
 # --- Preprocessing transform for CNN input ---
 preprocess_transform = T.Compose([
