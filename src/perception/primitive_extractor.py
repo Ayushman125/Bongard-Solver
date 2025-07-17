@@ -105,20 +105,52 @@ TTA_PIL = transforms.Compose([
 ])
 
 # --- Model import and global instance ---
+
+# --- Model import and global instance ---
 # This block attempts to initialize the PerceptionModule only if it was successfully imported
-# and CONFIG is available.
+# and CONFIG is available. The global MODEL is only set by explicit loader calls.
 MODEL = None
 if PerceptionModule is not None and CONFIG is not None:
     try:
-        # Ensure CONFIG is a dict and pass as keyword arguments if needed
         _model = PerceptionModule(CONFIG).to(DEVICE)
-        _model.eval() # Set the model to evaluation mode
+        _model.eval()
         MODEL = _model
         logger.info("PerceptionModule initialized successfully.")
     except Exception as e:
         logger.error(f"Failed to initialize PerceptionModule: {e}. CNN inference will not be available.")
 else:
     logger.warning("PerceptionModule or CONFIG not available due to import errors. CNN inference will not be available.")
+
+
+# --- Explicit model loader for fine-tuning or evaluation ---
+def initialize_perception_model(checkpoint_path: str, device: torch.device, config: dict = None) -> Optional[nn.Module]:
+    """
+    Loads a PerceptionModule from a checkpoint for fine-tuning or evaluation.
+    Sets the global MODEL for use by extract_cnn_features, etc.
+    Args:
+        checkpoint_path (str): Path to the model checkpoint (.pth file)
+        device (torch.device): Device to load the model onto
+        config (dict, optional): Config dict. If None, uses global CONFIG.
+    Returns:
+        nn.Module or None: The loaded PerceptionModule, or None if failed.
+    """
+    global MODEL
+    if config is None:
+        config = CONFIG
+    if PerceptionModule is None or config is None:
+        logger.error("Cannot initialize PerceptionModule: missing class or config.")
+        return None
+    try:
+        model = PerceptionModule(config).to(device)
+        state = torch.load(checkpoint_path, map_location=device)
+        model.load_state_dict(state)
+        model.eval()
+        MODEL = model
+        logger.info(f"PerceptionModule loaded from {checkpoint_path}")
+        return model
+    except Exception as e:
+        logger.error(f"Failed to load PerceptionModule from {checkpoint_path}: {e}")
+        return None
 
 
 def load_perception_model() -> nn.Module:

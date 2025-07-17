@@ -154,24 +154,51 @@ def plot_calibration(x, y, title):
 
 
 def online_finetune_test(imgs, labels):
-    from core_models.replay_buffer import ReplayBuffer
-    # Ensure MODEL is loaded
-    model = load_perception_model()
+    # Why You’re Seeing 100% “Fine-Tune” Accuracy
+    # Your online fine-tune routine currently does this:
+    # 1. Takes the same 100 synthetic images and labels for both training and testing.
+    # 2. Measures “pre-fine-tune” accuracy on those 100 → a perfect 100% (they’re synthetic and your model already overfits them).
+    # 3. Fine-tunes on them → of course it remains 100%.
+    # Whenever you train and test on identical data, you’ll trivially hit 100% accuracy.
+    #
+    # How to Fix: Introduce a Proper Train/Test Split
+    # 1. Hold out a test subset that the model never sees during fine-tuning.
+    # 2. Evaluate “pre” and “post” on that held-out set.
+
+    from src.perception.primitive_extractor import initialize_perception_model
+    # Use the last checkpoint for fine-tuning
+    ckpt_path = config['phase1']['last_model_path']
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = initialize_perception_model(ckpt_path, device, config)
     if model is None:
         raise RuntimeError("PerceptionModel failed to load—cannot fine-tune")
-    buffer = ReplayBuffer(capacity=len(imgs))
+
+    # Split: train on first n_train, test on the rest (up to 100)
+    n_train = 80
+    train_imgs = imgs[:n_train]
+    train_lbls = labels[:n_train]
+    test_imgs  = imgs[n_train:100]
+    test_lbls  = labels[n_train:100]
+
+    # Evaluate on held-out test set before fine-tuning
+    logger.info(f"Evaluating before fine-tuning on {len(test_imgs)} held-out samples...")
+    pre_acc, *_ = eval_set(test_imgs, test_lbls)
+
+    # Fine-tune on the training set
+    from core_models.replay_buffer import ReplayBuffer
+    buffer = ReplayBuffer(capacity=len(train_imgs))
     logger.info("Preparing buffer for online fine-tuning...")
-    for img, lbl in tqdm(list(zip(imgs, labels)), desc="Buffering", leave=False):
+    for img, lbl in tqdm(list(zip(train_imgs, train_lbls)), desc="Buffering", leave=False):
         buffer.push(to_tensor(img), lbl)
-    logger.info("Evaluating before fine-tuning...")
-    pre_acc, *_ = eval_set(imgs, labels)
     logger.info("Starting online fine-tuning...")
     start = time.time()
     fine_tune_perception(model, buffer, config)
     dur = time.time() - start
     logger.info(f"Fine-tuning completed in {dur:.1f}s")
-    logger.info("Evaluating after fine-tuning...")
-    post_acc, *_ = eval_set(imgs, labels)
+
+    # Evaluate on held-out test set after fine-tuning
+    logger.info(f"Evaluating after fine-tuning on {len(test_imgs)} held-out samples...")
+    post_acc, *_ = eval_set(test_imgs, test_lbls)
     return pre_acc, post_acc, dur
 
 
