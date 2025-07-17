@@ -1,13 +1,3 @@
-@dataclass
-class FewShotConfig:
-    enable: bool = False
-    # Add more few-shot parameters as needed, e.g.:
-    # support_shots: int = 5
-
-# Folder: bongard_solver/core_models/
-# File: training_args.py
-
-
 from dataclasses import dataclass, field
 import dataclasses
 import os
@@ -18,6 +8,12 @@ import torchvision.transforms as T # For mo_transform
 from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger(__name__)
+
+@dataclass
+class FewShotConfig:
+    enable: bool = False
+    # Add more few-shot parameters as needed, e.g.:
+    # support_shots: int = 5
 
 @dataclass
 class ModelConfig:

@@ -1074,7 +1074,8 @@ class LitBongard(pl.LightningModule):
         elif cfg.few_shot.enable and self.perception_module.attribute_model.feature_dim == self.perception_module.gnn_module.hidden_dim:
             logger.info("Prototypical Network: Feature dim matches GNN hidden dim. No prototype projection needed.")
         
-        self.save_hyperparameters(cfg) # Save config as hyperparameters
+        import dataclasses
+        self.save_hyperparameters(dataclasses.asdict(cfg)) # Save config as hyperparameters
         logger.info("LitBongard initialized.")
 
     def forward(self, images: torch.Tensor, ground_truth_json_strings: List[bytes], detected_bboxes_batch: List[List[List[float]]], detected_masks_batch: List[List[np.ndarray]], support_images: torch.Tensor = None, support_labels_flat: torch.Tensor = None, is_simclr_pretraining: bool = False) -> Dict[str, Any]:
@@ -1562,7 +1563,8 @@ class LitSimCLR(pl.LightningModule):
             self.use_moco = False
         
         self.criterion = NTXentLoss(temperature=self.temperature)
-        self.save_hyperparameters(cfg)
+        import dataclasses
+        self.save_hyperparameters(dataclasses.asdict(cfg))
         logger.info("LitSimCLR initialized.")
 
     def forward(self, x: torch.Tensor, x_k: Optional[torch.Tensor] = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:

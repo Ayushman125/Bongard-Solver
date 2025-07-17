@@ -129,9 +129,9 @@ def get_optimizer(model_or_params: Union[nn.Module, Any], config: Dict[str, Any]
     # Extract parameters from model if a model is passed
     params = model_or_params.parameters() if isinstance(model_or_params, nn.Module) else model_or_params
 
-    optimizer_name = config['optimizer']
-    learning_rate = config['learning_rate']
-    weight_decay = config.get('weight_decay', 0.0)
+    optimizer_name = config.optimizer
+    learning_rate = config.learning_rate
+    weight_decay = getattr(config, 'weight_decay', 0.0)
     
     optimizer = None
     if optimizer_name == 'AdamW':
@@ -160,7 +160,7 @@ def get_optimizer(model_or_params: Union[nn.Module, Any], config: Dict[str, Any]
         if SAM is not None:
             # SAM wraps a base optimizer, pass weight_decay to base_optimizer
             base_optimizer = optim.AdamW(params, lr=learning_rate, weight_decay=weight_decay)
-            optimizer = SAM(params, base_optimizer, rho=config.get('sam_rho', 0.05))
+            optimizer = SAM(params, base_optimizer, rho=getattr(config, 'sam_rho', 0.05))
         else:
             logger.warning("SAM optimizer is not available. Falling back to AdamW.")
             optimizer = optim.AdamW(params, lr=learning_rate, weight_decay=weight_decay)
@@ -184,8 +184,8 @@ def get_scheduler(optimizer: optim.Optimizer, config: Dict[str, Any], total_step
     Returns:
         Optional[torch.optim.lr_scheduler._LRScheduler]: The initialized scheduler, or None if no scheduler.
     """
-    scheduler_name = config.get('scheduler', 'None')
-    scheduler_config = config.get('scheduler_config', {})
+    scheduler_name = getattr(config, 'scheduler', 'None')
+    scheduler_config = getattr(config, 'scheduler_config', {})
     
     scheduler = None
     if scheduler_name == 'OneCycleLR':
@@ -232,7 +232,7 @@ def get_scheduler(optimizer: optim.Optimizer, config: Dict[str, Any], total_step
 def get_attention_layer(cfg: Dict[str, Any]) -> nn.Module:
     """
     Returns an attention layer based on the configuration.
-    Supports standard MultiheadAttention, PerformerSelfAttention, and NystromAttention.
+            T_max=config.epochs,
     Args:
         cfg (Dict[str, Any]): The configuration dictionary, specifically for 'attn' and 'model' settings.
     Returns:
