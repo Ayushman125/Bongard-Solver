@@ -10,10 +10,11 @@ import torch.nn as nn
 import torchvision.transforms as T
 from torchvision import transforms
 
-# Robust TTA transform for PIL images
-TTA_TRANSFORM = transforms.Compose([
+
+# Robust PIL-based TTA transform (PIL in, PIL out)
+TTA_PIL = transforms.Compose([
     transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),
-    transforms.RandomHorizontalFlip(p=0.5),
+    transforms.RandomHorizontalFlip(0.5),
     transforms.ColorJitter(brightness=0.2, contrast=0.2),
 ])
 from typing import Tuple, Dict, Any, Optional, List
@@ -474,15 +475,13 @@ def extract_cnn_features(img_pil: Image.Image) -> Tuple[Dict[str, Tuple[str, flo
         dummy = {t: (f"unknown_{t}", 0.0) for t in attribute_maps_inv}
         return dummy, 0.0
 
-    # Robust TTA using torchvision transforms
+    # PIL-based TTA: all transforms are PIL in, PIL out
     crops_pil = [img_pil]
     try:
-        tta_img = TTA_TRANSFORM(img_pil)
-        # TTA_TRANSFORM produces a Tensor (C, H, W); convert back to PIL for pipeline
-        tta_pil = transforms.ToPILImage()(tta_img)
-        crops_pil.append(tta_pil)
+        aug_pil = TTA_PIL(img_pil)  # returns PIL.Image.Image
+        crops_pil.append(aug_pil)
     except Exception as e:
-        logger.warning(f"TTA error during torchvision augmentation: {e}. Skipping augmentation.")
+        logger.warning(f"TTA error during PIL-based augmentation: {e}. Skipping augmentation.")
 
     crops_t = [preprocess_transform(p).to(DEVICE) for p in crops_pil]
     inp = torch.stack(crops_t, dim=0)  # B x C x H x W
