@@ -441,7 +441,7 @@ class AttributeClassifier(nn.Module):
         # This is a bit tricky with `features_only=True` and sequential models.
         # A robust implementation would apply DropPath within the backbone's blocks.
         # For a simple sequential backbone, we apply it once at the end of the trunk.
-        if self.config['model'].get('use_stochastic_depth', False) and HAS_DROPPATH and self.drop_paths:
+        if self.config.model.get('use_stochastic_depth', False) and HAS_DROPPATH and self.drop_paths:
             # Applying the last drop_path layer for simplicity here.
             # In a real model, it would be applied within the backbone's layers.
             x = self.drop_paths[-1](x) + x # Residual connection for DropPath
