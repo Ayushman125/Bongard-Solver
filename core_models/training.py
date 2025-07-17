@@ -1,4 +1,5 @@
 from pathlib import Path
+from src import utils
 # --- Helper functions ---
 def ensure_dir(path):
     Path(path).mkdir(parents=True, exist_ok=True)
@@ -257,8 +258,8 @@ def _get_ensemble_teacher_logits(
     raw_gt_json_strings: List[bytes],
     raw_support_images_np: List[np.ndarray],
     distillation_config: Dict[str, Any],
-    dali_image_processor: Any = None,  # DALI processor from datamodule
     config: Dict[str, Any], # Pass the full config here
+    dali_image_processor: Any = None,  # DALI processor from datamodule
     detected_bboxes_batch: Optional[List[List[List[float]]]] = None,
     detected_masks_batch: Optional[List[List[np.ndarray]]] = None,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:

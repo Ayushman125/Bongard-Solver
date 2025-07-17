@@ -12,7 +12,7 @@ from collections import Counter  # For TTA majority vote
 
 # Import global configuration and model components
 try:
-    from config import CONFIG, IMAGENET_MEAN, IMAGENET_STD, DEVICE, YOLO_CLASS_MAP, \
+from config import CONFIG, IMAGENET_MEAN, IMAGENET_STD, DEVICE, \
                          ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_FILL_MAP, \
                          ATTRIBUTE_SIZE_MAP, ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_TEXTURE_MAP
     from core_models.models import BongardPerceptionModel, PerceptionModule   # Import both
@@ -40,7 +40,7 @@ except ImportError as e:
     IMAGENET_MEAN = [0.485, 0.456, 0.406]
     IMAGENET_STD = [0.229, 0.224, 0.225]
     DEVICE = torch.device('cpu')
-    YOLO_CLASS_MAP = {0: 'circle', 1: 'square', 2: 'triangle', 3: 'pentagon', 4: 'star', 5: 'text_character'}   # Dummy map
+
     # Dummy BongardPerceptionModel for fallback
     class BongardPerceptionModel(nn.Module):
         def __init__(self, num_classes: int = 4):
@@ -123,7 +123,8 @@ preprocess_transform = T.Compose([
 
 
 # --- PHASE 1 HARNESS: Expose MODEL, single_inference, and TTA extract_cnn_feature ---
-from core_models.training_args import config
+from core_models.training_args import Config
+config = Config()
 import torch
 MODEL = BongardPerceptionModel().to(config.device)
 import os

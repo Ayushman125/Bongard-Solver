@@ -16,10 +16,10 @@ logger = logging.getLogger(__name__)
 
 # Import configuration
 try:
-    from config import CONFIG, YOLO_CLASS_MAP
+    from config import CONFIG
 except ImportError:
-    logger.error("Could not import CONFIG or YOLO_CLASS_MAP from config.py. SceneGraphBuilder will use default values.")
-    CONFIG = {'model': {'yolo_conf_threshold': 0.25, 'yolo_iou_threshold': 0.7, 'object_detector_model_path': 'yolov8n.pt'},
+    logger.error("Could not import CONFIG from config.py. SceneGraphBuilder will use default values.")
+    CONFIG = {'model': {},
               'segmentation': {'use_sam': False, 'sam_model_type': 'vit_b', 'sam_checkpoint_path': '', 'sam_points_per_side': 32, 'sam_pred_iou_thresh': 0.88},
               'debug': {'max_fallback_cnt': 5, 'min_contour_area_sam_fallback': 50},
               'use_cnn_features': True, # Default to True for primitive_extractor
@@ -28,7 +28,6 @@ except ImportError:
              },
              'data': {'image_size': [224, 224]} # Default image size
             }
-    YOLO_CLASS_MAP = {0: "object"}
 
 # Import primitive_extractor for attribute extraction with confidence
 try:
@@ -50,24 +49,7 @@ try:
 except ImportError:
     logger.warning("Segment Anything Model (SAM) not found. SAM segmentation will be disabled in SceneGraphBuilder.")
 
-# Import Ultralytics YOLO for object detection
-HAS_ULTRALYTICS = False
-try:
-    from ultralytics import YOLO as RealYOLO # Import RealYOLO from ultralytics
-    HAS_ULTRALYTICS = True
-    logger.info("Ultralytics YOLO found and enabled for SceneGraphBuilder.")
-except ImportError:
-    logger.warning("Ultralytics YOLO not found. YOLO detection will be disabled in SceneGraphBuilder.")
-    class RealYOLO: # Dummy YOLO class
-        def __init__(self, model_path): self.model_path = model_path
-        def __call__(self, img, conf=0.25, iou=0.7, verbose=False, augment=False):
-            class DummyBoxes:
-                def __init__(self): self.conf = torch.tensor([]); self.cls = torch.tensor([]); self.xyxy = torch.tensor([])
-                def __len__(self): return 0
-            class DummyResult:
-                def __init__(self): self.boxes = DummyBoxes(); self.masks = None
-                def plot(self, *args, **kwargs): return np.zeros((100,100,3), dtype=np.uint8)
-            return [DummyResult()]
+
 
 # --- Helper Functions for Mask Processing (from symbolic_fusion.py) ---
 def _mask_to_bbox(mask: np.ndarray) -> list:
@@ -266,32 +248,18 @@ def _cluster_by_proximity(G: nx.Graph, threshold: float = 50.0) -> dict:
 # --- Object Detection/Segmentation ---
 class ObjectDetector:
     """
-    Handles object detection using either YOLO or a classical CV fallback.
-    Can optionally integrate SAM for instance segmentation.
+    Handles object detection using SAM (if available) or a classical CV fallback.
     """
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.use_sam = config['segmentation']['use_sam'] and HAS_SAM_SEG
-        self.use_yolo = config['model'].get('use_yolo', True) and HAS_ULTRALYTICS # Default to YOLO if available
-        
-        self.yolo_model = None
         self.sam_predictor = None
         self.sam_mask_generator = None
-        
-        if self.use_yolo:
-            try:
-                self.yolo_model = RealYOLO(self.config['model']['object_detector_model_path'])
-                logger.info(f"YOLO model loaded from {self.config['model']['object_detector_model_path']}")
-            except Exception as e:
-                logger.error(f"Failed to load YOLO model: {e}. Disabling YOLO.")
-                self.use_yolo = False
-        
         if self.use_sam:
             try:
                 sam_checkpoint = self.config['segmentation']['sam_checkpoint_path']
                 model_type = self.config['segmentation']['sam_model_type']
                 device = "cuda" if torch.cuda.is_available() else "cpu"
-                
                 sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
                 sam.to(device=device)
                 self.sam_predictor = SamPredictor(sam)
@@ -304,108 +272,58 @@ class ObjectDetector:
             except Exception as e:
                 logger.error(f"Failed to load SAM model: {e}. Disabling SAM segmentation.")
                 self.use_sam = False
-        
         # Classical CV fallback parameters
         self.min_contour_area_ratio = self.config['debug'].get('min_contour_area_sam_fallback', 50) / (CONFIG['data']['image_size'][0] * CONFIG['data']['image_size'][1]) # Convert to ratio
         self.max_fallback_cnt = self.config['debug'].get('max_fallback_cnt', 5)
-        logger.info(f"ObjectDetector initialized. Use SAM: {self.use_sam}, Use YOLO: {self.use_yolo}")
+        logger.info(f"ObjectDetector initialized. Use SAM: {self.use_sam}")
 
     def detect_and_segment(self, image_np: np.ndarray) -> List[Dict[str, Any]]:
         """
-        Detects objects and generates masks. Prioritizes SAM, then YOLO, then CV fallback.
+        Detects objects and generates masks. Prioritizes SAM, then CV fallback.
         Returns a list of dictionaries, each with 'bbox', 'mask', 'label', 'confidence'.
         """
         if image_np is None or image_np.size == 0:
             logger.warning("Input image is empty or None for object detection.")
             return []
-        
-        image_pil = Image.fromarray(image_np)
         detections = []
-
         if self.use_sam:
             logger.debug("Attempting SAM automatic mask generation.")
             try:
                 sam_results = self.sam_mask_generator.generate(image_np)
                 for mask_data in sam_results:
-                    # SAM returns masks as bool, convert to uint8
                     mask = mask_data['segmentation'].astype(np.uint8) * 255
                     bbox = mask_data['bbox'] # xywh format
-                    # Convert bbox from xywh to xyxy
                     bbox_xyxy = [bbox[0], bbox[1], bbox[0]+bbox[2], bbox[1]+bbox[3]]
                     detections.append({
                         'bbox': bbox_xyxy,
                         'mask': mask,
-                        'label': 'object', # SAM doesn't classify, so generic 'object'
-                        'confidence': mask_data.get('stability_score', 1.0) # Use stability score as confidence
+                        'label': 'object',
+                        'confidence': mask_data.get('stability_score', 1.0)
                     })
                 logger.info(f"SAM detected {len(detections)} objects.")
                 if detections: return detections
             except Exception as e:
-                logger.error(f"Error during SAM mask generation: {e}. Falling back to YOLO/CV.", exc_info=True)
-                self.use_sam = False # Disable SAM for current run if it fails
-
-        if self.use_yolo:
-            logger.debug("Attempting YOLO detection.")
-            try:
-                # YOLO expects PIL Image or numpy array (RGB)
-                yolo_results = self.yolo_model(image_pil, 
-                                                conf=self.config['model']['yolo_conf_threshold'], 
-                                                iou=self.config['model']['yolo_iou_threshold'],
-                                                verbose=False,
-                                                augment=self.config['model'].get('yolo_augment', False)) # Use YOLO TTA
-                
-                for r in yolo_results:
-                    if r.boxes:
-                        for i in range(len(r.boxes)):
-                            bbox_xyxy = r.boxes.xyxy[i].cpu().numpy().astype(int).tolist()
-                            confidence = r.boxes.conf[i].item()
-                            class_id = int(r.boxes.cls[i].item())
-                            label = YOLO_CLASS_MAP.get(class_id, f"class_{class_id}")
-                            
-                            mask = None
-                            if r.masks is not None:
-                                # YOLO masks are typically (N, H, W) float tensors
-                                # Convert to binary numpy array (H, W)
-                                mask_tensor = r.masks.data[i].cpu().numpy() # This is already H,W
-                                mask = (mask_tensor > 0.5).astype(np.uint8) * 255 # Threshold and convert to 0/255
-                            
-                            detections.append({
-                                'bbox': bbox_xyxy,
-                                'mask': mask, # Can be None if no mask predicted
-                                'label': label,
-                                'confidence': confidence
-                            })
-                logger.info(f"YOLO detected {len(detections)} objects.")
-                # Filter out detections with very low confidence, even if YOLO returned them
-                detections = [d for d in detections if d['confidence'] >= self.config['model']['detection_confidence_threshold']]
-                if detections: return detections
-            except Exception as e:
-                logger.error(f"Error during YOLO detection: {e}. Falling back to classical CV.", exc_info=True)
-                self.use_yolo = False # Disable YOLO for current run if it fails
-
+                logger.error(f"Error during SAM mask generation: {e}. Falling back to CV.", exc_info=True)
+                self.use_sam = False
         logger.info("Falling back to Classical CV (contour detection) for objects.")
-        # Classical CV fallback
         gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
         _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Sort contours by area in descending order and take top N
         contours = sorted(contours, key=cv2.contourArea, reverse=True)[:self.max_fallback_cnt]
         image_area = image_np.shape[0] * image_np.shape[1]
-        
         for contour in contours:
             area = cv2.contourArea(contour)
             if area > image_area * self.min_contour_area_ratio:
                 mask = np.zeros(image_np.shape[:2], dtype=np.uint8)
                 cv2.drawContours(mask, [contour], -1, 255, cv2.FILLED)
                 bbox_xyxy = cv2.boundingRect(contour) # xywh
-                bbox_xyxy = [bbox_xyxy[0], bbox_xyxy[1], bbox_xyxy[0]+bbox_xyxy[2], bbox_xyxy[1]+bbox_xyxy[3]] # Convert to xyxy
+                bbox_xyxy = [bbox_xyxy[0], bbox_xyxy[1], bbox_xyxy[0]+bbox_xyxy[2], bbox_xyxy[1]+bbox_xyxy[3]]
                 detections.append({
                     'bbox': bbox_xyxy,
-                    'mask': (mask > 0).astype(np.uint8) * 255, # Binary 0/255 mask
-                    'label': 'object_cv', # Label for CV detected objects
-                    'confidence': area / image_area # Use area ratio as confidence
+                    'mask': (mask > 0).astype(np.uint8) * 255,
+                    'label': 'object_cv',
+                    'confidence': area / image_area
                 })
         logger.info(f"Classical CV detected {len(detections)} objects.")
         return detections

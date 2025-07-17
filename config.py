@@ -473,10 +473,13 @@ def load_config(config_path: str = 'config.yaml') -> Dict[str, Any]:
     return CONFIG
 
 # Argument parsing and initial config loading
+
 parser = argparse.ArgumentParser(description="Bongard Problem Phase 1: Advanced Perception Module")
 parser.add_argument('--config', type=str, default=None, help='Path to a YAML configuration file.')
 args, unknown = parser.parse_known_args()
-CONFIG = load_config(args.config)
+# Fix: Use default config path if args.config is None
+config_path = args.config if args.config is not None else 'config.yaml'
+CONFIG = load_config(config_path)
 
 # --- CRITICAL: Force Memory-Optimized CONFIG Values for 4GB GPU ---
 # These values will override anything set in a config file or elsewhere,
