@@ -515,7 +515,6 @@ class LogoGenerator(Dataset):
         """Draw positives, negatives, and return gt_rule string."""
         gt_rule = f"{rule_feat.upper()}({rule_val.upper()})"
         positives, negatives = [], []
-        rule_obj = self.sample_rule()
         for _ in range(self.num_positive_examples):
             outputs = self.make_problem(random.randint(0, 10000))
             img_np = outputs[0]  # first item is positive image

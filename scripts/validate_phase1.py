@@ -1,6 +1,8 @@
 import sys
 import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# Ensure repo root is on sys.path so 'data' is importable
+ROOT = os.path.dirname(os.path.dirname(__file__))
+sys.path.insert(0, ROOT)
 
 #!/usr/bin/env python3
 
@@ -16,7 +18,7 @@ from sklearn.calibration import calibration_curve
 import torch
 from torchvision.transforms.functional import to_tensor
 
-from data.generator import LogoGenerator
+from src.data.generator import LogoGenerator
 from src.perception.primitive_extractor import extract_cnn_feature, MODEL
 from core_models.training import fine_tune_perception
 from core_models.training_args import Config
