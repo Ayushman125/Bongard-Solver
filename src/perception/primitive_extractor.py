@@ -10,11 +10,11 @@ import torchvision.transforms as T
 from typing import Tuple, Dict, Any, Optional, List
 from collections import Counter  # For TTA majority vote
 
-# Import global configuration and model components
+ # Import global configuration and model components
 try:
-from config import CONFIG, IMAGENET_MEAN, IMAGENET_STD, DEVICE, \
-                         ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_FILL_MAP, \
-                         ATTRIBUTE_SIZE_MAP, ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_TEXTURE_MAP
+    from config import CONFIG, IMAGENET_MEAN, IMAGENET_STD, DEVICE
+    from config import ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_FILL_MAP
+    from config import ATTRIBUTE_SIZE_MAP, ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_TEXTURE_MAP
     from core_models.models import BongardPerceptionModel, PerceptionModule   # Import both
     from utils.augment import augment_image  # Import augment_image for TTA
 except ImportError as e:

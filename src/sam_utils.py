@@ -1,126 +1,120 @@
-
-# Conditional imports for SAM
 import os
+import logging
+from typing import List, Tuple, Dict, Any, Optional
+import numpy as np
+import cv2
+import torch
+import torch.nn.functional as F # Added for F.interpolate
 
-# Conditional imports for YOLO and SAM
+logger = logging.getLogger(__name__)
+
+# Try to import SAM
+HAS_SAM = False
 try:
-    from ultralytics import YOLO
-    HAS_YOLO = True
-    logger.info("Ultralytics YOLO found and enabled.")
-except ImportError:
-    logger.warning("Ultralytics YOLO not found. Object detection will be dummy.")
-    HAS_YOLO = False
-    from segment_anything import sam_model_registry, SamPredictor
+    from segment_anything import sam_model_registry, SamAutomaticMaskGenerator, SamPredictor # Added SamPredictor for consistency
     HAS_SAM = True
-    global _yolo_model, _sam_predictor
+except ImportError:
+    HAS_SAM = False
+    logger.warning("Segment Anything Model (SAM) not found. Only classical CV fallback will be used.")
 
-    if _yolo_model is None and HAS_YOLO:
-        try:
-            _yolo_model = YOLO(yolo_model_name)
-            _yolo_model.to(device)
-            logger.info(f"YOLO model '{yolo_model_name}' loaded successfully on {device}.")
-        except Exception as e:
-            logger.error(f"Failed to load YOLO model '{yolo_model_name}': {e}")
-            _yolo_model = None
+# Import configuration (if needed by this file, otherwise remove)
+try:
+    from config import CONFIG
+except ImportError:
+    logger.warning("Could not import CONFIG from config.py. Using default values for SAM/CV parameters.")
+    CONFIG = {
+        'segmentation': {'sam_model_type': 'vit_b', 'sam_checkpoint_path': ''},
+        'debug': {'min_contour_area_sam_fallback': 50} # Placeholder if needed
+    }
 
-    if _sam_predictor is None and HAS_SAM:
-        try:
-            if not os.path.exists(sam_checkpoint_path):
-                logger.error(f"SAM checkpoint not found at {sam_checkpoint_path}. Please download it.")
 
-        # Prepare object for scene graph
-    image_np: np.ndarray,
-    max_objects: int = 10
-) -> Tuple[List[List[float]], List[np.ndarray], List[Dict[str, Any]]]:
+def detect_and_segment_image(image_np: np.ndarray, max_objects: int = 10) -> Tuple[List[List[float]], List[np.ndarray], List[Dict[str, Any]]]:
     """
-    Performs object detection and segmentation using SAM (if available) or classical CV fallback.
+    Detects and segments objects in an image using SAM (if available) or classical CV fallback.
 
     Args:
-        image_np (np.ndarray): The input image as a NumPy array (H, W, C) in RGB format.
-        max_objects (int): Maximum number of objects to return.
+        image_np (np.ndarray): Input image (H, W, 3) RGB.
+        max_objects (int): Max number of objects to return.
 
     Returns:
         Tuple[List[List[float]], List[np.ndarray], List[Dict[str, Any]]]:
-            - bboxes (List[List[float]]): List of bounding boxes (x1, y1, x2, y2).
-            - masks (List[np.ndarray]): List of binary masks (H, W) for each detected object.
-            - scene_graph_objects (List[Dict[str, Any]]): List of object dictionaries for scene graph.
+            - bboxes: List of [x1, y1, x2, y2]
+            - masks: List of binary masks (H, W)
+            - scene_graph_objects: List of dicts for scene graph
     """
-    logger = logging.getLogger(__name__)
-    h, w, _ = image_np.shape
     bboxes = []
     masks = []
     scene_graph_objects = []
 
-    if _sam_predictor is not None:
+    h, w, _ = image_np.shape # Get image dimensions for later use
+
+    if HAS_SAM:
         try:
-            _sam_predictor.set_image(image_np)
-            # Use a grid of points or a single box covering the image for demo; real use may differ
-            # Here, we use a single box covering the whole image as a fallback
-            input_box = np.array([0, 0, w, h])
-            mask, _, _ = _sam_predictor.predict(
-                point_coords=None,
-                point_labels=None,
-                box=input_box[None, :],
-                multimask_output=False
+            # Use default model type and checkpoint path from config if available
+            model_type = CONFIG.get('segmentation', {}).get('sam_model_type', 'vit_b')
+            checkpoint_path = CONFIG.get('segmentation', {}).get('sam_checkpoint_path', '')
+
+            if not checkpoint_path or not os.path.exists(checkpoint_path):
+                logger.warning(f"SAM checkpoint not found at {checkpoint_path}. Falling back to CV.")
+                raise RuntimeError("SAM checkpoint missing or invalid path")
+
+            sam = sam_model_registry[model_type](checkpoint=checkpoint_path)
+            # Ensure device handling is correct for torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            sam.to(device)
+
+            mask_generator = SamAutomaticMaskGenerator(
+                sam,
+                points_per_side=CONFIG['segmentation'].get('sam_points_per_side', 32), # Use config value or default
+                pred_iou_thresh=CONFIG['segmentation'].get('sam_pred_iou_thresh', 0.88) # Use config value or default
             )
-            mask = mask[0]
-            # Find contours to get bounding box
-            contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if contours:
-                largest_contour = max(contours, key=cv2.contourArea)
-                x, y, bw, bh = cv2.boundingRect(largest_contour)
-                bbox = [float(x), float(y), float(x + bw), float(y + bh)]
-            else:
-                bbox = [0.0, 0.0, float(w), float(h)]
-            bboxes.append(bbox)
-            masks.append(mask)
-            scene_graph_objects.append({
-                'id': 0,
-                'bbox': bbox,
-                'mask': mask,
-                'attributes': {},
-                'relations': []
-            })
-            logger.info(f"SAM detected 1 object.")
+            sam_results = mask_generator.generate(image_np)
+
+            for mask_data in sam_results[:max_objects]:
+                mask = mask_data['segmentation'].astype(np.uint8) * 255
+                bbox = mask_data['bbox']  # xywh
+                bbox_xyxy = [bbox[0], bbox[1], bbox[0]+bbox[2], bbox[1]+bbox[3]]
+                bboxes.append(bbox_xyxy)
+                masks.append(mask)
+                scene_graph_objects.append({
+                    'bbox': bbox_xyxy,
+                    'mask': mask.tolist(),
+                    'label': 'object',
+                    'confidence': mask_data.get('stability_score', 1.0)
+                })
+            logger.info(f"SAM detected {len(bboxes)} objects.")
             return bboxes, masks, scene_graph_objects
         except Exception as e:
-            logger.error(f"Error during SAM mask generation: {e}. Falling back to classical CV.")
+            logger.error(f"SAM failed: {e}. Falling back to classical CV.", exc_info=True) # Added exc_info
 
     # Classical CV fallback
-    logger.info("Falling back to Classical CV (contour detection) for objects.")
+    logger.info("Using classical CV fallback for object detection.")
     gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     contours = sorted(contours, key=cv2.contourArea, reverse=True)[:max_objects]
-    for i, contour in enumerate(contours):
+    image_area = image_np.shape[0] * image_np.shape[1]
+
+    for i, contour in enumerate(contours): # Added 'i' for object ID consistency
         area = cv2.contourArea(contour)
-        if area > 0:
-            mask = np.zeros((h, w), dtype=np.uint8)
+        # Use a configurable min_contour_area_sam_fallback from CONFIG
+        min_area_threshold = CONFIG['debug'].get('min_contour_area_sam_fallback', 50)
+        if area > min_area_threshold:  # Filter out tiny contours based on config
+            mask = np.zeros(image_np.shape[:2], dtype=np.uint8) # Use image_np.shape[:2] for mask dimensions
             cv2.drawContours(mask, [contour], -1, 255, cv2.FILLED)
-            x, y, bw, bh = cv2.boundingRect(contour)
-            bbox = [float(x), float(y), float(x + bw), float(y + bh)]
-            bboxes.append(bbox)
+            x, y, w_bbox, h_bbox = cv2.boundingRect(contour) # Renamed w, h to w_bbox, h_bbox to avoid conflict with image h, w
+            bbox_xyxy = [x, y, x+w_bbox, y+h_bbox]
+            bboxes.append(bbox_xyxy)
             masks.append(mask)
             scene_graph_objects.append({
-                'id': i,
-                'bbox': bbox,
-                'mask': mask,
-                'attributes': {},
-                'relations': []
+                'bbox': bbox_xyxy,
+                'mask': mask.tolist(), # Convert mask to list for JSON serialization
+                'label': 'object_cv',
+                'confidence': area / image_area
             })
     logger.info(f"Classical CV detected {len(bboxes)} objects.")
     return bboxes, masks, scene_graph_objects
-        scene_graph_objects.append({
-            'id': i,
-            'bbox': refined_bboxes_list[-1], # Use refined bbox
-            'mask': mask, # Store the boolean mask
-            'attributes': {}, # To be filled by AttributeClassifier
-            'relations': [] # To be filled by RelationGNN
-        })
-
-    logger.debug(f"Detected and segmented {len(masks_list)} objects.")
-    return refined_bboxes_list, masks_list, scene_graph_objects
 
 
 def get_masked_crop(image_tensor: torch.Tensor, bbox: List[float], mask_np: np.ndarray, target_size: Tuple[int, int]) -> torch.Tensor:
@@ -138,30 +132,24 @@ def get_masked_crop(image_tensor: torch.Tensor, bbox: List[float], mask_np: np.n
     """
     _, img_h, img_w = image_tensor.shape
     x1, y1, x2, y2 = [int(b) for b in bbox]
-
     # Clamp bbox coordinates to image bounds
     x1 = max(0, x1)
     y1 = max(0, y1)
     x2 = min(img_w, x2)
     y2 = min(img_h, y2)
-
     if x2 <= x1 or y2 <= y1:
         logger.warning(f"Invalid bounding box for cropping: {bbox}. Returning black image.")
         return torch.zeros(image_tensor.shape[0], *target_size, device=image_tensor.device)
-
     # Crop the image using the bounding box
-    cropped_image = image_tensor[:, y1:y2, x1:x2] # (C, crop_H, crop_W)
-    cropped_mask = torch.from_numpy(mask_np[y1:y2, x1:x2]).to(image_tensor.device).unsqueeze(0).float() # (1, crop_H, crop_W)
-
+    cropped_image = image_tensor[:, y1:y2, x1:x2]  # (C, crop_H, crop_W)
+    cropped_mask = torch.from_numpy(mask_np[y1:y2, x1:x2]).to(image_tensor.device).unsqueeze(0).float()  # (1, crop_H, crop_W)
     # Resize cropped image and mask to target_size
     # Use bilinear for image, nearest for mask to keep it binary
     resized_cropped_image = F.interpolate(cropped_image.unsqueeze(0), size=target_size, mode='bilinear', align_corners=False).squeeze(0)
     resized_cropped_mask = F.interpolate(cropped_mask.unsqueeze(0), size=target_size, mode='nearest').squeeze(0)
-
     # Apply mask to the resized crop
     # Expand mask to C channels
     masked_crop = resized_cropped_image * resized_cropped_mask
-
     return masked_crop
 
 
@@ -178,22 +166,18 @@ def mask_to_yolo_format(mask: np.ndarray, image_shape: Tuple[int, int]) -> Optio
         Optional[str]: YOLO formatted string or None if no valid contour.
     """
     contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
+
     if not contours:
         return None
-
     # Get the largest contour
     largest_contour = max(contours, key=cv2.contourArea)
-    
+
     # Get bounding box
     x, y, w, h = cv2.boundingRect(largest_contour)
-
     # Convert to YOLO format (normalized center_x, center_y, width, height)
     img_h, img_w = image_shape
     cx = (x + w / 2) / img_w
     cy = (y + h / 2) / img_h
     nw = w / img_w
     nh = h / img_h
-
     return f"0 {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}"
-
