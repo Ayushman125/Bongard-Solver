@@ -517,10 +517,12 @@ class LogoGenerator(Dataset):
         positives, negatives = [], []
         rule_obj = self.sample_rule()
         for _ in range(self.num_positive_examples):
-            img_np, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = self.make_problem(random.randint(0, 10000))
+            outputs = self.make_problem(random.randint(0, 10000))
+            img_np = outputs[0]  # first item is positive image
             positives.append(img_np)
         for _ in range(self.num_negative_examples):
-            _, img_np, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = self.make_problem(random.randint(0, 10000))
+            outputs = self.make_problem(random.randint(0, 10000))
+            img_np = outputs[1]  # second item is negative image
             negatives.append(img_np)
         return positives, negatives, gt_rule
 
