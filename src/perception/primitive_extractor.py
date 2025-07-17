@@ -361,15 +361,36 @@ def extract_cnn_features(img_pil: Image.Image) -> Tuple[Dict[str, Tuple[str, flo
     # If the `augment_image` function is available (successfully imported), apply TTA.
     if augment_image:
         try:
-            augmented_tensor = augment_image(img_pil)
+            aug_arr = augment_image(img_pil)  # numpy ndarray, shape (3,H,W)
+            aug_tensor = torch.from_numpy(aug_arr).float()
+            aug_tensor = aug_tensor.to(DEVICE)
             mean_tensor = torch.tensor(IMAGENET_MEAN, device=DEVICE).view(3, 1, 1)
             std_tensor = torch.tensor(IMAGENET_STD, device=DEVICE).view(3, 1, 1)
-            augmented_tensor_denorm = augmented_tensor.to(DEVICE) * std_tensor + mean_tensor
-            augmented_tensor_denorm = torch.clamp(augmented_tensor_denorm * 255, 0, 255).byte()
-            augmented_img_pil = Image.fromarray(augmented_tensor_denorm.permute(1, 2, 0).cpu().numpy())
+            denorm = (aug_tensor * std_tensor + mean_tensor) * 255
+            denorm = denorm.clamp(0, 255).byte().permute(1, 2, 0).cpu().numpy()
+            augmented_img_pil = Image.fromarray(denorm)
             crops_pil.append(augmented_img_pil)
         except Exception as e:
             logger.warning(f"Error during TTA augmentation: {e}. Proceeding without augmentation.")
+# --- Model Loader for Validation/Fine-tune ---
+def load_perception_model():
+    """
+    Loads the PerceptionModule and its weights, returns the model instance.
+    Also sets the global MODEL variable.
+    """
+    global MODEL
+    try:
+        m = PerceptionModule(config).to(DEVICE)
+        ckpt = getattr(config, 'best_model_path', None) or "checkpoints/bongard_perception_last.pth"
+        state = torch.load(ckpt, map_location=DEVICE)
+        m.load_state_dict(state)
+        m.eval()
+        MODEL = m
+        logger.info(f"Loaded PerceptionModel from {ckpt}")
+    except Exception as e:
+        logger.error(f"Failed to load PerceptionModel: {e}")
+        MODEL = None
+    return MODEL
 
     all_votes: Dict[str, List[str]] = defaultdict(list)
     all_confs: Dict[str, List[float]] = defaultdict(list)

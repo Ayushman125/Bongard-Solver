@@ -31,7 +31,7 @@ from torchvision.transforms.functional import to_tensor
 from core_models.training_args import config
 from core_models.training      import train_perception_with_buffer, fine_tune_perception
 from src.data.generator        import LogoGenerator
-from src.perception.primitive_extractor import extract_cnn_features, MODEL
+from src.perception.primitive_extractor import extract_cnn_features, MODEL, load_perception_model
 
 
 # 1) If no checkpoint yet, train model first (only if not already present)
@@ -153,6 +153,10 @@ def plot_calibration(x, y, title):
 
 def online_finetune_test(imgs, labels):
     from core_models.replay_buffer import ReplayBuffer
+    # Ensure MODEL is loaded
+    model = load_perception_model()
+    if model is None:
+        raise RuntimeError("PerceptionModel failed to load—cannot fine-tune")
     buffer = ReplayBuffer(capacity=len(imgs))
     logger.info("Preparing buffer for online fine-tuning...")
     for img, lbl in tqdm(list(zip(imgs, labels)), desc="Buffering", leave=False):
@@ -161,7 +165,7 @@ def online_finetune_test(imgs, labels):
     pre_acc, *_ = eval_set(imgs, labels)
     logger.info("Starting online fine-tuning...")
     start = time.time()
-    fine_tune_perception(MODEL, buffer, config)
+    fine_tune_perception(model, buffer, config)
     dur = time.time() - start
     logger.info(f"Fine-tuning completed in {dur:.1f}s")
     logger.info("Evaluating after fine-tuning...")
