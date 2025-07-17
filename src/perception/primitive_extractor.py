@@ -1,3 +1,11 @@
+
+# --- Import config and attribute maps first ---
+from config import (
+    ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_FILL_MAP,
+    ATTRIBUTE_SIZE_MAP, ATTRIBUTE_ORIENTATION_MAP, ATTRIBUTE_TEXTURE_MAP,
+    CONFIG, IMAGENET_MEAN, IMAGENET_STD, DEVICE
+)
+
 # --- Inverse attribute maps for index-to-name mapping ---
 def _invert_map(m):
     return {v: k for k, v in m.items()}
@@ -13,15 +21,20 @@ attribute_maps_inv = {
 
 # --- Expose a global MODEL for import (after all dependencies are defined) ---
 # Expose a global MODEL for import (after all dependencies are defined)
-from core_models.models import BongardPerceptionModel
-from core_models.training_args import config as _config
 import torch
+from core_models.models import BongardPerceptionModel
+from core_models.training_args import Config
+_config = Config()
 _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-_model = BongardPerceptionModel().to(_device)
-_model.load_state_dict(torch.load(_config.best_model_path, map_location=_device))
-_model.eval()
-MODEL = _model
+MODEL = None
 DEVICE = _device
+
+def load_model():
+    global MODEL
+    _model = BongardPerceptionModel().to(_device)
+    _model.load_state_dict(torch.load(_config.best_model_path, map_location=_device))
+    _model.eval()
+    MODEL = _model
 # Folder: bongard_solver/src/perception/
 # File: primitive_extractor.py
 

@@ -26,32 +26,44 @@ import torch
 from torchvision.transforms.functional import to_tensor
 
 from src.data.generator import LogoGenerator
-from src.perception.primitive_extractor import extract_cnn_feature, MODEL
+from src.perception.primitive_extractor import extract_cnn_feature, load_model, MODEL
 from core_models.training import fine_tune_perception, train_perception_with_buffer
-from core_models.training_args import config
 
-# 1) If no checkpoint yet, train model first
-if not os.path.exists(config.best_model_path):
-    print(f">>> No checkpoint found at {config.best_model_path}\n>>> Training Phase-1 perception model...")
-    train_perception_with_buffer()
+# Use Config class and instantiate config
+from core_models.training_args import Config
+config = Config()
+
+
+# 1) If no checkpoint yet, train model first (only if not already present)
+def checkpoint_exists():
+    return os.path.exists(config.best_model_path) or os.path.exists(config.last_model_path)
+
+if not checkpoint_exists():
+    print(f">>> No checkpoint found at {config.best_model_path} or {config.last_model_path}\n>>> Training Phase-1 perception model...")
+    train_perception_with_buffer(config)
     print(">>> Training done. Now proceeding to validation.")
+else:
+    print(f"Checkpoint found at {config.best_model_path if os.path.exists(config.best_model_path) else config.last_model_path}. Skipping training.")
 
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
 logger = logging.getLogger("validate_phase1")
 
-# Ensure checkpoints exist
+# Ensure checkpoints exist and resume if interrupted
 Path(config.checkpoint_dir).mkdir(parents=True, exist_ok=True)
 ckpt = config.best_model_path if os.path.exists(config.best_model_path) else config.last_model_path
 if os.path.exists(ckpt):
     logger.info(f"Loading model checkpoint: {ckpt}")
-    MODEL.load_state_dict(torch.load(ckpt, map_location=config.device))
+    load_model()
 else:
     logger.error(f"No checkpoint found at {ckpt} after attempted training. Model may be uninitialized!")
 
 
-def build_synth_holdout(n=config.synth_holdout_count, cache_path="synth_holdout.npz"):
+import functools
+@functools.lru_cache(maxsize=2)
+def build_synth_holdout(n=None, cache_path="synth_holdout.npz"):
+    n = n or config.synth_holdout_count
     if os.path.exists(cache_path):
         logger.info(f"Loading cached synthetic holdout from {cache_path}")
         arr = np.load(cache_path, allow_pickle=True)
@@ -74,7 +86,9 @@ def build_synth_holdout(n=config.synth_holdout_count, cache_path="synth_holdout.
     return imgs, labels
 
 
-def load_real_holdout(root=config.real_holdout_root, cache_path="real_holdout.npz"):
+@functools.lru_cache(maxsize=2)
+def load_real_holdout(root=None, cache_path="real_holdout.npz"):
+    root = root or config.real_holdout_root
     if os.path.exists(cache_path):
         logger.info(f"Loading cached real holdout from {cache_path}")
         arr = np.load(cache_path, allow_pickle=True)
