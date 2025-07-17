@@ -83,15 +83,33 @@ preprocess_transform = T.Compose([
 MODEL: Optional[nn.Module] = None
 try:
     _model = PerceptionModule(config).to(DEVICE)
-    # Load the model's weights if a path is specified in the configuration.
-    best_model_path = getattr(config, 'best_model_path', None)
-    if best_model_path:
-        _model.load_state_dict(torch.load(best_model_path, map_location=DEVICE))
-    _model.eval()  # Set the model to evaluation mode (disables dropout, batch normalization updates).
-    MODEL = _model  # Assign the loaded model to the global variable.
-    logger.info("PerceptionModel loaded successfully.")
+    # Try both best and last checkpoints
+    candidates = []
+    best_cp = getattr(config, 'best_model_path', None)
+    if best_cp:
+        candidates.append(best_cp)
+    last_cp = getattr(config, 'last_model_path', None)
+    if last_cp:
+        candidates.append(last_cp)
+    # Fallback to default last checkpoint path if not in config
+    if not last_cp or last_cp != "checkpoints/bongard_perception_last.pth":
+        candidates.append("checkpoints/bongard_perception_last.pth")
+
+    for cp in candidates:
+        if cp and os.path.exists(cp):
+            logger.info(f"Loading PerceptionModel checkpoint from {cp}")
+            state = torch.load(cp, map_location=DEVICE)
+            _model.load_state_dict(state)
+            _model.eval()
+            MODEL = _model
+            break
+
+    if MODEL is None:
+        logger.warning("No perception checkpoint found; MODEL remains None.")
+    else:
+        logger.info("PerceptionModel loaded successfully.")
 except Exception as e:
-    logger.error(f"Failed to load PerceptionModel: {e}. CNN inference will not be available.")
+    logger.error(f"Failed to initialize PerceptionModel: {e}. CNN inference will not be available.")
     # If model loading fails, MODEL remains None, and subsequent functions
     # will handle this by returning 'unknown' attributes.
 
@@ -361,15 +379,20 @@ def extract_cnn_features(img_pil: Image.Image) -> Tuple[Dict[str, Tuple[str, flo
     # If the `augment_image` function is available (successfully imported), apply TTA.
     if augment_image:
         try:
-            aug_arr = augment_image(img_pil)  # numpy ndarray, shape (3,H,W)
-            aug_tensor = torch.from_numpy(aug_arr).float()
-            aug_tensor = aug_tensor.to(DEVICE)
-            mean_tensor = torch.tensor(IMAGENET_MEAN, device=DEVICE).view(3, 1, 1)
-            std_tensor = torch.tensor(IMAGENET_STD, device=DEVICE).view(3, 1, 1)
-            denorm = (aug_tensor * std_tensor + mean_tensor) * 255
-            denorm = denorm.clamp(0, 255).byte().permute(1, 2, 0).cpu().numpy()
-            augmented_img_pil = Image.fromarray(denorm)
-            crops_pil.append(augmented_img_pil)
+            aug_np = augment_image(img_pil)
+            # Convert to tensor, handle HWC or CHW
+            aug_t = torch.from_numpy(aug_np)
+            if aug_t.ndim == 3 and aug_t.shape[-1] == 3:
+                # HWC -> CHW
+                aug_t = aug_t.permute(2, 0, 1)
+            if aug_t.shape[0] != 3:
+                raise ValueError(f"Augmented tensor shape {aug_t.shape} does not have 3 channels in first dim")
+            aug_t = aug_t.float().to(DEVICE)
+            mean_t = torch.tensor(IMAGENET_MEAN, device=DEVICE).view(3,1,1)
+            std_t  = torch.tensor(IMAGENET_STD,  device=DEVICE).view(3,1,1)
+            img_denorm = (aug_t * std_t + mean_t) * 255
+            img_denorm = img_denorm.clamp(0,255).byte().permute(1,2,0).cpu().numpy()
+            crops_pil.append(Image.fromarray(img_denorm))
         except Exception as e:
             logger.warning(f"Error during TTA augmentation: {e}. Proceeding without augmentation.")
 # --- Model Loader for Validation/Fine-tune ---
