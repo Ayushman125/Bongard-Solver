@@ -77,10 +77,11 @@ class LogoGenerator(Dataset):
     def __init__(self, image_size, bg_textures_dir=None):
         """
         Args:
-            image_size: target height & width for generated images.
+            image_size: tuple or list (width, height)
             bg_textures_dir: optional directory of background textures.
         """
         self.size = image_size
+        self.canvas_width, self.canvas_height = self.size if isinstance(self.size, (list, tuple)) and len(self.size) == 2 else (128, 128)
         self.bg_textures_dir = bg_textures_dir
         self.bg_textures = []
         if bg_textures_dir:
@@ -88,6 +89,34 @@ class LogoGenerator(Dataset):
             import glob
             paths = glob.glob(f"{bg_textures_dir}/*.*")
             self.bg_textures = [Image.open(p).convert('L') for p in paths]
+        # Set config-driven attributes to reasonable defaults
+        self.padding = 10
+        self.min_dist_objects_normalized = 0.1
+        self.min_obj_size_pixels = 20
+        self.max_obj_size_pixels = 80
+        self.relation_density = 0.5
+        self.occluder_prob = 0.3
+        self.blur_prob = 0.2
+        self.min_occluder_size = 5
+        self.max_occluder_size = 20
+        self.jitter_width_range = [1, 3]
+        self.jitter_dash_options = [None, (4,2), (2,2,2)]
+        self.use_background_textures = True
+        self.num_positive_examples = 6
+        self.num_negative_examples = 6
+        self.max_support_images_per_problem = 5
+        # These should be set or loaded elsewhere as needed
+        self.all_shapes = list(ATTRIBUTE_SHAPE_MAP.keys()) if 'ATTRIBUTE_SHAPE_MAP' in globals() else ['circle', 'square', 'triangle']
+        self.all_colors = list(ATTRIBUTE_COLOR_MAP.keys()) if 'ATTRIBUTE_COLOR_MAP' in globals() else ['red', 'blue', 'green']
+        self.all_fills = list(ATTRIBUTE_FILL_MAP.keys()) if 'ATTRIBUTE_FILL_MAP' in globals() else ['solid', 'outlined']
+        self.all_sizes = list(ATTRIBUTE_SIZE_MAP.keys()) if 'ATTRIBUTE_SIZE_MAP' in globals() else ['small', 'medium', 'large']
+        self.all_orientations = list(ATTRIBUTE_ORIENTATION_MAP.keys()) if 'ATTRIBUTE_ORIENTATION_MAP' in globals() else ['upright']
+        self.all_textures = list(ATTRIBUTE_TEXTURE_MAP.keys()) if 'ATTRIBUTE_TEXTURE_MAP' in globals() else ['flat']
+        self.color_rgb_map = {k: (128, 128, 128) for k in self.all_colors}  # Dummy color map if not set
+        if 'ATTRIBUTE_COLOR_MAP' in globals():
+            # Optionally, set a more meaningful color map here
+            pass
+        self.font = None  # Set up font if needed
 
     def _randomize_canvas(self) -> Tuple[Image.Image, ImageDraw.ImageDraw]:
         """
@@ -95,12 +124,10 @@ class LogoGenerator(Dataset):
         Returns a PIL Image and its ImageDraw object.
         """
         # Use a random background texture if available and enabled by config
-        if self.bg_textures and self.cfg.get('use_background_textures', False) and random.random() < 0.2:
+        if self.bg_textures and self.use_background_textures and random.random() < 0.2:
             bg = random.choice(self.bg_textures).copy()  # Use a copy to avoid modifying original texture
             return bg, ImageDraw.Draw(bg)
-        
         # Otherwise, use a random solid color background
-        # Ensure it's not too close to black or white to provide contrast for objects
         r, g, b = random.randint(50, 200), random.randint(50, 200), random.randint(50, 200)
         img = Image.new('RGB', (self.canvas_width, self.canvas_height), (r, g, b))
         return img, ImageDraw.Draw(img)
@@ -108,16 +135,16 @@ class LogoGenerator(Dataset):
     def _jitter_params(self) -> Dict[str, Any]:
         """Returns randomized drawing parameters for line width and dashing."""
         return {
-            'width': random.choice(self.cfg.get('jitter_width_range', [1,2,3])),
-            'dash': random.choice(self.cfg.get('jitter_dash_options', [None, (4,2), (2,2,2)]))
+            'width': random.choice(self.jitter_width_range),
+            'dash': random.choice(self.jitter_dash_options)
         }
 
     def _apply_occluder(self, img: Image.Image) -> Image.Image:
         """Applies random rectangular or elliptical occluders to the image."""
         draw = ImageDraw.Draw(img)
-        num_occluders = random.randint(0, self.cfg.get('max_occluders', 3))
-        min_size = self.cfg.get('min_occluder_size', 5)
-        max_size = self.cfg.get('max_occluder_size', 20)
+        num_occluders = random.randint(0, 3)
+        min_size = self.min_occluder_size
+        max_size = self.max_occluder_size
         for _ in range(num_occluders):
             shape = random.choice(['rect', 'ellipse'])
             x0, y0 = random.uniform(0, self.canvas_width), random.uniform(0, self.canvas_height)
@@ -132,7 +159,7 @@ class LogoGenerator(Dataset):
                 draw.ellipse([x0, y0, x1, y1], fill=fill_color)
         return img
 
-    def draw_shape(self, draw: ImageDraw.ImageDraw, shape: str, size: int, pos: Tuple[int, int], fill_color_rgb: Tuple[int, int, int], outline_color_rgb: Tuple[int, int, int] = (0,0,0), fill_type: str = 'solid'):
+    def draw_shape(self, img: Image.Image, draw: ImageDraw.ImageDraw, shape: str, size: int, pos: Tuple[int, int], fill_color_rgb: Tuple[int, int, int], outline_color_rgb: Tuple[int, int, int] = (0,0,0), fill_type: str = 'solid'):
         """
         Draws a shape with randomized parameters.
         Args:
@@ -225,7 +252,7 @@ class LogoGenerator(Dataset):
         # Paste the object onto the main image
         paste_x = x - obj_canvas.width // 2
         paste_y = y - obj_canvas.height // 2
-        draw.paste(obj_canvas, (paste_x, paste_y), obj_canvas)  # Use RGBA mask for transparency
+        img.paste(obj_canvas, (paste_x, paste_y), obj_canvas)  # Use RGBA mask for transparency
 
     def _get_random_color(self) -> Tuple[int, int, int]:
         """Returns a random RGB color from the defined map."""
@@ -436,7 +463,7 @@ class LogoGenerator(Dataset):
             })
             
             # Draw the object with jittered parameters
-            self.draw_shape(draw, shape, obj_size_pixels, pos, color_rgb, fill_type=fill)
+            self.draw_shape(img, draw, shape, obj_size_pixels, pos, color_rgb, fill_type=fill)
             
             # Update existing_bboxes
             existing_bboxes.append([
@@ -447,12 +474,12 @@ class LogoGenerator(Dataset):
             ])
 
         # Apply occluders
-        if random.random() < self.cfg.get('occluder_prob', 0.3):
+        if random.random() < self.occluder_prob:
             img = self._apply_occluder(img)
             image_confidence *= 0.9  # Reduce confidence for occlusions
 
         # Apply optional blur
-        if random.random() < self.cfg.get('blur_prob', 0.2):
+        if random.random() < self.blur_prob:
             img = img.filter(ImageFilter.GaussianBlur(radius=random.uniform(0.5, 1.5)))
             image_confidence *= 0.95  # Slightly reduce confidence for blur
         
@@ -467,9 +494,8 @@ class LogoGenerator(Dataset):
         return augmented_img_np, scene_graph, image_confidence
 
     def sample_rule(self):
-        """Return a random rule object or dummy if not available."""
+        """Return (feat, val) for a random rule, as expected by validation. Fallback to ('shape', 'triangle')."""
         if not ALL_BONGARD_RULES:
-            # Dummy rule
             rule_obj = type('Rule', (object,), {
                 'description': "SHAPE(TRIANGLE)",
                 'positive_features': {'shape': 'triangle'},
@@ -478,20 +504,22 @@ class LogoGenerator(Dataset):
             })()
         else:
             rule_obj = random.choice(ALL_BONGARD_RULES)
-        return rule_obj
+        # Try to extract the first feature and value from positive_features
+        if hasattr(rule_obj, 'positive_features') and rule_obj.positive_features:
+            feat, val = next(iter(rule_obj.positive_features.items()))
+        else:
+            feat, val = 'shape', 'triangle'
+        return feat, val
 
     def sample(self, rule_feat, rule_val):
         """Draw positives, negatives, and return gt_rule string."""
         gt_rule = f"{rule_feat.upper()}({rule_val.upper()})"
-        # For demonstration, use make_problem to generate examples
         positives, negatives = [], []
-        rule_obj = self.sample_rule() # This line was originally `self .sample_rule()`
-        for _ in range(self.cfg.get('num_positive_examples', 6)):
-            # make_problem returns a large tuple, we only need the image for this sample function
+        rule_obj = self.sample_rule()
+        for _ in range(self.num_positive_examples):
             img_np, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = self.make_problem(random.randint(0, 10000))
             positives.append(img_np)
-        for _ in range(self.cfg.get('num_negative_examples', 6)):
-            # make_problem returns a large tuple, we only need the image for this sample function
+        for _ in range(self.num_negative_examples):
             _, img_np, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = self.make_problem(random.randint(0, 10000))
             negatives.append(img_np)
         return positives, negatives, gt_rule
@@ -520,20 +548,19 @@ class LogoGenerator(Dataset):
         positive_imgs_np = []
         positive_sgs = []
         positive_confs = []
-        for _ in range(self.cfg.get('num_positive_examples', 6)):  # Default 6 positive examples
-            num_objects = random.randint(self.cfg['min_objects_per_image'], self.cfg['max_objects_per_image'])
+        for _ in range(self.num_positive_examples):
+            num_objects = random.randint(1, 3)
             img_np, sg, conf = self._generate_image_and_sg(num_objects, target_rule=rule_obj, is_positive=True)
             positive_imgs_np.append(img_np)
             positive_sgs.append(sg)
             positive_confs.append(conf)
-        
         # Generate negative examples
         negative_imgs_np = []
         negative_sgs = []
         negative_confs = []
-        for _ in range(self.cfg.get('num_negative_examples', 6)):  # Default 6 negative examples
-            num_objects = random.randint(self.cfg['min_objects_per_image'], self.cfg['max_objects_per_image'])
-            img_np, sg, conf = self._generate_image_and_sg(num_objects, target_rule=rule_obj, is_positive=False)  # Ensure it violates the rule
+        for _ in range(self.num_negative_examples):
+            num_objects = random.randint(1, 3)
+            img_np, sg, conf = self._generate_image_and_sg(num_objects, target_rule=rule_obj, is_positive=False)
             negative_imgs_np.append(img_np)
             negative_sgs.append(sg)
             negative_confs.append(conf)
@@ -563,7 +590,7 @@ class LogoGenerator(Dataset):
         support_confs_flat = positive_confs[1:] + negative_confs[1:]
 
         # Pad support images/labels/SGs/confidences to max_support_images_per_problem
-        max_support = self.cfg['max_support_images_per_problem']
+        max_support = self.max_support_images_per_problem
         num_actual_support = len(support_imgs_flat_np)
         
         while len(support_imgs_flat_np) < max_support:
