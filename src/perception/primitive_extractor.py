@@ -1,3 +1,11 @@
+# Minimal loader for external scripts
+def load_perception_model() -> Optional[nn.Module]:
+    """
+    Return the globally initialized MODEL (or None).
+    This lets external scripts explicitly re-load or fetch it.
+    """
+    global MODEL
+    return MODEL
 # --- Explicit model loader for external use ---
 def load_perception_model() -> Optional[nn.Module]:
     """
