@@ -1,5 +1,3 @@
-# Folder: bongard_solver/core_models/
-# File: models.py
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -16,13 +14,12 @@ import copy
 # Import torchvision.transforms as T for image processing within PerceptionModule
 import torchvision.transforms as T
 
-# Conditional import for torch_geometric
+# --- Conditional imports for external libraries ---
+# PyTorch Geometric (for GNNs)
 try:
     import torch_geometric.nn as pyg_nn
     import torch_geometric.data as pyg_data
-    from torch_geometric.nn import global_mean_pool, global_attention # Added global_attention for 2.3
-    # Import GCNConv specifically
-    from torch_geometric.nn import GCNConv # Added for SceneGNN
+    from torch_geometric.nn import global_mean_pool, global_attention, GCNConv
     HAS_PYG = True
     logger = logging.getLogger(__name__)
     logger.info("PyTorch Geometric found and enabled.")
@@ -32,28 +29,25 @@ except ImportError:
     logger.warning("PyTorch Geometric not found. RelationGNN and related functionalities will be disabled.")
     # Dummy classes/functions to prevent errors if PyG is not installed
     class DummyGNN(nn.Module):
-        def __init__(self, *args, **kwargs): super().__init__(); self.hidden_dim = 256
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+            self.hidden_dim = 256
         def forward(self, object_feats, edge_index):
             # Dummy output: relation_logits (N_edges, N_relations), graph_embed (N_graphs, hidden_dim)
-            # Assuming N_graphs = 1 for a single image's graph
             num_edges = edge_index.shape[1] if edge_index.numel() > 0 else 0
             return torch.randn(num_edges, 10, device=object_feats.device), torch.randn(1, 256, device=object_feats.device)
     pyg_nn = None
     pyg_data = None
-    # Dummy global_mean_pool for when PyG is not available
     global_mean_pool = lambda node_embeds, batch: torch.mean(node_embeds, dim=0, keepdim=True) if node_embeds.numel() > 0 else torch.zeros(1, node_embeds.shape[-1], device=node_embeds.device)
-    # Dummy global_attention if PyG is not available
     global_attention = lambda x, batch, gate_nn: torch.mean(x, dim=0, keepdim=True) if x.numel() > 0 else torch.zeros(1, x.shape[-1], device=x.device)
-    # Dummy GCNConv for when PyG is not available
     class GCNConv(nn.Module):
         def __init__(self, in_channels, out_channels, *args, **kwargs):
             super().__init__()
             self.linear = nn.Linear(in_channels, out_channels)
         def forward(self, x, edge_index):
-            # Simple linear transformation as a dummy
             return self.linear(x)
 
-# Conditional import for timm backbones
+# timm backbones
 try:
     import timm
     HAS_TIMM = True
@@ -63,7 +57,7 @@ except ImportError:
     logger = logging.getLogger(__name__)
     logger.warning("timm not found. ViT/Swin backbones will not be available.")
 
-# Conditional import for DropBlock and DropPath (Stochastic Depth)
+# DropBlock and DropPath (Stochastic Depth)
 try:
     from dropblock import DropBlock2D
     HAS_DROPBLOCK = True
@@ -80,11 +74,9 @@ except ImportError:
         def forward(self, x):
             if not self.training or self.drop_prob == 0.:
                 return x
-            # Simple dropout as a fallback if DropBlock is not truly implemented
             return F.dropout(x, p=self.drop_prob, training=self.training)
 
 try:
-    # timm.layers.DropPath is a common implementation for Stochastic Depth
     from timm.layers import DropPath
     HAS_DROPPATH = True
     logger.info("timm.layers.DropPath (Stochastic Depth) found and enabled.")
@@ -100,14 +92,13 @@ except ImportError:
             if self.drop_prob == 0. or not self.training:
                 return x
             keep_prob = 1 - self.drop_prob
-            shape = (x.shape[0],) + (1,) * (x.ndim - 1)  # keep dim of C, H, W
+            shape = (x.shape[0],) + (1,) * (x.ndim - 1)
             random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
-            random_tensor.floor_()  # binarize
+            random_tensor.floor_()
             output = x.div(keep_prob) * random_tensor
             return output
 
-# Import from config (assuming config.py is in the project root)
-# Dummy CONFIG, DEVICE, etc. if not found for standalone execution
+# --- Import from config (assuming config.py is in the project root) ---
 try:
     from config import CONFIG, DEVICE, RELATION_MAP, IMAGENET_MEAN, IMAGENET_STD, \
                        ATTRIBUTE_FILL_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_SIZE_MAP, \
@@ -116,17 +107,17 @@ except ImportError:
     logger.warning("Could not import full config. Using dummy values for some config items.")
     CONFIG = {}
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    RELATION_MAP = {'none': 0, 'left_of': 1, 'above': 2} # Example
+    RELATION_MAP = {'none': 0, 'left_of': 1, 'above': 2} # Example dummy
     IMAGENET_MEAN = [0.5] # For grayscale images from LogoGenerator
     IMAGENET_STD = [0.5]  # For grayscale images from LogoGenerator
     ATTRIBUTE_FILL_MAP = {'filled': 0, 'outlined': 1}
-    ATTRIBUTE_COLOR_MAP = {'black': 0, 'white': 1} # Example
-    ATTRIBUTE_SIZE_MAP = {'small': 0, 'medium': 1, 'large': 2} # Example
-    ATTRIBUTE_ORIENTATION_MAP = {} # Example
+    ATTRIBUTE_COLOR_MAP = {'black': 0, 'white': 1} # Example dummy
+    ATTRIBUTE_SIZE_MAP = {'small': 0, 'medium': 1, 'large': 2} # Example dummy
+    ATTRIBUTE_ORIENTATION_MAP = {} # Example dummy
     ATTRIBUTE_SHAPE_MAP = {'triangle': 0, 'quadrilateral': 1}
-    ATTRIBUTE_TEXTURE_MAP = {} # Example
+    ATTRIBUTE_TEXTURE_MAP = {} # Example dummy
 
-# Import SAM utilities (assuming sam_utils.py is in src/)
+# --- Import SAM utilities (assuming sam_utils.py is in src/) ---
 try:
     from src.sam_utils import get_masked_crop
     logger.info("sam_utils.py found.")
@@ -134,7 +125,7 @@ except ImportError:
     logger.warning("src/sam_utils.py not found. get_masked_crop functionality will be limited.")
     def get_masked_crop(image_np, mask, bbox): return np.zeros((1,1,3), dtype=np.uint8) # Dummy
 
-# Import from utils (assuming utils.py is in src/)
+# --- Import from utils (assuming utils.py is in src/) ---
 try:
     from src.utils import _calculate_iou, make_edge_index_map, set_seed, infer_feature_dim
 except ImportError:
@@ -143,21 +134,20 @@ except ImportError:
     def make_edge_index_map(num_objects): return {} # Dummy
     def set_seed(seed): pass # Dummy
     def infer_feature_dim(model, input_size, device):
-        # Dummy inference: create a dummy input and pass through the model
         try:
             dummy_input = torch.randn(1, 3, input_size, input_size).to(device)
             with torch.no_grad():
                 output = model(dummy_input)
-            if isinstance(output, list): # For features_only=True
+            if isinstance(output, list):
                 output = output[-1]
-            return output.shape[1] if output.ndim == 4 else output.shape[-1] # C or D
+            return output.shape[1] if output.ndim == 4 else output.shape[-1]
         except Exception as e:
             logger.warning(f"Failed to infer feature dimension: {e}. Returning default 512.")
             return 512
 
-# Import Slipnet (assuming slipnet.py is in src/)
+# --- Import Slipnet (assuming slipnet.py is in src/emergent/) ---
 try:
-    from src.emergent.concept_net import ConceptNetwork as Slipnet # Renamed to ConceptNetwork
+    from src.emergent.concept_net import ConceptNetwork as Slipnet
     HAS_SLIPNET = True
     logger.info("Slipnet (ConceptNetwork) found and enabled.")
 except ImportError:
@@ -166,27 +156,26 @@ except ImportError:
     logger.warning("src/emergent/concept_net.py not found. Slipnet functionalities will be disabled.")
     class Slipnet: # Dummy Slipnet
         def __init__(self, *args, **kwargs): pass
-        def step(self, *args, **kwargs): pass # Renamed from update_activations
-        def get_active_nodes(self, *args, **kwargs): return {} # Renamed from get_active_concepts
+        def step(self, *args, **kwargs): pass
+        def get_active_nodes(self, *args, **kwargs): return {}
 
-# Import for PyTorch Lightning
+# --- Import for PyTorch Lightning ---
 import pytorch_lightning as pl
 
-# Import losses (now from the same core_models folder)
-from .losses import LabelSmoothingCrossEntropy, FeatureConsistencyLoss, SymbolicConsistencyLoss, DistillationLoss, NTXentLoss, CrossEntropyWithConfidence # Added CrossEntropyWithConfidence
+# --- Import losses (from the same core_models folder) ---
+from .losses import LabelSmoothingCrossEntropy, FeatureConsistencyLoss, SymbolicConsistencyLoss, DistillationLoss, NTXentLoss, CrossEntropyWithConfidence
 
-# Import optimizers and schedulers for LitBongard and LitSimCLR
+# --- Import optimizers and schedulers for LitBongard and LitSimCLR ---
 from torch.optim.lr_scheduler import OneCycleLR, ReduceLROnPlateau, CosineAnnealingLR
 
 # Conditional imports for advanced optimizers (handled by core_models/optimizers.py's get_optimizer)
-# We just need to ensure the classes are available if directly referenced.
 HAS_SAM_OPTIMIZER = False
 try:
     from .optimizers import SAM # Assuming SAM is defined in core_models/optimizers.py or sam.py
     if SAM.__name__ != 'SAM': # Check if it's the dummy SAM
         HAS_SAM_OPTIMIZER = True
 except ImportError:
-    pass # Handled by optimizers.py
+    pass
 
 HAS_RANGER = False
 try:
@@ -202,7 +191,7 @@ try:
 except ImportError:
     pass
 
-# Import from training.py (now from the same core_models folder)
+# --- Import from training.py (from the same core_models folder) ---
 try:
     from .training import _get_ensemble_teacher_logits, MixupCutmixAugmenter
     HAS_TRAINING_UTILS = True
@@ -216,21 +205,18 @@ except ImportError:
         def __init__(self, *args, **kwargs): pass
         def __call__(self, images, labels): return images, F.one_hot(labels, num_classes=2).float() # Dummy passthrough
 
-# Import MoCo builder if use_moco is enabled in config
+# --- Import MoCo builder if use_moco is enabled in config ---
 HAS_MOCO = False
 try:
-    # Check if CONFIG is defined and has the necessary keys
     if 'model' in globals().get('CONFIG', {}) and 'simclr_config' in CONFIG['model'] and CONFIG['model']['simclr_config'].get('use_moco', False):
         from moco.builder import MoCo
         HAS_MOCO = True
         logger.info("MoCo builder found and enabled.")
-    else:
-        HAS_MOCO = False
 except ImportError:
     HAS_MOCO = False
     logger.warning("moco.builder not found. MoCo pretraining will be disabled.")
 
-# Import LoRA
+# --- Import LoRA ---
 HAS_LORA = False
 try:
     from peft import LoraConfig, get_peft_model, TaskType
@@ -240,6 +226,7 @@ except ImportError:
     HAS_LORA = False
     logger.warning("peft library not found. LoRA functionality will be disabled.")
 
+# --- Logger for models.py ---
 logger = logging.getLogger(__name__)
 
 # --- New BongardPerceptionModel for Phase 1 initial training ---
@@ -247,6 +234,7 @@ class BongardPerceptionModel(nn.Module):
     """
     A simpler CNN-based perception model for initial Phase 1 training.
     It takes an image and classifies it into predefined categories (e.g., shape, fill).
+    This model is distinct from the more complex PerceptionModule.
     """
     def __init__(self, num_classes: int = 4):  # Default for 'triangle', 'quadrilateral', 'filled', 'outlined'
         super().__init__()
@@ -255,27 +243,23 @@ class BongardPerceptionModel(nn.Module):
             nn.Conv2d(1, 32, 3, padding=1), # Input is 1 channel (grayscale Bongard-LOGO)
             nn.ReLU(),
             nn.MaxPool2d(2), # Output size / 2
-
             nn.Conv2d(32, 64, 3, padding=1),
             nn.ReLU(),
             nn.MaxPool2d(2), # Output size / 4
-
             nn.Conv2d(64, 128, 3, padding=1),
             nn.ReLU(),
             nn.AdaptiveAvgPool2d(1), # Output (B, 128, 1, 1)
         )
-        
+
         # Classifier head
         self.classifier = nn.Linear(128, num_classes)
-        
+
         # Define the class names corresponding to the output classes
         # This is crucial for interpreting the model's predictions.
-        # Ensure this matches the labels generated by LogoGenerator and used in training.
         self.class_names = ['triangle', 'quadrilateral', 'filled', 'outlined']
-        
+
         if num_classes != len(self.class_names):
             logger.warning(f"BongardPerceptionModel initialized with num_classes={num_classes}, but default class_names has {len(self.class_names)} entries. Please ensure consistency.")
-
         logger.info(f"BongardPerceptionModel initialized with {num_classes} classes.")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -303,7 +287,7 @@ class AttributeClassifier(nn.Module):
         self.config = config
         backbone_name = config['model']['backbone']
         pretrained = config['model']['pretrained']
-        
+
         # Initialize feature extractor (backbone)
         if HAS_TIMM and ('vit' in backbone_name or 'swin' in backbone_name or 'convnext' in backbone_name):
             logger.info(f"Using timm backbone: {backbone_name}")
@@ -331,9 +315,9 @@ class AttributeClassifier(nn.Module):
                 self.feature_extractor = nn.Sequential(*list(model.children())[:-2]) # Remove avgpool and fc
             else:
                 raise ValueError(f"Unsupported torchvision backbone structure for {backbone_name}")
-        
+
         # Apply LoRA if enabled
-        self.use_lora = config['model'].get('use_lora', False) and HAS_LORA
+        self.use_lora = getattr(config['model'], 'use_lora', False) and HAS_LORA
         if self.use_lora:
             lora_config = LoraConfig(
                 task_type=TaskType.FEATURE_EXTRACTION,
@@ -345,30 +329,31 @@ class AttributeClassifier(nn.Module):
             )
             self.feature_extractor = get_peft_model(self.feature_extractor, lora_config)
             logger.info(f"LoRA enabled for backbone. Trainable parameters: {self.feature_extractor.print_trainable_parameters()}")
-        
+
         # Infer feature dimension using a dummy forward pass
         self.feature_dim = infer_feature_dim(
             self.feature_extractor, self.config['data']['image_size'], DEVICE
         )
         logger.info(f"Inferred feature_dim for AttributeClassifier backbone: {self.feature_dim}")
-        
+
         # Shared trunk BatchNorm
         self.trunk_bn = nn.BatchNorm1d(self.feature_dim)
         logger.info("AttributeClassifier: Added BatchNorm1d trunk.")
-        
+
         # DropBlock regularization
         self.dropblock = None
-        if config['model'].get('use_dropblock', False) and HAS_DROPBLOCK:
+        if getattr(config['model'], 'use_dropblock', False) and HAS_DROPBLOCK:
             self.dropblock = DropBlock2D(
                 block_size=config['model']['dropblock_config'].get('block_size', 7),
                 drop_prob=config['model']['dropblock_config'].get('drop_prob', 0.1)
             )
             logger.info(f"DropBlock enabled with block_size={self.dropblock.block_size}, drop_prob={self.dropblock.drop_prob}")
-        
-        # 2.2 Parameterized Stochastic-Depth Schedule
+
+        # Parameterized Stochastic-Depth Schedule (DropPath)
         self.drop_paths = nn.ModuleList()
-        if config['model'].get('use_stochastic_depth', False) and HAS_DROPPATH:
-            num_droppath_layers = config['model'].get('drop_path_layers', 5)
+        if getattr(config['model'], 'use_stochastic_depth', False) and HAS_DROPPATH:
+            num_droppath_layers = config['model'].get('drop_path_layers', 0) # Default to 0 if not specified
+            
             # Attempt to find actual number of blocks/layers in the feature extractor
             if hasattr(self.feature_extractor, 'blocks') and isinstance(self.feature_extractor.blocks, nn.ModuleList):
                 num_droppath_layers = len(self.feature_extractor.blocks)
@@ -380,12 +365,11 @@ class AttributeClassifier(nn.Module):
             
             drop_path_max = config['model'].get('drop_path_max', 0.1)
             drop_rates = np.linspace(0.0, drop_path_max, num=num_droppath_layers)
-            
             self.drop_paths = nn.ModuleList([
                 DropPath(p=dr) for dr in drop_rates
             ])
             logger.info(f"Stochastic Depth (DropPath) enabled with {num_droppath_layers} layers and max drop_prob={drop_path_max}.")
-        
+
         # Multi-task heads with branch-norm
         self.heads = nn.ModuleDict()
         mlp_dim = config['model']['attribute_classifier_config'].get('mlp_dim', 256)
@@ -401,55 +385,65 @@ class AttributeClassifier(nn.Module):
             )
             logger.info(f"AttributeClassifier: Added head for '{attr_name}' with {num_classes} classes.")
 
-    def forward(self, imgs: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """
+        Forward pass for the AttributeClassifier.
         Args:
-            imgs (torch.Tensor): Batch of object image crops (B, C, H, W).
+            x (torch.Tensor): Input image tensor (B, C, H, W) of object crops.
         Returns:
             Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
-                - Pooled features (B, feature_dim) after trunk_bn, dropblock, drop_path.
-                - Dictionary of attribute logits {attr_name: (B, num_classes)}.
+                - pooled_features (torch.Tensor): Global pooled features from the backbone (B, feature_dim).
+                - attribute_logits (Dict[str, torch.Tensor]): Dictionary of logits for each attribute head.
         """
-        features_raw = self.feature_extractor(imgs)
-        
-        if isinstance(features_raw, list):
-            feats = features_raw[-1] # Take the last feature map if features_only=True returns a list
+        # Feature extraction
+        # timm models with features_only=True return a list of feature maps from different stages.
+        # We take the last one (highest resolution features before pooling).
+        features = self.feature_extractor(x)
+        if isinstance(features, list):
+            features = features[-1] # Take the last feature map
+
+        # Global average pooling
+        # Ensure features are 4D (B, C, H, W) before pooling
+        if features.ndim == 4:
+            pooled_features = F.adaptive_avg_pool2d(features, (1, 1)).squeeze(-1).squeeze(-1)
+        elif features.ndim == 2: # Already flattened (e.g., from ViT's CLS token or some backbones)
+            pooled_features = features
         else:
-            feats = features_raw
-        
-        # Global average pooling for CNNs, or CLS token/mean for ViTs
-        if feats.ndim == 4: # CNN output (B, C, H, W)
-            feats = F.adaptive_avg_pool2d(feats, (1, 1)).flatten(1)
-        elif feats.ndim == 3: # Transformer output (B, N_tokens, D)
-            if feats.shape[1] > 1 and hasattr(self.feature_extractor, 'cls_token'): # If it's a ViT with CLS token
-                feats = feats[:, 0, :] # Take CLS token
-            else: # Otherwise, mean pool across tokens
-                feats = feats.mean(dim=1)
-        
-        flat = feats # This is the feature vector before shared trunk_bn
-        
-        x = self.trunk_bn(flat)
-        
-        # Apply DropBlock
+            raise ValueError(f"Unexpected feature tensor dimension: {features.ndim}")
+
+        # Apply trunk BatchNorm
+        flat = self.trunk_bn(pooled_features)
+
+        # Apply DropBlock (if enabled and applicable)
         if self.dropblock and self.dropblock.drop_prob > 0:
-            if x.ndim == 2: # DropBlock expects 4D input, so unsqueeze if 2D
-                x = self.dropblock(x.unsqueeze(-1).unsqueeze(-1)).squeeze(-1).squeeze(-1)
-            else:
-                x = self.dropblock(x)
+            # DropBlock expects 4D input (B, C, H, W). If flat is 2D (B, D),
+            # we need to unsqueeze it to (B, D, 1, 1) for DropBlock and then squeeze back.
+            if flat.ndim == 2:
+                flat = self.dropblock(flat.unsqueeze(-1).unsqueeze(-1)).squeeze(-1).squeeze(-1)
+            else: # If it's already 4D, apply directly
+                flat = self.dropblock(flat)
         
         # Apply Stochastic Depth (DropPath)
-        # This is a bit tricky with `features_only=True` and sequential models.
-        # A robust implementation would apply DropPath within the backbone's blocks.
-        # For a simple sequential backbone, we apply it once at the end of the trunk.
-        if self.config.model.get('use_stochastic_depth', False) and HAS_DROPPATH and self.drop_paths:
-            # Applying the last drop_path layer for simplicity here.
-            # In a real model, it would be applied within the backbone's layers.
-            x = self.drop_paths[-1](x) + x # Residual connection for DropPath
-        
-        out = {}
+        # This is typically applied within the backbone's blocks.
+        # If the backbone doesn't support internal DropPath, applying it once here is a simplified fallback.
+        # The provided snippet applies it once at the end of the trunk.
+        if self.config['model'].get('use_stochastic_depth', False) and HAS_DROPPATH and self.drop_paths:
+            # For simplicity, apply the last DropPath layer's effect here.
+            # In a true block-wise application, each block would have its own DropPath.
+            # This implementation assumes a residual connection for DropPath.
+            # If `flat` is the output of the backbone, and drop_paths are for internal layers,
+            # this might not be the intended use. Re-evaluating the original intent:
+            # If drop_paths is a ModuleList, it implies multiple layers.
+            # However, `features_only=True` might mean the backbone itself doesn't have these.
+            # For now, we'll apply the last one as a general regularization on the pooled features.
+            # A more accurate implementation would require modifying the backbone's internal structure.
+            flat = self.drop_paths[-1](flat) + flat # Apply DropPath with residual connection
+
+        attribute_logits = {}
         for name, head in self.heads.items():
-            out[name] = head(x)
-        return x, out # Return pooled features and attribute logits
+            attribute_logits[name] = head(flat) # Pass the processed features to each attribute head
+        
+        return pooled_features, attribute_logits # Return pooled features and attribute logits
 
     def mc_dropout_predict(self, imgs: torch.Tensor, n_samples: int = 10) -> Dict[str, torch.Tensor]:
         """
@@ -485,6 +479,8 @@ class AttributeClassifier(nn.Module):
 class RelationGNN(nn.Module):
     """
     Graph Neural Network for relation prediction and global scene graph embedding.
+    This GNN processes object features (nodes) and their connectivity (edges)
+    to predict relations between objects and generate a global graph embedding.
     """
     def __init__(self, config: Dict[str, Any]):
         super().__init__()
@@ -496,42 +492,47 @@ class RelationGNN(nn.Module):
         self.dropout_prob = gnn_config['dropout_prob']
         self.use_edge_features = gnn_config['use_edge_features']
         
-        input_dim = config['model'].get('feature_dim', 512) # Feature dim from AttributeClassifier
+        # Input dimension for the GNN nodes. This comes from the AttributeClassifier's output.
+        input_dim = getattr(config['model'], 'feature_dim', 512)
         
         if self.use_edge_features:
-            input_dim += 4 # For bbox coordinates (x1, y1, x2, y2)
-        
-        if not HAS_PYG:
-            logger.warning("PyTorch Geometric not found. Using dummy GNN implementation.")
-            self.gnn_layers = nn.ModuleList([nn.Linear(input_dim, self.hidden_dim)])
-            self.edge_head = nn.Linear(self.hidden_dim * 2, self.num_relations)
-            # Dummy global_mean_pool and global_attention if PyG is not available
-            if 'global_mean_pool' not in globals():
-                global_mean_pool = lambda node_embeds, batch: torch.mean(node_embeds, dim=0, keepdim=True) if node_embeds.numel() > 0 else torch.zeros(1, node_embeds.shape[-1], device=node_embeds.device)
-            if 'global_attention' not in globals():
-                global_attention = lambda x, batch, gate_nn: torch.mean(x, dim=0, keepdim=True) if x.numel() > 0 else torch.zeros(1, x.shape[-1], device=x.device)
-            return
-        
-        self.gnn_layers = nn.ModuleList()
-        # First layer
-        self.gnn_layers.append(pyg_nn.GraphConv(input_dim, self.hidden_dim))
-        # Subsequent layers
-        for _ in range(self.num_layers - 1):
-            self.gnn_layers.append(pyg_nn.GraphConv(self.hidden_dim, self.hidden_dim))
-        
-        self.edge_head = nn.Linear(self.hidden_dim * 2, self.num_relations)
+            input_dim += 4 # For bbox coordinates (x1, y1, x2, y2) as edge features, typically concatenated to node features.
+
         self.dropout = nn.Dropout(self.dropout_prob)
-        
+
+        # Initialize GNN layers based on PyTorch Geometric availability
+        if not HAS_PYG:
+            logger.warning("PyTorch Geometric not found. Using dummy GNN implementation for RelationGNN.")
+            self.gnn_layers = nn.ModuleList([nn.Linear(input_dim, self.hidden_dim)]) # Simple linear layer as dummy
+            # Dummy edge head for dummy GNN
+            self.edge_head = nn.Linear(self.hidden_dim * 2, self.num_relations)
+            self._is_dummy = True # Flag to indicate dummy implementation
+        else:
+            self.gnn_layers = nn.ModuleList()
+            # First layer
+            self.gnn_layers.append(pyg_nn.GraphConv(input_dim, self.hidden_dim))
+            # Subsequent layers
+            for _ in range(self.num_layers - 1):
+                self.gnn_layers.append(pyg_nn.GraphConv(self.hidden_dim, self.hidden_dim))
+            
+            # Head for predicting relations on edges (concatenates features of source and destination nodes)
+            self.edge_head = nn.Linear(self.hidden_dim * 2, self.num_relations)
+            self._is_dummy = False
+
+        # Global pooling mechanism for graph embedding
         self.global_pool_type = config['model'].get('global_pool', 'mean')
         if self.global_pool_type == 'attention':
+            # Gate network for attention pooling
             self.gate_nn = nn.Sequential(nn.Linear(self.hidden_dim, 1), nn.Sigmoid())
             logger.info("RelationGNN: Using attention-based global pooling.")
         else:
             logger.info("RelationGNN: Using mean-based global pooling.")
+        
         logger.info(f"RelationGNN initialized with {self.num_layers} layers, hidden_dim={self.hidden_dim}.")
 
     def forward(self, node_feats: torch.Tensor, edge_index: torch.Tensor, batch_idx: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
+        Forward pass for the RelationGNN.
         Args:
             node_feats (torch.Tensor): Features for each node (N_objects, feature_dim).
             edge_index (torch.Tensor): Graph connectivity in COO format (2, N_edges).
@@ -544,55 +545,57 @@ class RelationGNN(nn.Module):
                 - graph_embed (torch.Tensor): Global graph embedding (N_graphs, hidden_dim) after pooling.
         """
         x = node_feats
-        
-        if HAS_PYG:
+
+        if self._is_dummy:
+            # Dummy GNN forward: just a linear transformation
+            for layer in self.gnn_layers:
+                x = F.relu(layer(x))
+                x = self.dropout(x)
+        else:
             for conv in self.gnn_layers:
                 x = F.relu(conv(x, edge_index))
                 x = self.dropout(x) # Apply dropout after each layer
-        else: # Dummy GNN
-            for linear_layer in self.gnn_layers:
-                x = linear_layer(x)
-                x = F.relu(x)
-                x = self.dropout(x)
-            # Handle empty edge_index for dummy GNN
-            if edge_index.numel() == 0:
-                # Return empty tensor for edge_logits if no edges
-                # Return zero tensor for graph_embed (batch_size, hidden_dim)
-                num_graphs = 1 if batch_idx is None else (batch_idx.max().item() + 1 if batch_idx.numel() > 0 else 0)
-                return torch.empty(0, self.num_relations, device=x.device), torch.zeros(num_graphs, self.hidden_dim, device=x.device)
-        
-        node_embeds = x
-        
-        # Relation prediction head
-        src, dst = edge_index
-        if src.numel() > 0 and dst.numel() > 0:
+
+        node_embeds = x # Final node embeddings after GNN layers
+
+        # Predict relations on edges
+        src, dst = edge_index[0], edge_index[1]
+        if src.numel() > 0 and dst.numel() > 0: # Check if there are any edges
             edge_feats = torch.cat([node_embeds[src], node_embeds[dst]], dim=1)
             edge_logits = self.edge_head(edge_feats)
         else:
-            edge_logits = torch.empty(0, self.num_relations, device=x.device) # No edges, no relation logits
+            # If no edges, return an empty tensor for relation logits
+            edge_logits = torch.empty(0, self.num_relations, device=x.device)
+
+        # Global pooling to get graph embedding
+        if batch_idx is None: # Assume single graph if batch_idx is not provided
+            batch_idx = torch.zeros(node_embeds.shape[0], dtype=torch.long, device=x.device)
+
+        if self.global_pool_type == 'attention' and HAS_PYG:
+            graph_embed = global_attention(node_embeds, batch_idx, self.gate_nn)
+        else: # Default to mean pooling
+            graph_embed = global_mean_pool(node_embeds, batch_idx)
         
-        # Global pooling
-        if batch_idx is None:
-            batch_idx = node_feats.new_zeros(node_feats.size(0), dtype=torch.long)
-        
-        if HAS_PYG and self.global_pool_type == 'attention':
-            graph_embed = global_attention(x, batch_idx, self.gate_nn)
-        else:
-            graph_embed = global_mean_pool(x, batch_idx)
-        
+        # Ensure graph_embed is 2D (N_graphs, hidden_dim)
+        if graph_embed.ndim == 1:
+            graph_embed = graph_embed.unsqueeze(0)
+
         return edge_logits, graph_embed
 
 class SceneGNN(nn.Module):
     """
-    A simpler Graph Neural Network alternative using GCNConv for scene graph processing.
-    This can be used as an alternative to RelationGNN.
-    Modified to return the pooled embedding `g` directly.
+    An alternative GNN module for scene graph embedding, potentially simpler or
+    with a different architecture than RelationGNN.
+    It directly outputs a global graph embedding.
     """
-    def __init__(self, in_dim: int, hidden_dim: int, n_classes: int = 2):
+    def __init__(self, in_dim: int, hidden_dim: int, n_classes: int):
         super().__init__()
-        self.hidden_dim = hidden_dim # Store hidden_dim for external access
+        self.hidden_dim = hidden_dim
+        self.n_classes = n_classes # This might be used for an internal classification head if SceneGNN has one
+        self._is_dummy = False # Assume real implementation by default
+
         if not HAS_PYG:
-            logger.warning("PyTorch Geometric not found. SceneGNN will use dummy linear layers.")
+            logger.warning("PyTorch Geometric not found. Using dummy GNN implementation for SceneGNN.")
             self.conv1 = nn.Linear(in_dim, hidden_dim)
             self.conv2 = nn.Linear(hidden_dim, hidden_dim)
             self.lin = nn.Linear(hidden_dim, n_classes) # Still keep for internal classification if needed
@@ -600,13 +603,13 @@ class SceneGNN(nn.Module):
         else:
             self.conv1 = GCNConv(in_dim, hidden_dim)
             self.conv2 = GCNConv(hidden_dim, hidden_dim)
-            self.lin = nn.Linear(hidden_dim, n_classes)
-            self._is_dummy = False
-        logger.info(f"SceneGNN initialized: in_dim={in_dim}, hidden_dim={hidden_dim}, n_classes={n_classes}.")
+            self.lin = nn.Linear(hidden_dim, n_classes) # For potential internal classification
+
+        logger.info(f"SceneGNN initialized with in_dim={in_dim}, hidden_dim={hidden_dim}.")
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor, batch: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass for SceneGNN.
+        Forward pass for the SceneGNN.
         Args:
             x (torch.Tensor): Node features (N_nodes, in_dim).
             edge_index (torch.Tensor): Graph connectivity (2, N_edges).
@@ -617,13 +620,12 @@ class SceneGNN(nn.Module):
         if self._is_dummy:
             x = F.relu(self.conv1(x))
             x = F.relu(self.conv2(x))
-            # Use the dummy global_mean_pool defined earlier
-            g = global_mean_pool(x, batch)
+            g = global_mean_pool(x, batch) # Use the dummy global_mean_pool defined earlier
             return g # Return the pooled embedding
         else:
             x = F.relu(self.conv1(x, edge_index))
             x = F.relu(self.conv2(x, edge_index))
-            g = global_mean_pool(x, batch)
+            g = global_mean_pool(x, batch) # Use the actual pyg global_mean_pool
             return g # Return the pooled embedding
 
 class BongardHead(nn.Module):
@@ -637,18 +639,22 @@ class BongardHead(nn.Module):
         self.config = config
         head_config = config['model']['bongard_head_config']
         
-        feat_dim = head_config['hidden_dim']
+        # Feature dimension for the head, typically GNN's hidden_dim
+        feat_dim = config['model']['relation_gnn_config']['hidden_dim']
         attn_dim = head_config.get('attn_dim', feat_dim)
         n_classes = head_config['num_classes']
         
+        # FiLM (Feature-wise Linear Modulation) conditioning network
+        # It takes the support graph embedding and outputs gamma and beta for modulating query features.
         self.film = nn.Sequential(
             nn.Linear(feat_dim, attn_dim),
-            nn.LayerNorm(attn_dim),
+            nn.LayerNorm(attn_dim), # Normalize before GELU
             nn.GELU(),
             nn.Linear(attn_dim, feat_dim * 2) # Outputs gamma and beta
         )
         logger.info("BongardHead: FiLM conditioning MLP initialized.")
         
+        # Mixer-style MLP for processing the conditioned query features
         self.use_glu = config['model'].get('use_glu', False)
         if self.use_glu:
             self.mixer = nn.Sequential(
@@ -669,29 +675,32 @@ class BongardHead(nn.Module):
             )
             logger.info("BongardHead: Standard Mixer MLP initialized.")
         
+        # Final classifier layer
         self.classifier = nn.Linear(feat_dim, n_classes)
-        self.temperature = nn.Parameter(torch.ones(1) * 1.0) # Learnable temperature for logits
+        # Learnable temperature parameter for scaling logits (helps calibrate confidence)
+        self.temperature = nn.Parameter(torch.ones(1) * 1.0)
         logger.info(f"BongardHead initialized with feat_dim={feat_dim}, n_classes={n_classes}, learnable temperature.")
 
     def forward(self, query_feat: torch.Tensor, support_graph_embed: torch.Tensor) -> torch.Tensor:
         """
+        Forward pass for the BongardHead.
         Args:
             query_feat (torch.Tensor): Global graph embedding of the query image (B, feat_dim).
             support_graph_embed (torch.Tensor): Aggregated global graph embedding of support set (B, feat_dim).
         Returns:
             torch.Tensor: Bongard problem classification logits (B, n_classes) with temperature scaling.
         """
-        # FiLM conditioning
+        # FiLM conditioning: Generate gamma and beta from support embedding
         gamma_beta = self.film(support_graph_embed)
         gamma, beta = gamma_beta.chunk(2, dim=-1) # Split into gamma and beta
-        
+
         # Apply FiLM: element-wise multiplication by gamma, then addition of beta
         x = gamma * query_feat + beta
         
-        # Mixer MLP
+        # Pass through the Mixer MLP
         x = self.mixer(x)
         
-        # Classifier with temperature scaling
+        # Final classification and temperature scaling
         logits = self.classifier(x) / self.temperature.clamp(min=0.01) # Clamp to avoid division by zero
         return logits
 
@@ -699,7 +708,8 @@ class PerceptionModule(nn.Module):
     """
     The core perception module that integrates object detection (external), segmentation (external),
     attribute classification, and relation prediction (GNN).
-    Outputs features and a structured scene graph.
+    Outputs features and a structured scene graph. This module orchestrates the entire
+    visual perception pipeline for Bongard problems.
     """
     def __init__(self, config: Dict[str, Any]):
         super().__init__()
@@ -708,6 +718,7 @@ class PerceptionModule(nn.Module):
         # Attribute classification model (backbone + heads)
         self.attribute_model = AttributeClassifier(config)
         # Update config with the actual feature dimension inferred from the attribute_model
+        # This ensures other modules can correctly use this dimension.
         config['model']['feature_dim'] = self.attribute_model.feature_dim
         
         # GNN module (RelationGNN or SceneGNN)
@@ -729,7 +740,8 @@ class PerceptionModule(nn.Module):
         # Scene Graph Builder (for converting raw image/detections to structured scene graphs)
         try:
             from src.scene_graph_builder import SceneGraphBuilder
-            self.scene_graph_builder = SceneGraphBuilder(images=[], config=config) # Initialize with empty images, will be passed per-image
+            # Initialize with dummy images; actual images will be passed per-image in forward.
+            self.scene_graph_builder = SceneGraphBuilder(images=[], config=config)
             logger.info("SceneGraphBuilder initialized.")
         except ImportError as e:
             self.scene_graph_builder = None
@@ -789,8 +801,6 @@ class PerceptionModule(nn.Module):
         for i in range(batch_size):
             # Convert image tensor to numpy array for scene_graph_builder (expects HWC, 0-255)
             # Undo normalization: (img * std + mean) * 255
-            # Ensure IMAGENET_STD and IMAGENET_MEAN are tensors or lists with correct dimensions
-            # For 1-channel image, IMAGENET_MEAN/STD should be [0.5]
             image_np = (images[i].permute(1, 2, 0).cpu().numpy() * np.array(IMAGENET_STD) + np.array(IMAGENET_MEAN)) * 255
             image_np = image_np.astype(np.uint8) 
             
@@ -798,24 +808,22 @@ class PerceptionModule(nn.Module):
             current_image_bboxes = detected_bboxes_batch[i]
             current_image_masks = detected_masks_batch[i]
             
-            # Handle cases where no objects are detected in an image
+            # Handle cases where no objects are detected in an image or SceneGraphBuilder is not available
             if not current_image_bboxes or not self.scene_graph_builder:
                 logger.debug(f"No objects detected or SceneGraphBuilder not initialized for query image {i}. Skipping scene graph for this image.")
                 # Append dummy (empty or zero) outputs for this image to maintain batch consistency
-                # Get num_classes for the first attribute head to define dummy logits shape
                 first_attr_head_name = next(iter(self.config['model']['attribute_classifier_config'].keys()))
                 dummy_attr_logits_shape = (0, self.config['model']['attribute_classifier_config'][first_attr_head_name])
                 dummy_relation_logits_shape = (0, self.config['model']['relation_gnn_config']['num_relations'])
                 
                 all_inferred_scene_graphs.append({'objects': [], 'relations': []})
                 for attr_name in self.config['model']['attribute_classifier_config'].keys():
-                    if attr_name == 'mlp_dim' or attr_name == 'head_dropout_prob': # Skip non-attribute keys
+                    if attr_name == 'mlp_dim' or attr_name == 'head_dropout_prob':
                         continue
                     all_attribute_logits_list[attr_name].append(torch.empty(dummy_attr_logits_shape, device=DEVICE))
                 all_relation_logits_list.append(torch.empty(dummy_relation_logits_shape, device=DEVICE))
                 all_attribute_features_list.append(torch.empty(0, self.attribute_model.feature_dim, device=DEVICE))
                 
-                # Global graph embedding should be a zero vector of appropriate size
                 gnn_hidden_dim = self.config['model']['relation_gnn_config']['hidden_dim']
                 all_global_graph_embeddings_list.append(torch.zeros(1, gnn_hidden_dim, device=DEVICE))
                 all_support_graph_embeddings_list.append(torch.zeros(1, gnn_hidden_dim, device=DEVICE))
@@ -824,7 +832,6 @@ class PerceptionModule(nn.Module):
             # Prepare object crops for the attribute classifier
             object_crops_query = []
             for bbox, mask in zip(current_image_bboxes, current_image_masks):
-                # get_masked_crop expects numpy image, mask, and bbox
                 crop = get_masked_crop(image_np, mask, bbox)
                 # Apply same normalization as training data
                 crop_tensor = T.Compose([
@@ -836,7 +843,7 @@ class PerceptionModule(nn.Module):
                 object_crops_query.append(crop_tensor)
             
             # Stack object crops into a batch for the attribute model
-            object_crops_batch_query = torch.stack(object_crops)
+            object_crops_batch_query = torch.stack(object_crops_query)
             
             # Pass object crops through the attribute classifier
             pooled_object_features_query, attribute_logits_per_object_query = self.attribute_model(object_crops_batch_query)
@@ -879,11 +886,9 @@ class PerceptionModule(nn.Module):
                         pooled_object_features_query, edge_index_query, batch_idx=batch_idx_query
                     )
             
-            # 5. Build Scene Graph (for current QUERY image) using the SceneGraphBuilder
+            # Build Scene Graph (for current QUERY image) using the SceneGraphBuilder
             inferred_scene_graph_query = {}
             if self.scene_graph_builder:
-                # The scene_graph_builder now expects attribute_logits and relation_logits
-                # to extract symbolic values with confidence.
                 inferred_scene_graph_query = self.scene_graph_builder.build_scene_graph(
                     image_np=image_np,
                     detected_bboxes=current_image_bboxes,
@@ -1128,8 +1133,6 @@ class LitBongard(pl.LightningModule):
         support_labels_reshaped = support_labels_flat.view(batch_size_actual, max_support_imgs)
         
         # Apply Mixup/Cutmix if enabled
-        # Note: HAS_TORCHVISION_V2 is a placeholder, should be checked against actual torchvision version
-        # Assuming HAS_TRAINING_UTILS is true for MixupCutmixAugmenter
         if self.cfg['training'].get('use_mixup_cutmix', False) and HAS_TRAINING_UTILS:
             num_bongard_classes = self.cfg['model']['bongard_head_config']['num_classes']
             mixup_cutmix_augmenter = MixupCutmixAugmenter(self.cfg['training'], num_bongard_classes)
@@ -1650,4 +1653,3 @@ class LitSimCLR(pl.LightningModule):
             scheduler_interval = 'step'
         
         return [optimizer], ([{'scheduler': scheduler, 'interval': scheduler_interval, 'monitor': 'simclr_train_loss'}] if scheduler else [])
-
