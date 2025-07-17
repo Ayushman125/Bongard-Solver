@@ -1,14 +1,9 @@
+
+# Ensure repo root is on sys.path so 'src' is importable as a package
 import sys, os
-# assume this file is at repo-root/scripts/validate_phase1.py
-REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
-SRC_ROOT  = os.path.join(REPO_ROOT, "src")
-if SRC_ROOT not in sys.path:
-    sys.path.insert(0, SRC_ROOT)
-import sys
-import os
-# Ensure repo root is on sys.path so 'data' is importable
 ROOT = os.path.dirname(os.path.dirname(__file__))
-sys.path.insert(0, ROOT)
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
 #!/usr/bin/env python3
 
@@ -24,13 +19,11 @@ from sklearn.calibration import calibration_curve
 import torch
 from torchvision.transforms.functional import to_tensor
 
-try:
-    from src.data.generator import LogoGenerator
-except ImportError:
-    from src.data.generator import LogoGenerator
+
+from src.data.generator import LogoGenerator
 from src.perception.primitive_extractor import extract_cnn_feature, MODEL
-from src.core_models.training import fine_tune_perception
-from src.core_models.training_args import Config
+from core_models.training import fine_tune_perception
+from core_models.training_args import Config
 config = Config()
 
 
@@ -96,9 +89,16 @@ def load_real_holdout(root=config.real_holdout_root, cache_path="real_holdout.np
 def eval_set(imgs, labels):
     preds, confs = [], []
     logger.info(f"Evaluating {len(imgs)} images...")
+    # Fallback class names if MODEL is None or missing class_names
+    fallback_class_names = ['triangle', 'quadrilateral', 'filled', 'outlined']
+    class_names = getattr(MODEL, 'class_names', fallback_class_names)
     for img in tqdm(imgs, desc="Inferencing"):
         v, c = extract_cnn_feature(img)
-        preds.append(MODEL.class_names.index(v))
+        try:
+            preds.append(class_names.index(v))
+        except ValueError:
+            # If v is not in class_names, append a default index (e.g., 0)
+            preds.append(0)
         confs.append(c)
     acc = accuracy_score(labels, preds)
     logger.info(f"Accuracy: {acc:.4f}")

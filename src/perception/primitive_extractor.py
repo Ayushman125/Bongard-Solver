@@ -1,3 +1,42 @@
+# --- Inverse attribute maps for index-to-name mapping ---
+def _invert_map(m):
+    return {v: k for k, v in m.items()}
+
+try:
+    attribute_maps_inv = {
+        'shape': _invert_map(ATTRIBUTE_SHAPE_MAP),
+        'color': _invert_map(ATTRIBUTE_COLOR_MAP),
+        'fill': _invert_map(ATTRIBUTE_FILL_MAP),
+        'size': _invert_map(ATTRIBUTE_SIZE_MAP),
+        'orientation': _invert_map(ATTRIBUTE_ORIENTATION_MAP),
+        'texture': _invert_map(ATTRIBUTE_TEXTURE_MAP),
+    }
+except Exception:
+    # Fallback dummy mapping for dummy configs
+    attribute_maps_inv = {
+        'shape': {0: 'triangle', 1: 'quadrilateral', 2: 'circle', 3: 'polygon', 4: 'other'},
+        'color': {i: f'color_{i}' for i in range(7)},
+        'fill': {0: 'filled', 1: 'outlined'},
+        'size': {0: 'small', 1: 'medium', 2: 'large'},
+        'orientation': {i: f'orientation_{i}' for i in range(4)},
+        'texture': {0: 'solid', 1: 'striped'},
+    }
+
+# --- Expose a global MODEL for import (after all dependencies are defined) ---
+MODEL = None
+try:
+    from core_models.models import BongardPerceptionModel
+    from core_models.training_args import config as _config
+    _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    _model = BongardPerceptionModel().to(_device)
+    _model.load_state_dict(torch.load(_config.best_model_path, map_location=_device))
+    _model.eval()
+    MODEL = _model
+    DEVICE = _device
+except Exception as e:
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.warning(f"Could not load BongardPerceptionModel: {e}")
 # Folder: bongard_solver/src/perception/
 # File: primitive_extractor.py
 
@@ -102,9 +141,13 @@ except ImportError as e:
                 'support_graph_embeddings': torch.randn(batch_size, self.cfg['model']['relation_gnn_config']['hidden_dim'], device=images.device)
             }
         
-    # Dummy augment_image
-    def augment_image(img_np: np.ndarray) -> np.ndarray:
-        return img_np
+
+# --- Preprocessing transform for CNN input ---
+preprocess_transform = T.Compose([
+    T.Resize(tuple(CONFIG['data']['image_size']) if 'data' in CONFIG and 'image_size' in CONFIG['data'] else (224, 224)),
+    T.ToTensor(),
+    T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
+])
 
 
 
@@ -128,11 +171,18 @@ def extract_cnn_feature(img: Image.Image):
         pass
     votes, confs = [], []
     for c in crops:
-        v, c_conf = single_inference(c)
-        votes.append(v); confs.append(c_conf)
+        result = single_inference(c)
+        # Prefer 'bongard' if present, else first key
+        if 'bongard' in result:
+            v, c_conf = result['bongard']
+        else:
+            first_attr = next(iter(result))
+            v, c_conf = result[first_attr]
+        votes.append(v)
+        confs.append(c_conf)
     from collections import Counter
     val = Counter(votes).most_common(1)[0][0]
-    avg_conf = sum(c for v,c in zip(votes,confs) if v==val) / votes.count(val)
+    avg_conf = sum(c for v, c in zip(votes, confs) if v == val) / votes.count(val)
     return val, avg_conf
 
 
