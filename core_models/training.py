@@ -215,13 +215,13 @@ class EarlyStopping:
 
 # Mixup/CutMix Augmenter
 class MixupCutmixAugmenter:
-    def __init__(self, training_cfg: Dict[str, Any], num_classes: int):
-        self.use_mixup = training_cfg.get('use_mixup', False)
-        self.use_cutmix = training_cfg.get('use_cutmix', False)
-        self.mixup_prob = training_cfg.get('mixup_prob', 0.0)
-        self.cutmix_prob = training_cfg.get('cutmix_prob', 0.0)
-        self.mixup_alpha = training_cfg.get('mixup_alpha', 0.2)
-        self.cutmix_alpha = training_cfg.get('cutmix_alpha', 1.0)
+    def __init__(self, training_cfg, num_classes: int):
+        self.use_mixup = getattr(training_cfg, 'use_mixup', False)
+        self.use_cutmix = getattr(training_cfg, 'use_cutmix', False)
+        self.mixup_prob = getattr(training_cfg, 'mixup_prob', 0.0)
+        self.cutmix_prob = getattr(training_cfg, 'cutmix_prob', 0.0)
+        self.mixup_alpha = getattr(training_cfg, 'mixup_alpha', 0.2)
+        self.cutmix_alpha = getattr(training_cfg, 'cutmix_alpha', 1.0)
         self.num_classes = num_classes
         if not HAS_TORCHVISION_V2:
             logger.warning("torchvision.transforms.v2 not available. MixUp/CutMix will not function.")
