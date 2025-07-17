@@ -509,7 +509,7 @@ def train_perception_with_buffer(
         total_steps = num_epochs * len(train_loader)
         scheduler = get_scheduler(optimizer, cfg['training'], total_steps)
 
-    scaler = GradScaler() if cfg['training']['use_amp'] else None
+    scaler = GradScaler() if cfg.training.use_amp else None
 
     # Checkpointing setup
     from core_models.training_args import Config
@@ -521,8 +521,8 @@ def train_perception_with_buffer(
 
     # ...existing early stopping setup...
     early_stopping = EarlyStopping(
-        patience=cfg['training']['early_stop_patience'],
-        delta=cfg['training']['early_stop_delta'],
+        patience=cfg.training.early_stop_patience,
+        delta=cfg.training.early_stop_delta,
         verbose=True,
         path=best_ckpt_path
     )
@@ -533,7 +533,10 @@ def train_perception_with_buffer(
         for _ in range(steps):
             # ...backward, step, accumulate avg_loss, avg_acc...
             pass
-        print(f"[Epoch {epoch}] Train Loss={avg_loss/steps:.4f} Acc={avg_acc/steps:.4f}")
+        if steps > 0:
+            print(f"[Epoch {epoch}] Train Loss={avg_loss/steps:.4f} Acc={avg_acc/steps:.4f}")
+        else:
+            print(f"[Epoch {epoch}] No training steps executed — check your data loader.")
 
         # 2) validate on synthetic hold-out
         # val_acc, _, _ = validate_on_synthetic_holdout(model)  # Implement as needed
@@ -547,12 +550,12 @@ def train_perception_with_buffer(
             torch.save(model.state_dict(), best_ckpt_path)  # best
     logger.info(f"Early Stopping initialized with patience={early_stopping.patience}, delta={early_stopping.delta}.")
     
-    num_bongard_classes = cfg['model']['bongard_head_config']['num_classes']
-    mixup_cutmix_augmenter = MixupCutmixAugmenter(cfg['training'], num_bongard_classes)
+    num_bongard_classes = cfg.model.bongard_head_config['num_classes']
+    mixup_cutmix_augmenter = MixupCutmixAugmenter(cfg.training, num_bongard_classes)
     
     # Mean Teacher (EMA) model
     ema_model = None
-    if cfg['training'].get('use_mean_teacher', False):
+    if getattr(cfg.training, 'use_mean_teacher', False):
         ema_model = copy.deepcopy(model)
         for param in ema_model.parameters():
             param.requires_grad = False
@@ -560,16 +563,16 @@ def train_perception_with_buffer(
     
     # GradNorm
     grad_norm_instance = None
-    if cfg['training'].get('use_grad_norm', False):
+    if getattr(cfg.training, 'use_grad_norm', False):
         initial_task_weights = {
             'bongard_loss': 1.0,
-            'attribute_loss': cfg['training'].get('attribute_loss_weight', 1.0),
-            'relation_loss': cfg['training'].get('relation_loss_weight', 1.0),
-            'consistency_loss': cfg['training'].get('consistency_loss_weight', 1.0),
+            'attribute_loss': getattr(cfg.training, 'attribute_loss_weight', 1.0),
+            'relation_loss': getattr(cfg.training, 'relation_loss_weight', 1.0),
+            'consistency_loss': getattr(cfg.training, 'consistency_loss_weight', 1.0),
         }
         initial_task_weights = {k: v for k, v in initial_task_weights.items() if v > 0}
         if initial_task_weights:
-            grad_norm_instance = GradNorm(initial_task_weights, cfg['training'].get('grad_norm_alpha', 1.5))
+            grad_norm_instance = GradNorm(initial_task_weights, getattr(cfg.training, 'grad_norm_alpha', 1.5))
             grad_norm_instance.to(DEVICE)
             logger.info("GradNorm initialized.")
         else:
@@ -578,8 +581,8 @@ def train_perception_with_buffer(
     # SWA (Stochastic Weight Averaging)
     swa_model = None
     swa_scheduler = None
-    if cfg['training'].get('use_swa', False):
-        swa_config = cfg['training'].get('swa_config', {})
+    if getattr(cfg.training, 'use_swa', False):
+        swa_config = getattr(cfg.training, 'swa_config', {})
         swa_start_epoch = swa_config.get('swa_start_epoch', num_epochs // 2)
         if num_epochs > swa_start_epoch:
             swa_model = swa_utils.AveragedModel(model)
@@ -593,10 +596,10 @@ def train_perception_with_buffer(
     style_discriminator = None
     optimizer_d = None
     bce_loss = None
-    if HAS_DOMAIN_ADAPTATION and cfg['training'].get('use_domain_adaptation', False):
-        feat_dim = cfg['model'].get('feat_dim', 576) # Default to MobileNetV3 small output
+    if HAS_DOMAIN_ADAPTATION and getattr(cfg.training, 'use_domain_adaptation', False):
+        feat_dim = getattr(cfg.model, 'feat_dim', 576) # Default to MobileNetV3 small output
         style_discriminator = StyleDiscriminator(feat_dim=feat_dim).to(DEVICE)
-        optimizer_d = torch.optim.Adam(style_discriminator.parameters(), lr=cfg['training'].get('lr_disc', 1e-4))
+        optimizer_d = torch.optim.Adam(style_discriminator.parameters(), lr=getattr(cfg.training, 'lr_disc', 1e-4))
         bce_loss = nn.BCELoss()
         logger.info(f"Style Discriminator initialized with feat_dim={feat_dim}, lr_disc={cfg['training'].get('lr_disc', 1e-4)}.")
 

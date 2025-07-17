@@ -184,8 +184,8 @@ def get_scheduler(optimizer: optim.Optimizer, config: Dict[str, Any], total_step
     Returns:
         Optional[torch.optim.lr_scheduler._LRScheduler]: The initialized scheduler, or None if no scheduler.
     """
-    scheduler_name = getattr(config, 'scheduler', 'None')
-    scheduler_config = getattr(config, 'scheduler_config', {})
+    scheduler_name = getattr(config, 'scheduler', 'None') if isinstance(config, dict) else config.scheduler
+    scheduler_config = getattr(config, 'scheduler_config', {}) if isinstance(config, dict) else config.scheduler_config
     
     scheduler = None
     if scheduler_name == 'OneCycleLR':
@@ -199,7 +199,8 @@ def get_scheduler(optimizer: optim.Optimizer, config: Dict[str, Any], total_step
         scheduler = ReduceLROnPlateau(optimizer, **scheduler_config['ReduceLROnPlateau'])
         logger.info("Using ReduceLROnPlateau scheduler.")
     elif scheduler_name == 'CosineAnnealingLR':
-        scheduler = CosineAnnealingLR(optimizer, T_max=config['epochs'], eta_min=scheduler_config['CosineAnnealingLR'].get('eta_min', 1e-6))
+        T_max = config['epochs'] if isinstance(config, dict) else config.epochs
+        scheduler = CosineAnnealingLR(optimizer, T_max=T_max, eta_min=scheduler_config['CosineAnnealingLR'].get('eta_min', 1e-6))
         logger.info("Using CosineAnnealingLR scheduler.")
     elif scheduler_name == 'warmup_cosine':
         if HAS_GRADUAL_WARMUP:
@@ -218,7 +219,8 @@ def get_scheduler(optimizer: optim.Optimizer, config: Dict[str, Any], total_step
             logger.info(f"Initialized warmup_cosine scheduler with warmup_epochs={scheduler_config['warmup_cosine'].get('warmup_epochs', 5)}, T_0={scheduler_config['warmup_cosine'].get('T_0', 10)}.")
         else:
             logger.warning("warmup_cosine scheduler requested but GradualWarmupScheduler not found. Falling back to CosineAnnealingLR.")
-            scheduler = CosineAnnealingLR(optimizer, T_max=config['epochs'])
+            T_max = config['epochs'] if isinstance(config, dict) else config.epochs
+            scheduler = CosineAnnealingLR(optimizer, T_max=T_max)
     elif scheduler_name != 'None':
         logger.warning(f"Scheduler '{scheduler_name}' not found or supported. No scheduler will be used.")
     
