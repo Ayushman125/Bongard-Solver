@@ -269,38 +269,24 @@ class ObjectDetector:
     """
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.use_sam = config['segmentation']['use_sam'] and HAS_SAM_SEG
+        # --- PHASE 1 PATCH: Always skip SAM segmentation ---
+        self.use_sam = False
         self.sam_predictor = None
         self.sam_mask_generator = None
-
-        if self.use_sam:
-            try:
-                sam_checkpoint = self.config['segmentation']['sam_checkpoint_path']
-                model_type = self.config['segmentation']['sam_model_type']
-                device = "cuda" if torch.cuda.is_available() else "cpu"
-                sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
-                sam.to(device=device)
-                self.sam_predictor = SamPredictor(sam)
-                self.sam_mask_generator = SamAutomaticMaskGenerator(
-                    sam,
-                    points_per_side=self.config['segmentation']['sam_points_per_side'],
-                    pred_iou_thresh=self.config['segmentation']['sam_pred_iou_thresh']
-                )
-                logger.info(f"SAM {model_type} loaded for segmentation.")
-            except Exception as e:
-                logger.error(f"Failed to load SAM model: {e}. Disabling SAM segmentation.", exc_info=True)
-                self.use_sam = False
+        # --- END PATCH ---
 
         # Classical CV fallback parameters
         image_size_product = 1
-        if 'data' in CONFIG and 'image_size' in CONFIG['data'] and len(CONFIG['data']['image_size']) == 2:
-            image_size_product = CONFIG['data']['image_size'][0] * CONFIG['data']['image_size'][1]
+        # Use attribute access for dataclass config
+        if hasattr(self.config, 'data') and hasattr(self.config.data, 'image_size') and len(self.config.data.image_size) == 2:
+            image_size_product = self.config.data.image_size[0] * self.config.data.image_size[1]
         else:
-            logger.warning("CONFIG['data']['image_size'] not properly defined. Using default image area for min_contour_area_ratio.")
+            logger.warning("Config.data.image_size not properly defined. Using default image area for min_contour_area_ratio.")
             image_size_product = 224 * 224 # Default fallback if config is malformed
 
-        self.min_contour_area_ratio = self.config['debug'].get('min_contour_area_sam_fallback', 50) / image_size_product
-        self.max_fallback_cnt = self.config['debug'].get('max_fallback_cnt', 5)
+        fallback = getattr(getattr(self.config, 'debug', None), 'min_contour_area_sam_fallback', 50)
+        self.min_contour_area_ratio = fallback / image_size_product
+        self.max_fallback_cnt = getattr(getattr(self.config, 'debug', None), 'max_fallback_cnt', 5)
         logger.info(f"ObjectDetector initialized. Use SAM: {self.use_sam}")
 
     def detect_and_segment(self, image_np: np.ndarray) -> List[Dict[str, Any]]:
