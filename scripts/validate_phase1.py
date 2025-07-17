@@ -1,15 +1,15 @@
-# Ensure repo root is on sys.path so 'src' is importable as a package
 
+# -----------------------------------------------------------
+# Make sure we can import both:
+#   1) core_models   (living at project root)
+#   2) anything under src/
+# -----------------------------------------------------------
 import os, sys
-# Insert project root (one level up from scripts/) so `import core_models` works
-root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if root not in sys.path:
-    sys.path.insert(0, root)
-
-# Ensure src/ is also on sys.path so 'src' is importable as a package
-src = os.path.join(root, "src")
-if src not in sys.path:
-    sys.path.insert(0, src)
+script_dir   = os.path.dirname(__file__)
+project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+src_dir      = os.path.join(project_root, "src")
+sys.path.insert(0, project_root)
+sys.path.insert(0, src_dir)
 
 #!/usr/bin/env python3
 
