@@ -276,7 +276,8 @@ except ImportError:
 # --- Import MoCo builder if use_moco is enabled in config ---
 HAS_MOCO = False
 try:
-    if 'model' in CONFIG and 'simclr_config' in CONFIG.model and CONFIG.model.simclr_config.get('use_moco', False):
+    # Fixed: Use hasattr for checking attributes on CONFIG object
+    if hasattr(CONFIG, 'model') and hasattr(CONFIG.model, 'simclr_config') and CONFIG.model.simclr_config.get('use_moco', False):
         from moco.builder import MoCo
         HAS_MOCO = True
         logger.info("MoCo builder found and enabled.")
@@ -1572,7 +1573,7 @@ class LitBongard(pl.LightningModule):
         # Determine scheduler interval based on type
         scheduler_interval = 'epoch'
         if self.hparams.cfg.training.get('scheduler') == 'OneCycleLR': # Fixed: attribute access
-            scheduler_interval = 'step' # OneCycleLR updates every step
+            scheduler_interval = 'step'
         
         return [optimizer], ([{'scheduler': scheduler, 'interval': scheduler_interval, 'monitor': 'val/total_loss' if self.hparams.cfg.training.get('scheduler') == 'ReduceLROnPlateau' else None}] if scheduler else []) # Fixed: attribute access
 
