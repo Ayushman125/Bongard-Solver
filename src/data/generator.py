@@ -1,30 +1,3 @@
-    def sample_rule(self):
-        """Return a random rule object or dummy if not available."""
-        if not ALL_BONGARD_RULES:
-            # Dummy rule
-            rule_obj = type('Rule', (object,), {
-                'description': "SHAPE(TRIANGLE)",
-                'positive_features': {'shape': 'triangle'},
-                'negative_features': {'shape': 'square'},
-                'is_positive_rule': True
-            })()
-        else:
-            rule_obj = random.choice(ALL_BONGARD_RULES)
-        return rule_obj
-
-    def sample(self, rule_feat, rule_val):
-        """Draw positives, negatives, and return gt_rule string."""
-        gt_rule = f"{rule_feat.upper()}({rule_val.upper()})"
-        # For demonstration, use make_problem to generate examples
-        positives, negatives = [], []
-        rule_obj = self.sample_rule()
-        for _ in range(self.cfg.get('num_positive_examples', 6)):
-            img_np, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = self.make_problem(random.randint(0, 10000))
-            positives.append(img_np)
-        for _ in range(self.cfg.get('num_negative_examples', 6)):
-            _, img_np, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = self.make_problem(random.randint(0, 10000))
-            negatives.append(img_np)
-        return positives, negatives, gt_rule
 # Folder: bongard_solver/src/data/
 # File: generator.py
 import random
@@ -38,7 +11,7 @@ from typing import Dict, Any, List, Tuple, Optional, Union
 import os
 import json
 import math  # For geometric calculations
-import glob # Added for background textures loader
+import glob  # Added for background textures loader
 
 # Import global configuration and Bongard rules from the project root
 try:
@@ -72,7 +45,8 @@ except ImportError as e:
                 'min_occluder_size': 5,
                 'max_occluder_size': 20,
                 'jitter_width_range': [1, 3],
-                'jitter_dash_options': [None, (4,2), (2,2,2)]
+                'jitter_dash_options': [None, (4,2), (2,2,2)],
+                'use_background_textures': True # Added for dummy config to enable texture loading
             }
         },
         'training': {'augmentation_config': {}}
@@ -212,7 +186,8 @@ class LogoGenerator(Dataset):
         x, y = pos
         params = self._jitter_params()
         line_width = params['width']
-        dash_pattern = params['dash']
+        dash_pattern = params['dash'] # Not directly used by PIL's basic drawing functions for polygons/rectangles
+
         # Create a temporary blank image for drawing the object, then rotate and paste
         # Make the temporary canvas large enough to accommodate rotation without clipping
         temp_canvas_size = int(size * 2.5)  # Larger buffer for rotated shapes
@@ -224,6 +199,7 @@ class LogoGenerator(Dataset):
         half_size = size // 2
         bbox_rel = [center_offset - half_size, center_offset - half_size, center_offset + half_size, center_offset + half_size]
         current_fill_color = fill_color_rgb if fill_type == 'solid' else None
+
         if shape == 'triangle':
             h = size * (3**0.5 / 2)
             pts = [(center_offset, center_offset - h / 2),
@@ -260,13 +236,22 @@ class LogoGenerator(Dataset):
             char = random.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789')
             current_font_size = int(size * 0.7)
             font_to_use = ImageFont.truetype(self.cfg['font_path'], size=current_font_size) if self.cfg['font_path'] else ImageFont.load_default()
-            text_width, text_height = obj_draw.textsize(char, font=font_to_use)
+            # textbbox is preferred over textsize for newer PIL versions
+            try:
+                # PIL 9.2.0+
+                left, top, right, bottom = obj_draw.textbbox((0, 0), char, font=font_to_use)
+                text_width, text_height = right - left, bottom - top
+            except AttributeError:
+                # Older PIL versions
+                text_width, text_height = obj_draw.textsize(char, font=font_to_use)
+
             text_x = center_offset - text_width // 2
             text_y = center_offset - text_height // 2
             obj_draw.text((text_x, text_y), char, font=font_to_use, fill=fill_color_rgb)
         else:
             logger.warning(f"Unsupported shape type for drawing: {shape}. Drawing a square as fallback.")
             obj_draw.rectangle(bbox_rel, outline=outline_color_rgb, fill=current_fill_color, width=line_width)
+
         # Apply fill pattern if not 'solid' or 'outlined'
         if fill_type == 'striped':
             for y_stripe in range(0, temp_canvas_size, 5):  # 5 pixel wide stripes
@@ -275,6 +260,7 @@ class LogoGenerator(Dataset):
             for x_dot in range(0, temp_canvas_size, 10):
                 for y_dot in range(0, temp_canvas_size, 10):
                     obj_draw.ellipse([x_dot-1, y_dot-1, x_dot+1, y_dot+1], fill=fill_color_rgb)
+
         # Paste the object onto the main image
         paste_x = x - obj_canvas.width // 2
         paste_y = y - obj_canvas.height // 2
@@ -374,6 +360,7 @@ class LogoGenerator(Dataset):
                 s1 = obj1['size_pixels']
                 x2, y2 = obj2['position']
                 s2 = obj2['size_pixels']
+
                 # Simple spatial relations
                 if x1 < x2 and random.random() < self.relation_density:
                     scene_graph['relations'].append({
@@ -435,6 +422,7 @@ class LogoGenerator(Dataset):
         
         objects_data = []
         existing_bboxes = []  # To keep track of drawn object bounding boxes for overlap check
+
         # Calculate base confidence for the image (starts high, reduced by randomization)
         image_confidence = 1.0
         if self.bg_textures and self.cfg.get('use_background_textures', False) and random.random() < 0.2:  # If background texture was used
@@ -506,7 +494,7 @@ class LogoGenerator(Dataset):
         if random.random() < self.cfg.get('blur_prob', 0.2):
             img = img.filter(ImageFilter.GaussianBlur(radius=random.uniform(0.5, 1.5)))
             image_confidence *= 0.95  # Slightly reduce confidence for blur
-
+        
         # Apply augmentations after drawing and other randomization
         augmented_img_np = augment_image(np.array(img))  # augment_image expects numpy array
         
@@ -516,6 +504,36 @@ class LogoGenerator(Dataset):
         # Clamp confidence between 0 and 1
         image_confidence = max(0.0, min(1.0, image_confidence))
         return augmented_img_np, scene_graph, image_confidence
+
+    def sample_rule(self):
+        """Return a random rule object or dummy if not available."""
+        if not ALL_BONGARD_RULES:
+            # Dummy rule
+            rule_obj = type('Rule', (object,), {
+                'description': "SHAPE(TRIANGLE)",
+                'positive_features': {'shape': 'triangle'},
+                'negative_features': {'shape': 'square'},
+                'is_positive_rule': True
+            })()
+        else:
+            rule_obj = random.choice(ALL_BONGARD_RULES)
+        return rule_obj
+
+    def sample(self, rule_feat, rule_val):
+        """Draw positives, negatives, and return gt_rule string."""
+        gt_rule = f"{rule_feat.upper()}({rule_val.upper()})"
+        # For demonstration, use make_problem to generate examples
+        positives, negatives = [], []
+        rule_obj = self.sample_rule() # This line was originally `self .sample_rule()`
+        for _ in range(self.cfg.get('num_positive_examples', 6)):
+            # make_problem returns a large tuple, we only need the image for this sample function
+            img_np, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = self.make_problem(random.randint(0, 10000))
+            positives.append(img_np)
+        for _ in range(self.cfg.get('num_negative_examples', 6)):
+            # make_problem returns a large tuple, we only need the image for this sample function
+            _, img_np, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = self.make_problem(random.randint(0, 10000))
+            negatives.append(img_np)
+        return positives, negatives, gt_rule
 
     def make_problem(self, problem_id: int) -> Tuple[Any, ...]:
         """
@@ -595,7 +613,9 @@ class LogoGenerator(Dataset):
             support_sgs_flat_bytes.append(json.dumps({'objects': [], 'relations': []}).encode('utf-8'))
             support_confs_flat.append(0.0)  # Padding confidence is 0
 
-        # Convert to tensors
+        # Convert to tensors (these will be converted to tensors in __getitem__ of LogoDataset)
+        # For make_problem's direct return, keep them as Python types for now, or convert if needed by caller.
+        # The original snippet had them as tensors here, so we will keep them as tensors for consistency.
         num_support_per_problem_tensor = torch.tensor(num_actual_support, dtype=torch.long)
         tree_indices_tensor = torch.tensor(original_index, dtype=torch.long)
         is_weights_tensor = torch.tensor(1.0, dtype=torch.float)  # This will be updated by replay buffer
@@ -618,7 +638,7 @@ class LogoGenerator(Dataset):
                 dummy_query_bboxes_view1, dummy_query_masks_view1,
                 dummy_query_bboxes_view2, dummy_query_masks_view2,
                 dummy_support_bboxes_flat, dummy_support_masks_flat,
-                query_conf1, query_conf2, support_confs_flat, gt_rule_description) # Added confidences and gt_rule
+                query_conf1, query_conf2, support_confs_flat, gt_rule_description)  # Added confidences and gt_rule
 
 class LogoDataset(Dataset):
     """
@@ -631,7 +651,7 @@ class LogoDataset(Dataset):
         
         # Pass the background_texture_path from config to LogoGenerator
         bg_textures_dir = cfg['data']['synthetic_data_config'].get('background_texture_path', './data/textures')
-        self.generator = LogoGenerator(cfg, bg_textures_dir=bg_textures_dir) # Pass the directory
+        self.generator = LogoGenerator(cfg, bg_textures_dir=bg_textures_dir)  # Pass the directory
         logger.info(f"LogoDataset initialized to generate {num_samples} problems.")
 
     def __len__(self):
@@ -680,7 +700,6 @@ class LogoDataset(Dataset):
         problem_list[21] = torch.tensor(problem_list[21], dtype=torch.float)  # query_conf1
         problem_list[22] = torch.tensor(problem_list[22], dtype=torch.float)  # query_conf2
         problem_list[23] = torch.tensor(problem_list[23], dtype=torch.float)  # support_confs_flat
-
         return tuple(problem_list)
 
 if __name__ == '__main__':
@@ -713,7 +732,7 @@ if __name__ == '__main__':
                     'max_occluder_size': 20,
                     'jitter_width_range': [1, 3],
                     'jitter_dash_options': [None, (4,2), (2,2,2)],
-                    'use_background_textures': True # Enable for dummy test
+                    'use_background_textures': True  # Enable for dummy test
                 }
             },
             'training': {'augmentation_config': {}}
@@ -725,6 +744,7 @@ if __name__ == '__main__':
                 self.positive_features = positive_features
                 self.negative_features = negative_features
                 self.is_positive_rule = is_positive_rule
+
         ALL_BONGARD_RULES = [
             DummyBongardRule("SHAPE(TRIANGLE)", {'shape': 'triangle'}, {'shape': 'square'}),
             DummyBongardRule("COLOR(RED)", {'color': 'red'}, {'color': 'blue'}),
@@ -771,6 +791,7 @@ if __name__ == '__main__':
         axes[1].axis('off')
         plt.suptitle(f"Bongard Problem {original_index} (Label: {problem_label})")
         plt.show()
+
         # Display some support images
         if num_support_per_problem_tensor.item() > 0:
             num_display = min(4, num_support_per_problem_tensor.item())
@@ -794,4 +815,4 @@ if __name__ == '__main__':
         logger.info(f"Dataset item {i}: Support images shape {problem[9].shape}")
         logger.info(f"Dataset item {i}: Query1 confidence {problem[21].item():.4f}, Query2 confidence {problem[22].item():.4f}")
         logger.info(f"Dataset item {i}: Support confidences (first 5) {problem[23][:5].tolist()}")
-        logger.info(f"Dataset item {i}: GT Rule: {problem[24]}") # Accessing the new gt_rule_description
+        logger.info(f"Dataset item {i}: GT Rule: {problem[24]}")  # Accessing the new gt_rule_description
