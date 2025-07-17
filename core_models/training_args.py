@@ -1,14 +1,21 @@
+@dataclass
+class FewShotConfig:
+    enable: bool = False
+    # Add more few-shot parameters as needed, e.g.:
+    # support_shots: int = 5
+
 # Folder: bongard_solver/core_models/
 # File: training_args.py
 
-import dataclasses
+
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional
-import yaml
+import dataclasses
 import os
+import yaml
 import torch
 import logging
 import torchvision.transforms as T # For mo_transform
+from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -225,6 +232,7 @@ class Config:
     data: DataConfig = field(default_factory=DataConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
     debug: DebugConfig = field(default_factory=DebugConfig)
+    few_shot: FewShotConfig = field(default_factory=FewShotConfig)
 
     # Phase 1 hyper-configs and checkpointing
     # Perception CNN
