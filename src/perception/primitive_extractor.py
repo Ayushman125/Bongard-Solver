@@ -195,7 +195,7 @@ def single_inference(img_pil: Image.Image, model: Optional[nn.Module] = None) ->
         # Provide a full-image bbox so attribute_model sees an object
         H, W = input_tensor.shape[2:]
         # full-image bbox as a (1,4) Tensor
-        full_bbox = torch.tensor([[0, 0, W, H]], dtype=torch.float32, device=DEVICE)
+        full_bbox = torch.tensor([0, 0, W, H], dtype=torch.float32, device=DEVICE)
         dummy_bboxes_batch = [full_bbox]
         # Full-mask covering the entire image
         dummy_masks_batch = [torch.ones(1, 1, H, W, dtype=torch.float32, device=DEVICE)]
@@ -442,16 +442,24 @@ def extract_cnn_features(img_pil: Image.Image) -> Tuple[Dict[str, Tuple[str, flo
 
     crops_t = [preprocess_transform(p).to(DEVICE) for p in crops_pil]
     inp = torch.stack(crops_t)  # B x C x H x W
+    # Prepare dummy detection inputs so the model actually runs its heads
+    B, C, H, W = inp.shape
+    # Make a full-frame bbox [x1,y1,x2,y2] for each crop, shape (1,4)
+    full_bbox = torch.tensor([[0, 0, W, H]], dtype=torch.float32, device=DEVICE)
+    dummy_bboxes_batch = [full_bbox.clone() for _ in range(B)]
+
+    # Make a full-frame mask (1×1×H×W) for each crop
+    full_mask = torch.ones((1, 1, H, W), dtype=torch.float32, device=DEVICE)
+    dummy_masks_batch = [full_mask.clone() for _ in range(B)]
+
+    # DEBUG: verify we really have B boxes of shape (1,4)
+    logger.debug(f"Detected {len(dummy_bboxes_batch)} bboxes, each shape={dummy_bboxes_batch[0].shape}")
+    logger.debug(f"Detected {len(dummy_masks_batch)} masks, each shape={dummy_masks_batch[0].shape}")
+
     with torch.no_grad():
-        dummy_gts_json_strings = [b'{}'] * inp.shape[0]
-        # Provide a full-image bbox as a (1,4) Tensor for each crop
-        H, W = inp.shape[2:]
-        full_bbox = torch.tensor([[0, 0, W, H]], dtype=torch.float32, device=DEVICE)
-        dummy_bboxes_batch = [full_bbox for _ in range(inp.shape[0])]
-        dummy_masks_batch = [torch.ones(1, 1, H, W, dtype=torch.float32, device=DEVICE) for _ in range(inp.shape[0])]
         model_output = MODEL(
-            images=inp,
-            ground_truth_json_strings=dummy_gts_json_strings,
+            images=inp,  # B×C×H×W
+            ground_truth_json_strings=[b'{}'] * B,
             detected_bboxes_batch=dummy_bboxes_batch,
             detected_masks_batch=dummy_masks_batch,
             support_images=None,
