@@ -340,7 +340,7 @@ def extract_fill_conf(img_pil: Image.Image) -> Tuple[str, float]:
     return fill_type, confidence
 
 
-def extract_cnn_features(img_pil: Image.Image) -> Dict[str, Tuple[str, float]]:
+def extract_cnn_features(img_pil: Image.Image) -> Tuple[Dict[str, Tuple[str, float]], float]:
     """
     Extracts features (shape, color, fill, etc.) and their confidences
     using a pre-trained CNN model (PerceptionModule) combined with
@@ -351,8 +351,9 @@ def extract_cnn_features(img_pil: Image.Image) -> Dict[str, Tuple[str, float]]:
         img_pil (PIL.Image.Image): Cropped image of a single object.
 
     Returns:
-        Dict[str, Tuple[str, float]]: A dictionary mapping feature type (e.g., 'shape')
-                                      to a tuple of (predicted_value_name, confidence).
+        Tuple[Dict[str, Tuple[str, float]], float]:
+            - A dictionary mapping feature type (e.g., 'shape') to a tuple of (predicted_value_name, confidence).
+            - The average confidence across all features.
     """
     # Initialize a list with the original PIL image for inference.
     crops_pil = [img_pil]
@@ -373,10 +374,11 @@ def extract_cnn_features(img_pil: Image.Image) -> Dict[str, Tuple[str, float]]:
     all_votes: Dict[str, List[str]] = defaultdict(list)
     all_confs: Dict[str, List[float]] = defaultdict(list)
 
-    # If the model is not loaded, return a tuple of (dict, ) to match expected unpacking in callers.
+    # If the model is not loaded, return a tuple matching the normal return type.
     if MODEL is None:
         dummy_result = {attr_type: (f"unknown_{attr_type}", 0.0) for attr_type in attribute_maps_inv.keys()}
-        return (dummy_result, )
+        avg_conf = 0.0
+        return dummy_result, avg_conf
 
     for c in crops_pil:
         inference_results = single_inference(c)
@@ -387,6 +389,8 @@ def extract_cnn_features(img_pil: Image.Image) -> Dict[str, Tuple[str, float]]:
     final_extracted_features: Dict[str, Tuple[str, float]] = {}
 
     # Aggregate the results for each attribute type using majority voting and average confidence.
+    total_conf = 0.0
+    n_attr = 0
     for attr_type in all_votes.keys():
         votes = all_votes[attr_type]
         confs = all_confs[attr_type]
@@ -404,9 +408,13 @@ def extract_cnn_features(img_pil: Image.Image) -> Dict[str, Tuple[str, float]]:
         avg_conf = sum(matching_confs) / len(matching_confs) if matching_confs else 0.0
 
         final_extracted_features[attr_type] = (most_common_val, avg_conf)
+        total_conf += avg_conf
+        n_attr += 1
         logger.debug(f"CNN Extracted {attr_type.capitalize()} (TTA): {most_common_val} with confidence {avg_conf:.4f}")
 
-    return final_extracted_features
+    # Compute average confidence across all attributes
+    avg_confidence = total_conf / n_attr if n_attr > 0 else 0.0
+    return final_extracted_features, avg_confidence
 
 
 if __name__ == '__main__':
