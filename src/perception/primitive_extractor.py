@@ -1,5 +1,6 @@
 # Folder: bongard_solver/src/perception/
 # File: primitive_extractor.py
+
 import logging
 import cv2
 import numpy as np
@@ -9,8 +10,17 @@ import torch.nn as nn
 import torchvision.transforms as T
 from typing import Tuple, Dict, Any, Optional, List
 from collections import Counter  # For TTA majority vote
+import random
+import collections
 
+###############################
+# Logger Setup
+###############################
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
  # Import global configuration and model components
+
+# --- MOVE THESE DEFINITIONS AFTER THE TRY/EXCEPT THAT DEFINES CONFIG AND ATTRIBUTE MAPS ---
 try:
     from config import CONFIG, IMAGENET_MEAN, IMAGENET_STD, DEVICE
     from config import ATTRIBUTE_SHAPE_MAP, ATTRIBUTE_COLOR_MAP, ATTRIBUTE_FILL_MAP
@@ -96,56 +106,7 @@ except ImportError as e:
     def augment_image(img_np: np.ndarray) -> np.ndarray:
         return img_np
 
-# Inverse maps (index to name) - define globally or ensure they are imported/accessible
-SHAPE_MAP_INV = {v: k for k, v in ATTRIBUTE_SHAPE_MAP.items()} if 'ATTRIBUTE_SHAPE_MAP' in globals() else {0: 'circle', 1: 'square', 2: 'triangle', 3: 'pentagon', 4: 'star', 5: 'text_character'}
-COLOR_MAP_INV = {v: k for k, v in ATTRIBUTE_COLOR_MAP.items()} if 'ATTRIBUTE_COLOR_MAP' in globals() else {0: 'red', 1: 'blue', 2: 'green', 3: 'yellow', 4: 'black', 5: 'white'}
-FILL_MAP_INV = {v: k for k, v in ATTRIBUTE_FILL_MAP.items()} if 'ATTRIBUTE_FILL_MAP' in globals() else {0: 'solid', 1: 'outlined', 2: 'striped', 3: 'dotted'}
-SIZE_MAP_INV = {v: k for k, v in ATTRIBUTE_SIZE_MAP.items()} if 'ATTRIBUTE_SIZE_MAP' in globals() else {0: 'small', 1: 'medium', 2: 'large'}
-ORIENTATION_MAP_INV = {v: k for k, v in ATTRIBUTE_ORIENTATION_MAP.items()} if 'ATTRIBUTE_ORIENTATION_MAP' in globals() else {0: 'upright', 1: 'rotated_45', 2: 'rotated_90', 3: 'rotated_135'}
-TEXTURE_MAP_INV = {v: k for k, v in ATTRIBUTE_TEXTURE_MAP.items()} if 'ATTRIBUTE_TEXTURE_MAP' in globals() else {0: 'flat', 1: 'rough', 2: 'smooth'}
 
-attribute_maps_inv = {
-    'shape': SHAPE_MAP_INV, 'color': COLOR_MAP_INV, 'fill': FILL_MAP_INV,
-    'size': SIZE_MAP_INV, 'orientation': ORIENTATION_MAP_INV, 'texture': TEXTURE_MAP_INV
-}
-
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
-# Preprocessing transform for CNN model input
-# Use the image size from CONFIG['data']['image_size']
-preprocess_transform = T.Compose([
-    T.Resize(tuple(CONFIG['data']['image_size'])),   # Resize to model's expected input size (H, W)
-    T.ToTensor(),
-    T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
-])
-
-
-
-# --- PHASE 1 HARNESS: Expose MODEL, single_inference, and TTA extract_cnn_feature ---
-from core_models.training_args import Config
-config = Config()
-import torch
-MODEL = BongardPerceptionModel().to(config.device)
-import os
-if os.path.exists(config.best_model_path):
-    MODEL.load_state_dict(torch.load(config.best_model_path, map_location=config.device))
-MODEL.eval()
-
-def single_inference(img: Image.Image):
-    """Run the CNN on one preprocessed crop."""
-    preprocess = T.Compose([
-        T.Resize((config.img_size, config.img_size)),
-        T.ToTensor(),
-        T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-    x = preprocess(img).unsqueeze(0).to(config.device)
-    with torch.no_grad():
-        logits = MODEL(x)
-    probs = torch.softmax(logits, dim=1).cpu().squeeze(0)
-    idx = int(probs.argmax().item())
-    class_names = getattr(MODEL, 'class_names', [str(i) for i in range(probs.shape[0])])
-    return class_names[idx], float(probs[idx])
 
 def extract_cnn_feature(img: Image.Image):
     # Test-Time Augmentation: original + one augment
@@ -174,106 +135,42 @@ def extract_cnn_feature(img: Image.Image):
     avg_conf = sum(c for v,c in zip(votes,confs) if v==val) / votes.count(val)
     return val, avg_conf
 
-def _load_cnn_model():
-    """Loads the CNN model once."""
-    global _CNN_MODEL
-    if _CNN_MODEL is None:
-        model_path = CONFIG['model'].get('perception_model_path')   # Use 'perception_model_path' for the main model
-        
-        if model_path and os.path.exists(model_path):
-            try:
-                # Determine which model to load based on context or config
-                # If it's a pre-trained BongardPerceptionModel (e.g., from MoCo pretraining)
-                if 'simclr_config' in CONFIG['model'] and CONFIG['model']['simclr_config'].get('use_moco', False):
-                    # For MoCo pretraining, the saved model might be just the encoder (BongardPerceptionModel/AttributeClassifier)
-                    # We need to load it as a BongardPerceptionModel if it's a simple classification head.
-                    # Or as an AttributeClassifier if that was the base encoder.
-                    # Let's assume the saved model is the AttributeClassifier's state_dict for now.
-                    # The `PerceptionModule` contains the `AttributeClassifier`.
-                    _CNN_MODEL = PerceptionModule(CONFIG).to(DEVICE)
-                    state_dict = torch.load(model_path, map_location=DEVICE)
-                    
-                    # If the state_dict is from a LitSimCLR or LitBongard, it might have prefixes
-                    # Remove 'feature_extractor.' or 'perception_module.attribute_model.'
-                    # This depends on how the model was saved.
-                    new_state_dict = {}
-                    for k, v in state_dict.items():
-                        if k.startswith('feature_extractor.'):   # From LitSimCLR direct encoder save
-                            new_state_dict[k.replace('feature_extractor.', 'attribute_model.')] = v
-                        elif k.startswith('perception_module.attribute_model.'):   # From LitBongard save
-                            new_state_dict[k.replace('perception_module.', '')] = v
-                        elif k.startswith('module.perception_module.attribute_model.'):   # From DDP LitBongard save
-                            new_state_dict[k.replace('module.perception_module.', '')] = v
-                        else:   # Assume it's already correctly prefixed for PerceptionModule.attribute_model
-                            new_state_dict[f'attribute_model.{k}'] = v
-                    # Load into the PerceptionModule
-                    _CNN_MODEL.load_state_dict(new_state_dict, strict=False)   # strict=False for partial loads
-                    logger.info(f"Loaded PerceptionModule (for feature extraction) from {model_path}.")
-                else:   # Assume it's a full PerceptionModule or a simpler BongardPerceptionModel
-                    _CNN_MODEL = PerceptionModule(CONFIG).to(DEVICE)   # Default to PerceptionModule
-                    state_dict = torch.load(model_path, map_location=DEVICE)
-                    
-                    # Handle state_dict prefixes for PyTorch Lightning and DDP
-                    if 'state_dict' in state_dict:   # If saved by PyTorch Lightning
-                        state_dict = state_dict['state_dict']
-                    
-                    # Remove 'model.' or 'perception_module.' prefix if present
-                    state_dict = {k.replace('model.', ''): v for k, v in state_dict.items()}
-                    state_dict = {k.replace('perception_module.', ''): v for k, v in state_dict.items()}
-                    state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}   # For DDP
-                    
-                    _CNN_MODEL.load_state_dict(state_dict, strict=False)
-                    logger.info(f"Loaded PerceptionModule from {model_path}.")
-                
-                _CNN_MODEL.eval()
-            except Exception as e:
-                logger.error(f"Error loading CNN model from {model_path}: {e}", exc_info=True)
-                # Fallback to dummy model if loading fails
-                _CNN_MODEL = PerceptionModule(CONFIG).to(DEVICE)
-                _CNN_MODEL.eval()
-        else:
-            logger.warning(f"CNN model path '{model_path}' not found or not specified. Using dummy PerceptionModule.")
-            _CNN_MODEL = PerceptionModule(CONFIG).to(DEVICE)   # Use dummy if path not found
-            _CNN_MODEL.eval()
-    return _CNN_MODEL
 
-def single_inference(img_pil: Image.Image) -> Dict[str, Tuple[str, float]]:
+
+
+def single_inference(img_pil: Image.Image, model=None) -> Dict[str, Tuple[str, float]]:
     """
     Performs a single inference pass on a cropped object image using the CNN model.
     This function is a helper for extract_cnn_features to enable TTA.
     """
-    model = _load_cnn_model()
+    if model is None:
+        # Always instantiate the real model directly
+        model = PerceptionModule(CONFIG).to(DEVICE)
+        model.eval()
+        # Optionally, load weights here if needed
     input_tensor = preprocess_transform(img_pil).unsqueeze(0).to(DEVICE)
-    
     with torch.no_grad():
-        # Dummy inputs for other arguments of PerceptionModule.forward
-        dummy_gts_json_strings = [b'{}'] # Empty JSON for ground truth scene graph
-        dummy_bboxes_batch = [[]] # Empty list for detected bboxes
-        dummy_masks_batch = [[]] # Empty list for detected masks
-        
+        dummy_gts_json_strings = [b'{}']
+        dummy_bboxes_batch = [[]]
+        dummy_masks_batch = [[]]
         model_output = model(
             images=input_tensor,
             ground_truth_json_strings=dummy_gts_json_strings,
             detected_bboxes_batch=dummy_bboxes_batch,
             detected_masks_batch=dummy_masks_batch,
-            support_images=None, # No support images for single object inference
-            support_labels_flat=None, # No support labels
-            is_simclr_pretraining=False # Not for simclr pretraining
+            support_images=None,
+            support_labels_flat=None,
+            is_simclr_pretraining=False
         )
         attribute_logits_dict = model_output.get('attribute_logits', {})
-        
         extracted_features: Dict[str, Tuple[str, float]] = {}
         for attr_type, logits in attribute_logits_dict.items():
-            # Ensure logits are not empty
             if logits.numel() == 0:
                 extracted_features[attr_type] = (f"unknown_{attr_type}", 0.0)
                 continue
-            
-            probs = torch.softmax(logits, dim=1).squeeze(0) # Squeeze batch dimension
+            probs = torch.softmax(logits, dim=1).squeeze(0)
             conf, idx = probs.max(0)
             predicted_idx = idx.item()
-            
-            # Map index to attribute name using the inverse maps
             attr_name = attribute_maps_inv.get(attr_type, {}).get(predicted_idx, f"unknown_{attr_type}")
             extracted_features[attr_type] = (attr_name, conf.item())
     return extracted_features
@@ -506,6 +403,8 @@ def extract_cnn_features(img_pil: Image.Image) -> Dict[str, Tuple[str, float]]:
         logger.debug(f"CNN Extracted {attr_type.capitalize()} (TTA): {most_common_val} with confidence {avg_conf:.4f}")
     
     return final_extracted_features
+
+
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

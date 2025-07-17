@@ -1,3 +1,9 @@
+import sys, os
+# assume this file is at repo-root/scripts/validate_phase1.py
+REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
+SRC_ROOT  = os.path.join(REPO_ROOT, "src")
+if SRC_ROOT not in sys.path:
+    sys.path.insert(0, SRC_ROOT)
 import sys
 import os
 # Ensure repo root is on sys.path so 'data' is importable
@@ -19,12 +25,12 @@ import torch
 from torchvision.transforms.functional import to_tensor
 
 try:
-    from data.generator import LogoGenerator
+    from src.data.generator import LogoGenerator
 except ImportError:
     from src.data.generator import LogoGenerator
 from src.perception.primitive_extractor import extract_cnn_feature, MODEL
-from core_models.training import fine_tune_perception
-from core_models.training_args import Config
+from src.core_models.training import fine_tune_perception
+from src.core_models.training_args import Config
 config = Config()
 
 
