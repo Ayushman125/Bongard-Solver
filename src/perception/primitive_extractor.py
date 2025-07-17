@@ -91,7 +91,6 @@ try:
     last_cp = getattr(config, 'last_model_path', None)
     if last_cp:
         candidates.append(last_cp)
-    # Fallback to default last checkpoint path if not in config
     if not last_cp or last_cp != "checkpoints/bongard_perception_last.pth":
         candidates.append("checkpoints/bongard_perception_last.pth")
 
@@ -99,7 +98,14 @@ try:
         if cp and os.path.exists(cp):
             logger.info(f"Loading PerceptionModel checkpoint from {cp}")
             state = torch.load(cp, map_location=DEVICE)
-            _model.load_state_dict(state)
+            # Handle possible 'perception_module.' prefix in keys
+            if isinstance(state, dict) and any(k.startswith('perception_module.') for k in state.keys()):
+                new_state = {k.replace('perception_module.', ''): v for k, v in state.items()}
+                _model.load_state_dict(new_state, strict=False)
+            elif isinstance(state, dict) and 'perception_module' in state:
+                _model.load_state_dict(state['perception_module'], strict=True)
+            else:
+                _model.load_state_dict(state, strict=False)
             _model.eval()
             MODEL = _model
             break
@@ -373,17 +379,18 @@ def extract_cnn_features(img_pil: Image.Image) -> Tuple[Dict[str, Tuple[str, flo
             - A dictionary mapping feature type (e.g., 'shape') to a tuple of (predicted_value_name, confidence).
             - The average confidence across all features.
     """
-    # Initialize a list with the original PIL image for inference.
-    crops_pil = [img_pil]
+    # If the model is not loaded, return a tuple matching the normal return type.
+    if MODEL is None:
+        logger.error("CNN model not available for inference.")
+        dummy = {t: (f"unknown_{t}", 0.0) for t in attribute_maps_inv}
+        return dummy, 0.0
 
-    # If the `augment_image` function is available (successfully imported), apply TTA.
+    crops_pil = [img_pil]
     if augment_image:
         try:
             aug_np = augment_image(img_pil)
-            # Convert to tensor, handle HWC or CHW
             aug_t = torch.from_numpy(aug_np)
             if aug_t.ndim == 3 and aug_t.shape[-1] == 3:
-                # HWC -> CHW
                 aug_t = aug_t.permute(2, 0, 1)
             if aug_t.shape[0] != 3:
                 raise ValueError(f"Augmented tensor shape {aug_t.shape} does not have 3 channels in first dim")
