@@ -1,4 +1,16 @@
+# --- Minimal Dummy SAM Optimizer Class for Import Compatibility ---
+import torch.optim as optim
+class SAM(optim.Optimizer):
+    def __init__(self, params, base_optimizer, rho=0.05, adaptive=False, **kwargs):
+        super().__init__(params, dict(rho=rho, adaptive=adaptive, **kwargs))
+        self.base_optimizer = base_optimizer
+        logger.warning("Using dummy SAM optimizer from core_models/sam.py. Replace with real implementation if needed.")
+    def first_step(self, zero_grad=False): pass
+    def second_step(self, zero_grad=False): pass
+    def _grad_norm(self): return torch.tensor(1.0)
+    def load_state_dict(self, state_dict): pass
 # sam.py
+
 import torch
 import os
 import cv2
@@ -8,6 +20,8 @@ from matplotlib import cm
 import logging
 import json
 from torch.cuda.amp import autocast # New import for mixed precision
+
+logger = logging.getLogger(__name__)
 
 from segment_anything import sam_model_registry, SamPredictor, SamAutomaticMaskGenerator
 
@@ -24,8 +38,6 @@ except ImportError:
     logger.warning("Bongard symbolic_fusion not found. Symbolic labeling will be skipped.")
 except Exception as e:
     logger.warning(f"Error importing bongard.symbolic_fusion: {e}. Symbolic labeling will be skipped.")
-
-logger = logging.getLogger(__name__)
 
 def load_sam_model(
     checkpoint_path="weights/sam_vit_h_4b8939.pth",
