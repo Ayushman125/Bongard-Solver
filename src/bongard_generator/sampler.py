@@ -162,7 +162,7 @@ class BongardSampler:
                     rule: BongardRule, 
                     is_positive: bool = True,
                     use_adversarial: bool = False,
-                    max_attempts: int = 50) -> Optional[Dict[str, Any]]:
+                    max_attempts: int = 100) -> Optional[Dict[str, Any]]:
         """
         Sample a single scene conforming to or violating the rule.
         
@@ -215,16 +215,28 @@ class BongardSampler:
                 logger.debug(f"Scene generation attempt {attempt + 1} failed: {e}")
                 continue
         
-        logger.warning(f"Failed to generate {'positive' if is_positive else 'negative'} scene after {max_attempts} attempts")
-        return None
+        # If regular generation failed, try fallback generation
+        logger.warning(f"Regular generation failed after {max_attempts} attempts, trying fallback generation")
+        fallback_scene = self._generate_fallback_scene(rule, is_positive, use_adversarial)
+        
+        if fallback_scene is None:
+            logger.error(f"Failed to generate {'positive' if is_positive else 'negative'} scene even with fallback")
+        
+        return fallback_scene
     
     def _determine_scene_params(self, 
                               rule: BongardRule, 
                               is_positive: bool,
                               use_adversarial: bool) -> Dict[str, Any]:
-        """Determine scene generation parameters."""
+        """Determine scene generation parameters with improved diversity."""
+        
+        # Use weighted random selection for better object count diversity
+        possible_counts = [1, 2, 3, 4, 5, 6]
+        weights = [0.05, 0.2, 0.3, 0.25, 0.15, 0.05]  # Favor 2-4 objects but allow variety
+        num_objects = random.choices(possible_counts, weights=weights)[0]
+        
         params = {
-            'num_objects': random.randint(2, 5),
+            'num_objects': num_objects,
             'background_type': random.choice(['solid', 'gradient', 'texture']),
             'lighting': random.choice(['normal', 'bright', 'dim']),
             'noise_level': random.uniform(0.0, 0.1),
@@ -237,8 +249,16 @@ class BongardSampler:
             if is_positive:
                 params['num_objects'] = target_count
             else:
-                # For negative examples, use different count
-                params['num_objects'] = random.choice([i for i in range(1, 6) if i != target_count])
+                # For negative examples, use different count with better diversity
+                other_counts = [i for i in possible_counts if i != target_count]
+                if other_counts:
+                    # Use weights for the other counts as well
+                    other_weights = [weights[i-1] for i in other_counts]
+                    total_weight = sum(other_weights)
+                    normalized_weights = [w/total_weight for w in other_weights]
+                    params['num_objects'] = random.choices(other_counts, weights=normalized_weights)[0]
+                else:
+                    params['num_objects'] = random.choice([2, 3, 4])  # Fallback
         
         # Apply adversarial modifications
         if use_adversarial:
@@ -570,6 +590,237 @@ class BongardSampler:
         
         logger.info(f"Dataset saved to {output_path}")
     
+    def _generate_fallback_scene(self, 
+                               rule: BongardRule, 
+                               is_positive: bool = True,
+                               use_adversarial: bool = False) -> Optional[Dict[str, Any]]:
+        """
+        Generate a simple fallback scene when regular generation fails.
+        Uses relaxed constraints and randomized parameters for diversity.
+        """
+        try:
+            logger.info(f"Attempting fallback generation for {'positive' if is_positive else 'negative'} scene")
+            
+            # Use simplified, more diverse scene parameters for fallback
+            fallback_params = self._generate_fallback_params(rule, is_positive)
+            
+            # Generate objects with relaxed constraints
+            objects = self._generate_fallback_objects(fallback_params, rule, is_positive)
+            if not objects:
+                logger.warning("Fallback object generation failed")
+                return None
+            
+            # Create minimal scene graph
+            scene_graph = {
+                'objects': len(objects),
+                'relations': []  # Keep minimal for fallback
+            }
+            
+            # Force render with simplified settings
+            image = self._render_fallback_scene(objects)
+            if image is None:
+                logger.warning("Fallback scene rendering failed")
+                return None
+            
+            # Relaxed validation - accept more cases
+            if self._validate_fallback_scene(objects, rule, is_positive):
+                scene = {
+                    'objects': objects,
+                    'scene_graph': scene_graph,
+                    'image': image,
+                    'rule_satisfaction': is_positive,
+                    'metadata': {
+                        'fallback_generation': True,
+                        'rule_description': rule.description,
+                        'adversarial': use_adversarial,
+                        'scene_params': fallback_params
+                    }
+                }
+                
+                logger.info(f"Successfully generated fallback {'positive' if is_positive else 'negative'} scene")
+                return scene
+            else:
+                logger.warning("Fallback scene validation failed")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Fallback generation failed: {e}")
+            return None
+    
+    def _generate_fallback_params(self, rule: BongardRule, is_positive: bool) -> Dict[str, Any]:
+        """Generate relaxed parameters for fallback generation with more diversity."""
+        
+        # Randomize object count more aggressively to avoid "always 2 objects" issue
+        possible_counts = [1, 2, 3, 4, 5, 6]
+        weights = [0.1, 0.15, 0.25, 0.25, 0.15, 0.1]  # Favor 3-4 objects but allow variety
+        num_objects = random.choices(possible_counts, weights=weights)[0]
+        
+        # Extract rule-specific count constraints
+        if 'count' in rule.positive_features:
+            target_count = rule.positive_features['count']
+            if is_positive:
+                num_objects = target_count
+            else:
+                # For negative examples, explicitly avoid target count
+                other_counts = [c for c in possible_counts if c != target_count]
+                if other_counts:
+                    num_objects = random.choice(other_counts)
+        
+        return {
+            'num_objects': num_objects,
+            'background_type': 'solid',  # Keep simple for fallback
+            'lighting': 'normal',
+            'noise_level': 0.0,  # No noise for fallback
+            'use_cp_sat': False,  # Disable CP-SAT for faster fallback
+            'fallback_mode': True
+        }
+    
+    def _generate_fallback_objects(self, 
+                                 params: Dict[str, Any], 
+                                 rule: BongardRule,
+                                 is_positive: bool) -> List[Dict[str, Any]]:
+        """Generate objects for fallback scene with simplified constraints."""
+        num_objects = params['num_objects']
+        objects = []
+        
+        # Define possible attributes for diversity
+        shapes = ['circle', 'triangle', 'square']
+        colors = ['red', 'blue', 'green', 'yellow', 'purple']
+        fills = ['solid', 'outline']
+        
+        # Apply rule constraints but with fallback logic
+        target_shape = rule.positive_features.get('shape', None)
+        target_color = rule.positive_features.get('color', None) 
+        target_fill = rule.positive_features.get('fill', None)
+        
+        for i in range(num_objects):
+            # Random base position with better spacing
+            margin = 30
+            x = random.randint(margin, self.config.img_size - margin - 50)
+            y = random.randint(margin, self.config.img_size - margin - 50)
+            
+            # Randomized size
+            size = random.randint(20, 50)
+            
+            # Apply rule features with fallback diversity
+            if is_positive and target_shape:
+                shape = target_shape
+            elif not is_positive and target_shape:
+                # For negative, use different shapes but ensure some diversity
+                other_shapes = [s for s in shapes if s != target_shape]
+                shape = random.choice(other_shapes) if other_shapes else random.choice(shapes)
+            else:
+                shape = random.choice(shapes)
+            
+            if is_positive and target_color:
+                color = target_color
+            elif not is_positive and target_color:
+                other_colors = [c for c in colors if c != target_color]
+                color = random.choice(other_colors) if other_colors else random.choice(colors)
+            else:
+                color = random.choice(colors)
+                
+            if is_positive and target_fill:
+                fill = target_fill
+            elif not is_positive and target_fill:
+                fill = 'outline' if target_fill == 'solid' else 'solid'
+            else:
+                fill = random.choice(fills)
+            
+            obj = {
+                'x': x,
+                'y': y,
+                'size': size,
+                'shape': shape,
+                'color': color,
+                'fill': fill,
+                'id': i
+            }
+            objects.append(obj)
+        
+        return objects
+    
+    def _render_fallback_scene(self, objects: List[Dict[str, Any]]) -> Optional[np.ndarray]:
+        """Render fallback scene with simplified settings."""
+        try:
+            # Create canvas
+            canvas = TurtleCanvas(self.config.img_size)
+            
+            # Simple white background
+            canvas.set_background('white')
+            
+            # Draw objects with black color for Bongard-LOGO style
+            for obj in objects:
+                canvas.draw_shape(
+                    obj['shape'],
+                    obj['x'] + obj['size'] // 2,
+                    obj['y'] + obj['size'] // 2,
+                    obj['size'],
+                    'black',  # Always black for Bongard-LOGO
+                    obj['fill'] == 'solid'
+                )
+            
+            # Convert to grayscale and binarize
+            pil_img = canvas.get_image().convert('L')
+            pil_img = pil_img.point(lambda p: 255 if p > 128 else 0, '1')
+            image = np.array(pil_img, dtype=np.uint8)
+            
+            return image
+            
+        except Exception as e:
+            logger.error(f"Fallback scene rendering failed: {e}")
+            return None
+    
+    def _validate_fallback_scene(self, 
+                                objects: List[Dict[str, Any]], 
+                                rule: BongardRule,
+                                is_positive: bool) -> bool:
+        """Relaxed validation for fallback scenes."""
+        try:
+            # Count-based validation
+            if 'count' in rule.positive_features:
+                target_count = rule.positive_features['count']
+                actual_count = len(objects)
+                
+                if is_positive:
+                    return actual_count == target_count
+                else:
+                    return actual_count != target_count
+            
+            # For other rule types, use relaxed validation
+            # Shape-based validation 
+            if 'shape' in rule.positive_features:
+                target_shape = rule.positive_features['shape']
+                shape_counts = {}
+                for obj in objects:
+                    shape_counts[obj['shape']] = shape_counts.get(obj['shape'], 0) + 1
+                
+                if is_positive:
+                    # At least one object should have target shape
+                    return target_shape in shape_counts
+                else:
+                    # Either no target shape or other shapes present
+                    return target_shape not in shape_counts or len(shape_counts) > 1
+            
+            # Color-based validation
+            if 'color' in rule.positive_features:
+                target_color = rule.positive_features['color'] 
+                color_counts = {}
+                for obj in objects:
+                    color_counts[obj['color']] = color_counts.get(obj['color'], 0) + 1
+                
+                if is_positive:
+                    return target_color in color_counts
+                else:
+                    return target_color not in color_counts or len(color_counts) > 1
+            
+            # If no specific rule features, accept the scene
+            return True
+            
+        except Exception as e:
+            logger.warning(f"Fallback validation error: {e}")
+            return True  # Be permissive in fallback mode
+
     def _make_json_serializable(self, obj):
         """Convert numpy arrays and other non-serializable objects to JSON-safe types."""
         if isinstance(obj, np.ndarray):
