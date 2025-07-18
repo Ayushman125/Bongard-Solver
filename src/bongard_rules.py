@@ -209,12 +209,16 @@ class BongardRule:
 
 # --- Extended Set of Bongard Rules ---
 # Ensure fallback SHAPE(TRIANGLE) rule exists for validation harness
-if "SHAPE(TRIANGLE)" not in [k.strip().upper() for k in ALL_BONGARD_RULES.keys()]:
-    ALL_BONGARD_RULES["SHAPE(TRIANGLE)"] = BongardRule(
-        name="shape_triangle",
-        description="Default fallback: all objects are triangles.",
-        program_ast=[{"op": "FORALL", "args": [{"op": "object_variable", "value": "O"}, {"op": "shape", "args": [{"op": "object_variable", "value": "O"}, {"op": "triangle"}]}]}],
-        logical_facts=["forall(O, shape(O, triangle))"]
+if not any(
+    hasattr(r, "description") and r.description.strip().upper() == "SHAPE(TRIANGLE)"
+    for r in ALL_BONGARD_RULES
+):
+    ALL_BONGARD_RULES.append(
+        BongardRule(
+            description="SHAPE(TRIANGLE)",
+            pos_literals={"shape": "triangle"},
+            neg_literals={"shape": "square"},
+        )
     )
 # These rules cover various aspects of Bongard problems, from simple attributes
 # to complex relations and counting.
