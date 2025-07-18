@@ -1,11 +1,13 @@
 """Main Bongard problem sampler orchestrating all components"""
 
+
 import logging
 import random
 import json
 import numpy as np
 from typing import Dict, List, Any, Tuple, Optional
 from pathlib import Path
+from PIL import Image
 
 from .config_loader import get_config, get_sampler_config, SamplerConfig
 from src.bongard_rules import BongardRule
@@ -20,6 +22,33 @@ from .validation import ValidationSuite
 logger = logging.getLogger(__name__)
 
 class BongardSampler:
+    def flush_caches_and_reseed(self, seed=None):
+        """Flush caches and reseed RNGs to ensure generator changes take effect."""
+        import importlib
+        import sys
+        # Reload relevant modules (if needed)
+        for mod_name in [
+            'src.bongard_rules',
+            'bongard_generator.rule_loader',
+            'bongard_generator.sampler',
+            'bongard_generator.dataset',
+        ]:
+            if mod_name in sys.modules:
+                importlib.reload(sys.modules[mod_name])
+        # Reseed RNGs
+        if seed is None:
+            seed = random.randint(0, 1_000_000)
+        random.seed(seed)
+        np.random.seed(seed)
+        # Clear any custom caches (if present)
+        if hasattr(self, 'coverage_tracker') and hasattr(self.coverage_tracker, 'clear_cache'):
+            self.coverage_tracker.clear_cache()
+        if hasattr(self, 'adversarial_sampler') and hasattr(self.adversarial_sampler, 'clear_cache'):
+            self.adversarial_sampler.clear_cache()
+        # If sampler has a cache attribute, clear it
+        if hasattr(self, 'cache'):
+            self.cache.clear()
+        logger.info(f"Caches flushed and RNG reseeded with seed {seed}")
     """Main sampler class orchestrating all components for Bongard problem generation."""
     
     def __init__(self, config: Optional[SamplerConfig] = None):
@@ -573,25 +602,30 @@ if __name__ == "__main__":
     
     # Initialize sampler
     sampler = BongardSampler()
-    
+
+    # Flush caches and reseed before every run
+    sampler.flush_caches_and_reseed()
+
     # Run validation
     if sampler.run_validation():
         print("✓ Validation passed")
     else:
         print("✗ Validation failed")
         exit(1)
-    
+
     # Generate a single problem
+    sampler.flush_caches_and_reseed()
     problem = sampler.sample_problem(rule_description="SHAPE(CIRCLE)")
     if problem:
         print(f"Generated problem with rule: {problem['rule']['description']}")
         print(f"Positive scenes: {len(problem['positive_scenes'])}")
         print(f"Negative scenes: {len(problem['negative_scenes'])}")
-    
+
     # Generate small dataset
+    sampler.flush_caches_and_reseed()
     dataset = sampler.generate_dataset(num_problems=5, use_adversarial=True)
     print(f"Generated dataset with {len(dataset['problems'])} problems")
-    
+
     # Print coverage report
     coverage = sampler.get_coverage_report()
     print(f"Coverage: {coverage['coverage_percentage']:.1f}%")

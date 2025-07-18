@@ -31,6 +31,8 @@ try:
     assert hasattr(_rules[0], "description"), "Rule objects must have .description"
     ALL_RULES = _rules
     RULE_LOOKUP: Dict[str, BongardRule] = {r.description.strip().upper(): r for r in ALL_RULES}
+    # Quick sanity assert for validation harness
+    assert "SHAPE(TRIANGLE)" in RULE_LOOKUP, "Default rule SHAPE(TRIANGLE) missing from RULE_LOOKUP"
 except Exception as e:
     logger.warning(f"Could not import from src.bongard_rules, using fallback rules: {e}")
     from dataclasses import dataclass

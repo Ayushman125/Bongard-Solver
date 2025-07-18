@@ -7,8 +7,11 @@ from typing import List, Dict, Any, Tuple
 class RelationSampler:
     """Comprehensive spatial and topological relationship sampler."""
     
-    def __init__(self, img_size: int):
+    def __init__(self, img_size: int, min_obj_size=None, max_obj_size=None, pad=2):
         self.img_size = img_size
+        self.min_obj_size = min_obj_size
+        self.max_obj_size = max_obj_size
+        self.pad = pad
         self.margin = img_size * 0.1  # 10% margin from edges
 
     def sample(self, n: int, relation: str) -> List[Dict[str, Any]]:
