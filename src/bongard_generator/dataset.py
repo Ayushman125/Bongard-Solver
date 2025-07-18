@@ -138,13 +138,14 @@ class CoverageTracker:
 def create_composite_scene(objects, canvas_size):
     # Dummy image creation for demonstration
     # In a real scenario, this would render shapes onto a canvas
-    img = Image.new('RGB', (canvas_size, canvas_size), color = 'white')
+    # Always start with white background, grayscale
+    img = Image.new('L', (canvas_size, canvas_size), color=255)
     # Simple drawing logic (replace with actual rendering)
-    for obj in objects:
-        # This is a placeholder. Real rendering would involve drawing shapes.
-        # For now, just simulate something.
-        pass
-    return img
+    # ...existing code...
+    # After all drawing and occluders/noise, binarize
+    img_bw = img.point(lambda p: 255 if p > 128 else 0, mode='1')
+    img_bw_L = img_bw.convert('L')
+    return img_bw_L
 
 def get_config():
     # Dummy config for demonstration
@@ -500,20 +501,16 @@ class BongardDataset:
     def _generate_and_save_image(self, example: Dict[str, Any], objects: List[Dict[str, Any]]) -> Path:
         """Generate and save the visual representation of the scene."""
         try:
-            # Create composite image
+            # Create composite image (already binarized)
             image = create_composite_scene(objects, self.canvas_size)
-            
             # Generate filename
             rule_name = example['rule'].replace('(', '_').replace(')', '').replace(' ', '_')
             label = 'pos' if example['positive'] else 'neg'
             filename = f"{example['id']:06d}_{rule_name}_{label}.png"
-            
             # Save image
             image_path = self.output_dir / filename
             image.save(image_path)
-            
             return image_path.relative_to(self.output_dir)
-            
         except Exception as e:
             logger.error(f"Failed to save image for example {example['id']}: {e}")
             return Path("error.png")
