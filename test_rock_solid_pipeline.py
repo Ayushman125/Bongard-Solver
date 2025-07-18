@@ -13,7 +13,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from bongard_generator.rock_solid_pipeline import RockSolidPipeline
 from bongard_generator.genetic_pipeline import GeneticPipeline, SceneGenome, NeuralTester
-from bongard_generator.enhanced_cp_solver import EnhancedCPSolver, ConstraintSolution
+## Removed legacy EnhancedCPSolver import
 
 def safe_randint(a: int, b: int) -> int:
     """Safe random integer generator that handles inverted ranges."""
@@ -28,77 +28,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-def test_enhanced_cp_solver():
-    """Test the enhanced CP solver with all fallback phases."""
-    print("\n" + "="*50)
-    print("TESTING ENHANCED CP SOLVER")
-    print("="*50)
-    
-    solver = EnhancedCPSolver(canvas_size=128)
-    
-    # Test various scenarios
-    test_cases = [
-        {
-            'name': 'Simple Shape Rule',
-            'rule_desc': 'SHAPE(circle)',
-            'is_positive': True,
-            'num_objects': 2,
-            'target_cell': ('circle', 'solid', 2, 'overlap')
-        },
-        {
-            'name': 'Complex Relation Rule',
-            'rule_desc': 'RELATION(overlap)',
-            'is_positive': True,
-            'num_objects': 3,
-            'target_cell': ('triangle', 'outline', 3, 'overlap')
-        },
-        {
-            'name': 'Negative Fill Rule',
-            'rule_desc': 'FILL(striped)',
-            'is_positive': False,
-            'num_objects': 4,
-            'target_cell': ('square', 'solid', 4, 'near')
-        }
-    ]
-    
-    success_count = 0
-    for i, test_case in enumerate(test_cases):
-        print(f"\nTest {i+1}: {test_case['name']}")
-        
-        try:
-            solution = solver.solve_scene_constraints(
-                rule_desc=test_case['rule_desc'],
-                is_positive=test_case['is_positive'],
-                num_objects=test_case['num_objects'],
-                target_cell=test_case['target_cell']
-            )
-            
-            print(f"  Solver Phase: {solution.solver_phase}")
-            print(f"  Valid: {solution.is_valid}")
-            print(f"  Objects Generated: {len(solution.objects)}")
-            print(f"  Confidence: {solution.confidence:.2f}")
-            print(f"  Solve Time: {solution.solve_time_ms:.1f}ms")
-            
-            if solution.is_valid and len(solution.objects) > 0:
-                success_count += 1
-                print("  ✅ SUCCESS")
-            else:
-                print("  ❌ FAILED")
-                
-        except Exception as e:
-            print(f"  ❌ ERROR: {e}")
-    
-    # Display solver stats
-    stats = solver.get_solver_stats()
-    print(f"\nSolver Statistics:")
-    for key, value in stats.items():
-        if isinstance(value, float):
-            print(f"  {key}: {value:.2%}")
-        else:
-            print(f"  {key}: {value}")
-    
-    print(f"\nOverall Success Rate: {success_count}/{len(test_cases)} ({success_count/len(test_cases)*100:.1f}%)")
-    return success_count == len(test_cases)
+## Removed legacy EnhancedCPSolver test
 
 def test_genetic_pipeline():
     """Test the genetic algorithm pipeline."""
@@ -339,7 +269,7 @@ def main():
     test_results = {}
     
     # Run individual component tests
-    test_results['cp_solver'] = test_enhanced_cp_solver()
+    # Removed legacy EnhancedCPSolver test
     test_results['genetic_pipeline'] = test_genetic_pipeline()
     test_results['neural_tester'] = test_neural_tester()
     test_results['complete_pipeline'] = test_rock_solid_pipeline()

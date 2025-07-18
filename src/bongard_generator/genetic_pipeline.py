@@ -1091,48 +1091,49 @@ class GeneticPipeline:
     Ensures every (shape, fill, count, relation) cell gets M=100+ valid examples.
     """
     
-    def __init__(self, 
-                 population_size: int = 50,
-                 min_quota: int = 100,
-                 max_generations: int = 1000,
-                 alpha: float = 0.7,  # tester weight
-                 beta: float = 0.3):  # diversity weight
+    def __init__(self, config=None):
         """
-        Initialize the genetic pipeline.
-        
+        Initialize the genetic pipeline using config values.
         Args:
-            population_size: Size of genetic population
-            min_quota: Minimum examples per coverage cell
-            max_generations: Maximum evolutionary generations
-            alpha: Weight for tester confidence in fitness
-            beta: Weight for diversity in fitness
+            config: Optional config dict. If None, loads from main config.py
         """
-        self.population_size = population_size
-        self.min_quota = min_quota
-        self.max_generations = max_generations
-        self.alpha = alpha
-        self.beta = beta
-        
+        if config is None:
+            try:
+                from config import CONFIG
+                config = CONFIG.get('genetic', {})
+            except ImportError:
+                config = {}
+        self.config = config
+        self.population_size = config.get('population_size', 50)
+        self.min_quota = config.get('min_quota', config.get('min_quota', 100))
+        self.max_generations = config.get('num_generations', config.get('max_generations', 1000))
+        self.alpha = config.get('tester_weight', 0.7)
+        self.beta = config.get('diversity_weight', 0.3)
+        self.coverage_weight = config.get('coverage_weight', 1.0)
+        self.mutation_rate = config.get('mutation_rate', 0.2)
+        self.crossover_rate = config.get('crossover_rate', 0.5)
+        self.elitism = config.get('elitism', 2)
+        self.max_attempts = config.get('max_attempts', 100)
+        self.cache_enabled = config.get('cache_enabled', True)
+        self.seed = config.get('seed', 42)
+        random.seed(self.seed)
+        np.random.seed(self.seed)
         # Initialize components
-        self.neural_tester = MockNeuralTester() # Using MockNeuralTester
-        self.renderer = BongardRenderer() # Added renderer for scene generation
-        self.placement_optimizer = PlacementOptimizer() # Added optimizer for scene generation
-        
+        self.neural_tester = MockNeuralTester()
+        self.renderer = BongardRenderer()
+        self.placement_optimizer = PlacementOptimizer()
         self.coverage_cells = self._generate_all_cells()
         self.cell_coverage = {cell: [] for cell in self.coverage_cells}
-        
         # Evolutionary state
         self.population = []
         self.generation = 0
         self.best_fitness_history = []
         self.coverage_history = []
-        
         # Statistics
         self.total_scenes_generated = 0
         self.total_scenes_validated = 0
         self.failed_generations = 0
-        
-        logger.info(f"Initialized Genetic Pipeline with {len(self.coverage_cells)} coverage cells")
+        logger.info(f"Initialized Genetic Pipeline with {len(self.coverage_cells)} coverage cells and config: {self.config}")
     
     def _generate_all_cells(self) -> List[Tuple[str, str, int, str]]:
         """Generate all possible (shape, fill, count, relation) cells."""

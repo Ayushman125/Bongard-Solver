@@ -1,3 +1,22 @@
+def test_genetic_scene_generator_config_usage():
+    """Test that GeneticSceneGenerator uses config values correctly."""
+    from genetic_generator import GeneticSceneGenerator
+    from config import CONFIG
+    config = CONFIG.get('genetic', {})
+    generator = GeneticSceneGenerator(config)
+    assert generator.population_size == config['population_size']
+    assert generator.num_generations == config['num_generations']
+    assert generator.mutation_rate == config['mutation_rate']
+    assert generator.crossover_rate == config['crossover_rate']
+    assert generator.diversity_weight == config['diversity_weight']
+    assert generator.tester_weight == config['tester_weight']
+    assert generator.coverage_weight == config['coverage_weight']
+    assert generator.elitism == config['elitism']
+    assert generator.max_attempts == config['max_attempts']
+    assert generator.cache_enabled == config['cache_enabled']
+    assert generator.seed == config['seed']
+    print("✓ GeneticSceneGenerator config usage test passed.")
+
 """
 Integration test for the genetic pipeline to verify all components work together.
 """
@@ -124,6 +143,7 @@ def test_rock_solid_pipeline_integration():
 if __name__ == "__main__":
     success1 = test_genetic_pipeline_integration()
     success2 = test_rock_solid_pipeline_integration()
+    test_genetic_scene_generator_config_usage()
     
     if success1 and success2:
         logger.info("🚀 ALL INTEGRATION TESTS PASSED! The genetic pipeline is ready to use.")

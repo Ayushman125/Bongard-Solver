@@ -78,8 +78,8 @@ def build_synth_holdout(n=None, cache_path="synth_holdout.npz"):
         imgs = [Image.fromarray(x) for x in arr['imgs']]
         labels = arr['labels'].tolist()
         return imgs, labels
-    logger.info(f"Generating {n} synthetic holdout samples using BongardSampler...")
-    sampler_config = get_sampler_config(img_size=config['phase1']['img_size'])
+    logger.info(f"Generating {n} synthetic holdout samples using Genetic BongardSampler...")
+    sampler_config = get_sampler_config(img_size=config['phase1']['img_size'], generator_mode='genetic')
     sampler = BongardSampler(sampler_config)
     rules = get_all_rules()
     imgs, labels = [], []
@@ -91,12 +91,12 @@ def build_synth_holdout(n=None, cache_path="synth_holdout.npz"):
                 img = scene.get('image')
                 if img is not None:
                     imgs.append(img)
-                    labels.append(MODEL.class_names.index(rule.value) if hasattr(rule, 'value') else 0)
+                    labels.append(1)  # Label 1 for positive
             for scene in problem['negative_scenes']:
                 img = scene.get('image')
                 if img is not None:
                     imgs.append(img)
-                    labels.append(MODEL.class_names.index(rule.value) if hasattr(rule, 'value') else 0)
+                    labels.append(0)  # Label 0 for negative
     # Save cache
     arr_imgs = np.stack([np.array(img) for img in imgs])
     np.savez_compressed(cache_path, imgs=arr_imgs, labels=np.array(labels))
@@ -106,7 +106,7 @@ def build_synth_holdout(n=None, cache_path="synth_holdout.npz"):
 
 def test_modular_generator():
     """Test the modular Bongard generator package."""
-    logger.info("==== Testing Modular Bongard Generator ====")
+    logger.info("==== Testing Genetic Bongard Generator ====")
     try:
         # Validate installation
         validator = ValidationSuite()
@@ -118,12 +118,12 @@ def test_modular_generator():
             logger.info("✓ All validations passed")
 
         # Test sampler configuration
-        logger.info("Testing sampler configuration...")
-        config_obj = get_sampler_config()
-        logger.info(f"✓ Config loaded: img_size={config_obj.img_size}, max_objs={config_obj.max_objs}")
+        logger.info("Testing genetic sampler configuration...")
+        config_obj = get_sampler_config(generator_mode='genetic')
+        logger.info(f"✓ Config loaded: img_size={config_obj.img_size}, max_objs={config_obj.max_objs}, generator_mode={config_obj.generator_mode}")
 
         # Test single problem generation
-        logger.info("Testing single problem generation...")
+        logger.info("Testing single problem generation (genetic)...")
         sampler = BongardSampler(config_obj)
         rules = get_all_rules()
         rule = rules[0]
@@ -149,8 +149,8 @@ def test_modular_generator():
             return False
 
         # Test sampler with different configurations
-        logger.info("Testing sampler with different configurations...")
-        custom_config = get_sampler_config(img_size=64, max_objs=2)
+        logger.info("Testing genetic sampler with different configurations...")
+        custom_config = get_sampler_config(img_size=64, max_objs=2, generator_mode='genetic')
         sampler = BongardSampler(custom_config)
         test_rules = ["SHAPE(TRIANGLE)", "COUNT(2)", "COLOR(RED)"]
         for rule_desc in test_rules:
@@ -169,7 +169,7 @@ def test_modular_generator():
         logger.info(f"✓ Coverage report generated: {coverage_report.get('total_scenes', 0)} scenes tracked")
 
         # Test dataset generation
-        logger.info("Testing small dataset generation...")
+        logger.info("Testing small dataset generation (genetic)...")
         try:
             dataset = sampler.generate_dataset(num_problems=3, use_adversarial=False)
             if dataset and 'problems' in dataset:
@@ -184,10 +184,10 @@ def test_modular_generator():
         except Exception as e:
             logger.warning(f"⚠ Dataset generation failed: {e}")
 
-        logger.info("✓ Modular generator testing completed successfully")
+        logger.info("✓ Genetic generator testing completed successfully")
         return True
     except Exception as e:
-        logger.error(f"✗ Modular generator testing failed: {e}")
+        logger.error(f"✗ Genetic generator testing failed: {e}")
         return False
 
 

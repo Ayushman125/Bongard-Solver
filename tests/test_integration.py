@@ -17,8 +17,7 @@ def test_imports():
         from src.bongard_generator.rule_loader import RuleLoader
         from src.bongard_generator.draw_utils import AdvancedDrawingUtils
         from src.bongard_generator.spatial_sampler import RelationSampler
-        from src.bongard_generator.cp_sampler import CPSATSampler
-        from src.bongard_generator.fallback_samplers import FallbackSamplers
+        # Removed legacy samplers: cp_sampler, fallback_samplers
         from src.bongard_generator.dataset import BongardDataset
         from src.bongard_generator import BongardDataset as MainDataset
         
@@ -91,17 +90,9 @@ def test_dataset_getitem():
 def test_sampler_components():
     """Test individual sampler components."""
     from src.bongard_generator.spatial_sampler import RelationSampler
-    from src.bongard_generator.cp_sampler import CPSATSampler
-    from src.bongard_generator.fallback_samplers import FallbackSamplers
-    
-    # Test initialization
+    # Removed legacy samplers: cp_sampler, fallback_samplers
     relation_sampler = RelationSampler(img_size=100)
-    cp_sampler = CPSATSampler(img_size=100, time_limit=1.0)
-    fallback_samplers = FallbackSamplers(img_size=100)
-    
     assert relation_sampler.img_size == 100
-    assert cp_sampler.img_size == 100
-    assert fallback_samplers.img_size == 100
 
 def test_drawing_utils():
     """Test drawing utilities initialization."""

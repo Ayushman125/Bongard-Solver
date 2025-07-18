@@ -65,13 +65,12 @@ class BongardSampler:
     def __init__(self, config: Optional[SamplerConfig] = None):
         """
         Initialize the Bongard sampler.
-        
         Args:
             config: Optional sampler configuration. If None, loads from config files.
         """
         self.config = config or get_sampler_config()
         self.rules = get_all_rules()
-        
+        self.generator_mode = getattr(self.config, 'generator_mode', 'default')
         # Initialize components
         self.shape_drawer = ShapeDrawer(self.config)
         self.relation_sampler = RelationSampler(
@@ -87,15 +86,17 @@ class BongardSampler:
             self.config.max_obj_size
         )
         self.constraint_generator = ConstraintGenerator()
-        
-        # Validation suite
         self.validator = ValidationSuite()
-        
+        # Wire up genetic generator
+        try:
+            from bongard_generator.genetic_generator import GeneticSceneGenerator
+            self.genetic = GeneticSceneGenerator(self.config)
+        except ImportError:
+            self.genetic = None
         # Initialize random seed
         if hasattr(self.config, 'seed') and self.config.seed is not None:
             set_seed(self.config.seed)
-        
-        logger.info(f"BongardSampler initialized with {len(self.rules)} rules")
+        logger.info(f"BongardSampler initialized with {len(self.rules)} rules, generator_mode={self.generator_mode}")
     
     def sample_problem(self, 
                       rule_description: Optional[str] = None,
@@ -176,64 +177,34 @@ class BongardSampler:
                     max_attempts: int = 100) -> Optional[Dict[str, Any]]:
         """
         Sample a single scene conforming to or violating the rule.
-        
-        Args:
-            rule: The Bongard rule to follow/violate
-            is_positive: Whether scene should satisfy the rule
-            use_adversarial: Whether to use adversarial sampling
-            max_attempts: Maximum generation attempts
-            
-        Returns:
-            Scene dictionary or None if generation failed
+        If generator_mode is 'genetic', use GeneticSceneGenerator.
         """
-        for attempt in range(max_attempts):
-            try:
-                # Determine scene parameters
-                scene_params = self._determine_scene_params(rule, is_positive, use_adversarial)
-                
-                # Generate objects
-                objects = self._generate_objects(scene_params, rule, is_positive)
-                if not objects:
-                    continue
-                
-                # Create scene graph (relationships between objects)
-                scene_graph = self._create_scene_graph(objects, scene_params)
-                
-                # Render the scene
-                image = self._render_scene(objects, scene_graph)
-                if image is None:
-                    continue
-                
-                # Validate scene against rule
-                if self._validate_scene(objects, scene_graph, rule, is_positive):
-                    scene = {
-                        'objects': objects,
-                        'scene_graph': scene_graph,
-                        'image': image,
-                        'rule_satisfaction': is_positive,
-                        'metadata': {
-                            'attempt': attempt + 1,
-                            'rule_description': rule.description,
-                            'adversarial': use_adversarial,
-                            'scene_params': scene_params
-                        }
+        if getattr(self, 'generator_mode', 'default') == 'genetic' and self.genetic is not None:
+            # Use genetic generator for scene creation
+            rule_obj = rule
+            label = 1 if is_positive else 0
+            result = self.genetic.generate(rule_obj, label)
+            if result:
+                objs, masks = result
+                # Use SyntheticBongardDataset for final rendering
+                from bongard_generator.dataset import SyntheticBongardDataset
+                ds = SyntheticBongardDataset(grayscale=True, flush_cache=False)
+                img, final_masks = ds._generate_scene_image_and_masks(objs)
+                return {
+                    'objects': objs,
+                    'scene_graph': {},
+                    'image': img,
+                    'masks': final_masks,
+                    'rule_satisfaction': is_positive,
+                    'metadata': {
+                        'generator': 'genetic',
+                        'rule_description': rule.description
                     }
-                    
-                    logger.debug(f"Generated {'positive' if is_positive else 'negative'} scene in {attempt + 1} attempts")
-                    return scene
-                
-            except Exception as e:
-                logger.debug(f"Scene generation attempt {attempt + 1} failed: {e}")
-                continue
-        
-        # If regular generation failed, try fallback generation
-        logger.warning(f"Regular generation failed after {max_attempts} attempts, trying fallback generation")
-        fallback_scene = self._generate_fallback_scene(rule, is_positive, use_adversarial)
-        
-        if fallback_scene is None:
-            logger.error(f"Failed to generate {'positive' if is_positive else 'negative'} scene even with fallback")
-        
-        return fallback_scene
+                }
+            else:
+                logger.error("Genetic generator failed to produce a scene")
+                return None
+        # ...existing code for default generator...
     
     def _determine_scene_params(self, 
                               rule: BongardRule, 

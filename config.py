@@ -21,8 +21,9 @@ IMAGENET_MEAN = [0.485 * 255, 0.456 * 255, 0.406 * 255]   # For 0-255 range
 IMAGENET_STD = [0.229 * 255, 0.224 * 255, 0.225 * 255]   # For 0-255 range
 
  # --- Global Configuration Dictionary ---
-# This dictionary will hold all hyperparameters and settings.
-# It can be loaded from a YAML file.
+ # This dictionary will hold all hyperparameters and settings.
+ # It can be loaded from a YAML file.
+from genetic_config import GENETIC_CONFIG
 CONFIG: Dict[str, Any] = {
     # --- Data Configuration ---
     'data': {
@@ -307,6 +308,8 @@ CONFIG: Dict[str, Any] = {
         'use_sensitivity': True,   # Use sensitivity analysis to select layers for pruning
         'pruning_target_layers_ratio': 0.5,   # Ratio of least sensitive layers to prune
     },
+    # --- Genetic Algorithm Configuration ---
+    'genetic': GENETIC_CONFIG,
     # --- Quantization Configuration ---
     'quantization': {   # Top-level key for quantization
         'qat': False,   # Quantization Aware Training

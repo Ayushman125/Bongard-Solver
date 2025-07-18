@@ -4,7 +4,7 @@ import pytest
 import numpy as np
 from typing import List, Dict, Any
 
-from src.bongard_generator.cp_sampler import sample_scene_cp, CPSATSampler, SceneParameters
+## Removed legacy CP-SAT sampler imports
 from src.bongard_generator.rule_loader import get_rule_by_description, get_all_rules, RULE_LOOKUP
 from src.bongard_generator.spatial_sampler import RelationSampler
 from src.bongard_generator.coverage import CoverageTracker
