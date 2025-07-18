@@ -241,7 +241,7 @@ def test_coverage_tracker():
 
 def test_relation_sampler():
     """Test relation sampler functionality."""
-    from .relation_sampler import RelationSampler
+    from .spatial_sampler import RelationSampler
     
     sampler = RelationSampler(128)
     

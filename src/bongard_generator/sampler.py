@@ -11,7 +11,7 @@ from .config_loader import get_config, get_sampler_config, SamplerConfig
 from .rule_loader import get_all_rules, get_rule_by_description, BongardRule
 from .utils import set_seed, add_noise, create_gradient_background
 from .drawing import TurtleCanvas, ShapeDrawer
-from .relation_sampler import RelationSampler
+from .spatial_sampler import RelationSampler
 from .coverage import CoverageTracker, AdversarialSampler
 from .constraints import PlacementOptimizer, ConstraintGenerator
 from .validation import ValidationSuite

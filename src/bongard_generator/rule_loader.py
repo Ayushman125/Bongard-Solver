@@ -17,20 +17,26 @@ class BongardRule:
         if self.negative_features is None:
             self.negative_features = {}
 
+
 # Try to import from the real bongard_rules, fall back to defaults
 try:
     from src.bongard_rules import ALL_BONGARD_RULES, BongardRule as RealBongardRule
-    
-    # Convert real rules to our format if needed
-    if ALL_BONGARD_RULES and hasattr(ALL_BONGARD_RULES[0], 'description'):
-        logger.info("Successfully loaded rules from src.bongard_rules")
-        RULES = ALL_BONGARD_RULES
+    # Normalize ALL_BONGARD_RULES to a list if it's a dict
+    if isinstance(ALL_BONGARD_RULES, dict):
+        _rules_seq = list(ALL_BONGARD_RULES.values())
     else:
-        raise ImportError("Rules format mismatch")
-        
+        _rules_seq = ALL_BONGARD_RULES
+    # Sanity check
+    if not _rules_seq:
+        raise ImportError("No Bongard rules loaded!")
+    first_rule = _rules_seq[0] if isinstance(_rules_seq, list) else next(iter(_rules_seq))
+    if hasattr(first_rule, "description"):
+        logger.info("Successfully loaded rules from src.bongard_rules")
+        RULES = _rules_seq
+    else:
+        raise ImportError("Rules format mismatch: missing 'description' attribute")
 except ImportError:
     logger.warning("Could not import from src.bongard_rules, using fallback rules")
-    
     # Fallback rules
     RULES = [
         BongardRule("SHAPE(TRIANGLE)", {"shape": "triangle"}),

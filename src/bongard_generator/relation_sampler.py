@@ -1,3 +1,4 @@
+# This file has been replaced by spatial_sampler.py
 """Spatial and topological relationship sampler for Bongard problems"""
 
 import logging

@@ -99,6 +99,14 @@ class PlacementOptimizer:
             solver = cp_model.CpSolver()
             solver.parameters.max_time_in_seconds = 10.0  # 10 second timeout
             
+            # Validate model before solving
+            validation_errors = model.Validate()
+            if validation_errors:
+                logger.error(f"Invalid CP-SAT model: {validation_errors}")
+                return self._fallback_placement(num_objects, fixed_objects, spatial_constraints, max_attempts)
+            
+            status = solver.Solve(model)
+            
             status = solver.Solve(model)
             
             if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:

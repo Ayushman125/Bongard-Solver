@@ -91,13 +91,45 @@ class CoverageTracker:
         """Check if a cell has met the minimum coverage quota."""
         return self.coverage[cell] >= min_quota
 
-    def get_coverage_stats(self) -> Dict[str, Any]:
-        """Get comprehensive coverage statistics."""
-        total_cells = len(self.ALL_CELLS)
-        covered_cells = len([cell for cell in self.ALL_CELLS if self.coverage[cell] > 0])
-        coverage_percentage = (covered_cells / total_cells) * 100 if total_cells > 0 else 0
+    def is_generation_complete(self, min_quota: int = 10) -> bool:
+        """Check if generation is complete (all cells meet quota)."""
+        return all(self.coverage[cell] >= min_quota for cell in self.ALL_CELLS)
+    
+    def get_under_covered_cells(self, min_quota: int = 10) -> List[Tuple]:
+        """Get cells that haven't met the minimum quota."""
+        return [cell for cell in self.ALL_CELLS if self.coverage[cell] < min_quota]
+    
+    def get_coverage_heatmap_data(self) -> Dict[str, Any]:
+        """Get data for plotting coverage heatmap."""
+        # Create a matrix for heatmap visualization
+        shape_fill_matrix = {}
+        for cell in self.ALL_CELLS:
+            shape, fill, count, relation = cell
+            key = f"{shape}_{fill}"
+            if key not in shape_fill_matrix:
+                shape_fill_matrix[key] = 0
+            shape_fill_matrix[key] += self.coverage[cell]
         
-        # Get under-covered cells
+        return {
+            'matrix': shape_fill_matrix,
+            'total_cells': len(self.ALL_CELLS),
+            'covered_cells': len([cell for cell in self.ALL_CELLS if self.coverage[cell] > 0])
+        }
+    
+    def should_halt_generation(self, target_quota: int = 50) -> bool:
+        """Determine if generation should halt based on coverage."""
+        under_covered = self.get_under_covered_cells(target_quota)
+        if not under_covered:
+            logger.info(f"All {len(self.ALL_CELLS)} cells have met quota of {target_quota}")
+            return True
+        
+        # Check if we're making progress
+        progress_ratio = len([cell for cell in self.ALL_CELLS if self.coverage[cell] > 0]) / len(self.ALL_CELLS)
+        if progress_ratio < 0.1 and self.total_scenes_generated > 1000:
+            logger.warning(f"Low coverage progress: {progress_ratio:.2%} after {self.total_scenes_generated} scenes")
+            return True
+            
+        return False
         min_quota = 1
         under_covered = [cell for cell in self.ALL_CELLS if not self.is_covered(cell, min_quota)]
         
