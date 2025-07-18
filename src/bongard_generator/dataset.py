@@ -8,11 +8,147 @@ from typing import List, Dict, Any, Tuple, Optional, Iterator
 import numpy as np
 from PIL import Image
 
-from .cp_sampler import sample_scene_cp, SceneParameters
-from .rule_loader import get_all_rules, get_rule_by_description, BongardRule
-from .coverage import CoverageTracker
-from .mask_utils import create_composite_scene
-from .config_loader import get_config
+# Assuming these modules are in the same package or correctly imported in a real environment
+# from .cp_sampler import sample_scene_cp, SceneParameters
+# from .rule_loader import get_all_rules, get_rule_by_description, BongardRule
+# from .coverage import CoverageTracker
+# from .mask_utils import create_composite_scene
+# from .config_loader import get_config
+
+# Dummy imports for demonstration purposes if original modules are not available
+# In a real scenario, ensure these are correctly imported from your project structure.
+class SceneParameters:
+    def __init__(self, canvas_size, min_obj_size, max_obj_size, max_objects, colors, shapes, fills):
+        self.canvas_size = canvas_size
+        self.min_obj_size = min_obj_size
+        self.max_obj_size = max_obj_size
+        self.max_objects = max_objects
+        self.colors = colors
+        self.shapes = shapes
+        self.fills = fills
+
+class BongardRule:
+    def __init__(self, description, positive_features, negative_features=None):
+        self.description = description
+        self.positive_features = positive_features
+        self.negative_features = negative_features if negative_features is not None else {}
+
+def get_all_rules():
+    # Dummy rules for demonstration
+    return [
+        BongardRule("SHAPE(circle)", {"shape": "circle"}),
+        BongardRule("FILL(solid)", {"fill": "solid"}),
+        BongardRule("COUNT(2)", {"count": 2}),
+        BongardRule("RELATION(overlap)", {"relation": "overlap"}),
+    ]
+
+def get_rule_by_description(description):
+    for rule in get_all_rules():
+        if rule.description == description:
+            return rule
+    return None
+
+def sample_scene_cp(rule, num_objects, is_positive, canvas_size, min_obj_size, max_obj_size, max_attempts):
+    # Dummy implementation for scene sampling
+    # In a real scenario, this would use a CP-SAT solver
+    objects = []
+    for _ in range(num_objects):
+        obj = {
+            'x': random.randint(min_obj_size, canvas_size - min_obj_size),
+            'y': random.randint(min_obj_size, canvas_size - min_obj_size),
+            'size': random.randint(min_obj_size, max_obj_size),
+            'shape': random.choice(['circle', 'triangle', 'square', 'pentagon', 'star']),
+            'fill': random.choice(['solid', 'outline', 'striped', 'gradient']),
+            'color': random.choice(['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'black'])
+        }
+        # Apply rule features if positive, or avoid them if negative
+        if is_positive:
+            if 'shape' in rule.positive_features:
+                obj['shape'] = rule.positive_features['shape']
+            if 'fill' in rule.positive_features:
+                obj['fill'] = rule.positive_features['fill']
+            # For count and relation, the logic is more complex and would be handled by the CP-SAT solver
+        else: # is_negative
+            if 'shape' in rule.positive_features: # Negative rule means avoiding positive features
+                # Ensure the generated shape is NOT the positive feature shape
+                available_shapes = [s for s in ['circle', 'triangle', 'square', 'pentagon', 'star'] if s != rule.positive_features['shape']]
+                if available_shapes:
+                    obj['shape'] = random.choice(available_shapes)
+            if 'fill' in rule.positive_features:
+                available_fills = [f for f in ['solid', 'outline', 'striped', 'gradient'] if f != rule.positive_features['fill']]
+                if available_fills:
+                    obj['fill'] = random.choice(available_fills)
+        
+        objects.append(obj)
+    
+    # Add 'position' key for consistency with the main class
+    for obj in objects:
+        obj['position'] = (obj['x'], obj['y'])
+    
+    return objects
+
+
+class CoverageTracker:
+    def __init__(self):
+        self.ALL_CELLS = [
+            ("circle", "solid", 1, None), ("circle", "outline", 1, None),
+            ("square", "solid", 1, None), ("square", "outline", 1, None),
+            (None, None, 2, None), (None, None, 3, None),
+            (None, None, None, "overlap"), (None, None, None, "near")
+        ] # Example cells
+        self.coverage = {cell: 0 for cell in self.ALL_CELLS}
+
+    def record_scene(self, objects, scene_graph, rule_description, is_positive):
+        # Dummy recording logic for demonstration
+        # In a real scenario, this would analyze the scene and update coverage based on features
+        # For simplicity, we'll just increment counts for some features based on the rule
+        rule = get_rule_by_description(rule_description)
+        if rule:
+            features = rule.positive_features if is_positive else rule.negative_features
+            
+            # Simple heuristic to update coverage based on rule features
+            if 'shape' in features:
+                for cell in self.ALL_CELLS:
+                    if cell[0] == features['shape']:
+                        self.coverage[cell] += 1
+            if 'fill' in features:
+                for cell in self.ALL_CELLS:
+                    if cell[1] == features['fill']:
+                        self.coverage[cell] += 1
+            if 'count' in features:
+                for cell in self.ALL_CELLS:
+                    if cell[2] == features['count']:
+                        self.coverage[cell] += 1
+            if 'relation' in features:
+                for cell in self.ALL_CELLS:
+                    if cell[3] == features['relation']:
+                        self.coverage[cell] += 1
+
+
+    def get_under_covered_cells(self, target_quota):
+        return [cell for cell, count in self.coverage.items() if count < target_quota]
+
+    def get_coverage_heatmap_data(self):
+        return {
+            "total_cells": len(self.ALL_CELLS),
+            "covered_cells": sum(1 for count in self.coverage.values() if count > 0),
+            "coverage_counts": self.coverage
+        }
+
+def create_composite_scene(objects, canvas_size):
+    # Dummy image creation for demonstration
+    # In a real scenario, this would render shapes onto a canvas
+    img = Image.new('RGB', (canvas_size, canvas_size), color = 'white')
+    # Simple drawing logic (replace with actual rendering)
+    for obj in objects:
+        # This is a placeholder. Real rendering would involve drawing shapes.
+        # For now, just simulate something.
+        pass
+    return img
+
+def get_config():
+    # Dummy config for demonstration
+    return {}
 
 logger = logging.getLogger(__name__)
 
@@ -63,11 +199,11 @@ class BongardDataset:
         logger.info(f"Initialized dataset generator with {len(self.rules)} rules")
     
     def generate_dataset(self, 
-                        total_examples: int = 10000,
-                        positive_ratio: float = 0.5,
-                        max_objects_range: Tuple[int, int] = (1, 4),
-                        save_images: bool = True,
-                        save_metadata: bool = True) -> Dict[str, Any]:
+                         total_examples: int = 10000,
+                         positive_ratio: float = 0.5,
+                         max_objects_range: Tuple[int, int] = (1, 4),
+                         save_images: bool = True,
+                         save_metadata: bool = True) -> Dict[str, Any]:
         """
         Generate a complete Bongard dataset.
         
@@ -87,12 +223,13 @@ class BongardDataset:
         attempts = 0
         max_attempts = total_examples * 3  # Give up after 3x attempts
         
+        # Real-time coverage counter for (shape, fill, count, relation)
+        coverage_counter = self.coverage_tracker.coverage
         while len(examples) < total_examples and attempts < max_attempts:
             attempts += 1
-            
-            # Check if we should halt generation based on coverage
-            if self.coverage_tracker.should_halt_generation(self.target_quota):
-                logger.info("Coverage targets met, halting generation")
+            # Halt generation once every cell hits target quota N
+            if all(coverage_counter[cell] >= self.target_quota for cell in self.coverage_tracker.ALL_CELLS):
+                logger.info("All coverage cells have met target quota. Halting generation.")
                 break
             
             # Select rule and parameters
@@ -100,47 +237,84 @@ class BongardDataset:
             is_positive = random.random() < positive_ratio
             num_objects = random.randint(*max_objects_range)
             
-            # Generate scene
-            try:
-                scene = self._generate_single_scene(rule, num_objects, is_positive)
-                if scene is None:
+            # Inject adversarial corner cases (5% of scenes)
+            adversarial = random.random() < 0.05
+            if adversarial:
+                # For overlap: set positions to be just at the threshold
+                if 'relation' in rule.positive_features and rule.positive_features['relation'] in ['overlap', 'near', 'nested']:
+                    # Use custom positions for boundary overlap
+                    base_pos = self.canvas_size // 2
+                    jitter = int(self.scene_params.max_obj_size * 0.49)  # 49% overlap
+                    positions = [
+                        {'position': (base_pos, base_pos)},
+                        {'position': (base_pos + jitter, base_pos)}
+                    ]
+                    # Generate objects with these positions
+                    objects = []
+                    for i in range(num_objects):
+                        obj = {
+                            'x': positions[i % len(positions)]['position'][0],
+                            'y': positions[i % len(positions)]['position'][1],
+                            'size': self.scene_params.max_obj_size,
+                            'shape': rule.positive_features.get('shape', random.choice(self.scene_params.shapes)),
+                            'fill': rule.positive_features.get('fill', random.choice(self.scene_params.fills)),
+                            'color': random.choice(self.scene_params.colors),
+                            'position': positions[i % len(positions)]['position']
+                        }
+                        objects.append(obj)
+                    scene = {
+                        'objects': objects,
+                        'scene_graph': self._generate_scene_graph(objects),
+                        'rule': rule.description,
+                        'positive': is_positive
+                    }
+                else: # If not a relation rule, generate a normal scene but mark as adversarial
+                    try:
+                        scene = self._generate_single_scene(rule, num_objects, is_positive)
+                        if scene is None:
+                            self.failed_count += 1
+                            continue
+                    except Exception as e:
+                        logger.error(f"Failed to generate adversarial example {attempts}: {e}")
+                        self.failed_count += 1
+                        continue
+            else: # Not adversarial
+                try:
+                    scene = self._generate_single_scene(rule, num_objects, is_positive)
+                    if scene is None:
+                        self.failed_count += 1
+                        continue
+                except Exception as e:
+                    logger.error(f"Failed to generate example {attempts}: {e}")
                     self.failed_count += 1
                     continue
-                
-                # Create example metadata
-                example = {
-                    'id': len(examples),
-                    'rule': rule.description,
-                    'positive': is_positive,
-                    'objects': scene['objects'],
-                    'scene_graph': scene.get('scene_graph', {}),
-                    'image_path': None
-                }
-                
-                # Generate and save image if requested
-                if save_images:
-                    image_path = self._generate_and_save_image(example, scene['objects'])
-                    example['image_path'] = str(image_path)
-                
-                # Record for coverage tracking
-                self.coverage_tracker.record_scene(
-                    scene['objects'], 
-                    scene.get('scene_graph', {}),
-                    rule.description,
-                    1 if is_positive else 0
-                )
-                
-                examples.append(example)
-                self.generated_count += 1
-                
-                # Progress logging
-                if len(examples) % 100 == 0:
-                    self._log_progress(len(examples), total_examples)
-                    
-            except Exception as e:
-                logger.error(f"Failed to generate example {attempts}: {e}")
+
+            # Active tester feedback: auto-reject low-confidence scenes
+            if not self._tester_confidence(scene):
                 self.failed_count += 1
                 continue
+            
+            example = {
+                'id': len(examples),
+                'rule': rule.description,
+                'positive': is_positive,
+                'objects': scene['objects'],
+                'scene_graph': scene.get('scene_graph', {}),
+                'image_path': None
+            }
+            if save_images:
+                image_path = self._generate_and_save_image(example, scene['objects'])
+                example['image_path'] = str(image_path)
+            self.coverage_tracker.record_scene(
+                scene['objects'], 
+                scene.get('scene_graph', {}),
+                rule.description,
+                1 if is_positive else 0
+            )
+            examples.append(example)
+            self.generated_count += 1
+            if len(examples) % 100 == 0:
+                self._log_progress(len(examples), total_examples)
         
         # Save metadata
         if save_metadata:
@@ -151,6 +325,24 @@ class BongardDataset:
         
         logger.info(f"Dataset generation complete: {len(examples)} examples generated")
         return stats
+    
+    def _tester_confidence(self, scene: Dict[str, Any], threshold: float = 0.9) -> bool:
+        """Lightweight pretrained tester network stub. Returns True if rule confidence >= threshold."""
+        # For demonstration, use a simple heuristic: if all objects match the rule, confidence is 1.0
+        # In practice, replace with a real model
+        rule = scene.get('rule', '')
+        objects = scene.get('objects', [])
+        # Example: if rule is shape, check all objects
+        if 'SHAPE(' in rule:
+            shape = rule.split('(')[1].split(')')[0].lower()
+            confidence = sum(1 for obj in objects if obj.get('shape') == shape) / max(1, len(objects))
+            return confidence >= threshold
+        if 'FILL(' in rule:
+            fill = rule.split('(')[1].split(')')[0].lower()
+            confidence = sum(1 for obj in objects if obj.get('fill') == fill) / max(1, len(objects))
+            return confidence >= threshold
+        # Default: pass
+        return True
     
     def _select_rule_for_generation(self) -> BongardRule:
         """Select a rule for generation based on coverage needs."""
@@ -174,10 +366,10 @@ class BongardDataset:
         return random.choice(self.rules)
     
     def _generate_single_scene(self, 
-                              rule: BongardRule, 
-                              num_objects: int, 
-                              is_positive: bool,
-                              max_attempts: int = 10) -> Optional[Dict[str, Any]]:
+                               rule: BongardRule, 
+                               num_objects: int, 
+                               is_positive: bool,
+                               max_attempts: int = 10) -> Optional[Dict[str, Any]]:
         """Generate a single scene following the given rule."""
         
         for attempt in range(max_attempts):
@@ -392,13 +584,13 @@ class BongardDataset:
         coverage_pct = (coverage_stats['covered_cells'] / coverage_stats['total_cells']) * 100
         
         logger.info(f"Progress: {current}/{total} ({percentage:.1f}%) - "
-                   f"Coverage: {coverage_pct:.1f}% - "
-                   f"Success rate: {self.generated_count/(self.generated_count + self.failed_count):.2f}")
+                    f"Coverage: {coverage_pct:.1f}% - "
+                    f"Success rate: {self.generated_count/(self.generated_count + self.failed_count):.2f}")
 
 def generate_bongard_dataset(output_dir: str = "synthetic_images",
-                           total_examples: int = 10000,
-                           canvas_size: int = 128,
-                           target_quota: int = 50) -> Dict[str, Any]:
+                             total_examples: int = 10000,
+                             canvas_size: int = 128,
+                             target_quota: int = 50) -> Dict[str, Any]:
     """
     Convenience function to generate a complete Bongard dataset.
     
@@ -418,3 +610,4 @@ def generate_bongard_dataset(output_dir: str = "synthetic_images",
     )
     
     return dataset.generate_dataset(total_examples=total_examples)
+

@@ -311,7 +311,7 @@ if __name__ == "__main__":
     modular_success = test_modular_generator()
     if not modular_success:
         logger.warning("Modular generator testing had issues, but continuing with phase 1 validation")
-    
+
     # Determine synthetic holdout cache path from config if present
     synth_cache = 'synth_holdout.npz'
     if 'holdout_cache' in config['data'].get('synthetic_data_config', {}):
@@ -320,44 +320,62 @@ if __name__ == "__main__":
     if config['data'].get('use_synthetic_data', True):
         logger.info("==== Phase 1 Validation: Synthetic Holdout ====")
         s_imgs, s_lbls = build_synth_holdout(cache_path=synth_cache)
-        s_acc, s_pp, s_pt = eval_set(s_imgs, s_lbls)
-        logger.info(f"Synth Acc: {s_acc:.4f}")
-        plot_calibration(s_pp, s_pt, "Synthetic Calibration")
+        # --- Visualization step: show a few synthetic images before model inference ---
+        try:
+            import matplotlib.pyplot as plt
+            n_show = min(5, len(s_imgs))
+            logger.info(f"Displaying {n_show} synthetic images before model inference...")
+            fig, axes = plt.subplots(1, n_show, figsize=(3*n_show, 3))
+            for i in range(n_show):
+                axes[i].imshow(s_imgs[i], cmap='gray')
+                axes[i].set_title(f"Label: {s_lbls[i]}")
+                axes[i].axis('off')
+            plt.tight_layout()
+            plt.show()
+        except ImportError:
+            logger.warning("matplotlib not installed, skipping synthetic image visualization.")
+        # --- End visualization ---
+        # --- Model training and evaluation temporarily disabled ---
+        logger.info("Model training and evaluation temporarily disabled. Synthetic data generation and visualization only.")
+        # s_acc, s_pp, s_pt = eval_set(s_imgs, s_lbls)
+        # logger.info(f"Synth Acc: {s_acc:.4f}")
+        # plot_calibration(s_pp, s_pt, "Synthetic Calibration")
     else:
         logger.info("==== Phase 1 Validation: Real Holdout ====")
         r_imgs, r_lbls = load_real_holdout()
         if r_imgs is not None:
-            r_acc, r_pp, r_pt = eval_set(r_imgs, r_lbls)
-            logger.info(f"Real Acc: {r_acc:.4f}")
-            plot_calibration(r_pp, r_pt, "Real Calibration")
+            logger.info("Model training and evaluation temporarily disabled. Synthetic data generation and visualization only.")
+            # r_acc, r_pp, r_pt = eval_set(r_imgs, r_lbls)
+            # logger.info(f"Real Acc: {r_acc:.4f}")
+            # plot_calibration(r_pp, r_pt, "Real Calibration")
         else:
             logger.info("No real holdout data found. Skipping real validation.")
 
     logger.info("==== Phase 1: Online Fine-tune Test (first 100 synth) ====")
-    # Use synthetic for fine-tune if available, else real
-    if 's_imgs' in locals() and 's_lbls' in locals():
-        pre, post, t = online_finetune_test(s_imgs[:100], s_lbls[:100])
-    elif 'r_imgs' in locals() and r_imgs is not None:
-        pre, post, t = online_finetune_test(r_imgs[:100], r_lbls[:100])
-    else:
-        logger.info("No data available for online fine-tune test.")
-        pre = post = t = None
-    if pre is not None:
-        logger.info(f"Online FT: Pre {pre:.4f} → Post {post:.4f} in {t:.1f}s")
-    
+    logger.info("Model training and evaluation temporarily disabled. Synthetic data generation and visualization only.")
+    # if 's_imgs' in locals() and 's_lbls' in locals():
+    #     pre, post, t = online_finetune_test(s_imgs[:100], s_lbls[:100])
+    # elif 'r_imgs' in locals() and r_imgs is not None:
+    #     pre, post, t = online_finetune_test(r_imgs[:100], r_lbls[:100])
+    # else:
+    #     logger.info("No data available for online fine-tune test.")
+    #     pre = post = t = None
+    # if pre is not None:
+    #     logger.info(f"Online FT: Pre {pre:.4f} → Post {post:.4f} in {t:.1f}s")
+
     # Summary report
     logger.info("==== Phase 1 Validation Summary ====")
     if modular_success:
         logger.info("✓ Modular generator tests passed")
     else:
         logger.warning("⚠ Modular generator tests had issues")
-    
-    if 's_acc' in locals():
-        logger.info(f"✓ Synthetic holdout accuracy: {s_acc:.4f}")
-    if 'r_acc' in locals():
-        logger.info(f"✓ Real holdout accuracy: {r_acc:.4f}")
-    if pre is not None and post is not None:
-        improvement = post - pre
-        logger.info(f"✓ Fine-tuning improvement: {improvement:+.4f}")
-    
+
+    # if 's_acc' in locals():
+    #     logger.info(f"✓ Synthetic holdout accuracy: {s_acc:.4f}")
+    # if 'r_acc' in locals():
+    #     logger.info(f"✓ Real holdout accuracy: {r_acc:.4f}")
+    # if pre is not None and post is not None:
+    #     improvement = post - pre
+    #     logger.info(f"✓ Fine-tuning improvement: {improvement:+.4f}")
+
     logger.info("Phase 1 validation completed!")

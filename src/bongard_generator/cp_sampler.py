@@ -94,7 +94,6 @@ class CPSATSampler:
             solver = cp_model.CpSolver()
             solver.parameters.max_time_in_seconds = 10.0
             solver.parameters.num_search_workers = 1
-            
             # Use solution collector for multiple solutions
             class SolutionCollector(cp_model.CpSolverSolutionCallback):
                 def __init__(self, variables, limit=1):
@@ -102,33 +101,28 @@ class CPSATSampler:
                     self.variables = variables
                     self.solutions = []
                     self.limit = limit
-                
                 def on_solution_callback(self):
                     if len(self.solutions) < self.limit:
                         solution = {}
                         for name, var in self.variables.items():
                             solution[name] = self.Value(var)
                         self.solutions.append(solution)
-            
             # Flatten variables for collector
             flat_vars = {}
             for i, obj in enumerate(objects):
                 for key, var in obj.items():
                     flat_vars[f'{key}_{i}'] = var
-            
             collector = SolutionCollector(flat_vars, limit=5)
-            
             # Search for solutions
             status = solver.SearchForAllSolutions(model, collector)
-            
+            # Profiling: log solver wall time and conflicts
+            logger.info(f"CP-SAT rule '{rule.description}': WallTime={solver.WallTime():.3f}s, NumConflicts={solver.NumConflicts()}")
             if status in [cp_model.OPTIMAL, cp_model.FEASIBLE] and collector.solutions:
-                # Convert solution back to object format
                 solution = random.choice(collector.solutions)
                 return self._solution_to_objects(solution, num_objects)
             else:
                 logger.warning(f"No feasible solution found for rule {rule.description}")
                 return self._fallback_sampling(rule, num_objects, positive)
-                
         except Exception as e:
             logger.error(f"CP-SAT sampling failed: {e}")
             return self._fallback_sampling(rule, num_objects, positive)

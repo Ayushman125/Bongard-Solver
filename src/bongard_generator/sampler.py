@@ -344,15 +344,15 @@ class BongardSampler:
     def _render_scene(self, 
                     objects: List[Dict[str, Any]], 
                     scene_graph: Dict[str, Any]) -> Optional[np.ndarray]:
-        """Render the scene to an image."""
+        """Render the scene to an image, binarize, and add binary noise."""
         try:
             # Create canvas
             canvas = TurtleCanvas(self.config.img_size)
-            
+
             # Add background
-            bg_color = random.choice(['white', 'lightgray', 'lightblue'])
+            bg_color = 'white'  # Always white for Bongard-LOGO style
             canvas.set_background(bg_color)
-            
+
             # Draw objects
             for obj in objects:
                 canvas.draw_shape(
@@ -360,20 +360,29 @@ class BongardSampler:
                     obj['x'] + obj['size'] // 2,  # Center coordinates
                     obj['y'] + obj['size'] // 2,
                     obj['size'],
-                    obj['color'],
+                    'black',  # Always black for Bongard-LOGO style
                     obj['fill'] == 'solid'
                 )
-            
-            # Convert to numpy array
-            image = np.array(canvas.get_image())
-            
-            # Add noise if specified
-            noise_level = getattr(self.config, 'noise_level', 0.0)
-            if noise_level > 0:
-                image = add_noise(image, noise_level)
-            
+
+            # Convert to PIL Image in 'L' mode
+            pil_img = canvas.get_image().convert('L')
+
+            # Add binary noise before binarization
+            def binary_noise(img, prob=0.01):
+                arr = np.array(img, dtype=np.uint8)
+                mask = np.random.rand(*arr.shape) < prob
+                arr[mask] = 255 - arr[mask]
+                return Image.fromarray(arr, mode='L')
+            pil_img = binary_noise(pil_img, prob=0.01)
+
+            # Binarize to pure black-and-white
+            pil_img = pil_img.point(lambda p: 255 if p > 128 else 0, '1')
+
+            # Convert back to numpy array (0 or 255)
+            image = np.array(pil_img, dtype=np.uint8)
+
             return image
-            
+
         except Exception as e:
             logger.error(f"Scene rendering failed: {e}")
             return None

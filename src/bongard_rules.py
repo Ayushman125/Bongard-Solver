@@ -155,6 +155,57 @@ class BongardRule:
             "is_positive_rule": self.is_positive_rule
         }
 
+    @property
+    def positive_features(self) -> Dict[str, Any]:
+        """Extract positive features from program_ast or logical_facts for backward compatibility."""
+        # Heuristic: look for shape, fill, color, count, relation in logical_facts or AST
+        features = {}
+        # Try logical_facts first
+        for fact in self.logical_facts:
+            if "shape(" in fact:
+                val = fact.split("shape(")[1].split(")")[0].split(",")[-1].strip()
+                features["shape"] = val
+            if "color(" in fact:
+                val = fact.split("color(")[1].split(")")[0].split(",")[-1].strip()
+                features["color"] = val
+            if "fill(" in fact:
+                val = fact.split("fill(")[1].split(")")[0].split(",")[-1].strip()
+                features["fill"] = val
+            if "size(" in fact:
+                val = fact.split("size(")[1].split(")")[0].split(",")[-1].strip()
+                features["size"] = val
+            if "count(" in fact:
+                val = fact.split("count(")[1].split(")")[0].split(",")[-1].strip()
+                features["count"] = int(val) if val.isdigit() else val
+            if "overlap" in fact:
+                features["relation"] = "overlap"
+            if "near" in fact:
+                features["relation"] = "near"
+        # Fallback: try to infer from program_ast
+        for node in self.program_ast:
+            if isinstance(node, dict):
+                op = node.get("op", "")
+                args = node.get("args", [])
+                if op == "shape":
+                    features["shape"] = args[-1].get("op", args[-1]) if isinstance(args[-1], dict) else args[-1]
+                if op == "color":
+                    features["color"] = args[-1].get("op", args[-1]) if isinstance(args[-1], dict) else args[-1]
+                if op == "fill":
+                    features["fill"] = args[-1].get("op", args[-1]) if isinstance(args[-1], dict) else args[-1]
+                if op == "size":
+                    features["size"] = args[-1].get("op", args[-1]) if isinstance(args[-1], dict) else args[-1]
+                if op == "count":
+                    features["count"] = args[-1].get("op", args[-1]) if isinstance(args[-1], dict) else args[-1]
+                if op in ["overlap", "near"]:
+                    features["relation"] = op
+        return features
+
+    @property
+    def negative_features(self) -> Dict[str, Any]:
+        """Stub for negative features; can be extended if needed."""
+        # For now, just return empty dict (old code expects this)
+        return {}
+
 
 # --- Extended Set of Bongard Rules ---
 # These rules cover various aspects of Bongard problems, from simple attributes
