@@ -207,12 +207,13 @@ class BongardRule:
         return {}
 
 
+
 # --- Extended Set of Bongard Rules ---
+# Ensure ALL_BONGARD_RULES is a list before fallback rule check
+ALL_BONGARD_RULES = []
+
 # Ensure fallback SHAPE(TRIANGLE) rule exists for validation harness
-if not any(
-    hasattr(r, "description") and r.description.strip().upper() == "SHAPE(TRIANGLE)"
-    for r in ALL_BONGARD_RULES
-):
+if not any(r.description.strip().upper() == "SHAPE(TRIANGLE)" for r in ALL_BONGARD_RULES):
     ALL_BONGARD_RULES.append(
         BongardRule(
             description="SHAPE(TRIANGLE)",
@@ -222,8 +223,6 @@ if not any(
     )
 # These rules cover various aspects of Bongard problems, from simple attributes
 # to complex relations and counting.
-
-ALL_BONGARD_RULES = collections.OrderedDict()
 
 # --- Attribute-based Rules ---
 
