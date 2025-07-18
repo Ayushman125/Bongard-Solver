@@ -6,6 +6,17 @@ import random
 import math
 from typing import List, Dict, Any, Tuple, Optional
 
+def safe_randint(a: int, b: int) -> int:
+    """Safe random integer generator that handles inverted ranges."""
+    lo, hi = min(a, b), max(a, b)
+    return random.randint(lo, hi)
+
+def safe_randrange(a: int, b: int) -> int:
+    """Safe random range generator that handles inverted ranges."""
+    lo, hi = min(a, b), max(a, b)
+    # randrange excludes hi, so we +1
+    return random.randrange(lo, hi+1)
+
 logger = logging.getLogger(__name__)
 
 class RelationSampler:
@@ -70,9 +81,9 @@ class RelationSampler:
     
     def _generate_random_object(self) -> Dict[str, Any]:
         """Generate a random object with random properties."""
-        size = random.randint(self.min_obj_size, self.max_obj_size)
-        x = random.randint(0, self.canvas_size - size)
-        y = random.randint(0, self.canvas_size - size)
+        size = safe_randint(self.min_obj_size, self.max_obj_size)
+        x = safe_randint(0, self.canvas_size - size)
+        y = safe_randint(0, self.canvas_size - size)
         
         return {
             'x': x,
@@ -90,26 +101,26 @@ class RelationSampler:
         
         # Choose a reference object
         ref_obj = random.choice(existing_objects)
-        size = random.randint(self.min_obj_size, self.max_obj_size)
+        size = safe_randint(self.min_obj_size, self.max_obj_size)
         
         # Calculate position based on relation
         if relation == 'left_of':
-            x = random.randint(0, max(0, ref_obj['x'] - size - 10))
-            y = random.randint(max(0, ref_obj['y'] - size//2), 
+            x = safe_randint(0, max(0, ref_obj['x'] - size - 10))
+            y = safe_randint(max(0, ref_obj['y'] - size//2), 
                              min(self.canvas_size - size, ref_obj['y'] + ref_obj['size'] + size//2))
         elif relation == 'right_of':
-            x = random.randint(min(self.canvas_size - size, ref_obj['x'] + ref_obj['size'] + 10), 
+            x = safe_randint(min(self.canvas_size - size, ref_obj['x'] + ref_obj['size'] + 10), 
                              self.canvas_size - size)
-            y = random.randint(max(0, ref_obj['y'] - size//2),
+            y = safe_randint(max(0, ref_obj['y'] - size//2),
                              min(self.canvas_size - size, ref_obj['y'] + ref_obj['size'] + size//2))
         elif relation == 'above':
-            x = random.randint(max(0, ref_obj['x'] - size//2),
+            x = safe_randint(max(0, ref_obj['x'] - size//2),
                              min(self.canvas_size - size, ref_obj['x'] + ref_obj['size'] + size//2))
-            y = random.randint(0, max(0, ref_obj['y'] - size - 10))
+            y = safe_randint(0, max(0, ref_obj['y'] - size - 10))
         elif relation == 'below':
-            x = random.randint(max(0, ref_obj['x'] - size//2),
+            x = safe_randint(max(0, ref_obj['x'] - size//2),
                              min(self.canvas_size - size, ref_obj['x'] + ref_obj['size'] + size//2))
-            y = random.randint(min(self.canvas_size - size, ref_obj['y'] + ref_obj['size'] + 10),
+            y = safe_randint(min(self.canvas_size - size, ref_obj['y'] + ref_obj['size'] + 10),
                              self.canvas_size - size)
         else:
             return self._generate_random_object()
@@ -133,7 +144,7 @@ class RelationSampler:
             return self._generate_random_object()
         
         ref_obj = random.choice(existing_objects)
-        size = random.randint(self.min_obj_size, self.max_obj_size)
+        size = safe_randint(self.min_obj_size, self.max_obj_size)
         
         # Place object within a certain distance
         max_distance = 50
@@ -165,11 +176,11 @@ class RelationSampler:
             return self._generate_random_object()
         
         ref_obj = random.choice(existing_objects)
-        size = random.randint(self.min_obj_size, self.max_obj_size)
+        size = safe_randint(self.min_obj_size, self.max_obj_size)
         
         # Create overlap by placing object partially over reference object
-        overlap_x = random.randint(-size//2, ref_obj['size']//2)
-        overlap_y = random.randint(-size//2, ref_obj['size']//2)
+        overlap_x = safe_randint(-size//2, ref_obj['size']//2)
+        overlap_y = safe_randint(-size//2, ref_obj['size']//2)
         
         x = ref_obj['x'] + overlap_x
         y = ref_obj['y'] + overlap_y
@@ -200,12 +211,12 @@ class RelationSampler:
         if max_nested_size < self.min_obj_size:
             return self._generate_random_object()
         
-        size = random.randint(self.min_obj_size, max_nested_size)
+        size = safe_randint(self.min_obj_size, max_nested_size)
         
         # Place inside reference object
         margin = (ref_obj['size'] - size) // 2
-        x = ref_obj['x'] + random.randint(5, max(5, margin))
-        y = ref_obj['y'] + random.randint(5, max(5, margin))
+        x = ref_obj['x'] + safe_randint(5, max(5, margin))
+        y = ref_obj['y'] + safe_randint(5, max(5, margin))
         
         return {
             'x': x,

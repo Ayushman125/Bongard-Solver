@@ -9,6 +9,17 @@ from typing import Dict, List, Any, Tuple, Optional
 from pathlib import Path
 from PIL import Image
 
+def safe_randint(a: int, b: int) -> int:
+    """Safe random integer generator that handles inverted ranges."""
+    lo, hi = min(a, b), max(a, b)
+    return random.randint(lo, hi)
+
+def safe_randrange(a: int, b: int) -> int:
+    """Safe random range generator that handles inverted ranges."""
+    lo, hi = min(a, b), max(a, b)
+    # randrange excludes hi, so we +1
+    return random.randrange(lo, hi+1)
+
 from .config_loader import get_config, get_sampler_config, SamplerConfig
 from src.bongard_rules import BongardRule
 from .rule_loader import get_all_rules, get_rule_by_description
@@ -37,7 +48,7 @@ class BongardSampler:
                 importlib.reload(sys.modules[mod_name])
         # Reseed RNGs
         if seed is None:
-            seed = random.randint(0, 1_000_000)
+            seed = safe_randint(0, 1_000_000)
         random.seed(seed)
         np.random.seed(seed)
         # Clear any custom caches (if present)
@@ -340,17 +351,17 @@ class BongardSampler:
                 target_size = features['size']
                 if is_positive:
                     if target_size == 'large':
-                        obj['size'] = random.randint(40, 60)
+                        obj['size'] = safe_randint(40, 60)
                     elif target_size == 'small':
-                        obj['size'] = random.randint(15, 30)
+                        obj['size'] = safe_randint(15, 30)
                     else:
-                        obj['size'] = random.randint(25, 45)
+                        obj['size'] = safe_randint(25, 45)
                 else:
                     # For negative examples, use opposite size
                     if target_size == 'large':
-                        obj['size'] = random.randint(15, 30)
+                        obj['size'] = safe_randint(15, 30)
                     elif target_size == 'small':
-                        obj['size'] = random.randint(40, 60)
+                        obj['size'] = safe_randint(40, 60)
         
         return objects
     
@@ -607,8 +618,24 @@ class BongardSampler:
             # Generate objects with relaxed constraints
             objects = self._generate_fallback_objects(fallback_params, rule, is_positive)
             if not objects:
-                logger.warning("Fallback object generation failed")
-                return None
+                logger.warning("Fallback object generation failed; forcing at least one random object")
+                # Guarantee at least one object
+                shapes = ['circle', 'triangle', 'square']
+                colors = ['red', 'blue', 'green', 'yellow', 'purple']
+                fills = ['solid', 'outline']
+                size = safe_randint(20, 50)
+                margin = 30
+                x = safe_randint(margin, self.config.img_size - margin - 50)
+                y = safe_randint(margin, self.config.img_size - margin - 50)
+                objects = [{
+                    'x': x,
+                    'y': y,
+                    'size': size,
+                    'shape': random.choice(shapes),
+                    'color': random.choice(colors),
+                    'fill': random.choice(fills),
+                    'id': 0
+                }]
             
             # Create minimal scene graph
             scene_graph = {
@@ -696,11 +723,11 @@ class BongardSampler:
         for i in range(num_objects):
             # Random base position with better spacing
             margin = 30
-            x = random.randint(margin, self.config.img_size - margin - 50)
-            y = random.randint(margin, self.config.img_size - margin - 50)
+            x = safe_randint(margin, self.config.img_size - margin - 50)
+            y = safe_randint(margin, self.config.img_size - margin - 50)
             
             # Randomized size
-            size = random.randint(20, 50)
+            size = safe_randint(20, 50)
             
             # Apply rule features with fallback diversity
             if is_positive and target_shape:

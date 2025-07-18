@@ -4,6 +4,17 @@ import random
 import math
 from typing import List, Dict, Any, Tuple
 
+def safe_randint(a: int, b: int) -> int:
+    """Safe random integer generator that handles inverted ranges."""
+    lo, hi = min(a, b), max(a, b)
+    return random.randint(lo, hi)
+
+def safe_randrange(a: int, b: int) -> int:
+    """Safe random range generator that handles inverted ranges."""
+    lo, hi = min(a, b), max(a, b)
+    # randrange excludes hi, so we +1
+    return random.randrange(lo, hi+1)
+
 class RelationSampler:
     """Comprehensive spatial and topological relationship sampler."""
     
@@ -140,7 +151,7 @@ class RelationSampler:
             
             objects.append({
                 "position": (x, y),
-                "size": random.randint(15, 30)  # Smaller objects inside
+                "size": safe_randint(15, 30)  # Smaller objects inside
             })
         
         return objects

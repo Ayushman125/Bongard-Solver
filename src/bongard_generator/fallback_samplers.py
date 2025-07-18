@@ -4,6 +4,17 @@ import random
 import logging
 from typing import Dict, Any, List, Tuple
 
+def safe_randint(a: int, b: int) -> int:
+    """Safe random integer generator that handles inverted ranges."""
+    lo, hi = min(a, b), max(a, b)
+    return random.randint(lo, hi)
+
+def safe_randrange(a: int, b: int) -> int:
+    """Safe random range generator that handles inverted ranges."""
+    lo, hi = min(a, b), max(a, b)
+    # randrange excludes hi, so we +1
+    return random.randrange(lo, hi+1)
+
 from ..bongard_rules import BongardRule
 from .config_loader import SamplerConfig
 from .spatial_sampler import RelationSampler
@@ -183,7 +194,7 @@ class FallbackSamplers:
     
     def _random_object(self) -> Dict[str, Any]:
         """Generate a random object with basic attributes."""
-        size = random.randint(self.cfg.min_obj_size, self.cfg.max_obj_size)
+        size = safe_randint(self.cfg.min_obj_size, self.cfg.max_obj_size)
         margin = size // 2
         
         return {
@@ -213,10 +224,9 @@ class FallbackSamplers:
             obj['orientation'] = 'upright'
         if 'texture' not in obj:
             obj['texture'] = 'flat'
-        
         # Ensure size attributes
         if 'width_pixels' not in obj or 'height_pixels' not in obj:
-            size = random.randint(self.cfg.min_obj_size, self.cfg.max_obj_size)
+            size = safe_randint(self.cfg.min_obj_size, self.cfg.max_obj_size)
             obj['width_pixels'] = size
             obj['height_pixels'] = size
         

@@ -5,6 +5,17 @@ import random
 from typing import List, Dict, Any, Tuple, Optional, Set
 import numpy as np
 
+def safe_randint(a: int, b: int) -> int:
+    """Safe random integer generator that handles inverted ranges."""
+    lo, hi = min(a, b), max(a, b)
+    return random.randint(lo, hi)
+
+def safe_randrange(a: int, b: int) -> int:
+    """Safe random range generator that handles inverted ranges."""
+    lo, hi = min(a, b), max(a, b)
+    # randrange excludes hi, so we +1
+    return random.randrange(lo, hi+1)
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -221,9 +232,9 @@ class PlacementOptimizer:
             
             for attempt in range(max_attempts):
                 # Generate random object
-                size = random.randint(self.min_obj_size, self.max_obj_size)
-                x = random.randint(0, self.canvas_size - size)
-                y = random.randint(0, self.canvas_size - size)
+                size = safe_randint(self.min_obj_size, self.max_obj_size)
+                x = safe_randint(0, self.canvas_size - size)
+                y = safe_randint(0, self.canvas_size - size)
                 
                 obj = {
                     'x': x,
@@ -254,8 +265,8 @@ class PlacementOptimizer:
             else:
                 # Generate a minimal object if we can't find a good placement
                 size = self.min_obj_size
-                x = random.randint(0, self.canvas_size - size)
-                y = random.randint(0, self.canvas_size - size)
+                x = safe_randint(0, self.canvas_size - size)
+                y = safe_randint(0, self.canvas_size - size)
                 
                 obj = {
                     'x': x,
@@ -432,8 +443,8 @@ class ConstraintGenerator:
         
         # Add random constraints if needed
         while len(constraints) < max_constraints and num_objects > 1:
-            obj1 = random.randint(0, num_objects - 1)
-            obj2 = random.randint(0, num_objects - 1)
+            obj1 = safe_randint(0, num_objects - 1)
+            obj2 = safe_randint(0, num_objects - 1)
             
             if obj1 != obj2:
                 constraint_type = random.choice(self.constraint_types)

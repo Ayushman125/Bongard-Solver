@@ -8,6 +8,17 @@ from typing import List, Dict, Any, Tuple, Optional, Iterator
 import numpy as np
 from PIL import Image
 
+def safe_randint(a: int, b: int) -> int:
+    """Safe random integer generator that handles inverted ranges."""
+    lo, hi = min(a, b), max(a, b)
+    return random.randint(lo, hi)
+
+def safe_randrange(a: int, b: int) -> int:
+    """Safe random range generator that handles inverted ranges."""
+    lo, hi = min(a, b), max(a, b)
+    # randrange excludes hi, so we +1
+    return random.randrange(lo, hi+1)
+
 # Assuming these modules are in the same package or correctly imported in a real environment
 # from .cp_sampler import sample_scene_cp, SceneParameters
 # from .rule_loader import get_all_rules, get_rule_by_description, BongardRule
@@ -54,9 +65,9 @@ def sample_scene_cp(rule, num_objects, is_positive, canvas_size, min_obj_size, m
     objects = []
     for _ in range(num_objects):
         obj = {
-            'x': random.randint(min_obj_size, canvas_size - min_obj_size),
-            'y': random.randint(min_obj_size, canvas_size - min_obj_size),
-            'size': random.randint(min_obj_size, max_obj_size),
+            'x': safe_randint(min_obj_size, canvas_size - min_obj_size),
+            'y': safe_randint(min_obj_size, canvas_size - min_obj_size),
+            'size': safe_randint(min_obj_size, max_obj_size),
             'shape': random.choice(['circle', 'triangle', 'square', 'pentagon', 'star']),
             'fill': random.choice(['solid', 'outline', 'striped', 'gradient']),
             'color': random.choice(['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'black'])
@@ -236,7 +247,7 @@ class BongardDataset:
             # Select rule and parameters
             rule = self._select_rule_for_generation()
             is_positive = random.random() < positive_ratio
-            num_objects = random.randint(*max_objects_range)
+            num_objects = safe_randint(*max_objects_range)
             
             # Inject adversarial corner cases (5% of scenes)
             adversarial = random.random() < 0.05
@@ -588,12 +599,17 @@ class SyntheticBongardDataset:
     def __init__(self, rules, img_size=128, grayscale=True, flush_cache=False):
         self.dataset = BongardDataset(canvas_size=img_size)
         self.examples = []
-        if flush_cache and hasattr(self.dataset, 'sampler') and hasattr(self.dataset.sampler, 'cache'):
-            self.dataset.sampler.cache.clear()
+        
+        # Clear cache and reseed between runs
+        if flush_cache:
+            if hasattr(self.dataset, 'sampler') and hasattr(self.dataset.sampler, 'cache'):
+                self.dataset.sampler.cache.clear()
+        
         # Reseed RNG for diversity
         import random, numpy as np
         random.seed(None)
         np.random.seed(None)
+        
         for rule_desc, count in rules:
             rule = self.dataset._select_rule_for_generation()
             for i in range(count):
@@ -601,8 +617,24 @@ class SyntheticBongardDataset:
                 if scene:
                     img = create_composite_scene(scene['objects'], img_size)
                     self.examples.append({'image': img, 'rule': rule_desc, 'label': 1, 'scene_graph': scene['scene_graph']})
+                
+                # Force at least one object if scene generation failed
+                if not scene:
+                    logger.warning("Scene generation failed; forcing at least one random object")
+                    obj = {
+                        'x': safe_randint(20, img_size - 40),
+                        'y': safe_randint(20, img_size - 40), 
+                        'size': safe_randint(20, 40),
+                        'shape': random.choice(['circle', 'triangle', 'square']),
+                        'fill': random.choice(['solid', 'outline']),
+                        'color': random.choice(['red', 'blue', 'green'])
+                    }
+                    img = create_composite_scene([obj], img_size)
+                    self.examples.append({'image': img, 'rule': rule_desc, 'label': 1, 'scene_graph': {'objects': 1, 'relations': []}})
+    
     def __len__(self):
         return len(self.examples)
+    
     def __getitem__(self, idx):
         return self.examples[idx]
 

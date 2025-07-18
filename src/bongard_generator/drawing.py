@@ -9,6 +9,17 @@ from typing import List, Tuple, Dict, Any, Optional, Callable, Union
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import string
 
+def safe_randint(a: int, b: int) -> int:
+    """Safe random integer generator that handles inverted ranges."""
+    lo, hi = min(a, b), max(a, b)
+    return random.randint(lo, hi)
+
+def safe_randrange(a: int, b: int) -> int:
+    """Safe random range generator that handles inverted ranges."""
+    lo, hi = min(a, b), max(a, b)
+    # randrange excludes hi, so we +1
+    return random.randrange(lo, hi+1)
+
 from .utils import generate_perlin_noise, find_coeffs, make_linear_gradient, draw_dashed_line, draw_dashed_arc
 from .config_loader import get_config
 
@@ -217,7 +228,7 @@ class ShapeDrawer:
                           stroke_width_hr: int, dash_pattern_hr: Optional[Tuple[int, ...]], fill_color: Union[int, Tuple[int, int, int, int]]) -> None:
         """Draw a zigzag shape."""
         pts_hr: List[Tuple[float, float]] = []
-        segments: int = random.randint(3, 7)
+        segments: int = safe_randint(3, 7)
         for k in range(segments + 1):
             px: float = bbox_hr[0] + (bbox_hr[2] - bbox_hr[0]) * k / segments
             py: float = bbox_hr[1] + (bbox_hr[3] - bbox_hr[1]) * random.choice([0, 1])
@@ -233,7 +244,7 @@ class ShapeDrawer:
                        stroke_width_hr: int, dash_pattern_hr: Optional[Tuple[int, ...]], fill_color: Union[int, Tuple[int, int, int, int]]) -> None:
         """Draw a fan shape."""
         center_hr: Tuple[int, int] = (center_offset_hr, center_offset_hr)
-        spokes: int = random.randint(5, 12)
+        spokes: int = safe_randint(5, 12)
         for k in range(spokes):
             ang: float = math.radians(k * 360 / spokes)
             ex: float = center_hr[0] + half_size_hr * math.cos(ang)
@@ -246,8 +257,8 @@ class ShapeDrawer:
     def _draw_grid_shape(self, draw_hr: ImageDraw.ImageDraw, high_res: int, bbox_hr: List[float], 
                         stroke_width_hr: int, dash_pattern_hr: Optional[Tuple[int, ...]], fill_color: Union[int, Tuple[int, int, int, int]]) -> None:
         """Draw a grid shape."""
-        rows: int = random.randint(2, 5)
-        cols: int = random.randint(2, 5)
+        rows: int = safe_randint(2, 5)
+        cols: int = safe_randint(2, 5)
         cell_w: float = (bbox_hr[2] - bbox_hr[0]) / cols
         cell_h: float = (bbox_hr[3] - bbox_hr[1]) / rows
         for i in range(rows):
@@ -300,7 +311,7 @@ class ShapeDrawer:
         for i in range(20):
             t = i / 19
             x = bbox_hr[0] + t * (bbox_hr[2] - bbox_hr[0])
-            y = bbox_hr[1] + (bbox_hr[3] - bbox_hr[1]) * 0.5 + math.sin(2 * math.pi * t * random.randint(1, 3)) * high_res * 0.1
+            y = bbox_hr[1] + (bbox_hr[3] - bbox_hr[1]) * 0.5 + math.sin(2 * math.pi * t * safe_randint(1, 3)) * high_res * 0.1
             pts.append((x, y))
         
         if dash_pattern_hr:
@@ -319,7 +330,7 @@ def apply_occluder(img: Image.Image, canvas_width: int, canvas_height: int,
     
     occluder_mask = Image.new('L', (W, H), color=0)
     occluder_draw = ImageDraw.Draw(occluder_mask)
-    num_occluders = random.randint(0, 3)
+    num_occluders = safe_randint(0, 3)
     
     for _ in range(num_occluders):
         shape: str = random.choice(['rect', 'ellipse'])
@@ -352,7 +363,162 @@ def randomize_canvas(canvas_width: int, canvas_height: int, grayscale: bool = Tr
             bg = random.choice(bg_textures).resize((W, H))
             img = Image.merge('RGB', (bg, bg, bg))
         else:
-            color = tuple(random.randint(50, 200) for _ in range(3))
+            color = tuple(safe_randint(50, 200) for _ in range(3))
             img = Image.new('RGB', (W, H), color)
         draw = ImageDraw.Draw(img)
     return img, draw
+
+
+class BongardRenderer:
+    """Complete renderer for Bongard scene generation."""
+    
+    def __init__(self, canvas_size: int = 128, high_res_factor: int = 4):
+        self.canvas_size = canvas_size
+        self.high_res_factor = high_res_factor
+        self.high_res_size = canvas_size * high_res_factor
+        
+        # Initialize shape drawer
+        self.shape_drawer = ShapeDrawer()
+        
+        logger.info(f"Initialized BongardRenderer with canvas_size={canvas_size}")
+    
+    def render_scene(self, objects: List[Dict[str, Any]], 
+                    canvas_size: Optional[int] = None,
+                    background_color: str = 'white',
+                    output_format: str = 'pil') -> Any:
+        """
+        Render a complete Bongard scene.
+        
+        Args:
+            objects: List of object dictionaries with shape, position, size, etc.
+            canvas_size: Override default canvas size
+            background_color: Background color ('white' or 'black')
+            output_format: 'pil' for PIL Image, 'numpy' for numpy array
+            
+        Returns:
+            Rendered scene as PIL Image or numpy array
+        """
+        size = canvas_size or self.canvas_size
+        
+        # Create high-resolution canvas for anti-aliasing
+        hr_size = size * self.high_res_factor
+        
+        # Initialize canvas
+        if background_color == 'white':
+            img = Image.new('L', (hr_size, hr_size), color=255)
+        else:
+            img = Image.new('L', (hr_size, hr_size), color=0)
+        
+        draw = ImageDraw.Draw(img)
+        
+        # Render each object
+        for obj in objects:
+            self._render_object(draw, obj, hr_size)
+        
+        # Downscale for final output
+        img = img.resize((size, size), Image.LANCZOS)
+        
+        # Convert to requested format
+        if output_format == 'numpy':
+            return np.array(img)
+        elif output_format == 'pil':
+            return img
+        else:
+            raise ValueError(f"Unknown output format: {output_format}")
+    
+    def _render_object(self, draw: ImageDraw.ImageDraw, obj: Dict[str, Any], canvas_size: int):
+        """Render a single object on the canvas."""
+        # Extract object properties
+        shape = obj.get('shape', 'circle')
+        position = obj.get('position', (canvas_size//2, canvas_size//2))
+        size = obj.get('size', obj.get('width_pixels', 30))
+        fill = obj.get('fill', 'solid')
+        color = obj.get('color', 'black')
+        orientation = obj.get('orientation', 0)
+        
+        # Scale position and size for high-resolution
+        x, y = position
+        x_hr = int(x * self.high_res_factor)
+        y_hr = int(y * self.high_res_factor)
+        size_hr = int(size * self.high_res_factor)
+        
+        # Convert color to grayscale value
+        if color == 'black' or fill == 'solid':
+            fill_color = 0  # Black
+        else:
+            fill_color = 0  # Default to black for now
+        
+        # Calculate bounding box
+        half_size = size_hr // 2
+        bbox = [x_hr - half_size, y_hr - half_size, x_hr + half_size, y_hr + half_size]
+        
+        # Render based on shape
+        if shape == 'circle':
+            if fill == 'solid':
+                draw.ellipse(bbox, fill=fill_color)
+            else:
+                draw.ellipse(bbox, outline=fill_color, width=max(2, size_hr//10))
+        
+        elif shape == 'square' or shape == 'rectangle':
+            if fill == 'solid':
+                draw.rectangle(bbox, fill=fill_color)
+            else:
+                draw.rectangle(bbox, outline=fill_color, width=max(2, size_hr//10))
+        
+        elif shape == 'triangle':
+            # Create triangle points
+            points = [
+                (x_hr, y_hr - half_size),  # Top
+                (x_hr - half_size, y_hr + half_size),  # Bottom left
+                (x_hr + half_size, y_hr + half_size)   # Bottom right
+            ]
+            
+            if fill == 'solid':
+                draw.polygon(points, fill=fill_color)
+            else:
+                draw.polygon(points, outline=fill_color, width=max(2, size_hr//10))
+        
+        elif shape == 'pentagon':
+            # Create pentagon points
+            points = []
+            for i in range(5):
+                angle = (2 * math.pi * i / 5) - (math.pi / 2)  # Start from top
+                px = x_hr + half_size * math.cos(angle)
+                py = y_hr + half_size * math.sin(angle)
+                points.append((px, py))
+            
+            if fill == 'solid':
+                draw.polygon(points, fill=fill_color)
+            else:
+                draw.polygon(points, outline=fill_color, width=max(2, size_hr//10))
+        
+        elif shape == 'hexagon':
+            # Create hexagon points
+            points = []
+            for i in range(6):
+                angle = (2 * math.pi * i / 6) - (math.pi / 2)  # Start from top
+                px = x_hr + half_size * math.cos(angle)
+                py = y_hr + half_size * math.sin(angle)
+                points.append((px, py))
+            
+            if fill == 'solid':
+                draw.polygon(points, fill=fill_color)
+            else:
+                draw.polygon(points, outline=fill_color, width=max(2, size_hr//10))
+        
+        else:
+            # Default to circle for unknown shapes
+            if fill == 'solid':
+                draw.ellipse(bbox, fill=fill_color)
+            else:
+                draw.ellipse(bbox, outline=fill_color, width=max(2, size_hr//10))
+    
+    def render_scene_from_genome(self, genome, scene_objects: List[Dict[str, Any]]) -> np.ndarray:
+        """Render scene specifically from a SceneGenome."""
+        canvas_size = genome.params.get('canvas_size', self.canvas_size)
+        return self.render_scene(
+            objects=scene_objects,
+            canvas_size=canvas_size,
+            background_color='white',
+            output_format='numpy'
+        )
