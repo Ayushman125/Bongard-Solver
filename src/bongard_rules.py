@@ -216,9 +216,10 @@ ALL_BONGARD_RULES = []
 if not any(r.description.strip().upper() == "SHAPE(TRIANGLE)" for r in ALL_BONGARD_RULES):
     ALL_BONGARD_RULES.append(
         BongardRule(
+            name="shape_triangle_fallback",
             description="SHAPE(TRIANGLE)",
-            pos_literals={"shape": "triangle"},
-            neg_literals={"shape": "square"},
+            program_ast=[{"op": "FORALL", "args": [{"op": "object_variable", "value": "O"}, {"op": "shape", "args": [{"op": "object_variable", "value": "O"}, {"op": "triangle"}]}]}],
+            logical_facts=["forall(O, shape(O, triangle))"]
         )
     )
 # These rules cover various aspects of Bongard problems, from simple attributes
@@ -226,24 +227,25 @@ if not any(r.description.strip().upper() == "SHAPE(TRIANGLE)" for r in ALL_BONGA
 
 # --- Attribute-based Rules ---
 
+
 # Rule 1: All objects are circles
-ALL_BONGARD_RULES["all_circles"] = BongardRule(
+ALL_BONGARD_RULES.append(BongardRule(
     name="all_circles",
     description="All objects in the image are circles.",
     program_ast=[{"op": "FORALL", "args": [{"op": "object_variable", "value": "O"}, {"op": "shape", "args": [{"op": "object_variable", "value": "O"}, {"op": "circle"}]}]}],
     logical_facts=["forall(O, shape(O, circle))"]
-)
+))
 
 # Rule 2: All objects are the same color (e.g., all red)
-ALL_BONGARD_RULES["all_same_color_red"] = BongardRule(
+ALL_BONGARD_RULES.append(BongardRule(
     name="all_same_color_red",
     description="All objects in the image are red.",
     program_ast=[{"op": "FORALL", "args": [{"op": "object_variable", "value": "O"}, {"op": "color", "args": [{"op": "object_variable", "value": "O"}, {"op": "red"}]}]}],
     logical_facts=["forall(O, color(O, red))"]
-)
+))
 
 # Rule 3: There exists at least one large square
-ALL_BONGARD_RULES["exists_large_square"] = BongardRule(
+ALL_BONGARD_RULES.append(BongardRule(
     name="exists_large_square",
     description="There is at least one large square in the image.",
     program_ast=[
@@ -253,10 +255,10 @@ ALL_BONGARD_RULES["exists_large_square"] = BongardRule(
         ]}]}
     ],
     logical_facts=["exists(O, (shape(O, square) and size(O, large)))"]
-)
+))
 
 # Rule 4: No object is a hollow triangle
-ALL_BONGARD_RULES["no_hollow_triangle"] = BongardRule(
+ALL_BONGARD_RULES.append(BongardRule(
     name="no_hollow_triangle",
     description="No object in the image is a hollow triangle.",
     program_ast=[
@@ -268,10 +270,10 @@ ALL_BONGARD_RULES["no_hollow_triangle"] = BongardRule(
         ]}
     ],
     logical_facts=["not(exists(O, (shape(O, triangle) and fill(O, hollow))))"]
-)
+))
 
 # Rule 5: All objects are either red or blue
-ALL_BONGARD_RULES["all_red_or_blue"] = BongardRule(
+ALL_BONGARD_RULES.append(BongardRule(
     name="all_red_or_blue",
     description="All objects in the image are either red or blue.",
     program_ast=[
@@ -281,12 +283,13 @@ ALL_BONGARD_RULES["all_red_or_blue"] = BongardRule(
         ]}]}
     ],
     logical_facts=["forall(O, (color(O, red) or color(O, blue)))"]
-)
+))
 
 # --- Relational Rules ---
 
+
 # Rule 6: A small object is above a large object
-ALL_BONGARD_RULES["small_above_large"] = BongardRule(
+ALL_BONGARD_RULES.append(BongardRule(
     name="small_above_large",
     description="There is a small object above a large object.",
     program_ast=[
@@ -297,10 +300,10 @@ ALL_BONGARD_RULES["small_above_large"] = BongardRule(
         ]}]}]}
     ],
     logical_facts=["exists(O1, exists(O2, (size(O1, small) and size(O2, large) and above(O1, O2))))"]
-)
+))
 
 # Rule 7: All objects are aligned horizontally
-ALL_BONGARD_RULES["all_aligned_horizontally"] = BongardRule(
+ALL_BONGARD_RULES.append(BongardRule(
     name="all_aligned_horizontally",
     description="All pairs of objects in the image are horizontally aligned.",
     program_ast=[
@@ -310,10 +313,10 @@ ALL_BONGARD_RULES["all_aligned_horizontally"] = BongardRule(
         ]}]}]}
     ],
     logical_facts=["forall(O1, forall(O2, (O1 != O2 and aligned_horizontally(O1, O2))))"]
-)
+))
 
 # Rule 8: A circle is inside a square (conceptual 'contains' relation)
-ALL_BONGARD_RULES["circle_in_square"] = BongardRule(
+ALL_BONGARD_RULES.append(BongardRule(
     name="circle_in_square",
     description="There is a circle contained within a square.",
     program_ast=[
@@ -324,12 +327,12 @@ ALL_BONGARD_RULES["circle_in_square"] = BongardRule(
         ]}]}]}
     ],
     logical_facts=["exists(C, exists(S, (shape(C, circle) and shape(S, square) and contains(S, C))))"]
-)
+))
 
 # Rule 9: Objects form a line (all objects are aligned horizontally AND vertically with some other object)
 # This is a more complex relational rule, often implying collinearity.
 # Simplified to mean all objects are aligned in both directions with at least one other object.
-ALL_BONGARD_RULES["objects_form_line"] = BongardRule(
+ALL_BONGARD_RULES.append(BongardRule(
     name="objects_form_line",
     description="All objects are arranged to form a single line (horizontally or vertically).",
     program_ast=[
@@ -342,13 +345,14 @@ ALL_BONGARD_RULES["objects_form_line"] = BongardRule(
         ]}]}]}
     ],
     logical_facts=["forall(O1, exists(O2, (O1 != O2 and (aligned_horizontally(O1, O2) or aligned_vertically(O1, O2)))))"]
-)
+))
 
 # --- Counting Rules ---
 
+
 # Rule 10: Exactly three circles
 # Updated program_ast to use EQ(COUNT(predicate), INT_3)
-ALL_BONGARD_RULES["exactly_three_circles"] = BongardRule(
+ALL_BONGARD_RULES.append(BongardRule(
     name="exactly_three_circles",
     description="There are exactly three circles in the image.",
     program_ast=[
@@ -358,10 +362,10 @@ ALL_BONGARD_RULES["exactly_three_circles"] = BongardRule(
         ]}
     ],
     logical_facts=["count(O, shape(O, circle), N), N = 3"] # Simplified logical fact for clarity
-)
+))
 
 # Rule 11: More squares than circles
-ALL_BONGARD_RULES["more_squares_than_circles"] = BongardRule(
+ALL_BONGARD_RULES.append(BongardRule(
     name="more_squares_than_circles",
     description="The number of squares is greater than the number of circles.",
     program_ast=[
@@ -371,12 +375,13 @@ ALL_BONGARD_RULES["more_squares_than_circles"] = BongardRule(
         ]}
     ],
     logical_facts=["count(O, shape(O, square), N_S), count(O, shape(O, circle), N_C), N_S > N_C"]
-)
+))
 
 # --- Negated/Absence Rules ---
 
+
 # Rule 12: No objects intersect
-ALL_BONGARD_RULES["no_intersections"] = BongardRule(
+ALL_BONGARD_RULES.append(BongardRule(
     name="no_intersections",
     description="No two objects in the image intersect.",
     program_ast=[
@@ -388,10 +393,10 @@ ALL_BONGARD_RULES["no_intersections"] = BongardRule(
         ]}
     ],
     logical_facts=["not(exists(O1, exists(O2, (O1 != O2 and intersects(O1, O2)))))"]
-)
+))
 
 # Rule 13: Not all objects are the same size
-ALL_BONGARD_RULES["not_all_same_size"] = BongardRule(
+ALL_BONGARD_RULES.append(BongardRule(
     name="not_all_same_size",
     description="Objects in the image are not all the same size.",
     program_ast=[
@@ -401,12 +406,13 @@ ALL_BONGARD_RULES["not_all_same_size"] = BongardRule(
     ],
     # Corrected logical fact for "not all same size"
     logical_facts=["not(exists(S_val, forall(O, size(O, S_val))))"]
-)
+))
 
 # --- Compositional Rules ---
 
+
 # Rule 14: A red circle and a blue square
-ALL_BONGARD_RULES["red_circle_and_blue_square"] = BongardRule(
+ALL_BONGARD_RULES.append(BongardRule(
     name="red_circle_and_blue_square",
     description="There is a red circle AND a blue square in the image.",
     program_ast=[
@@ -422,10 +428,10 @@ ALL_BONGARD_RULES["red_circle_and_blue_square"] = BongardRule(
         ]}
     ],
     logical_facts=["exists(O1, (shape(O1, circle) and color(O1, red))), exists(O2, (shape(O2, square) and color(O2, blue)))"]
-)
+))
 
 # Rule 15: All circles are small
-ALL_BONGARD_RULES["all_circles_are_small"] = BongardRule(
+ALL_BONGARD_RULES.append(BongardRule(
     name="all_circles_are_small",
     description="If an object is a circle, then it is small.",
     program_ast=[
@@ -435,7 +441,7 @@ ALL_BONGARD_RULES["all_circles_are_small"] = BongardRule(
         ]}]} # Removed the extra ']}'
     ],
     logical_facts=["forall(O, (shape(O, circle) implies size(O, small)))"]
-)
+))
 
 
 logger.info(f"Loaded {len(ALL_BONGARD_RULES)} extended Bongard rules.")
