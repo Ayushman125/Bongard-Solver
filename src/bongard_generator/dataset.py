@@ -584,6 +584,28 @@ class BongardDataset:
                     f"Coverage: {coverage_pct:.1f}% - "
                     f"Success rate: {self.generated_count/(self.generated_count + self.failed_count):.2f}")
 
+class SyntheticBongardDataset:
+    def __init__(self, rules, img_size=128, grayscale=True, flush_cache=False):
+        self.dataset = BongardDataset(canvas_size=img_size)
+        self.examples = []
+        if flush_cache and hasattr(self.dataset, 'sampler') and hasattr(self.dataset.sampler, 'cache'):
+            self.dataset.sampler.cache.clear()
+        # Reseed RNG for diversity
+        import random, numpy as np
+        random.seed(None)
+        np.random.seed(None)
+        for rule_desc, count in rules:
+            rule = self.dataset._select_rule_for_generation()
+            for i in range(count):
+                scene = self.dataset._generate_single_scene(rule, num_objects=2, is_positive=True)
+                if scene:
+                    img = create_composite_scene(scene['objects'], img_size)
+                    self.examples.append({'image': img, 'rule': rule_desc, 'label': 1, 'scene_graph': scene['scene_graph']})
+    def __len__(self):
+        return len(self.examples)
+    def __getitem__(self, idx):
+        return self.examples[idx]
+
 def generate_bongard_dataset(output_dir: str = "synthetic_images",
                              total_examples: int = 10000,
                              canvas_size: int = 128,

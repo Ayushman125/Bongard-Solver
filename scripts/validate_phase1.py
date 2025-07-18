@@ -319,6 +319,11 @@ if __name__ == "__main__":
 
     if config['data'].get('use_synthetic_data', True):
         logger.info("==== Phase 1 Validation: Synthetic Holdout ====")
+        # --- Flush synthetic cache and reseed RNG for diversity ---
+        import random, numpy as np
+        random.seed(None)
+        np.random.seed(None)
+        # --- Generate synthetic holdout ---
         s_imgs, s_lbls = build_synth_holdout(cache_path=synth_cache)
         # --- Visualization step: show a few synthetic images before model inference ---
         try:
@@ -335,11 +340,44 @@ if __name__ == "__main__":
         except ImportError:
             logger.warning("matplotlib not installed, skipping synthetic image visualization.")
         # --- End visualization ---
+        # --- Show mosaic and rule distribution using visualize.py ---
+        try:
+            from bongard_generator.visualize import show_mosaic, plot_rule_distribution
+            from bongard_generator.dataset import BongardDataset, create_composite_scene
+            # Create a small synthetic dataset for inspection
+            rules = [
+                ('SHAPE(circle)', 1),
+                ('SHAPE(triangle)', 2),
+                ('SHAPE(square)', 3),
+                ('FILL(solid)', 1),
+                ('FILL(outline)', 2),
+                ('COUNT(2)', 2),
+                ('COUNT(3)', 3),
+                ('RELATION(overlap)', 2),
+                ('RELATION(near)', 2)
+            ]
+            class SyntheticBongardDataset:
+                def __init__(self, rules, img_size=128, grayscale=True):
+                    self.dataset = BongardDataset(canvas_size=img_size)
+                    self.examples = []
+                    for rule_desc, count in rules:
+                        rule = self.dataset._select_rule_for_generation()
+                        for i in range(count):
+                            scene = self.dataset._generate_single_scene(rule, num_objects=2, is_positive=True)
+                            if scene:
+                                img = create_composite_scene(scene['objects'], img_size)
+                                self.examples.append({'image': img, 'rule': rule_desc, 'label': 1, 'scene_graph': scene['scene_graph']})
+                def __len__(self):
+                    return len(self.examples)
+                def __getitem__(self, idx):
+                    return self.examples[idx]
+            ds = SyntheticBongardDataset(rules=rules, img_size=128, grayscale=True)
+            show_mosaic(ds, n=16, cols=4)
+            plot_rule_distribution(ds)
+        except Exception as e:
+            logger.warning(f"Could not run synthetic inspection visualizations: {e}")
         # --- Model training and evaluation temporarily disabled ---
         logger.info("Model training and evaluation temporarily disabled. Synthetic data generation and visualization only.")
-        # s_acc, s_pp, s_pt = eval_set(s_imgs, s_lbls)
-        # logger.info(f"Synth Acc: {s_acc:.4f}")
-        # plot_calibration(s_pp, s_pt, "Synthetic Calibration")
     else:
         logger.info("==== Phase 1 Validation: Real Holdout ====")
         r_imgs, r_lbls = load_real_holdout()
