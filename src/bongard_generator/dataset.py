@@ -192,28 +192,23 @@ class BongardDataset:
                     self.scene_params.max_obj_size,
                     max_attempts=5
                 )
-                
+                # Enforce model.Validate() if possible (handled inside sample_scene_cp)
                 if objects is None:
                     continue
-                
-                # Validate the scene
+                # Always honor the requested rule
                 if not self._validate_scene(objects, rule, is_positive):
                     continue
-                
                 # Generate scene graph
                 scene_graph = self._generate_scene_graph(objects)
-                
                 return {
                     'objects': objects,
                     'scene_graph': scene_graph,
                     'rule': rule.description,
                     'positive': is_positive
                 }
-                
             except Exception as e:
                 logger.debug(f"Scene generation attempt {attempt + 1} failed: {e}")
                 continue
-        
         logger.warning(f"Failed to generate scene for rule {rule.description} after {max_attempts} attempts")
         return None
     

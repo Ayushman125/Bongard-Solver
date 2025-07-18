@@ -18,27 +18,31 @@ class BongardRule:
             self.negative_features = {}
 
 
-# Try to import from the real bongard_rules, fall back to defaults
+
+# Robust import and normalization of ALL_BONGARD_RULES
 try:
-    from src.bongard_rules import ALL_BONGARD_RULES, BongardRule as RealBongardRule
+    from src.bongard_rules import ALL_BONGARD_RULES, BongardRule
     # Normalize ALL_BONGARD_RULES to a list if it's a dict
     if isinstance(ALL_BONGARD_RULES, dict):
-        _rules_seq = list(ALL_BONGARD_RULES.values())
+        _rules = list(ALL_BONGARD_RULES.values())
     else:
-        _rules_seq = ALL_BONGARD_RULES
-    # Sanity check
-    if not _rules_seq:
-        raise ImportError("No Bongard rules loaded!")
-    first_rule = _rules_seq[0] if isinstance(_rules_seq, list) else next(iter(_rules_seq))
-    if hasattr(first_rule, "description"):
-        logger.info("Successfully loaded rules from src.bongard_rules")
-        RULES = _rules_seq
-    else:
-        raise ImportError("Rules format mismatch: missing 'description' attribute")
-except ImportError:
-    logger.warning("Could not import from src.bongard_rules, using fallback rules")
-    # Fallback rules
-    RULES = [
+        _rules = ALL_BONGARD_RULES
+    assert _rules, "No Bongard rules found!"
+    assert hasattr(_rules[0], "description"), "Rule objects must have .description"
+    ALL_RULES = _rules
+    RULE_LOOKUP: Dict[str, BongardRule] = {r.description.strip().upper(): r for r in ALL_RULES}
+except Exception as e:
+    logger.warning(f"Could not import from src.bongard_rules, using fallback rules: {e}")
+    from dataclasses import dataclass
+    @dataclass
+    class BongardRule:
+        description: str
+        positive_features: Dict[str, any]
+        negative_features: Dict[str, any] = None
+        def __post_init__(self):
+            if self.negative_features is None:
+                self.negative_features = {}
+    ALL_RULES = [
         BongardRule("SHAPE(TRIANGLE)", {"shape": "triangle"}),
         BongardRule("SHAPE(SQUARE)", {"shape": "square"}),
         BongardRule("SHAPE(CIRCLE)", {"shape": "circle"}),
@@ -56,22 +60,20 @@ except ImportError:
         BongardRule("TOPO(OVERLAP)", {"relation": "overlap"}),
         BongardRule("TOPO(NESTED)", {"relation": "nested"}),
     ]
+    RULE_LOOKUP: Dict[str, BongardRule] = {r.description.strip().upper(): r for r in ALL_RULES}
 
-# Build a lookup for fast access by description
-RULE_LOOKUP: Dict[str, BongardRule] = {
-    r.description.strip().upper(): r for r in RULES
-}
+def get_all_rules() -> List[BongardRule]:
+    return ALL_RULES
 
-# Ensure default rule exists
-if 'SHAPE(TRIANGLE)' not in RULE_LOOKUP:
-    logger.warning("Default rule SHAPE(TRIANGLE) missing, adding it")
-    default_rule = BongardRule("SHAPE(TRIANGLE)", {"shape": "triangle"})
-    RULES.append(default_rule)
-    RULE_LOOKUP['SHAPE(TRIANGLE)'] = default_rule
+def get_rule_lookup() -> Dict[str, BongardRule]:
+    return RULE_LOOKUP.copy()
+
+def get_rule_by_description(description: str) -> BongardRule:
+    return RULE_LOOKUP[description.strip().upper()]
 
 def get_all_rules() -> List[BongardRule]:
     """Get all available Bongard rules."""
-    return RULES.copy()
+    return ALL_RULES.copy()
 
 def get_rule_lookup() -> Dict[str, BongardRule]:
     """Get the rule lookup dictionary."""
@@ -83,7 +85,7 @@ def get_rule_by_description(description: str) -> Optional[BongardRule]:
 
 def validate_rules() -> bool:
     """Validate that all rules are properly formatted."""
-    for rule in RULES:
+    for rule in ALL_RULES:
         if not rule.description:
             logger.error(f"Rule missing description: {rule}")
             return False
@@ -96,4 +98,4 @@ def validate_rules() -> bool:
 if not validate_rules():
     logger.error("Rule validation failed!")
 else:
-    logger.info(f"Successfully loaded and validated {len(RULES)} rules")
+    logger.info(f"Successfully loaded and validated {len(ALL_RULES)} rules")

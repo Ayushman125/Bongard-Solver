@@ -8,7 +8,8 @@ from typing import Dict, List, Any, Tuple, Optional
 from pathlib import Path
 
 from .config_loader import get_config, get_sampler_config, SamplerConfig
-from .rule_loader import get_all_rules, get_rule_by_description, BongardRule
+from src.bongard_rules import BongardRule
+from .rule_loader import get_all_rules, get_rule_by_description
 from .utils import set_seed, add_noise, create_gradient_background
 from .drawing import TurtleCanvas, ShapeDrawer
 from .spatial_sampler import RelationSampler
