@@ -9,8 +9,11 @@ def show_mosaic(dataset, n=16, cols=4):
     for ax, idx in zip(axes.flatten(), idxs):
         sample = dataset[idx]
         img = sample['image'].squeeze().numpy() if hasattr(sample['image'], 'numpy') else np.array(sample['image'])
+        rule_title = str(sample.get('rule', ''))
+        if len(rule_title) > 20:
+            rule_title = rule_title[:20] + '...'
         ax.imshow(img, cmap='gray')
-        ax.set_title(str(sample.get('rule', '')) + f" / L{sample.get('label', '')}")
+        ax.set_title(rule_title + f" / L{sample.get('label', '')}")
         ax.axis('off')
     plt.tight_layout()
     plt.show()

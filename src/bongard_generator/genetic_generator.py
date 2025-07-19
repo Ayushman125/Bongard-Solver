@@ -12,23 +12,26 @@ class GeneticSceneGenerator:
     def __init__(self, config=None):
         # Use config from main CONFIG dict if not provided
         if config is None:
-            config = CONFIG.get('genetic', {})
+            from genetic_config import GENETIC_CONFIG
+            config = GENETIC_CONFIG
         self.config = config
-        self.population_size = config.get('population_size', 50)
-        self.num_generations = config.get('num_generations', 30)
-        self.mutation_rate = config.get('mutation_rate', 0.2)
-        self.crossover_rate = config.get('crossover_rate', 0.5)
-        self.diversity_weight = config.get('diversity_weight', 0.5)
-        self.tester_weight = config.get('tester_weight', 0.5)
-        self.coverage_weight = config.get('coverage_weight', 1.0)
-        self.elitism = config.get('elitism', 2)
-        self.max_attempts = config.get('max_attempts', 100)
-        self.cache_enabled = config.get('cache_enabled', True)
-        self.seed = config.get('seed', 42)
+        self.population_size = int(config.get('population_size', 50))
+        self.num_generations = int(config.get('num_generations', 30))
+        self.mutation_rate = float(config.get('mutation_rate', 0.2))
+        self.crossover_rate = float(config.get('crossover_rate', 0.5))
+        self.diversity_weight = float(config.get('diversity_weight', 0.5))
+        self.tester_weight = float(config.get('tester_weight', 0.5)) if 'tester_weight' in config else 0.5
+        self.coverage_weight = float(config.get('coverage_weight', 1.0))
+        self.elitism = int(config.get('elitism', 2))
+        self.max_attempts = int(config.get('max_attempts', 100))
+        self.cache_enabled = bool(config.get('cache_enabled', True))
+        self.seed = int(config.get('seed', 42))
+        self.tester_checkpoint = config.get('tester_checkpoint', None)
+        self.num_rules = int(config.get('num_rules', 23))
+        self.device = config.get('device', 'cpu')
         random.seed(self.seed)
         np.random.seed(self.seed)
-        self.tester = create_tester_model(config.get('tester_checkpoint'), num_rules=config.get('num_rules', 23))
-        self.device = config.get('device', 'cuda')
+        self.tester = create_tester_model(self.tester_checkpoint, num_rules=self.num_rules)
         # ...initialize other components as needed...
 
     def evaluate_fitness(self, genome):
@@ -74,12 +77,15 @@ class GeneticSceneGenerator:
 
     def _fallback_scene(self, rule_obj, label):
         # Generate a simple default scene (objects, masks)
-        # This should match the expected output format
+        # Ensure all values are JSON-serializable
         objects = [{
             'shape': 'circle',
             'fill': 'solid',
-            'position': (32, 32),
-            'size': 16
+            'position': [32, 32],  # Use list for JSON compatibility
+            'size': 16,
+            'color': 'black',
+            'label': int(label),
+            'rule': str(getattr(rule_obj, 'description', ''))
         }]
-        masks = np.zeros((1, 64, 64), dtype=np.uint8)
+        masks = np.zeros((1, 64, 64), dtype=np.uint8).tolist()  # Convert to list for JSON
         return (objects, masks)

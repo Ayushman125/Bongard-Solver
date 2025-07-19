@@ -170,16 +170,16 @@ class MockTesterCNN:
 def create_tester_model(model_path: str = None, num_rules: int = 16) -> TesterCNN:
     """Create and optionally load a tester model."""
     model = TesterCNN(num_rules=num_rules)
-    
+    # Use device from config if available
+    device = getattr(model, 'device', 'cpu')
     if model_path and Path(model_path).exists():
         try:
-            model.load_state_dict(torch.load(model_path, map_location='cpu'))
+            model.load_state_dict(torch.load(model_path, map_location=device))
             logger.info(f"Loaded tester model from {model_path}")
         except Exception as e:
             logger.warning(f"Failed to load model from {model_path}: {e}")
             logger.info("Using randomly initialized model")
     else:
         logger.info("Using randomly initialized tester model")
-    
     model.eval()
     return model
