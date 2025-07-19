@@ -147,12 +147,10 @@ class CoverageTracker:
         }
 
 def create_composite_scene(objects, canvas_size):
-    # Dummy image creation for demonstration
-    # In a real scenario, this would render shapes onto a canvas
-    # Always start with white background, grayscale
+    print(f"[create_composite_scene] Drawing {len(objects)} objects: {objects}")
     img = Image.new('L', (canvas_size, canvas_size), color=255)
-    # Simple drawing logic (replace with actual rendering)
-    # ...existing code...
+    # TODO: Replace with actual shape rendering logic
+    # For now, just print the objects and return blank canvas
     # After all drawing and occluders/noise, binarize
     img_bw = img.point(lambda p: 255 if p > 128 else 0, mode='1')
     img_bw_L = img_bw.convert('L')
@@ -597,29 +595,34 @@ class BongardDataset:
 
 class SyntheticBongardDataset:
     def __init__(self, rules, img_size=128, grayscale=True, flush_cache=False):
+        from bongard_generator.rule_loader import get_rule_lookup
         self.dataset = BongardDataset(canvas_size=img_size)
         self.examples = []
-        
+        self.requested_rules = {k: count for k, count in rules}
+        self.current_rule_key = None
         # Clear cache and reseed between runs
         if flush_cache:
             if hasattr(self.dataset, 'sampler') and hasattr(self.dataset.sampler, 'cache'):
                 self.dataset.sampler.cache.clear()
-        
         # Reseed RNG for diversity
         import random, numpy as np
         random.seed(None)
         np.random.seed(None)
-        
+        rule_lookup = get_rule_lookup()
         for rule_desc, count in rules:
-            rule = self.dataset._select_rule_for_generation()
+            print(f"[SyntheticBongardDataset] Requested rule key: {rule_desc}")
+            rule = rule_lookup.get(rule_desc)
+            if rule is None:
+                print(f"[SyntheticBongardDataset] WARNING: Rule key {rule_desc} not found in rule_lookup!")
+                continue
+            print(f"[SyntheticBongardDataset] Selected rule: {getattr(rule, 'name', None)} | Description: {getattr(rule, 'description', None)}")
             for i in range(count):
                 scene = self.dataset._generate_single_scene(rule, num_objects=2, is_positive=True)
                 if scene:
+                    print(f"[SyntheticBongardDataset] Scene objects: {scene['objects']}")
                     img = create_composite_scene(scene['objects'], img_size)
                     self.examples.append({'image': img, 'rule': rule_desc, 'label': 1, 'scene_graph': scene['scene_graph']})
-                
-                # Force at least one object if scene generation failed
-                if not scene:
+                else:
                     logger.warning("Scene generation failed; forcing at least one random object")
                     obj = {
                         'x': safe_randint(20, img_size - 40),
@@ -629,6 +632,7 @@ class SyntheticBongardDataset:
                         'fill': random.choice(['solid', 'outline']),
                         'color': random.choice(['red', 'blue', 'green'])
                     }
+                    print(f"[SyntheticBongardDataset] Fallback object: {obj}")
                     img = create_composite_scene([obj], img_size)
                     self.examples.append({'image': img, 'rule': rule_desc, 'label': 1, 'scene_graph': {'objects': 1, 'relations': []}})
     
@@ -636,7 +640,9 @@ class SyntheticBongardDataset:
         return len(self.examples)
     
     def __getitem__(self, idx):
-        return self.examples[idx]
+        example = self.examples[idx]
+        print(f"[SyntheticBongardDataset] __getitem__ idx={idx} rule={example['rule']} label={example['label']} objects={example.get('scene_graph', {}).get('objects', None)}")
+        return example
 
 def generate_bongard_dataset(output_dir: str = "synthetic_images",
                              total_examples: int = 10000,

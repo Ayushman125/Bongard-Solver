@@ -179,7 +179,7 @@ class BongardSampler:
         Sample a single scene conforming to or violating the rule.
         If generator_mode is 'genetic', use GeneticSceneGenerator.
         """
-        if getattr(self, 'generator_mode', 'default') == 'genetic' and self.genetic is not None:
+        if getattr(self, 'generator_mode', 'genetic') == 'genetic' and self.genetic is not None:
             # Use genetic generator for scene creation
             rule_obj = rule
             label = 1 if is_positive else 0
@@ -221,7 +221,49 @@ class BongardSampler:
             else:
                 logger.error("Genetic generator failed to produce a scene")
                 return None
-        # ...existing code for default generator...
+        # tell the dataset exactly which rule to use
+        self.current_rule_key = rule.name
+        from bongard_generator.dataset import SyntheticBongardDataset
+        ds = SyntheticBongardDataset(
+            rules=[(rule.name, 1)],
+            grayscale=True,
+            flush_cache=False
+        )
+        # Sample from the dataset
+        try:
+            sample = ds.sample_scene()
+            if sample is None:
+                logger.warning("Failed to sample from SyntheticBongardDataset")
+                return None
+            
+            # Extract objects and scene graph
+            objects = sample['objects']
+            scene_graph = sample.get('scene_graph', {})
+            
+            # Render image from objects (bypassing dataset rendering)
+            image = self._render_scene(objects, scene_graph)
+            if image is None:
+                logger.warning("Rendering sampled scene failed")
+                return None
+            
+            # Validate rule satisfaction
+            rule_satisfaction = self._validate_scene(objects, scene_graph, rule, is_positive)
+            
+            return {
+                'objects': objects,
+                'scene_graph': scene_graph,
+                'image': image,
+                'masks': [],  # No masks in fallback sampling
+                'rule_satisfaction': rule_satisfaction,
+                'metadata': {
+                    'generator': 'default',
+                    'rule_description': rule.description
+                }
+            }
+        
+        except Exception as e:
+            logger.error(f"Scene sampling from dataset failed: {e}")
+            return None
     
     def _determine_scene_params(self, 
                               rule: BongardRule, 
