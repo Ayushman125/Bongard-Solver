@@ -25,18 +25,14 @@ def safe_randint(min_val: int, max_val: int) -> int:
     return random.randint(min_val, max_val)
 
 # Define ALL_BONGARD_RULES (mock for demonstration)
-@dataclass
-class BongardRule:
-    description: str
-    category: str
-    complexity: int
+from bongard_generator.rule_loader import BongardRule
 
 ALL_BONGARD_RULES = [
-    BongardRule("COMBINED(circle,solid,1,none)", "shape_fill_count_relation", 1),
-    BongardRule("COMBINED(triangle,outline,2,near)", "shape_fill_count_relation", 2),
-    BongardRule("COMBINED(square,striped,3,overlap)", "shape_fill_count_relation", 3),
-    BongardRule("COMBINED(pentagon,gradient,1,left_of)", "shape_fill_count_relation", 4),
-    BongardRule("COMBINED(hexagon,solid,4,above)", "shape_fill_count_relation", 5),
+    BongardRule(description="COMBINED(circle,solid,1,none)", positive_features={"shape": "circle", "fill": "solid", "count": 1, "relation": "none"}),
+    BongardRule(description="COMBINED(triangle,outline,2,near)", positive_features={"shape": "triangle", "fill": "outline", "count": 2, "relation": "near"}),
+    BongardRule(description="COMBINED(square,striped,3,overlap)", positive_features={"shape": "square", "fill": "striped", "count": 3, "relation": "overlap"}),
+    BongardRule(description="COMBINED(pentagon,gradient,1,left_of)", positive_features={"shape": "pentagon", "fill": "gradient", "count": 1, "relation": "left_of"}),
+    BongardRule(description="COMBINED(hexagon,solid,4,above)", positive_features={"shape": "hexagon", "fill": "solid", "count": 4, "relation": "above"}),
     # Add more rules as needed for comprehensive coverage
 ]
 

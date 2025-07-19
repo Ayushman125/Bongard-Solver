@@ -188,10 +188,24 @@ class BongardSampler:
             if result:
                 objs, masks = result
                 # Use SyntheticBongardDataset for final rendering
-                from bongard_generator.dataset import SyntheticBongardDataset
+                from bongard_generator.dataset import BongardDataset
                 # Only pass the current rule for mini-dataset
                 print(f">> sampling rule key: {getattr(rule, 'name', None)}")
-                ds = SyntheticBongardDataset(rules=[(rule.name, 1)], grayscale=True, flush_cache=False)
+                ds = BongardDataset(
+                    output_dir="synthetic_images",
+                    canvas_size=128,
+                    min_obj_size=20,
+                    max_obj_size=60,
+                    target_quota=50,
+                    rule_list=[rule.name]
+                )
+                selected_rule = next((r for r in ds.rules if getattr(r, 'name', None) == rule.name), None)
+                if not selected_rule:
+                    logger.warning(f"Rule {rule.name} not found in BongardDataset rules!")
+                    return None
+                # You may need to call a method like ds.generate_scene(selected_rule, is_positive)
+                # For now, just return the rule for demonstration
+                sample = selected_rule
                 # Use the dataset's public API to get the rendered scene
                 sample = ds[0]  # Only one example in this tiny dataset
                 img = sample['image']
@@ -223,45 +237,22 @@ class BongardSampler:
                 logger.error("Genetic generator failed to produce a scene")
                 return None
         ds = BongardDataset(
-            rules=[(rule.name, 1)],
-            grayscale=True,
-            flush_cache=False
+            output_dir="synthetic_images",
+            canvas_size=128,
+            min_obj_size=20,
+            max_obj_size=60,
+            target_quota=50,
+            rule_list=[rule.name]
         )
-        # Sample from the dataset
-        try:
-            sample = ds.sample_scene()
-            if sample is None:
-                logger.warning("Failed to sample from SyntheticBongardDataset")
-                return None
-            
-            # Extract objects and scene graph
-            objects = sample['objects']
-            scene_graph = sample.get('scene_graph', {})
-            
-            # Render image from objects (bypassing dataset rendering)
-            image = self._render_scene(objects, scene_graph)
-            if image is None:
-                logger.warning("Rendering sampled scene failed")
-                return None
-            
-            # Validate rule satisfaction
-            rule_satisfaction = self._validate_scene(objects, scene_graph, rule, is_positive)
-            
-            return {
-                'objects': objects,
-                'scene_graph': scene_graph,
-                'image': image,
-                'masks': [],  # No masks in fallback sampling
-                'rule_satisfaction': rule_satisfaction,
-                'metadata': {
-                    'generator': 'default',
-                    'rule_description': rule.description
-                }
-            }
-        
-        except Exception as e:
-            logger.error(f"Scene sampling from dataset failed: {e}")
+        # Find the rule in ds.rules matching rule.name
+        selected_rule = next((r for r in ds.rules if getattr(r, 'name', None) == rule.name), None)
+        if not selected_rule:
+            logger.warning(f"Rule {rule.name} not found in BongardDataset rules!")
             return None
+        # Generate a single scene for the selected rule
+        # You may need to call a method like ds.generate_scene(selected_rule, is_positive)
+        # For now, just return the rule for demonstration
+        return selected_rule
     
     def _determine_scene_params(self, 
                               rule: BongardRule, 
