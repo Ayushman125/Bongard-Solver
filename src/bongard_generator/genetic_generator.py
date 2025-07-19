@@ -27,7 +27,7 @@ class GeneticSceneGenerator:
         self.beta            = getattr(config, 'beta', getattr(gd, 'beta', 0.3))
         self.tester_checkpoint = getattr(config, 'tester_checkpoint', getattr(gd, 'tester_checkpoint', None))
         self.num_rules = getattr(config, 'num_rules', getattr(gd, 'num_rules', 23))
-        self.device = getattr(config, 'device', getattr(gd, 'device', 'cpu'))
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.mutation_rate = getattr(config, 'mutation_rate', getattr(gd, 'mutation_rate', 0.2))
         self.crossover_rate = getattr(config, 'crossover_rate', getattr(gd, 'crossover_rate', 0.5))
         self.diversity_weight = getattr(config, 'diversity_weight', getattr(gd, 'diversity_weight', 0.5))
@@ -40,6 +40,7 @@ class GeneticSceneGenerator:
         random.seed(self.seed)
         np.random.seed(self.seed)
         self.tester = create_tester_model(self.tester_checkpoint, num_rules=self.num_rules)
+        self.tester.to(self.device)
         # ...initialize other components as needed...
 
     def evaluate_fitness(self, genome):
@@ -53,7 +54,8 @@ class GeneticSceneGenerator:
             image = np.array(img_refined)
         if image.dtype == np.uint8:
             image = image.astype(np.float32) / 255.0
-        tensor = torch.FloatTensor(image).unsqueeze(0).unsqueeze(0).to(self.device)
+        tensor = torch.FloatTensor(image).unsqueeze(0).unsqueeze(0)
+        tensor = tensor.to(self.device)
         # Sanity check: print device info
         print("Input device:", tensor.device)
         print("Model device:", next(self.tester.parameters()).device)
@@ -65,8 +67,8 @@ class GeneticSceneGenerator:
         # 2) Diversity score (placeholder, implement min_cosine as needed)
         div = 1.0  # TODO: Replace with actual diversity calculation
         # 3) Final fitness
-        alpha = self.config.get('alpha', 0.5)
-        beta = self.config.get('beta', 0.5)
+        alpha = getattr(self.config, 'alpha', 0.5)
+        beta = getattr(self.config, 'beta', 0.5)
         genome.fitness = alpha * conf + beta * div
         genome.tester_confidence = conf
         genome.diversity_score = div
