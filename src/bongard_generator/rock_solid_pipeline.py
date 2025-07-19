@@ -168,7 +168,7 @@ class RockSolidPipeline:
             self.neural_tester.confidence_threshold = self.confidence_threshold
 
         # Read hybrid_split from config
-        import yaml
+        import yaml, random
         config_path = Path(__file__).parent.parent.parent / 'config_template.yaml'
         with open(config_path, 'r') as f:
             config_yaml = yaml.safe_load(f)
@@ -180,12 +180,12 @@ class RockSolidPipeline:
         total_scenes = self.min_quota * len(self.genetic_pipeline.all_cells)
         cp_scenes = int(total_scenes * cp_ratio)
         ga_scenes = total_scenes - cp_scenes
-
-        # Run genetic evolution for ga_scenes
-        genetic_stats = self.genetic_pipeline.run_evolution(target_coverage=ga_scenes / total_scenes)
+        print(f"→ Hybrid build: total={total_scenes}, cp={cp_scenes}, ga={ga_scenes}")
+        print("→ Cells:", [f"{c[0]},{c[1]},{c[2]},{c[3]}" for c in self.genetic_pipeline.all_cells])
 
         # Run CP-SAT for cp_scenes
         cp_sat_generated = 0
+        cp_samples = []
         for cell in self.genetic_pipeline.all_cells:
             needed = self.min_quota - len(self.genetic_pipeline.cell_coverage.get(cell, []))
             cp_needed = int(needed * cp_ratio)
@@ -207,9 +207,15 @@ class RockSolidPipeline:
                     self.total_scenes_generated += 1
                     self.total_scenes_validated += 1
                     cp_sat_generated += 1
+                    cp_samples.append((solution.objects, solution.scene_graph, rule_desc, 1))
+            print(f"  • CP pass: cell={rule_desc}, got {cp_needed} samples")
+
+        # Run genetic evolution for ga_scenes
+        genetic_stats = self.genetic_pipeline.run_evolution(target_coverage=ga_scenes / total_scenes)
 
         # Collect generated scenes from genetic pipeline
         genetic_scenes = 0
+        ga_samples = []
         for cell_examples in self.genetic_pipeline.cell_coverage.values():
             genetic_scenes += len(cell_examples)
             for example in cell_examples:
@@ -223,12 +229,18 @@ class RockSolidPipeline:
                     scene_data['rule'],
                     scene_data['label']
                 )
+                ga_samples.append((scene_data['objects'], scene_data['scene_graph'], scene_data['rule'], scene_data['label']))
+            print(f"  • GA pass: cell={scene_data['rule']}, got {len(cell_examples)} samples")
+
+        # Shuffle all samples for randomized ordering
+        combined_samples = cp_samples + ga_samples
+        random.shuffle(combined_samples)
 
         self.phase_stats['genetic_evolution'] = time.time() - self.phase_stats['genetic_evolution']
 
         return {
             'genetic_stats': genetic_stats,
-            'scenes_generated': genetic_scenes + cp_sat_generated,
+            'scenes_generated': len(combined_samples),
             'genetic_scenes': genetic_scenes,
             'cp_sat_scenes': cp_sat_generated,
             'phase_duration': self.phase_stats['genetic_evolution']

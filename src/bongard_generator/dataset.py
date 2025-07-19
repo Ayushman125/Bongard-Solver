@@ -20,7 +20,7 @@ def safe_randrange(a: int, b: int) -> int:
     # randrange excludes hi, so we +1
     return random.randrange(lo, hi+1)
 
-from bongard_generator.rule_loader import BongardRule, get_all_rules, get_rule_by_description
+from .rule_loader import BongardRule, get_all_rules, get_rule_by_description
 
 class SceneParameters:
     def __init__(self, canvas_size, min_obj_size, max_obj_size, max_objects, colors, shapes, fills):
@@ -642,6 +642,10 @@ class BongardDataset:
     def __len__(self):
         """Return the number of stored examples."""
         return len(self.examples)
+
+    def __iter__(self):
+        """Make dataset iterable."""
+        return iter(self.examples)
 
     def __getitem__(self, idx):
         """Return the example at the given index."""

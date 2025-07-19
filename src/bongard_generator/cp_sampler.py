@@ -17,6 +17,12 @@ except ImportError:
 from .rule_loader import BongardRule
 from .spatial_sampler import RelationSampler
 
+# Constants from unified generator for enhanced constraint building
+SHAPE_IDX = {'circle': 0, 'square': 1, 'triangle': 2, 'star': 3, 'pentagon': 4}
+COLOR_IDX = {'red': 0, 'blue': 1, 'green': 2, 'black': 3, 'white': 4}
+SIZE_IDX = {'small': 0, 'medium': 1, 'large': 2}
+TEXTURE_IDX = {'none': 0, 'striped': 1, 'dotted': 2, 'crosshatch': 3, 'gradient': 4, 'checker': 5}
+
 @dataclass
 class SceneParameters:
     """Parameters for scene generation."""
@@ -246,10 +252,60 @@ class CPSATSampler:
                 obj['shape'] = random.choice(available_shapes if available_shapes else self.params.shapes)
                 obj['fill'] = random.choice(available_fills if available_fills else self.params.fills)
             
-            obj['color'] = random.choice(self.params.colors)
-            objects.append(obj)
+        obj['color'] = random.choice(self.params.colors)
+        objects.append(obj)
+    
+    return objects
+
+    def add_literal_constraints(self, model, vars_, literals):
+        """Enhanced constraint building from unified generator."""
+        for lit in literals:
+            f, v = lit.get('feature'), lit.get('value')
+            if f == 'color' and v in COLOR_IDX:
+                idx = COLOR_IDX[v]
+                for obj in vars_:
+                    model.Add(obj['color_idx'] == idx)
+            elif f == 'shape' and v in SHAPE_IDX:
+                idx = SHAPE_IDX[v]
+                for obj in vars_:
+                    model.Add(obj['shape_idx'] == idx)
+            elif f == 'size' and v in SIZE_IDX:
+                idx = SIZE_IDX[v]
+                for obj in vars_:
+                    model.Add(obj['size'] == idx)
+            elif f == 'count_op':
+                # Enhanced count constraints
+                bools = []
+                idx = SHAPE_IDX.get(v, 0)
+                for obj in vars_:
+                    b = model.NewBoolVar(f'is_{v}_{id(obj)}')
+                    model.Add(obj['shape_idx'] == idx).OnlyEnforceIf(b)
+                    model.Add(obj['shape_idx'] != idx).OnlyEnforceIf(b.Not())
+                    bools.append(b)
+                
+                op, cnt = lit.get('count_op'), lit.get('count_value', 1)
+                if op == 'EQ':
+                    model.Add(sum(bools) == cnt)
+                elif op == 'GT':
+                    model.Add(sum(bools) > cnt)
+                elif op == 'LT':
+                    model.Add(sum(bools) < cnt)
+
+    def block_previous_solution(self, model, vars_, solution):
+        """Block a previous solution to encourage diversity."""
+        if not solution:
+            return
         
-        return objects
+        clause = []
+        for i, obj_vars in enumerate(vars_):
+            if i < len(solution):
+                sol_obj = solution[i]
+                for key, var in obj_vars.items():
+                    if key in sol_obj:
+                        clause.append(var != sol_obj[key])
+        
+        if clause:
+            model.AddBoolOr(clause)
 
 def sample_scene_cp(rule: BongardRule, 
                    num_objects: int, 

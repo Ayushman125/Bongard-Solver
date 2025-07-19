@@ -105,23 +105,27 @@ def get_config() -> Dict[str, Any]:
     """Get the current configuration."""
     return CONFIG
 
-def get_sampler_config(**kwargs) -> SamplerConfig:
-    """Create a SamplerConfig with optional overrides."""
+def get_sampler_config(**kwargs) -> Dict[str, Any]:
+    """Create a sampler config dict with optional overrides."""
     # Extract relevant config from CONFIG
     synth_cfg = CONFIG['data'].get('synthetic_data_config', {})
     
     defaults = {
-        'img_size': CONFIG['data']['image_size'][0],
-        'min_obj_size': synth_cfg.get('object_size_range', [20, 80])[0],
-        'max_obj_size': synth_cfg.get('object_size_range', [20, 80])[1],
-        'max_objs': synth_cfg.get('max_objects_per_image', 4),
-        'cp_time_limit': synth_cfg.get('cp_time_limit', 60.0),
-        'batch_size': synth_cfg.get('sampler_batch_size', 100),
-        'generator_mode': synth_cfg.get('generator_mode', 'cp_sat'),
-        'default_fill_type': synth_cfg.get('default_fill_type', 'solid')
+        'data': {
+            'image_size': CONFIG['data']['image_size'],
+            'total': kwargs.get('total', 1000),
+            'hybrid_split': kwargs.get('hybrid_split', {'cp': 0.7, 'ga': 0.3}),
+            'synthetic_data_config': {
+                'img_size': kwargs.get('img_size', CONFIG['data']['image_size'][0]),
+                'min_obj_size': synth_cfg.get('object_size_range', [20, 80])[0],
+                'max_obj_size': synth_cfg.get('object_size_range', [20, 80])[1],
+                'max_objs': kwargs.get('max_objs', synth_cfg.get('max_objects_per_image', 4)),
+                'cp_time_limit': synth_cfg.get('cp_time_limit', 60.0),
+                'batch_size': synth_cfg.get('sampler_batch_size', 100),
+                'generator_mode': kwargs.get('generator_mode', synth_cfg.get('generator_mode', 'cp_sat')),
+                'default_fill_type': synth_cfg.get('default_fill_type', 'solid')
+            }
+        }
     }
     
-    # Override with any passed kwargs
-    defaults.update(kwargs)
-    
-    return SamplerConfig(**defaults)
+    return defaults

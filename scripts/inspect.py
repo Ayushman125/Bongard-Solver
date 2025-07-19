@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
 import sys
+import random
 
 def safe_randint(a: int, b: int) -> int:
     """Safe random integer generator that handles inverted ranges."""
@@ -24,11 +25,14 @@ def safe_randrange(a: int, b: int) -> int:
 sys.path.append(str(Path(__file__).parent.parent))
 
 
-# Use unified generator for dataset creation
+# Use hybrid generator for dataset creation
 try:
-    from src.bongard_generator.unified_generator import generate_all_bongard_data
+    from src.bongard_generator.hybrid_sampler import HybridSampler
+    from src.bongard_generator.config_loader import get_sampler_config
+    GENERATOR_AVAILABLE = True
 except ImportError:
-    print("Warning: Could not import unified generator. Mosaic will use fallback test data.")
+    print("Warning: Could not import hybrid generator. Mosaic will use fallback test data.")
+    GENERATOR_AVAILABLE = False
 
 def show_mosaic(ds, N=16, C=4, show_cnn_score=False):
     """
@@ -122,10 +126,28 @@ def main():
     print("Bongard Sample Inspector")
     print("========================")
     try:
-        print("Generating Bongard scenes using unified generator...")
-        ds = generate_all_bongard_data(N_per_rule=4)
-        print(f"Generated {len(ds)} scenes.")
-        # TODO: Integrate CNN scoring and scene graph export here
+        if GENERATOR_AVAILABLE:
+            print("Generating Bongard scenes using hybrid generator...")
+            config = get_sampler_config(total=16)
+            if 'hybrid_split' not in config['data']:
+                config['data']['hybrid_split'] = {'cp': 0.7, 'ga': 0.3}
+            sampler = HybridSampler(config)
+            imgs, labels = sampler.build_synth_holdout(n=16)
+            
+            # Convert to dataset format for mosaic display
+            ds = []
+            for img, label in zip(imgs, labels):
+                ds.append({
+                    'image': np.array(img) if hasattr(img, 'size') else img,
+                    'label': label,
+                    'rule': 'hybrid_generated',
+                    'polarity': 'pos' if label == 1 else 'neg'
+                })
+            print(f"Generated {len(ds)} scenes using hybrid generator.")
+        else:
+            print("Hybrid generator not available, creating simple dataset...")
+            ds = create_simple_dataset(16)
+        
         print("Displaying mosaic...")
         show_mosaic(ds, N=min(16, len(ds)), C=4)
     except Exception as e:

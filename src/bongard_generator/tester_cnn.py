@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import random
 from typing import Dict, List, Any, Tuple
 from PIL import Image
 import logging
