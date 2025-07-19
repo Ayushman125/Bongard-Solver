@@ -197,6 +197,9 @@ class BongardDataset:
             fills=['solid', 'outline', 'striped', 'gradient']
         )
 
+        # Store rule_list for debugging and downstream use
+        self.rule_list = rule_list if rule_list is not None else None
+        
         # Load rules and initialize tracking
         if rule_list is not None:
             self.rules = [r for r in get_all_rules() if getattr(r, 'name', None) in rule_list]
@@ -212,6 +215,21 @@ class BongardDataset:
         self.examples = []
 
         logger.info(f"Initialized dataset generator with {len(self.rules)} rules")
+        print("→ BongardDataset will generate for:", self.rule_list)
+        
+        # Auto-generate examples if rule_list is specified and target_quota is small (likely single-scene generation)
+        if rule_list is not None and target_quota <= 10:
+            print(f"→ Auto-generating {target_quota} examples for single-scene generation...")
+            self.generate_dataset(
+                total_examples=target_quota,
+                positive_ratio=1.0,  # Generate only positive examples for single-scene use case
+                max_objects_range=(1, 3),
+                save_images=False,
+                save_metadata=False,
+                store_examples=True
+            )
+        
+        print("→ Examples built:", len(self.examples))
         print("BongardDataset signature:", inspect.signature(BongardDataset.__init__))
 
     def generate_dataset(self, 

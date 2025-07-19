@@ -196,7 +196,7 @@ class BongardSampler:
                     canvas_size=128,
                     min_obj_size=20,
                     max_obj_size=60,
-                    target_quota=50,
+                    target_quota=1,  # Generate exactly 1 example for this rule
                     rule_list=[rule.name]
                 )
                 selected_rule = next((r for r in ds.rules if getattr(r, 'name', None) == rule.name), None)
