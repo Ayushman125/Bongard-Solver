@@ -3,6 +3,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import models
 from torchvision.models import MobileNet_V2_Weights, MobileNet_V3_Small_Weights, EfficientNet_B0_Weights
+from torchvision.models.detection import maskrcnn_resnet50_fpn, MaskRCNN_ResNet50_FPN_Weights
+from torchvision.ops import masks_to_boxes
+import torchvision.transforms as T
 from typing import Dict, Any, List, Tuple, Optional, Union
 import logging
 import json
@@ -10,8 +13,6 @@ import collections
 import numpy as np
 import random
 import copy
-# Import torchvision.transforms as T for image processing within PerceptionModule
-import torchvision.transforms as T
 
 # --- Conditional imports for external libraries ---
 # PyTorch Geometric (for GNNs)
@@ -240,6 +241,143 @@ except ImportError:
 
 # --- Logger for models.py ---
 logger = logging.getLogger(__name__)
+
+# --- Mask R-CNN Detector for System 1 Perception ---
+class MaskRCNNDetector(nn.Module):
+    """
+    Mask R-CNN based object detector and instance segmenter.
+    This is the System 1 component that handles fast, automatic object detection and segmentation.
+    """
+    def __init__(self, num_classes: int = 6, confidence_threshold: float = 0.7):
+        """
+        Args:
+            num_classes (int): Number of object classes (background + object classes)
+                              Default: 6 (background, triangle, quadrilateral, circle, filled, outlined)
+            confidence_threshold (float): Minimum confidence for detections
+        """
+        super().__init__()
+        self.num_classes = num_classes
+        self.confidence_threshold = confidence_threshold
+        
+        # Load pre-trained Mask R-CNN model
+        weights = MaskRCNN_ResNet50_FPN_Weights.COCO_V1
+        self.model = maskrcnn_resnet50_fpn(weights=weights)
+        
+        # Replace the classifier head for our custom classes
+        # Get the number of input features for the classifier
+        in_features = self.model.roi_heads.box_predictor.cls_score.in_features
+        
+        # Replace the box predictor
+        self.model.roi_heads.box_predictor = models.detection.faster_rcnn.FastRCNNPredictor(
+            in_features, num_classes
+        )
+        
+        # Replace the mask predictor 
+        in_features_mask = self.model.roi_heads.mask_predictor.conv5_mask.in_channels
+        hidden_layer = 256
+        self.model.roi_heads.mask_predictor = models.detection.mask_rcnn.MaskRCNNPredictor(
+            in_features_mask, hidden_layer, num_classes
+        )
+        
+        # Class names for interpretation
+        self.class_names = ['background', 'triangle', 'quadrilateral', 'circle', 'filled', 'outlined']
+        
+        # Image normalization (COCO standard)
+        self.normalize = T.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225]
+        )
+        
+        logger.info(f"MaskRCNNDetector initialized with {num_classes} classes, confidence threshold: {confidence_threshold}")
+
+    def forward(self, images: torch.Tensor, targets: Optional[List[Dict[str, torch.Tensor]]] = None) -> Dict[str, Any]:
+        """
+        Forward pass for detection and segmentation.
+        
+        Args:
+            images (torch.Tensor): Batch of images (B, C, H, W)
+            targets (Optional[List[Dict]]): Ground truth targets for training
+                Each target dict should contain:
+                - 'boxes': (N, 4) tensor of bounding boxes in (x1, y1, x2, y2) format
+                - 'labels': (N,) tensor of class labels
+                - 'masks': (N, H, W) tensor of instance masks
+        
+        Returns:
+            Dict containing detections or losses (if training)
+        """
+        # Ensure images are normalized
+        if images.max() > 1.0:  # If images are in [0, 255] range
+            images = images / 255.0
+        
+        # Apply normalization
+        normalized_images = []
+        for img in images:
+            normalized_images.append(self.normalize(img))
+        normalized_images = torch.stack(normalized_images)
+        
+        # Convert to list format required by torchvision
+        image_list = [img for img in normalized_images]
+        
+        if self.training and targets is not None:
+            # Training mode - return losses
+            losses = self.model(image_list, targets)
+            return losses
+        else:
+            # Inference mode - return predictions
+            self.model.eval()
+            with torch.no_grad():
+                predictions = self.model(image_list)
+            
+            # Filter predictions by confidence threshold and format output
+            filtered_predictions = []
+            for pred in predictions:
+                # Filter by confidence
+                scores = pred['scores']
+                keep = scores >= self.confidence_threshold
+                
+                filtered_pred = {
+                    'boxes': pred['boxes'][keep],
+                    'labels': pred['labels'][keep], 
+                    'scores': pred['scores'][keep],
+                    'masks': pred['masks'][keep]
+                }
+                filtered_predictions.append(filtered_pred)
+            
+            return {'detections': filtered_predictions}
+
+    def extract_features_for_batch(self, images: torch.Tensor) -> Tuple[List[List[torch.Tensor]], List[List[np.ndarray]]]:
+        """
+        Extract object features and masks for integration with PerceptionModule.
+        
+        Args:
+            images (torch.Tensor): Batch of images (B, C, H, W)
+            
+        Returns:
+            Tuple of:
+            - List of lists of bounding boxes per image [[x1,y1,x2,y2], ...]
+            - List of lists of masks per image [np.ndarray, ...]
+        """
+        results = self.forward(images)
+        detections = results['detections']
+        
+        batch_bboxes = []
+        batch_masks = []
+        
+        for det in detections:
+            # Convert boxes to list format
+            boxes_list = det['boxes'].cpu().numpy().tolist()
+            batch_bboxes.append(boxes_list)
+            
+            # Convert masks to numpy arrays
+            if det['masks'].numel() > 0:
+                # Apply threshold to get binary masks
+                binary_masks = (det['masks'].squeeze(1) > 0.5).cpu().numpy()
+                masks_list = [mask.astype(np.uint8) for mask in binary_masks]
+            else:
+                masks_list = []
+            batch_masks.append(masks_list)
+        
+        return batch_bboxes, batch_masks
 
 # --- New BongardPerceptionModel for Phase 1 initial training ---
 class BongardPerceptionModel(nn.Module):
@@ -707,6 +845,18 @@ class PerceptionModule(nn.Module):
         super().__init__()
         self.config = config
         
+        # System 1: Mask R-CNN Detector for automatic object detection and segmentation
+        detector_config = getattr(config.model, 'detector_config', {})
+        # Handle DictConfig vs regular dict access
+        if hasattr(detector_config, 'get'):
+            num_classes = detector_config.get('num_classes', 6)  # background + 5 object classes  
+            confidence_threshold = detector_config.get('confidence_threshold', 0.7)
+        else:
+            num_classes = getattr(detector_config, 'num_classes', 6)
+            confidence_threshold = getattr(detector_config, 'confidence_threshold', 0.7)
+        self.detector = MaskRCNNDetector(num_classes=num_classes, confidence_threshold=confidence_threshold)
+        logger.info(f"PerceptionModule: Integrated MaskRCNNDetector with {num_classes} classes")
+        
         # Attribute classification model (backbone + heads)
         self.attribute_model = AttributeClassifier(config)
         # Update config with the actual feature dimension inferred from the attribute_model
@@ -741,12 +891,13 @@ class PerceptionModule(nn.Module):
 
     def forward(self,
                 images: torch.Tensor, # Batch of images (B, C, H, W)
-                ground_truth_json_strings: List[bytes], # List of GT JSON strings (for training)
-                detected_bboxes_batch: List[List[List[float]]], # List of lists of bboxes per image in batch
-                detected_masks_batch: List[List[np.ndarray]], # List of lists of masks per image in batch
+                ground_truth_json_strings: List[bytes] = None, # List of GT JSON strings (for training)
+                detected_bboxes_batch: List[List[List[float]]] = None, # List of lists of bboxes per image in batch
+                detected_masks_batch: List[List[np.ndarray]] = None, # List of lists of masks per image in batch
                 support_images: torch.Tensor = None, # (B, N_support, C, H, W) for few-shot
                 support_labels_flat: torch.Tensor = None, # (B, N_support) for few-shot
-                is_simclr_pretraining: bool = False # Flag for SimCLR pretraining path
+                is_simclr_pretraining: bool = False, # Flag for SimCLR pretraining path
+                detection_targets: List[Dict[str, torch.Tensor]] = None # GT targets for detector training
                ) -> Dict[str, Any]:
         """
         Forward pass through the entire perception pipeline.
@@ -788,6 +939,27 @@ class PerceptionModule(nn.Module):
         if is_simclr_pretraining:
             simclr_features, _ = self.attribute_model(images)
             return {'simclr_features': simclr_features}
+        
+        # --- System 1: Object Detection and Segmentation ---
+        detection_results = {}
+        if detected_bboxes_batch is None or detected_masks_batch is None:
+            # Use integrated Mask R-CNN detector
+            if self.training and detection_targets is not None:
+                # Training mode: return detection losses
+                detection_results = self.detector(images, detection_targets)
+                # If we're in detection training mode, return early with losses
+                if 'loss_classifier' in detection_results:
+                    return {'detection_losses': detection_results}
+            else:
+                # Inference mode: get detections
+                detection_output = self.detector(images)
+                detected_bboxes_batch, detected_masks_batch = self.detector.extract_features_for_batch(images)
+                detection_results['detections'] = detection_output['detections']
+                logger.info(f"MaskRCNNDetector: Detected objects in {len(detected_bboxes_batch)} images")
+        
+        # Ensure we have valid detections to proceed
+        if ground_truth_json_strings is None:
+            ground_truth_json_strings = [b'{}'] * batch_size  # Dummy GT for inference
         
         # --- Process each image in the batch ---
         for i in range(batch_size):

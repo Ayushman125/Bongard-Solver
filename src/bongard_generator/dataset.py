@@ -7,6 +7,7 @@ from typing import List, Dict, Any, Tuple, Optional, Iterator
 import numpy as np
 from PIL import Image, ImageDraw
 import inspect
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -748,14 +749,12 @@ class BongardDataset:
                 'image': self._create_black_placeholder(),
                 'scene_graph': {'objects': [], 'relations': []}
             }
-            print(f"[BongardDataset] __getitem__ idx={idx} EMPTY DATASET - returning black placeholder")
             return dummy_example
         
         if idx >= len(self.examples):
             idx = idx % len(self.examples)  # Wrap around if index too large
             
         example = self.examples[idx]
-        print(f"[BongardDataset] __getitem__ idx={idx} rule={example['rule']} label={example['label']} objects={example.get('scene_graph', {}).get('objects', None)}")
         return example
     
     def _create_black_placeholder(self):
@@ -777,8 +776,8 @@ class SyntheticBongardDataset:
         
         # Clear cache and reseed between runs
         if flush_cache:
-            import random, numpy as np
-            random.seed(None)
+            import random as rand_mod, numpy as np
+            rand_mod.seed(None)
             np.random.seed(None)
         
         # Initialize rule lookup
@@ -786,14 +785,20 @@ class SyntheticBongardDataset:
         
         # Pre-generate ALL examples at initialization to avoid infinite loops
         total_examples = sum(count for _, count in rules)
-        print(f"[SyntheticBongardDataset] Pre-generating {total_examples} examples...")
+        if total_examples > 20:
+            print(f"[SyntheticBongardDataset] Pre-generating {total_examples} examples...")
+            # Use progress bar for large datasets
+            progress_bar = tqdm(total=total_examples, desc="🎨 Generating synthetic images", unit="img")
         
+        generated_count = 0
         for rule_desc, count in rules:
-            print(f"[SyntheticBongardDataset] Requested rule key: {rule_desc}")
+            if total_examples <= 20:  # Only show detailed logs for small datasets
+                print(f"[SyntheticBongardDataset] Requested rule key: {rule_desc}")
             rule = rule_lookup.get(rule_desc)
             
             if rule is None:
-                print(f"[SyntheticBongardDataset] WARNING: Rule key {rule_desc} not found!")
+                if total_examples <= 20:
+                    print(f"[SyntheticBongardDataset] WARNING: Rule key {rule_desc} not found!")
                 # Create fallback examples for unknown rules
                 for i in range(count):
                     obj = {
@@ -813,15 +818,21 @@ class SyntheticBongardDataset:
                         'label': 1, 
                         'scene_graph': {'objects': [obj], 'relations': []}
                     })
+                    generated_count += 1
+                    if total_examples > 20:
+                        progress_bar.update(1)
+                        progress_bar.set_postfix(rule=rule_desc[:30])
                 continue
             
-            print(f"[SyntheticBongardDataset] Selected rule: {getattr(rule, 'name', None)} | Description: {getattr(rule, 'description', None)}")
+            if total_examples <= 20:  # Only show detailed logs for small datasets
+                print(f"[SyntheticBongardDataset] Selected rule: {getattr(rule, 'name', None)} | Description: {getattr(rule, 'description', None)}")
             
             # Generate examples for this rule
             for i in range(count):
                 # Generate scene objects based on rule
                 objects = self._generate_objects_for_rule(rule, img_size)
-                print(f"[SyntheticBongardDataset] Scene objects: {objects}")
+                if total_examples <= 20:  # Only show detailed logs for small datasets
+                    print(f"[SyntheticBongardDataset] Scene objects: {objects}")
                 
                 # Create image from objects
                 img = create_composite_scene(objects, img_size)
@@ -833,8 +844,16 @@ class SyntheticBongardDataset:
                     'label': 1, 
                     'scene_graph': {'objects': objects, 'relations': []}
                 })
+                generated_count += 1
+                if total_examples > 20:
+                    progress_bar.update(1)
+                    progress_bar.set_postfix(rule=rule_desc[:30], completed=f"{generated_count}/{total_examples}")
         
-        print(f"[SyntheticBongardDataset] Finished generating {len(self.examples)} examples")
+        if total_examples > 20:
+            progress_bar.close()
+            print(f"[SyntheticBongardDataset] ✅ Finished generating {len(self.examples)} examples")
+        else:
+            print(f"[SyntheticBongardDataset] Finished generating {len(self.examples)} examples")
 
     def _generate_objects_for_rule(self, rule, img_size):
         """Generate objects that satisfy the given rule."""
@@ -876,7 +895,6 @@ class SyntheticBongardDataset:
             raise IndexError(f"Index {idx} out of range for dataset of size {len(self.examples)}")
             
         example = self.examples[idx]
-        print(f"[SyntheticBongardDataset] __getitem__ idx={idx} rule={example['rule']} label={example['label']} objects={example.get('scene_graph', {}).get('objects', None)}")
         return example
 
 def generate_bongard_dataset(output_dir: str = "synthetic_images",

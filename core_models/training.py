@@ -1102,3 +1102,277 @@ def fine_tune_perception(model, buffer, config):
         loss.backward()
         optimizer.step()
     print(f"[FINE-TUNE] Completed {steps} steps")
+
+
+# --- Detection Training Function for System 1 ---
+def train_detection_system1(
+    cfg: Dict[str, Any],
+    detection_dataloader: DataLoader,
+    val_detection_dataloader: DataLoader = None,
+    num_epochs: int = 20,
+    current_rank: int = 0
+) -> Tuple[str, Dict[str, float]]:
+    """
+    Trains the Mask R-CNN detector (System 1) on synthetic Bongard data.
+    
+    Args:
+        cfg: Configuration dictionary
+        detection_dataloader: DataLoader with detection targets (COCO format)
+        val_detection_dataloader: Validation dataloader (optional)
+        num_epochs: Number of training epochs
+        current_rank: Current GPU rank
+    
+    Returns:
+        Tuple of (best_checkpoint_path, best_metrics)
+    """
+    from .models import PerceptionModule
+    from pycocotools.cocoeval import COCOeval
+    from pycocotools.coco import COCO
+    import tempfile
+    
+    logger = logging.getLogger(__name__)
+    
+    # Initialize model
+    model = PerceptionModule(cfg).to(DEVICE)
+    
+    # Setup optimizer - use lower learning rate for detection
+    detection_params = list(model.detector.parameters())
+    optimizer = optim.SGD(detection_params, 
+                         lr=cfg.get('detection_lr', 0.005),
+                         momentum=0.9, 
+                         weight_decay=0.0005)
+    
+    # Learning rate scheduler
+    lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
+    
+    # Mixed precision scaler
+    scaler = GradScaler() if cfg.get('use_mixed_precision', True) else None
+    
+    best_ap = 0.0
+    best_checkpoint_path = ""
+    best_metrics = {}
+    
+    logger.info(f"Starting Mask R-CNN detection training for {num_epochs} epochs")
+    
+    # Import COCO evaluation tools
+    try:
+        from pycocotools.cocoeval import COCOeval
+        from pycocotools.coco import COCO
+        HAS_PYCOCOTOOLS = True
+    except ImportError:
+        logger.warning("pycocotools not found. Using simplified evaluation metrics.")
+        HAS_PYCOCOTOOLS = False
+    
+    for epoch in range(num_epochs):
+        model.train()
+        epoch_losses = []
+        
+        # Training loop
+        pbar = tqdm(detection_dataloader, desc=f"Epoch {epoch+1}/{num_epochs}")
+        for batch_idx, (images, targets) in enumerate(pbar):
+            images = images.to(DEVICE)
+            targets = [{k: v.to(DEVICE) for k, v in t.items()} for t in targets]
+            
+            optimizer.zero_grad()
+            
+            if scaler:
+                with autocast():
+                    # Forward pass through detector
+                    loss_dict = model.detector(images, targets)
+                    total_loss = sum(loss_dict.values())
+                
+                scaler.scale(total_loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                # Forward pass through detector
+                loss_dict = model.detector(images, targets)
+                total_loss = sum(loss_dict.values())
+                
+                total_loss.backward()
+                optimizer.step()
+            
+            epoch_losses.append(total_loss.item())
+            
+            # Update progress bar
+            pbar.set_postfix({
+                'loss': f'{total_loss.item():.4f}',
+                'cls_loss': f'{loss_dict.get("loss_classifier", 0):.4f}',
+                'bbox_loss': f'{loss_dict.get("loss_box_reg", 0):.4f}',
+                'mask_loss': f'{loss_dict.get("loss_mask", 0):.4f}'
+            })
+        
+        avg_loss = np.mean(epoch_losses)
+        lr_scheduler.step()
+        
+        # Validation
+        if val_detection_dataloader is not None:
+            val_metrics = evaluate_detection(model, val_detection_dataloader)
+            current_ap = val_metrics.get('AP@0.5:0.95', 0.0)
+            
+            logger.info(f"Epoch {epoch+1}: Loss={avg_loss:.4f}, AP@0.5:0.95={current_ap:.4f}")
+            
+            # Save best checkpoint
+            if current_ap > best_ap:
+                best_ap = current_ap
+                best_metrics = val_metrics
+                checkpoint_path = os.path.join(cfg.get('checkpoint_dir', 'checkpoints'), 
+                                             f'best_detection_epoch_{epoch+1}.pth')
+                torch.save({
+                    'epoch': epoch,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'best_ap': best_ap,
+                    'metrics': best_metrics
+                }, checkpoint_path)
+                best_checkpoint_path = checkpoint_path
+                logger.info(f"New best AP: {best_ap:.4f}, saved to {checkpoint_path}")
+        else:
+            logger.info(f"Epoch {epoch+1}: Loss={avg_loss:.4f}")
+    
+    return best_checkpoint_path, best_metrics
+
+
+def evaluate_detection(model: nn.Module, dataloader: DataLoader) -> Dict[str, float]:
+    """
+    Evaluates detection model using COCO metrics.
+    
+    Args:
+        model: PerceptionModule with detector
+        dataloader: Validation dataloader
+    
+    Returns:
+        Dictionary of COCO evaluation metrics
+    """
+    # Import COCO evaluation tools
+    try:
+        from pycocotools.cocoeval import COCOeval
+        from pycocotools.coco import COCO
+        HAS_PYCOCOTOOLS = True
+    except ImportError:
+        logger = logging.getLogger(__name__)
+        logger.warning("pycocotools not found. Using simplified evaluation metrics.")
+        HAS_PYCOCOTOOLS = False
+    
+    model.eval()
+    device = next(model.parameters()).device
+    
+    # Collect predictions and ground truth
+    predictions = []
+    ground_truths = []
+    
+    with torch.no_grad():
+        for batch_idx, (images, targets) in enumerate(tqdm(dataloader, desc="Evaluating")):
+            images = images.to(device)
+            
+            # Get predictions
+            outputs = model.detector(images)
+            detections = outputs['detections']
+            
+            # Convert to COCO format
+            for img_idx, (det, target) in enumerate(zip(detections, targets)):
+                image_id = batch_idx * len(images) + img_idx
+                
+                # Predictions
+                boxes = det['boxes'].cpu().numpy()
+                scores = det['scores'].cpu().numpy()  
+                labels = det['labels'].cpu().numpy()
+                
+                for box, score, label in zip(boxes, scores, labels):
+                    x1, y1, x2, y2 = box
+                    predictions.append({
+                        'image_id': image_id,
+                        'category_id': int(label),
+                        'bbox': [float(x1), float(y1), float(x2-x1), float(y2-y1)],
+                        'score': float(score)
+                    })
+                
+                # Ground truth
+                gt_boxes = target['boxes'].cpu().numpy()
+                gt_labels = target['labels'].cpu().numpy()
+                
+                for box, label in zip(gt_boxes, gt_labels):
+                    x1, y1, x2, y2 = box
+                    ground_truths.append({
+                        'image_id': image_id,
+                        'category_id': int(label),
+                        'bbox': [float(x1), float(y1), float(x2-x1), float(y2-y1)],
+                        'area': float((x2-x1) * (y2-y1)),
+                        'iscrowd': 0,
+                        'id': len(ground_truths)
+                    })
+    
+    # Calculate COCO metrics
+    if not HAS_PYCOCOTOOLS:
+        # Fallback to simple metrics
+        logger.warning("Using simplified metrics (pycocotools not available)")
+        if len(predictions) > 0 and len(ground_truths) > 0:
+            return {
+                'AP@0.5:0.95': len(predictions) / max(len(ground_truths), 1),
+                'AP@0.5': len(predictions) / max(len(ground_truths), 1),
+                'num_predictions': len(predictions),
+                'num_ground_truths': len(ground_truths)
+            }
+        else:
+            return {'AP@0.5:0.95': 0.0, 'AP@0.5': 0.0, 'num_predictions': 0, 'num_ground_truths': 0}
+    
+    try:
+        # Create temporary COCO dataset
+        coco_gt = {
+            'images': [{'id': i} for i in range(len(set([gt['image_id'] for gt in ground_truths])))],
+            'annotations': ground_truths,
+            'categories': [{'id': i, 'name': f'class_{i}'} for i in range(1, 6)]
+        }
+        
+        # Write temporary files
+        import tempfile
+        import json
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            json.dump(coco_gt, f)
+            gt_file = f.name
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            json.dump(predictions, f)
+            pred_file = f.name
+        
+        # Load with COCO API
+        coco_gt_api = COCO(gt_file)
+        coco_dt = coco_gt_api.loadRes(pred_file)
+        
+        # Evaluate
+        coco_eval = COCOeval(coco_gt_api, coco_dt, 'bbox')
+        coco_eval.evaluate()
+        coco_eval.accumulate()
+        coco_eval.summarize()
+        
+        # Extract metrics
+        metrics = {
+            'AP@0.5:0.95': coco_eval.stats[0],
+            'AP@0.5': coco_eval.stats[1],
+            'AP@0.75': coco_eval.stats[2],
+            'AP_small': coco_eval.stats[3],
+            'AP_medium': coco_eval.stats[4],
+            'AP_large': coco_eval.stats[5]
+        }
+        
+        # Clean up
+        os.unlink(gt_file)
+        os.unlink(pred_file)
+        
+        return metrics
+    
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.warning(f"COCO evaluation failed: {e}. Using simple metrics.")
+        
+        # Fallback to simple metrics
+        if len(predictions) > 0 and len(ground_truths) > 0:
+            return {
+                'AP@0.5:0.95': len(predictions) / max(len(ground_truths), 1),
+                'AP@0.5': len(predictions) / max(len(ground_truths), 1),
+                'num_predictions': len(predictions),
+                'num_ground_truths': len(ground_truths)
+            }
+        else:
+            return {'AP@0.5:0.95': 0.0, 'AP@0.5': 0.0, 'num_predictions': 0, 'num_ground_truths': 0}

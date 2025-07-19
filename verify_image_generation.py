@@ -11,7 +11,7 @@ import numpy as np
 
 def visualize_generated_images():
     """Generate and display some sample images to verify they contain actual shapes."""
-    print("Generating sample images...")
+    print("🔍 Generating sample images for verification...")
     
     # Create a small dataset with different rules using correct rule descriptions
     rules = [
@@ -23,7 +23,7 @@ def visualize_generated_images():
     
     dataset = SyntheticBongardDataset(rules, img_size=128)
     
-    print(f"Generated {len(dataset)} examples")
+    print(f"📊 Generated {len(dataset)} examples")
     
     # Display the images in a grid
     fig, axes = plt.subplots(2, 4, figsize=(12, 6))
@@ -42,9 +42,9 @@ def visualize_generated_images():
         axes[row, col].set_title(f'{rule}\nLabel: {label}', fontsize=8)
         axes[row, col].axis('off')
         
-        # Print image statistics
+        # Print image statistics for verification
         unique_vals = np.unique(img)
-        print(f"Image {i}: Rule='{rule}', Shape={img.shape}, Unique values={unique_vals}, Mean={img.mean():.1f}")
+        print(f"  📷 Image {i}: Rule='{rule}', Shape={img.shape}, Values={unique_vals}, Mean={img.mean():.1f}")
     
     plt.tight_layout()
     
@@ -56,7 +56,7 @@ def visualize_generated_images():
     # Verify all images have shape variation (not blank)
     all_good = True
     dataset_len = len(dataset)
-    print(f"\nValidating {dataset_len} generated images...")
+    print(f"\n🔬 Validating {dataset_len} generated images...")
     
     # Use the already generated examples from the plotting loop to avoid re-generating
     generated_examples = []
@@ -73,10 +73,10 @@ def visualize_generated_images():
             all_good = False
     
     if all_good:
-        print(f"\n✅ SUCCESS: All {len(dataset)} images contain actual shapes!")
+        print(f"✅ SUCCESS: All {len(dataset)} images contain actual shapes!")
         return True
     else:
-        print(f"\n❌ FAILED: Some images are still blank")
+        print(f"❌ FAILED: Some images are still blank")
         return False
 
 if __name__ == "__main__":
