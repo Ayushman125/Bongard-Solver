@@ -189,6 +189,7 @@ class BongardSampler:
                 # Use SyntheticBongardDataset for final rendering
                 from bongard_generator.dataset import SyntheticBongardDataset
                 # Only pass the current rule for mini-dataset
+                print(f">> sampling rule key: {getattr(rule, 'name', None)}")
                 ds = SyntheticBongardDataset(rules=[(rule.name, 1)], grayscale=True, flush_cache=False)
                 # Use the dataset's public API to get the rendered scene
                 sample = ds[0]  # Only one example in this tiny dataset

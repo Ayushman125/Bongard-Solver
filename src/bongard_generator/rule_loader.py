@@ -38,12 +38,29 @@ except Exception as e:
     from dataclasses import dataclass
     @dataclass
     class BongardRule:
-        description: str
-        positive_features: Dict[str, any]
-        negative_features: Dict[str, any] = None
-        def __post_init__(self):
-            if self.negative_features is None:
-                self.negative_features = {}
+        def __init__(self, description: str, positive_features: Dict[str, any], negative_features: Dict[str, any] = None):
+            self.description = description
+            self.positive_features = positive_features
+            self.negative_features = negative_features if negative_features is not None else {}
+            # Canonical key mapping
+            self.name = self._make_canonical_key(description, positive_features)
+
+        def _make_canonical_key(self, description, features):
+            # Map description/features to canonical dataset key
+            desc = description.strip().upper()
+            if desc.startswith("SHAPE("):
+                return f"shape_{features['shape']}"
+            elif desc.startswith("COUNT("):
+                return f"count_eq_{features['count']}"
+            elif desc.startswith("FILL("):
+                return f"fill_{features['fill']}"
+            elif desc.startswith("SPATIAL("):
+                return f"{features['relation']}"
+            elif desc.startswith("TOPO("):
+                return f"{features['relation']}"
+            else:
+                # fallback: use lowercased description
+                return desc.lower().replace('(', '_').replace(')', '').replace(' ', '_')
     ALL_RULES = [
         BongardRule("SHAPE(TRIANGLE)", {"shape": "triangle"}),
         BongardRule("SHAPE(SQUARE)", {"shape": "square"}),
