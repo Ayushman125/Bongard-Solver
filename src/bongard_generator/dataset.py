@@ -21,133 +21,21 @@ def safe_randrange(a: int, b: int) -> int:
     return random.randrange(lo, hi+1)
 
 from .rule_loader import BongardRule, get_all_rules, get_rule_by_description
+from .mask_utils import create_composite_scene
+from .coverage import CoverageTracker
+from .cp_sampler import SceneParameters, sample_scene_cp
 
-class SceneParameters:
-    def __init__(self, canvas_size, min_obj_size, max_obj_size, max_objects, colors, shapes, fills):
-        self.canvas_size = canvas_size
-        self.min_obj_size = min_obj_size
-        self.max_obj_size = max_obj_size
-        self.max_objects = max_objects
-        self.colors = colors
-        self.shapes = shapes
-        self.fills = fills
+logger = logging.getLogger(__name__)
 
-def sample_scene_cp(rule, num_objects, is_positive, canvas_size, min_obj_size, max_obj_size, max_attempts):
-    # Dummy implementation for scene sampling
-    # In a real scenario, this would use a CP-SAT solver
-    objects = []
-    for _ in range(num_objects):
-        obj = {
-            'x': safe_randint(min_obj_size, canvas_size - min_obj_size),
-            'y': safe_randint(min_obj_size, canvas_size - min_obj_size),
-            'size': safe_randint(min_obj_size, max_obj_size),
-            'shape': random.choice(['circle', 'triangle', 'square', 'pentagon', 'star']),
-            'fill': random.choice(['solid', 'outline', 'striped', 'gradient']),
-            'color': random.choice(['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'black'])
-        }
-        # Apply rule features if positive, or avoid them if negative
-        if is_positive:
-            # Check pos_literals for features to apply
-            for literal in rule.pos_literals:
-                feature = literal.get('feature')
-                value = literal.get('value')
-                if feature == 'shape' and value:
-                    obj['shape'] = value
-                elif feature == 'fill' and value:
-                    obj['fill'] = value
-                elif feature == 'color' and value:
-                    obj['color'] = value
-        else: # is_negative
-            # Check pos_literals to avoid those features
-            for literal in rule.pos_literals:
-                feature = literal.get('feature')
-                value = literal.get('value')
-                if feature == 'shape' and value:
-                    # Ensure the generated shape is NOT the positive feature shape
-                    available_shapes = [s for s in ['circle', 'triangle', 'square', 'pentagon', 'star'] if s != value]
-                    if available_shapes:
-                        obj['shape'] = random.choice(available_shapes)
-                elif feature == 'fill' and value:
-                    available_fills = [f for f in ['solid', 'outline', 'striped', 'gradient'] if f != value]
-                    if available_fills:
-                        obj['fill'] = random.choice(available_fills)
-                elif feature == 'color' and value:
-                    available_colors = [c for c in ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'black'] if c != value]
-                    if available_colors:
-                        obj['color'] = random.choice(available_colors)
-        
-        objects.append(obj)
-    
-    # Add 'position' key for consistency with the main class
-    for obj in objects:
-        obj['position'] = (obj['x'], obj['y'])
-    
-    return objects
-
-
-class CoverageTracker:
-    def __init__(self):
-        self.ALL_CELLS = [
-            ("circle", "solid", 1, None), ("circle", "outline", 1, None),
-            ("square", "solid", 1, None), ("square", "outline", 1, None),
-            (None, None, 2, None), (None, None, 3, None),
-            (None, None, None, "overlap"), (None, None, None, "near")
-        ] # Example cells
-        self.coverage = {cell: 0 for cell in self.ALL_CELLS}
-
-    def record_scene(self, objects, scene_graph, rule_description, is_positive):
-        # Dummy recording logic for demonstration
-        # In a real scenario, this would analyze the scene and update coverage based on features
-        # For simplicity, we'll just increment counts for some features based on the rule
-        rule = get_rule_by_description(rule_description)
-        if rule:
-            literals = rule.pos_literals if is_positive else rule.neg_literals
-            
-            # Simple heuristic to update coverage based on rule literals
-            for literal in literals:
-                feature = literal.get('feature')
-                value = literal.get('value')
-                if feature == 'shape':
-                    for cell in self.ALL_CELLS:
-                        if cell[0] == value:
-                            self.coverage[cell] += 1
-                elif feature == 'fill':
-                    for cell in self.ALL_CELLS:
-                        if cell[1] == value:
-                            self.coverage[cell] += 1
-                elif feature == 'count':
-                    for cell in self.ALL_CELLS:
-                        if cell[2] == value:
-                            self.coverage[cell] += 1
-                elif feature == 'relation':
-                    for cell in self.ALL_CELLS:
-                        if cell[3] == value:
-                            self.coverage[cell] += 1
-
-
-    def get_under_covered_cells(self, target_quota):
-        return [cell for cell, count in self.coverage.items() if count < target_quota]
-
-    def get_coverage_heatmap_data(self):
-        return {
-            "total_cells": len(self.ALL_CELLS),
-            "covered_cells": sum(1 for count in self.coverage.values() if count > 0),
-            "coverage_counts": self.coverage
-        }
-
-def create_composite_scene(objects, canvas_size):
-    print(f"[create_composite_scene] Drawing {len(objects)} objects: {objects}")
-    img = Image.new('L', (canvas_size, canvas_size), color=255)
-    # TODO: Replace with actual shape rendering logic
-    # For now, just print the objects and return blank canvas
-    # After all drawing and occluders/noise, binarize
-    img_bw = img.point(lambda p: 255 if p > 128 else 0, mode='1')
-    img_bw_L = img_bw.convert('L')
-    return img_bw_L
-
+# Default configuration if not available elsewhere
 def get_config():
-    # Dummy config for demonstration
-    return {}
+    """Basic config defaults."""
+    return {
+        'canvas_size': 128,
+        'min_obj_size': 15,
+        'max_obj_size': 40,
+        'max_objects': 6
+    }
 
 logger = logging.getLogger(__name__)
 

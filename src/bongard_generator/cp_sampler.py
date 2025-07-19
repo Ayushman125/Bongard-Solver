@@ -255,7 +255,7 @@ class CPSATSampler:
         obj['color'] = random.choice(self.params.colors)
         objects.append(obj)
     
-    return objects
+        return objects
 
     def add_literal_constraints(self, model, vars_, literals):
         """Enhanced constraint building from unified generator."""

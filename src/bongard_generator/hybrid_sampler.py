@@ -93,8 +93,10 @@ class BongardSampler:
                 rule = next((r for r in rules if getattr(r, 'name', '') == rule_description), None)
             
             if rule:
-                # Create dataset with small quota for sampling
-                ds = BongardDataset(target_quota=max(num_pos, num_neg, 2), rule_list=[getattr(rule, 'name', rule.description)])
+                # Create dataset with consistent key passing - use rule.name if available, otherwise description
+                rule_key = rule.name if hasattr(rule, 'name') and rule.name else rule.description
+                print(f"→ CP-SAT Dataset sees rule key: '{rule_key}' for description: '{rule_description}'")
+                ds = BongardDataset(target_quota=max(num_pos, num_neg, 2), rule_list=[rule_key])
                 pos_imgs, neg_imgs = [], []
                 
                 # Collect examples from dataset
@@ -135,6 +137,9 @@ class BongardSampler:
                 rule = next((r for r in rules if getattr(r, 'name', '') == rule_description), None)
                 
             if rule and hasattr(self.ga_generator, 'generate_problem'):
+                # Use consistent key passing - same as CP-SAT
+                rule_key = rule.name if hasattr(rule, 'name') and rule.name else rule.description
+                print(f"→ GA sees rule key: '{rule_key}' for description: '{rule_description}'")
                 pos_imgs, neg_imgs = [], []
                 
                 # Generate positive samples
