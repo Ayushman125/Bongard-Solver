@@ -367,6 +367,32 @@ class BongardRule:
     def neg_literals(self) -> List[Dict[str, Any]]:
         """Returns the extracted negative literals."""
         return self._neg_literals
+    
+    @property
+    def positive_features(self) -> Dict[str, Any]:
+        """Convert list of positive literals to a feature dictionary for CP-SAT compatibility."""
+        features = {}
+        for literal in self._pos_literals:
+            if isinstance(literal, dict):
+                # Extract feature and value from literal
+                feature = literal.get('feature', '')
+                value = literal.get('value', '')
+                if feature and value:
+                    features[feature] = value
+        return features
+
+    @property  
+    def negative_features(self) -> Dict[str, Any]:
+        """Convert list of negative literals to a feature dictionary for CP-SAT compatibility."""
+        features = {}
+        for literal in self._neg_literals:
+            if isinstance(literal, dict):
+                # Extract feature and value from literal
+                feature = literal.get('feature', '')
+                value = literal.get('value', '')
+                if feature and value:
+                    features[feature] = value
+        return features
 
 # --- Canonical Set of Bongard Rules ---
 # These rules are defined directly with their positive/negative literals.

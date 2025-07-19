@@ -1,5 +1,6 @@
-from bongard_generator.dataset import BongardDataset, create_composite_scene
-from bongard_generator.visualize import show_mosaic, plot_rule_distribution
+
+from src.bongard_generator.dataset import BongardDataset, create_composite_scene, SyntheticBongardDataset
+from src.bongard_generator.visualize import show_mosaic, plot_rule_distribution
 
 # 1) instantiate with your full rule set
 rules = [

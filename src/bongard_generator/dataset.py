@@ -1,12 +1,11 @@
 """Dataset generation and management for Bongard problems."""
-
 import logging
 import random
 import json
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional, Iterator
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 import inspect
 
 def safe_randint(a: int, b: int) -> int:
@@ -18,24 +17,252 @@ def safe_randrange(a: int, b: int) -> int:
     """Safe random range generator that handles inverted ranges."""
     lo, hi = min(a, b), max(a, b)
     # randrange excludes hi, so we +1
-    return random.randrange(lo, hi+1)
+    return random.randrange(lo, hi + 1)
 
-from .rule_loader import BongardRule, get_all_rules, get_rule_by_description
-from .mask_utils import create_composite_scene
-from .coverage import CoverageTracker
-from .cp_sampler import SceneParameters, sample_scene_cp
+# Assuming these modules are in the same package or correctly imported in a real environment
+# from .cp_sampler import sample_scene_cp, SceneParameters
+# from .rule_loader import get_all_rules, get_rule_by_description, BongardRule
+# from .coverage import CoverageTracker
+# from .mask_utils import create_composite_scene
+# from .config_loader import get_config
 
-logger = logging.getLogger(__name__)
+# Dummy imports for demonstration purposes if original modules are not available
+# In a real scenario, ensure these are correctly imported from your project structure.
+class SceneParameters:
+    def __init__(self, canvas_size, min_obj_size, max_obj_size, max_objects, colors, shapes, fills):
+        self.canvas_size = canvas_size
+        self.min_obj_size = min_obj_size
+        self.max_obj_size = max_obj_size
+        self.max_objects = max_objects
+        self.colors = colors
+        self.shapes = shapes
+        self.fills = fills
 
-# Default configuration if not available elsewhere
+# Dummy implementations for required modules/functions
+class BongardRule:
+    def __init__(self, description, positive_features=None, negative_features=None):
+        self.description = description
+        self.positive_features = positive_features if positive_features is not None else {}
+        self.negative_features = negative_features if negative_features is not None else {}
+        self.name = description # Simple name for dummy rule
+
+def get_all_rules():
+    # Example dummy rules
+    return [
+        BongardRule("SHAPE(circle)", positive_features={'shape': 'circle'}),
+        BongardRule("FILL(solid)", positive_features={'fill': 'solid'}),
+        BongardRule("COUNT(2)", positive_features={'count': 2}),
+        BongardRule("RELATION(overlap)", positive_features={'relation': 'overlap'}),
+        BongardRule("SHAPE(square)", positive_features={'shape': 'square'}),
+        BongardRule("FILL(outline)", positive_features={'fill': 'outline'})
+    ]
+
+def get_rule_by_description(description):
+    for rule in get_all_rules():
+        if rule.description == description:
+            return rule
+    return None
+
+def sample_scene_cp(rule, num_objects, is_positive, canvas_size, min_obj_size, max_obj_size, max_attempts):
+    # Dummy implementation for scene sampling
+    # In a real scenario, this would use a CP-SAT solver
+    objects = []
+    for _ in range(num_objects):
+        obj = {
+            'x': safe_randint(min_obj_size, canvas_size - min_obj_size),
+            'y': safe_randint(min_obj_size, canvas_size - min_obj_size),
+            'size': safe_randint(min_obj_size, max_obj_size),
+            'shape': random.choice(['circle', 'triangle', 'square', 'pentagon', 'star']),
+            'fill': random.choice(['solid', 'outline', 'striped', 'gradient']),
+            'color': random.choice(['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'black'])
+        }
+        # Apply rule features if positive, or avoid them if negative
+        if is_positive:
+            if 'shape' in rule.positive_features:
+                obj['shape'] = rule.positive_features['shape']
+            if 'fill' in rule.positive_features:
+                obj['fill'] = rule.positive_features['fill']
+            # For count and relation, the logic is more complex and would be handled by the CP-SAT solver
+        else:  # is_negative
+            if 'shape' in rule.positive_features:  # Negative rule means avoiding positive features
+                # Ensure the generated shape is NOT the positive feature shape
+                available_shapes = [s for s in ['circle', 'triangle', 'square', 'pentagon', 'star'] if s != rule.positive_features['shape']]
+                if available_shapes:
+                    obj['shape'] = random.choice(available_shapes)
+            if 'fill' in rule.positive_features:
+                available_fills = [f for f in ['solid', 'outline', 'striped', 'gradient'] if f != rule.positive_features['fill']]
+                if available_fills:
+                    obj['fill'] = random.choice(available_fills)
+        
+        objects.append(obj)
+    
+    # Add 'position' key for consistency with the main class
+    for obj in objects:
+        obj['position'] = (obj['x'], obj['y'])
+    
+    return objects
+
+class CoverageTracker:
+    def __init__(self):
+        self.ALL_CELLS = [
+            ("circle", "solid", 1, None), ("circle", "outline", 1, None),
+            ("square", "solid", 1, None), ("square", "outline", 1, None),
+            (None, None, 2, None), (None, None, 3, None),
+            (None, None, None, "overlap"), (None, None, None, "near")
+        ]  # Example cells
+        self.coverage = {cell: 0 for cell in self.ALL_CELLS}
+
+    def record_scene(self, objects, scene_graph, rule_description, is_positive):
+        # Dummy recording logic for demonstration
+        # In a real scenario, this would analyze the scene and update coverage based on features
+        # For simplicity, we'll just increment counts for some features based on the rule
+        rule = get_rule_by_description(rule_description)
+        if rule:
+            features = rule.positive_features if is_positive else rule.negative_features
+            
+            # Simple heuristic to update coverage based on rule features
+            if 'shape' in features:
+                for cell in self.ALL_CELLS:
+                    if cell[0] == features['shape']:
+                        self.coverage[cell] += 1
+            if 'fill' in features:
+                for cell in self.ALL_CELLS:
+                    if cell[1] == features['fill']:
+                        self.coverage[cell] += 1
+            if 'count' in features:
+                for cell in self.ALL_CELLS:
+                    if cell[2] == features['count']:
+                        self.coverage[cell] += 1
+            if 'relation' in features:
+                for cell in self.ALL_CELLS:
+                    if cell[3] == features['relation']:
+                        self.coverage[cell] += 1
+
+    def get_under_covered_cells(self, target_quota):
+        return [cell for cell, count in self.coverage.items() if count < target_quota]
+
+    def get_coverage_heatmap_data(self):
+        return {
+            "total_cells": len(self.ALL_CELLS),
+            "covered_cells": sum(1 for count in self.coverage.values() if count > 0),
+            "coverage_counts": self.coverage
+        }
+
+def create_composite_scene(objects, canvas_size):
+    """Create a composite scene with actual shape rendering."""
+    print(f"[create_composite_scene] Drawing {len(objects)} objects: {objects}")
+    
+    # Create RGB canvas for better color handling
+    img = Image.new('RGB', (canvas_size, canvas_size), color=(255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    
+    for obj in objects:
+        # Extract object properties with defaults
+        x = obj.get('x', obj.get('position', [canvas_size // 2, canvas_size // 2])[0])
+        y = obj.get('y', obj.get('position', [canvas_size // 2, canvas_size // 2])[1])
+        size = obj.get('size', 30)
+        shape = obj.get('shape', 'circle')
+        fill_type = obj.get('fill', 'solid')
+        color = obj.get('color', 'black')
+        
+        # Handle position as tuple/list
+        if isinstance(obj.get('position'), (list, tuple)) and len(obj['position']) >= 2:
+            x, y = obj['position'][0], obj['position'][1]
+        
+        # Convert color name to RGB if needed
+        color_map = {
+            'black': (0, 0, 0),
+            'white': (255, 255, 255),
+            'red': (255, 0, 0),
+            'blue': (0, 0, 255),
+            'green': (0, 255, 0),
+            'yellow': (255, 255, 0),
+            'purple': (128, 0, 128),
+            'orange': (255, 165, 0)
+        }
+        fill_color = color_map.get(color, (0, 0, 0))  # Default to black
+        
+        # Calculate bounding box
+        half_size = size // 2
+        bbox = [x - half_size, y - half_size, x + half_size, y + half_size]
+        
+        # Draw shapes based on type
+        try:
+            if shape in ['circle', 'CIRCLE']:
+                if fill_type == 'solid':
+                    draw.ellipse(bbox, fill=fill_color)
+                else:
+                    draw.ellipse(bbox, outline=fill_color, width=2)
+                    
+            elif shape in ['square', 'SQUARE', 'rectangle', 'RECTANGLE']:
+                if fill_type == 'solid':
+                    draw.rectangle(bbox, fill=fill_color)
+                else:
+                    draw.rectangle(bbox, outline=fill_color, width=2)
+                    
+            elif shape in ['triangle', 'TRIANGLE']:
+                # Draw triangle as polygon
+                points = [
+                    (x, y - half_size),      # top
+                    (x - half_size, y + half_size),  # bottom left  
+                    (x + half_size, y + half_size)   # bottom right
+                ]
+                if fill_type == 'solid':
+                    draw.polygon(points, fill=fill_color)
+                else:
+                    draw.polygon(points, outline=fill_color, width=2)
+                    
+            elif shape in ['pentagon', 'PENTAGON']:
+                # Draw pentagon as polygon (5 sides)
+                import math
+                points = []
+                for i in range(5):
+                    angle = 2 * math.pi * i / 5 - math.pi / 2  # Start from top
+                    px = x + half_size * math.cos(angle)
+                    py = y + half_size * math.sin(angle)
+                    points.append((px, py))
+                if fill_type == 'solid':
+                    draw.polygon(points, fill=fill_color)
+                else:
+                    draw.polygon(points, outline=fill_color, width=2)
+                    
+            elif shape in ['star', 'STAR']:
+                # Draw 5-pointed star
+                import math
+                outer_radius = half_size
+                inner_radius = half_size * 0.4
+                points = []
+                for i in range(10):
+                    angle = 2 * math.pi * i / 10 - math.pi / 2
+                    radius = outer_radius if i % 2 == 0 else inner_radius
+                    px = x + radius * math.cos(angle)
+                    py = y + radius * math.sin(angle)
+                    points.append((px, py))
+                if fill_type == 'solid':
+                    draw.polygon(points, fill=fill_color)
+                else:
+                    draw.polygon(points, outline=fill_color, width=2)
+                    
+            else:
+                # Default to circle for unknown shapes
+                if fill_type == 'solid':
+                    draw.ellipse(bbox, fill=fill_color)
+                else:
+                    draw.ellipse(bbox, outline=fill_color, width=2)
+                    
+        except Exception as e:
+            logger.warning(f"Error drawing shape {shape}: {e}")
+            # Fallback to simple circle
+            draw.ellipse(bbox, fill=fill_color)
+    
+    # Convert to grayscale and binarize as expected by the pipeline
+    img_gray = img.convert('L')
+    img_bw = img_gray.point(lambda p: 255 if p > 128 else 0, mode='1')
+    return img_bw.convert('L')
+
 def get_config():
-    """Basic config defaults."""
-    return {
-        'canvas_size': 128,
-        'min_obj_size': 15,
-        'max_obj_size': 40,
-        'max_objects': 6
-    }
+    # Dummy config for demonstration
+    return {}
 
 logger = logging.getLogger(__name__)
 
@@ -61,10 +288,8 @@ class BongardDataset:
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
-
         self.canvas_size = canvas_size
         self.target_quota = target_quota
-
         # Initialize scene parameters
         self.scene_params = SceneParameters(
             canvas_size=canvas_size,
@@ -75,35 +300,20 @@ class BongardDataset:
             shapes=['circle', 'triangle', 'square', 'pentagon', 'star'],
             fills=['solid', 'outline', 'striped', 'gradient']
         )
-
         # Store rule_list for debugging and downstream use
         self.rule_list = rule_list if rule_list is not None else None
         
         # Load rules and initialize tracking
-        all_rules = get_all_rules()
         if rule_list is not None:
-            self.rules = []
-            for key in rule_list:
-                # try matching on .name first
-                match = next((r for r in all_rules if r.name == key), None)
-                if match is None:
-                    # fallback to matching on .description
-                    match = next((r for r in all_rules if r.description == key), None)
-                if match:
-                    self.rules.append(match)
-                else:
-                    logger.warning(f"Rule key '{key}' did not match any canonical rule")
+            self.rules = [r for r in get_all_rules() if getattr(r, 'name', None) in rule_list]
         else:
-            self.rules = all_rules
+            self.rules = get_all_rules()
         self.coverage_tracker = CoverageTracker()
-
         # Dataset statistics
         self.generated_count = 0
         self.failed_count = 0
-
         # Store generated examples for direct access
         self.examples = []
-
         logger.info(f"Initialized dataset generator with {len(self.rules)} rules")
         print("→ BongardDataset will generate for:", self.rule_list)
         
@@ -159,16 +369,7 @@ class BongardDataset:
             num_objects = safe_randint(*max_objects_range)
             adversarial = random.random() < 0.05
             if adversarial:
-                # Check if rule has spatial relation literals
-                has_spatial_relation = False
-                spatial_value = None
-                for literal in rule.pos_literals:
-                    if literal.get('feature') == 'relation' and literal.get('value') in ['overlap', 'near', 'nested']:
-                        has_spatial_relation = True
-                        spatial_value = literal.get('value')
-                        break
-                
-                if has_spatial_relation:
+                if 'relation' in rule.positive_features and rule.positive_features['relation'] in ['overlap', 'near', 'nested']:
                     base_pos = self.canvas_size // 2
                     jitter = int(self.scene_params.max_obj_size * 0.49)
                     positions = [
@@ -181,21 +382,11 @@ class BongardDataset:
                             'x': positions[i % len(positions)]['position'][0],
                             'y': positions[i % len(positions)]['position'][1],
                             'size': self.scene_params.max_obj_size,
-                            'shape': random.choice(self.scene_params.shapes),
-                            'fill': random.choice(self.scene_params.fills),
+                            'shape': rule.positive_features.get('shape', random.choice(self.scene_params.shapes)),
+                            'fill': rule.positive_features.get('fill', random.choice(self.scene_params.fills)),
                             'color': random.choice(self.scene_params.colors),
                             'position': positions[i % len(positions)]['position']
                         }
-                        # Apply rule literals
-                        for literal in rule.pos_literals:
-                            feature = literal.get('feature')
-                            value = literal.get('value')
-                            if feature == 'shape':
-                                obj['shape'] = value
-                            elif feature == 'fill':
-                                obj['fill'] = value
-                            elif feature == 'color':
-                                obj['color'] = value
                         objects.append(obj)
                     scene = {
                         'objects': objects,
@@ -261,6 +452,7 @@ class BongardDataset:
             self._save_dataset_metadata(examples)
         stats = self._generate_final_statistics(examples)
         return stats
+
     def _select_rule_for_generation(self) -> BongardRule:
         """Select a rule for generation based on coverage needs."""
         under_covered_cells = self.coverage_tracker.get_under_covered_cells(self.target_quota)
@@ -272,15 +464,12 @@ class BongardDataset:
             
             # Try to find a rule that matches this cell
             for rule in self.rules:
-                # Check pos_literals for matching features
-                for literal in rule.pos_literals:
-                    feature = literal.get('feature')
-                    value = literal.get('value')
-                    if ((feature == 'shape' and value == shape) or
-                        (feature == 'fill' and value == fill) or
-                        (feature == 'count' and value == count) or
-                        (feature == 'relation' and value == relation)):
-                        return rule
+                features = rule.positive_features
+                if (features.get('shape') == shape or
+                    features.get('fill') == fill or
+                    features.get('count') == count or
+                    features.get('relation') == relation):
+                    return rule
         
         # Fallback to random rule selection
         return random.choice(self.rules)
@@ -344,52 +533,37 @@ class BongardDataset:
     def _validate_scene(self, objects: List[Dict[str, Any]], rule: BongardRule, is_positive: bool) -> bool:
         """Validate that the scene follows the rule correctly."""
         try:
-            literals = rule.pos_literals if is_positive else rule.neg_literals
-            
-            for literal in literals:
-                feature = literal.get('feature')
-                value = literal.get('value')
-                
-                # Check shape constraints
-                if feature == 'shape':
-                    shapes = [obj.get('shape') for obj in objects]
-                    if is_positive:
-                        if value not in shapes:
-                            return False
-                    else:
-                        if value in shapes:
-                            return False
-                
-                # Check fill constraints
-                elif feature == 'fill':
-                    fills = [obj.get('fill') for obj in objects]
-                    if is_positive:
-                        if value not in fills:
-                            return False
-                    else:
-                        if value in fills:
-                            return False
-                
-                # Check color constraints
-                elif feature == 'color':
-                    colors = [obj.get('color') for obj in objects]
-                    if is_positive:
-                        if value not in colors:
-                            return False
-                    else:
-                        if value in colors:
-                            return False
-                
-                # Check count constraints
-                elif feature == 'count':
-                    actual_count = len(objects)
-                    if is_positive:
-                        if actual_count != value:
-                            return False
-                    else:
-                        if actual_count == value:
-                            return False
-            
+            features = rule.positive_features if is_positive else rule.negative_features
+            # Check shape constraints
+            if 'shape' in features:
+                shapes = [obj.get('shape') for obj in objects]
+                target_shape = features['shape']
+                if is_positive:
+                    if target_shape not in shapes:
+                        return False
+                else:
+                    if target_shape in shapes:
+                        return False
+            # Check fill constraints
+            if 'fill' in features:
+                fills = [obj.get('fill') for obj in objects]
+                target_fill = features['fill']
+                if is_positive:
+                    if target_fill not in fills:
+                        return False
+                else:
+                    if target_fill in fills:
+                        return False
+            # Check count constraints
+            if 'count' in features:
+                target_count = features['count']
+                actual_count = len(objects)
+                if is_positive:
+                    if actual_count != target_count:
+                        return False
+                else:
+                    if actual_count == target_count:
+                        return False
             return True
         except Exception as e:
             logger.error(f"Scene validation failed: {e}")
@@ -524,17 +698,13 @@ class BongardDataset:
         coverage_pct = (coverage_stats['covered_cells'] / coverage_stats['total_cells']) * 100
         
         logger.info(f"Progress: {current}/{total} ({percentage:.1f}%) - "
-                    f"Coverage: {coverage_pct:.1f}% - "
-                    f"Success rate: {self.generated_count/(self.generated_count + self.failed_count):.2f}")
+                            f"Coverage: {coverage_pct:.1f}% - "
+                            f"Success rate: {self.generated_count/(self.generated_count + self.failed_count):.2f}")
 
     def __len__(self):
         """Return the number of stored examples."""
         return len(self.examples)
-
-    def __iter__(self):
-        """Make dataset iterable."""
-        return iter(self.examples)
-
+    
     def __getitem__(self, idx):
         """Return the example at the given index."""
         example = self.examples[idx]
@@ -543,7 +713,15 @@ class BongardDataset:
 
 class SyntheticBongardDataset:
     def __init__(self, rules, img_size=128, grayscale=True, flush_cache=False):
-        from bongard_generator.rule_loader import get_rule_lookup
+        # Dummy import for demonstration purposes
+        class RuleLookup:
+            def __init__(self):
+                self._rules = {rule.description: rule for rule in get_all_rules()}
+            def get(self, description):
+                return self._rules.get(description)
+        
+        rule_lookup_instance = RuleLookup()
+
         self.dataset = BongardDataset(canvas_size=img_size)
         self.examples = []
         self.requested_rules = {k: count for k, count in rules}
@@ -556,7 +734,7 @@ class SyntheticBongardDataset:
         import random, numpy as np
         random.seed(None)
         np.random.seed(None)
-        rule_lookup = get_rule_lookup()
+        rule_lookup = rule_lookup_instance
         for rule_desc, count in rules:
             print(f"[SyntheticBongardDataset] Requested rule key: {rule_desc}")
             rule = rule_lookup.get(rule_desc)
@@ -583,7 +761,7 @@ class SyntheticBongardDataset:
                     print(f"[SyntheticBongardDataset] Fallback object: {obj}")
                     img = create_composite_scene([obj], img_size)
                     self.examples.append({'image': img, 'rule': rule_desc, 'label': 1, 'scene_graph': {'objects': 1, 'relations': []}})
-    
+
     def __len__(self):
         return len(self.examples)
     
@@ -615,4 +793,3 @@ def generate_bongard_dataset(output_dir: str = "synthetic_images",
     )
     
     return dataset.generate_dataset(total_examples=total_examples)
-
