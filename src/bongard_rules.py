@@ -372,17 +372,19 @@ class BongardRule:
 # These rules are defined directly with their positive/negative literals.
 # Their program_ast is intentionally left empty as they are "atomic" canonical rules.
 CANONICAL_RULES_STRINGS = [
-  # Shapes
+  # Shapes (4)
   "SHAPE(CIRCLE)", "SHAPE(SQUARE)", "SHAPE(TRIANGLE)", "SHAPE(STAR)",
-  # Fills
+  # Colors (4)
+  "COLOR(RED)", "COLOR(GREEN)", "COLOR(BLUE)", "COLOR(BLACK)",
+  # Fills (4)
   "FILL(SOLID)", "FILL(HOLLOW)", "FILL(STRIPED)", "FILL(DOTTED)",
-  # Counts
+  # Counts (4)
   "COUNT(EQ,1)", "COUNT(EQ,2)", "COUNT(EQ,3)", "COUNT(EQ,4)",
-  # Relations
+  # Relations (4)
   "LEFT_OF", "RIGHT_OF", "ABOVE", "BELOW",
-  # Shape properties
+  # Shape properties (2)
   "CONVEX", "CONCAVE",
-  # Negation
+  # Negation (1)
   "NO_INTERSECTIONS",
 ]
 
@@ -409,6 +411,11 @@ def load_canonical_rules() -> List[BongardRule]:
             rule_name = f"fill_{fill_type}"
             pos_literals.append({"feature": "fill", "value": fill_type})
             rule_description = f"All objects have {fill_type} fill."
+        elif rule_str.startswith("COLOR("):
+            color_type = rule_str.split("(")[1][:-1].lower()
+            rule_name = f"color_{color_type}"
+            pos_literals.append({"feature": "color", "value": color_type})
+            rule_description = f"All objects are {color_type}."
         elif rule_str.startswith("COUNT(EQ,"):
             try:
                 count_value = int(rule_str.split(',')[1][:-1])
@@ -454,8 +461,8 @@ def load_canonical_rules() -> List[BongardRule]:
 ALL_BONGARD_RULES = load_canonical_rules()
 
 # Quick test to ensure the correct number of rules are loaded
-if len(ALL_BONGARD_RULES) != 19: # 4 shapes + 4 fills + 4 counts + 4 relations + 2 properties + 1 negation = 19
-    logger.error(f"Expected 19 canonical rules, but loaded {len(ALL_BONGARD_RULES)}.")
+if len(ALL_BONGARD_RULES) != 23: # 4 shapes + 4 colors + 4 fills + 4 counts + 4 relations + 2 properties + 1 negation = 23
+    logger.error(f"Expected 23 canonical rules, but loaded {len(ALL_BONGARD_RULES)}.")
 else:
     logger.info(f"Loaded {len(ALL_BONGARD_RULES)} canonical Bongard rules successfully.")
 

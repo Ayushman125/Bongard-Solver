@@ -145,8 +145,8 @@ class BongardSampler:
         problem = {
             'rule': {
                 'description': rule.description,
-                'positive_features': rule.positive_features,
-                'negative_features': rule.negative_features
+                'positive_features': rule.pos_literals,
+                'negative_features': rule.neg_literals
             },
             'positive_scenes': positive_scenes,
             'negative_scenes': negative_scenes,
@@ -192,10 +192,6 @@ class BongardSampler:
                 # Only pass the current rule for mini-dataset
                 print(f">> sampling rule key: {getattr(rule, 'name', None)}")
                 ds = BongardDataset(
-                    output_dir="synthetic_images",
-                    canvas_size=128,
-                    min_obj_size=20,
-                    max_obj_size=60,
                     target_quota=1,  # Generate exactly 1 example for this rule
                     rule_list=[rule.name]
                 )
@@ -237,11 +233,7 @@ class BongardSampler:
                 logger.error("Genetic generator failed to produce a scene")
                 return None
         ds = BongardDataset(
-            output_dir="synthetic_images",
-            canvas_size=128,
-            min_obj_size=20,
-            max_obj_size=60,
-            target_quota=50,
+            target_quota=1,
             rule_list=[rule.name]
         )
         # Find the rule in ds.rules matching rule.name
@@ -335,7 +327,7 @@ class BongardSampler:
                            rule: BongardRule,
                            is_positive: bool) -> List[Dict[str, Any]]:
         """Apply rule-specific features to objects."""
-        features = rule.positive_features if is_positive else rule.negative_features
+        features = rule.pos_literals if is_positive else rule.neg_literals
         
         for obj in objects:
             # Apply shape constraints
