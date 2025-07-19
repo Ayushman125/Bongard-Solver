@@ -46,8 +46,22 @@ class GeneticSceneGenerator:
         # Assume genome has 'refined_image' (PIL Image) and 'rule_idx'
         img_refined = genome.refined_image  # PIL image, B/W
         rule_idx = genome.rule_idx
+        # Convert image to tensor and move to correct device
+        if isinstance(img_refined, Image.Image):
+            image = np.array(img_refined.convert('L'))
+        else:
+            image = np.array(img_refined)
+        if image.dtype == np.uint8:
+            image = image.astype(np.float32) / 255.0
+        tensor = torch.FloatTensor(image).unsqueeze(0).unsqueeze(0).to(self.device)
+        # Sanity check: print device info
+        print("Input device:", tensor.device)
+        print("Model device:", next(self.tester.parameters()).device)
         # 1) CNN semantic confidence
-        conf = self.tester.predict_confidence(np.array(img_refined), rule_idx)
+        with torch.no_grad():
+            logits = self.tester.forward(tensor)
+            probabilities = torch.nn.functional.softmax(logits, dim=1)
+            conf = probabilities[0, rule_idx].item()
         # 2) Diversity score (placeholder, implement min_cosine as needed)
         div = 1.0  # TODO: Replace with actual diversity calculation
         # 3) Final fitness

@@ -192,7 +192,10 @@ class BongardSampler:
                 examples_per_rule = 1  # You can adjust this as needed
                 rules_list = [(r.description, examples_per_rule) for r in self.rules]
                 ds = SyntheticBongardDataset(rules=rules_list, grayscale=True, flush_cache=False)
-                img, final_masks = ds._generate_scene_image_and_masks(objs)
+                # Use the dataset's public API to get the rendered scene
+                sample = ds[0]  # Only one example in this tiny dataset
+                img = sample['image']
+                final_masks = sample.get('masks', [])
                 # CNN scoring
                 rule_idx = getattr(rule_obj, 'rule_idx', 0) if hasattr(rule_obj, 'rule_idx') else 0
                 cnn_score = None
