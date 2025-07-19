@@ -28,6 +28,14 @@ class SamplerConfig:
     use_advanced_drawing: bool = True
     enable_caching: bool = True
     max_generation_attempts: int = 10
+    # Additional parameters for backward compatibility
+    total: int = 1000
+    hybrid_split: dict = None
+    
+    def __post_init__(self):
+        """Initialize default values after construction."""
+        if self.hybrid_split is None:
+            self.hybrid_split = {'cp': 0.7, 'ga': 0.3}
 
 # Try to import from the main config, fall back to defaults
 try:
@@ -105,27 +113,61 @@ def get_config() -> Dict[str, Any]:
     """Get the current configuration."""
     return CONFIG
 
-def get_sampler_config(**kwargs) -> Dict[str, Any]:
-    """Create a sampler config dict with optional overrides."""
+def get_sampler_config(**kwargs) -> SamplerConfig:
+    """Create a SamplerConfig with optional overrides."""
     # Extract relevant config from CONFIG
     synth_cfg = CONFIG['data'].get('synthetic_data_config', {})
     
     defaults = {
-        'data': {
-            'image_size': CONFIG['data']['image_size'],
-            'total': kwargs.get('total', 1000),
-            'hybrid_split': kwargs.get('hybrid_split', {'cp': 0.7, 'ga': 0.3}),
-            'synthetic_data_config': {
-                'img_size': kwargs.get('img_size', CONFIG['data']['image_size'][0]),
-                'min_obj_size': synth_cfg.get('object_size_range', [20, 80])[0],
-                'max_obj_size': synth_cfg.get('object_size_range', [20, 80])[1],
-                'max_objs': kwargs.get('max_objs', synth_cfg.get('max_objects_per_image', 4)),
-                'cp_time_limit': synth_cfg.get('cp_time_limit', 60.0),
-                'batch_size': synth_cfg.get('sampler_batch_size', 100),
-                'generator_mode': kwargs.get('generator_mode', synth_cfg.get('generator_mode', 'cp_sat')),
-                'default_fill_type': synth_cfg.get('default_fill_type', 'solid')
-            }
-        }
+        'img_size': CONFIG['data']['image_size'][0],
+        'min_obj_size': synth_cfg.get('object_size_range', [20, 80])[0],
+        'max_obj_size': synth_cfg.get('object_size_range', [20, 80])[1],
+        'max_objs': synth_cfg.get('max_objects_per_image', 4),
+        'cp_time_limit': synth_cfg.get('cp_time_limit', 60.0),
+        'batch_size': synth_cfg.get('sampler_batch_size', 100),
+        'generator_mode': synth_cfg.get('generator_mode', 'cp_sat'),
+        'default_fill_type': synth_cfg.get('default_fill_type', 'solid'),
+        'total': kwargs.get('total', 1000),
+        'hybrid_split': kwargs.get('hybrid_split', {'cp': 0.7, 'ga': 0.3})
     }
     
-    return defaults
+    # Override with any passed kwargs
+    defaults.update(kwargs)
+    
+    # Create SamplerConfig
+    config = SamplerConfig(**defaults)
+    
+    # Add backward compatibility for dict-style access
+    # Some legacy code expects config['data']['hybrid_split']
+    if hasattr(config, '__getitem__'):
+        # Already supports dict access
+        pass
+    else:
+        # Add dict-style access support
+        class BackwardCompatibleConfig(SamplerConfig):
+            def __getitem__(self, key):
+                if key == 'data':
+                    return {
+                        'hybrid_split': self.hybrid_split,
+                        'total': self.total,
+                        'image_size': [self.img_size, self.img_size],
+                        'synthetic_data_config': {
+                            'img_size': self.img_size,
+                            'min_obj_size': self.min_obj_size,
+                            'max_obj_size': self.max_obj_size,
+                            'max_objs': self.max_objs,
+                            'cp_time_limit': self.cp_time_limit,
+                            'batch_size': self.batch_size,
+                            'generator_mode': self.generator_mode,
+                            'default_fill_type': self.default_fill_type
+                        }
+                    }
+                return getattr(self, key)
+            
+            def __setitem__(self, key, value):
+                setattr(self, key, value)
+        
+        # Transfer all attributes from SamplerConfig to BackwardCompatibleConfig
+        config = BackwardCompatibleConfig(**defaults)
+    
+    return config

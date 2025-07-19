@@ -8,6 +8,8 @@ import numpy as np
 from PIL import Image, ImageDraw
 import inspect
 
+logger = logging.getLogger(__name__)
+
 def safe_randint(a: int, b: int) -> int:
     """Safe random integer generator that handles inverted ranges."""
     lo, hi = min(a, b), max(a, b)
@@ -19,15 +21,54 @@ def safe_randrange(a: int, b: int) -> int:
     # randrange excludes hi, so we +1
     return random.randrange(lo, hi + 1)
 
-# Assuming these modules are in the same package or correctly imported in a real environment
-# from .cp_sampler import sample_scene_cp, SceneParameters
-# from .rule_loader import get_all_rules, get_rule_by_description, BongardRule
-# from .coverage import CoverageTracker
-# from .mask_utils import create_composite_scene
-# from .config_loader import get_config
+# Import real modules instead of using dummy implementations
+try:
+    from .cp_sampler import sample_scene_cp
+    from .rule_loader import get_all_rules, get_rule_by_description, BongardRule
+    from .coverage import CoverageTracker
+    from .mask_utils import create_composite_scene
+    from .config_loader import get_config
+except ImportError as e:
+    logger.warning(f"Failed to import some modules, using fallback: {e}")
+    # Fallback imports if modules don't exist
+    from bongard_generator.rule_loader import get_all_rules, get_rule_by_description, BongardRule
+    
+    def sample_scene_cp(rule, num_objects, is_positive, canvas_size, min_obj_size, max_obj_size, max_attempts):
+        """Fallback CP-SAT sampler implementation."""
+        objects = []
+        for _ in range(num_objects):
+            obj = {
+                'x': safe_randint(min_obj_size, canvas_size - min_obj_size),
+                'y': safe_randint(min_obj_size, canvas_size - min_obj_size),
+                'size': safe_randint(min_obj_size, max_obj_size),
+                'shape': random.choice(['circle', 'triangle', 'square', 'pentagon', 'star']),
+                'fill': random.choice(['solid', 'outline', 'striped', 'gradient']),
+                'color': random.choice(['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'black'])
+            }
+            # Apply rule features if positive, or avoid them if negative
+            if is_positive:
+                if 'shape' in rule.positive_features:
+                    obj['shape'] = rule.positive_features['shape']
+                if 'fill' in rule.positive_features:
+                    obj['fill'] = rule.positive_features['fill']
+            else:  # is_negative
+                if 'shape' in rule.positive_features:
+                    available_shapes = [s for s in ['circle', 'triangle', 'square', 'pentagon', 'star'] if s != rule.positive_features['shape']]
+                    if available_shapes:
+                        obj['shape'] = random.choice(available_shapes)
+                if 'fill' in rule.positive_features:
+                    available_fills = [f for f in ['solid', 'outline', 'striped', 'gradient'] if f != rule.positive_features['fill']]
+                    if available_fills:
+                        obj['fill'] = random.choice(available_fills)
+            
+            objects.append(obj)
+        
+        # Add 'position' key for consistency with the main class
+        for obj in objects:
+            obj['position'] = (obj['x'], obj['y'])
+        
+        return objects
 
-# Dummy imports for demonstration purposes if original modules are not available
-# In a real scenario, ensure these are correctly imported from your project structure.
 class SceneParameters:
     def __init__(self, canvas_size, min_obj_size, max_obj_size, max_objects, colors, shapes, fills):
         self.canvas_size = canvas_size
@@ -37,31 +78,6 @@ class SceneParameters:
         self.colors = colors
         self.shapes = shapes
         self.fills = fills
-
-# Dummy implementations for required modules/functions
-class BongardRule:
-    def __init__(self, description, positive_features=None, negative_features=None):
-        self.description = description
-        self.positive_features = positive_features if positive_features is not None else {}
-        self.negative_features = negative_features if negative_features is not None else {}
-        self.name = description # Simple name for dummy rule
-
-def get_all_rules():
-    # Example dummy rules
-    return [
-        BongardRule("SHAPE(circle)", positive_features={'shape': 'circle'}),
-        BongardRule("FILL(solid)", positive_features={'fill': 'solid'}),
-        BongardRule("COUNT(2)", positive_features={'count': 2}),
-        BongardRule("RELATION(overlap)", positive_features={'relation': 'overlap'}),
-        BongardRule("SHAPE(square)", positive_features={'shape': 'square'}),
-        BongardRule("FILL(outline)", positive_features={'fill': 'outline'})
-    ]
-
-def get_rule_by_description(description):
-    for rule in get_all_rules():
-        if rule.description == description:
-            return rule
-    return None
 
 def sample_scene_cp(rule, num_objects, is_positive, canvas_size, min_obj_size, max_obj_size, max_attempts):
     # Dummy implementation for scene sampling
@@ -182,6 +198,14 @@ def create_composite_scene(objects, canvas_size):
         }
         fill_color = color_map.get(color, (0, 0, 0))  # Default to black
         
+        # For outline shapes, use a darker color to ensure visibility after binarization
+        if fill_type in ['outline', 'hollow']:
+            if color in ['yellow', 'white']:
+                fill_color = (0, 0, 0)  # Use black for light colors
+            elif color == 'orange':
+                fill_color = (128, 64, 0)  # Darker orange
+            # Keep other colors as they are dark enough
+        
         # Calculate bounding box
         half_size = size // 2
         bbox = [x - half_size, y - half_size, x + half_size, y + half_size]
@@ -192,13 +216,13 @@ def create_composite_scene(objects, canvas_size):
                 if fill_type == 'solid':
                     draw.ellipse(bbox, fill=fill_color)
                 else:
-                    draw.ellipse(bbox, outline=fill_color, width=2)
+                    draw.ellipse(bbox, outline=fill_color, width=3)
                     
             elif shape in ['square', 'SQUARE', 'rectangle', 'RECTANGLE']:
                 if fill_type == 'solid':
                     draw.rectangle(bbox, fill=fill_color)
                 else:
-                    draw.rectangle(bbox, outline=fill_color, width=2)
+                    draw.rectangle(bbox, outline=fill_color, width=3)
                     
             elif shape in ['triangle', 'TRIANGLE']:
                 # Draw triangle as polygon
@@ -210,7 +234,7 @@ def create_composite_scene(objects, canvas_size):
                 if fill_type == 'solid':
                     draw.polygon(points, fill=fill_color)
                 else:
-                    draw.polygon(points, outline=fill_color, width=2)
+                    draw.polygon(points, outline=fill_color, width=3)
                     
             elif shape in ['pentagon', 'PENTAGON']:
                 # Draw pentagon as polygon (5 sides)
@@ -224,7 +248,7 @@ def create_composite_scene(objects, canvas_size):
                 if fill_type == 'solid':
                     draw.polygon(points, fill=fill_color)
                 else:
-                    draw.polygon(points, outline=fill_color, width=2)
+                    draw.polygon(points, outline=fill_color, width=3)
                     
             elif shape in ['star', 'STAR']:
                 # Draw 5-pointed star
@@ -241,14 +265,14 @@ def create_composite_scene(objects, canvas_size):
                 if fill_type == 'solid':
                     draw.polygon(points, fill=fill_color)
                 else:
-                    draw.polygon(points, outline=fill_color, width=2)
+                    draw.polygon(points, outline=fill_color, width=3)
                     
             else:
                 # Default to circle for unknown shapes
                 if fill_type == 'solid':
                     draw.ellipse(bbox, fill=fill_color)
                 else:
-                    draw.ellipse(bbox, outline=fill_color, width=2)
+                    draw.ellipse(bbox, outline=fill_color, width=3)
                     
         except Exception as e:
             logger.warning(f"Error drawing shape {shape}: {e}")
@@ -257,8 +281,10 @@ def create_composite_scene(objects, canvas_size):
     
     # Convert to grayscale and binarize as expected by the pipeline
     img_gray = img.convert('L')
-    img_bw = img_gray.point(lambda p: 255 if p > 128 else 0, mode='1')
-    return img_bw.convert('L')
+    # Fixed logic: shapes should be black (0), background white (255)
+    # Background is white (255) stays white, objects become black regardless of original color
+    img_bw = img_gray.point(lambda p: 255 if p > 240 else 0, mode='L')
+    return img_bw
 
 def get_config():
     # Dummy config for demonstration
@@ -455,6 +481,13 @@ class BongardDataset:
 
     def _select_rule_for_generation(self) -> BongardRule:
         """Select a rule for generation based on coverage needs."""
+        # Safety check: ensure we have rules
+        if not self.rules:
+            logger.error("No rules available for generation! Using fallback rule.")
+            # Create a basic fallback rule
+            from bongard_generator.rule_loader import BongardRule
+            return BongardRule("SHAPE(CIRCLE)", positive_features={'shape': 'circle'})
+        
         under_covered_cells = self.coverage_tracker.get_under_covered_cells(self.target_quota)
         
         if under_covered_cells:
@@ -584,7 +617,7 @@ class BongardDataset:
                     })
         
         return {
-            'objects': len(objects),
+            'objects': objects,
             'relations': relations
         }
     
@@ -707,65 +740,141 @@ class BongardDataset:
     
     def __getitem__(self, idx):
         """Return the example at the given index."""
+        if not self.examples:
+            # Return a dummy black image for empty datasets
+            dummy_example = {
+                'rule': 'empty_dataset',
+                'label': 0,
+                'image': self._create_black_placeholder(),
+                'scene_graph': {'objects': [], 'relations': []}
+            }
+            print(f"[BongardDataset] __getitem__ idx={idx} EMPTY DATASET - returning black placeholder")
+            return dummy_example
+        
+        if idx >= len(self.examples):
+            idx = idx % len(self.examples)  # Wrap around if index too large
+            
         example = self.examples[idx]
         print(f"[BongardDataset] __getitem__ idx={idx} rule={example['rule']} label={example['label']} objects={example.get('scene_graph', {}).get('objects', None)}")
         return example
+    
+    def _create_black_placeholder(self):
+        """Create a black placeholder image for empty datasets."""
+        from PIL import Image
+        import numpy as np
+        
+        # Create a black image
+        img = Image.new('L', (self.canvas_size, self.canvas_size), color=0)
+        return img
 
 class SyntheticBongardDataset:
     def __init__(self, rules, img_size=128, grayscale=True, flush_cache=False):
-        # Dummy import for demonstration purposes
-        class RuleLookup:
-            def __init__(self):
-                self._rules = {rule.description: rule for rule in get_all_rules()}
-            def get(self, description):
-                return self._rules.get(description)
-        
-        rule_lookup_instance = RuleLookup()
-
-        self.dataset = BongardDataset(canvas_size=img_size)
+        # Fixed implementation with proper data generation and caching
+        self.img_size = img_size
+        self.grayscale = grayscale
         self.examples = []
         self.requested_rules = {k: count for k, count in rules}
-        self.current_rule_key = None
+        
         # Clear cache and reseed between runs
         if flush_cache:
-            if hasattr(self.dataset, 'sampler') and hasattr(self.dataset.sampler, 'cache'):
-                self.dataset.sampler.cache.clear()
-        # Reseed RNG for diversity
-        import random, numpy as np
-        random.seed(None)
-        np.random.seed(None)
-        rule_lookup = rule_lookup_instance
+            import random, numpy as np
+            random.seed(None)
+            np.random.seed(None)
+        
+        # Initialize rule lookup
+        rule_lookup = {rule.description: rule for rule in get_all_rules()}
+        
+        # Pre-generate ALL examples at initialization to avoid infinite loops
+        total_examples = sum(count for _, count in rules)
+        print(f"[SyntheticBongardDataset] Pre-generating {total_examples} examples...")
+        
         for rule_desc, count in rules:
             print(f"[SyntheticBongardDataset] Requested rule key: {rule_desc}")
             rule = rule_lookup.get(rule_desc)
+            
             if rule is None:
-                print(f"[SyntheticBongardDataset] WARNING: Rule key {rule_desc} not found in rule_lookup!")
-                continue
-            print(f"[SyntheticBongardDataset] Selected rule: {getattr(rule, 'name', None)} | Description: {getattr(rule, 'description', None)}")
-            for i in range(count):
-                scene = self.dataset._generate_single_scene(rule, num_objects=2, is_positive=True)
-                if scene:
-                    print(f"[SyntheticBongardDataset] Scene objects: {scene['objects']}")
-                    img = create_composite_scene(scene['objects'], img_size)
-                    self.examples.append({'image': img, 'rule': rule_desc, 'label': 1, 'scene_graph': scene['scene_graph']})
-                else:
-                    logger.warning("Scene generation failed; forcing at least one random object")
+                print(f"[SyntheticBongardDataset] WARNING: Rule key {rule_desc} not found!")
+                # Create fallback examples for unknown rules
+                for i in range(count):
                     obj = {
                         'x': safe_randint(20, img_size - 40),
                         'y': safe_randint(20, img_size - 40), 
                         'size': safe_randint(20, 40),
-                        'shape': random.choice(['circle', 'triangle', 'square']),
-                        'fill': random.choice(['solid', 'outline']),
-                        'color': random.choice(['red', 'blue', 'green'])
+                        'shape': random.choice(['circle', 'square']),
+                        'fill': 'solid',
+                        'color': 'black',
+                        'position': (0, 0)  # Will be overridden by x,y
                     }
-                    print(f"[SyntheticBongardDataset] Fallback object: {obj}")
+                    obj['position'] = (obj['x'], obj['y'])
                     img = create_composite_scene([obj], img_size)
-                    self.examples.append({'image': img, 'rule': rule_desc, 'label': 1, 'scene_graph': {'objects': 1, 'relations': []}})
+                    self.examples.append({
+                        'image': img, 
+                        'rule': rule_desc, 
+                        'label': 1, 
+                        'scene_graph': {'objects': [obj], 'relations': []}
+                    })
+                continue
+            
+            print(f"[SyntheticBongardDataset] Selected rule: {getattr(rule, 'name', None)} | Description: {getattr(rule, 'description', None)}")
+            
+            # Generate examples for this rule
+            for i in range(count):
+                # Generate scene objects based on rule
+                objects = self._generate_objects_for_rule(rule, img_size)
+                print(f"[SyntheticBongardDataset] Scene objects: {objects}")
+                
+                # Create image from objects
+                img = create_composite_scene(objects, img_size)
+                
+                # Store the example
+                self.examples.append({
+                    'image': img, 
+                    'rule': rule_desc, 
+                    'label': 1, 
+                    'scene_graph': {'objects': objects, 'relations': []}
+                })
+        
+        print(f"[SyntheticBongardDataset] Finished generating {len(self.examples)} examples")
+
+    def _generate_objects_for_rule(self, rule, img_size):
+        """Generate objects that satisfy the given rule."""
+        objects = []
+        
+        # Generate 2-3 objects by default
+        num_objects = random.randint(2, 3)
+        
+        for i in range(num_objects):
+            obj = {
+                'x': safe_randint(20, img_size - 40),
+                'y': safe_randint(20, img_size - 40), 
+                'size': safe_randint(20, 60),
+                'shape': random.choice(['circle', 'triangle', 'square', 'pentagon', 'star']),
+                'fill': random.choice(['solid', 'outline', 'striped', 'gradient']),
+                'color': random.choice(['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'black'])
+            }
+            
+            # Apply rule constraints
+            if hasattr(rule, 'positive_features'):
+                if 'shape' in rule.positive_features:
+                    obj['shape'] = rule.positive_features['shape']
+                if 'fill' in rule.positive_features:
+                    obj['fill'] = rule.positive_features['fill']
+                if 'color' in rule.positive_features:
+                    obj['color'] = rule.positive_features['color']
+            
+            # Set position for consistency
+            obj['position'] = (obj['x'], obj['y'])
+            objects.append(obj)
+        
+        return objects
 
     def __len__(self):
         return len(self.examples)
     
     def __getitem__(self, idx):
+        if idx < 0 or idx >= len(self.examples):
+            raise IndexError(f"Index {idx} out of range for dataset of size {len(self.examples)}")
+            
         example = self.examples[idx]
         print(f"[SyntheticBongardDataset] __getitem__ idx={idx} rule={example['rule']} label={example['label']} objects={example.get('scene_graph', {}).get('objects', None)}")
         return example

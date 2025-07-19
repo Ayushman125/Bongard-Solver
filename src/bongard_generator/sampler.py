@@ -447,7 +447,8 @@ class BongardSampler:
             pil_img = binary_noise(pil_img, prob=0.01)
 
             # Binarize to pure black-and-white
-            pil_img = pil_img.point(lambda p: 255 if p > 128 else 0, '1')
+            # Fix binarization: shapes should be black (0), background white (255)
+            pil_img = pil_img.point(lambda p: 0 if p < 128 else 255, 'L')
 
             # Convert back to numpy array (0 or 255)
             image = np.array(pil_img, dtype=np.uint8)
@@ -800,7 +801,8 @@ class BongardSampler:
             
             # Convert to grayscale and binarize
             pil_img = canvas.get_image().convert('L')
-            pil_img = pil_img.point(lambda p: 255 if p > 128 else 0, '1')
+            # Fix binarization: shapes should be black (0), background white (255)
+            pil_img = pil_img.point(lambda p: 0 if p < 128 else 255, 'L')
             image = np.array(pil_img, dtype=np.uint8)
             
             return image
