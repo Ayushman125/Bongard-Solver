@@ -188,7 +188,10 @@ class BongardSampler:
                 objs, masks = result
                 # Use SyntheticBongardDataset for final rendering
                 from bongard_generator.dataset import SyntheticBongardDataset
-                ds = SyntheticBongardDataset(grayscale=True, flush_cache=False)
+                # Prepare rules as list of (description, count) pairs
+                examples_per_rule = 1  # You can adjust this as needed
+                rules_list = [(r.description, examples_per_rule) for r in self.rules]
+                ds = SyntheticBongardDataset(rules=rules_list, grayscale=True, flush_cache=False)
                 img, final_masks = ds._generate_scene_image_and_masks(objs)
                 # CNN scoring
                 rule_idx = getattr(rule_obj, 'rule_idx', 0) if hasattr(rule_obj, 'rule_idx') else 0

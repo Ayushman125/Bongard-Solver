@@ -10,6 +10,7 @@ import numpy as np
 from typing import Dict, List, Any, Tuple
 from PIL import Image
 import logging
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -170,8 +171,11 @@ class MockTesterCNN:
 def create_tester_model(model_path: str = None, num_rules: int = 16) -> TesterCNN:
     """Create and optionally load a tester model."""
     model = TesterCNN(num_rules=num_rules)
-    # Use device from config if available
-    device = getattr(model, 'device', 'cpu')
+    # Determine device from torch or config
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    # If model has a .device attribute, use it
+    if hasattr(model, 'device'):
+        device = getattr(model, 'device', device)
     if model_path and Path(model_path).exists():
         try:
             model.load_state_dict(torch.load(model_path, map_location=device))
@@ -182,4 +186,6 @@ def create_tester_model(model_path: str = None, num_rules: int = 16) -> TesterCN
     else:
         logger.info("Using randomly initialized tester model")
     model.eval()
+    # Move model to correct device
+    model.to(device)
     return model

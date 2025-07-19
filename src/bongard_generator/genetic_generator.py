@@ -15,20 +15,28 @@ class GeneticSceneGenerator:
             from genetic_config import GENETIC_CONFIG
             config = GENETIC_CONFIG
         self.config = config
-        self.population_size = int(config.get('population_size', 50))
-        self.num_generations = int(config.get('num_generations', 30))
-        self.mutation_rate = float(config.get('mutation_rate', 0.2))
-        self.crossover_rate = float(config.get('crossover_rate', 0.5))
-        self.diversity_weight = float(config.get('diversity_weight', 0.5))
-        self.tester_weight = float(config.get('tester_weight', 0.5)) if 'tester_weight' in config else 0.5
-        self.coverage_weight = float(config.get('coverage_weight', 1.0))
-        self.elitism = int(config.get('elitism', 2))
-        self.max_attempts = int(config.get('max_attempts', 100))
-        self.cache_enabled = bool(config.get('cache_enabled', True))
-        self.seed = int(config.get('seed', 42))
-        self.tester_checkpoint = config.get('tester_checkpoint', None)
-        self.num_rules = int(config.get('num_rules', 23))
-        self.device = config.get('device', 'cpu')
+        # Prefer config.data.genetic if available
+        gd = getattr(config, 'data', None)
+        if gd and hasattr(gd, 'genetic'):
+            gd = gd.genetic
+        else:
+            gd = config
+        self.population_size = getattr(config, 'population_size', getattr(gd, 'population_size', 50))
+        self.generations     = getattr(config, 'generations', getattr(gd, 'generations', 20))
+        self.alpha           = getattr(config, 'alpha', getattr(gd, 'alpha', 0.7))
+        self.beta            = getattr(config, 'beta', getattr(gd, 'beta', 0.3))
+        self.tester_checkpoint = getattr(config, 'tester_checkpoint', getattr(gd, 'tester_checkpoint', None))
+        self.num_rules = getattr(config, 'num_rules', getattr(gd, 'num_rules', 23))
+        self.device = getattr(config, 'device', getattr(gd, 'device', 'cpu'))
+        self.mutation_rate = getattr(config, 'mutation_rate', getattr(gd, 'mutation_rate', 0.2))
+        self.crossover_rate = getattr(config, 'crossover_rate', getattr(gd, 'crossover_rate', 0.5))
+        self.diversity_weight = getattr(config, 'diversity_weight', getattr(gd, 'diversity_weight', 0.5))
+        self.tester_weight = getattr(config, 'tester_weight', getattr(gd, 'tester_weight', 0.5))
+        self.coverage_weight = getattr(config, 'coverage_weight', getattr(gd, 'coverage_weight', 1.0))
+        self.elitism = getattr(config, 'elitism', getattr(gd, 'elitism', 2))
+        self.max_attempts = getattr(config, 'max_attempts', getattr(gd, 'max_attempts', 100))
+        self.cache_enabled = getattr(config, 'cache_enabled', getattr(gd, 'cache_enabled', True))
+        self.seed = getattr(config, 'seed', getattr(gd, 'seed', 42))
         random.seed(self.seed)
         np.random.seed(self.seed)
         self.tester = create_tester_model(self.tester_checkpoint, num_rules=self.num_rules)
