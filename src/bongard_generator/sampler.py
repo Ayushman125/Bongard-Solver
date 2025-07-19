@@ -188,10 +188,8 @@ class BongardSampler:
                 objs, masks = result
                 # Use SyntheticBongardDataset for final rendering
                 from bongard_generator.dataset import SyntheticBongardDataset
-                # Prepare rules as list of (description, count) pairs
-                examples_per_rule = 1  # You can adjust this as needed
-                rules_list = [(r.description, examples_per_rule) for r in self.rules]
-                ds = SyntheticBongardDataset(rules=rules_list, grayscale=True, flush_cache=False)
+                # Only pass the current rule for mini-dataset
+                ds = SyntheticBongardDataset(rules=[(rule.name, 1)], grayscale=True, flush_cache=False)
                 # Use the dataset's public API to get the rendered scene
                 sample = ds[0]  # Only one example in this tiny dataset
                 img = sample['image']
