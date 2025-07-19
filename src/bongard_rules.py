@@ -398,35 +398,40 @@ def load_canonical_rules() -> List[BongardRule]:
     rules = []
     for rule_str in CANONICAL_RULES_STRINGS:
         pos_literals, neg_literals = [], []
-        rule_name = rule_str.lower()
-        rule_description = f"Canonical rule: {rule_str}"
-
+        # Map rule_str to canonical dataset key
         if rule_str.startswith("SHAPE("):
             shape_type = rule_str.split("(")[1][:-1].lower()
+            rule_name = f"shape_{shape_type}"
             pos_literals.append({"feature": "shape", "value": shape_type})
             rule_description = f"All objects are {shape_type}s."
         elif rule_str.startswith("FILL("):
             fill_type = rule_str.split("(")[1][:-1].lower()
+            rule_name = f"fill_{fill_type}"
             pos_literals.append({"feature": "fill", "value": fill_type})
             rule_description = f"All objects have {fill_type} fill."
         elif rule_str.startswith("COUNT(EQ,"):
             try:
                 count_value = int(rule_str.split(',')[1][:-1])
+                rule_name = f"count_eq_{count_value}"
                 pos_literals.append({"feature": "count", "value": count_value, "count_op": "EQ"})
                 rule_description = f"There are exactly {count_value} objects in the image."
             except ValueError:
                 logger.error(f"Invalid count value in rule string: {rule_str}")
                 continue
         elif rule_str in {"LEFT_OF", "RIGHT_OF", "ABOVE", "BELOW"}:
+            rule_name = rule_str.lower()
             pos_literals.append({"feature": "relation", "value": rule_str.lower()})
             rule_description = f"There is at least one object {rule_str.lower().replace('_', ' ')} another."
         elif rule_str == "CONVEX":
+            rule_name = "property_convex"
             pos_literals.append({"feature": "property", "value": "convex"})
             rule_description = "All shapes are convex."
         elif rule_str == "CONCAVE":
+            rule_name = "property_concave"
             pos_literals.append({"feature": "property", "value": "concave"})
             rule_description = "All shapes are concave."
         elif rule_str == "NO_INTERSECTIONS":
+            rule_name = "no_intersections"
             neg_literals.append({"feature": "relation", "value": "intersects"})
             rule_description = "No two objects intersect."
         else:
