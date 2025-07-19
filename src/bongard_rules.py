@@ -25,7 +25,6 @@ class RuleAtom:
 
 # Define common attribute atoms (predicates)
 ATTR_SHAPE = RuleAtom("shape", 2, ["object", "shape_type"])  # e.g., shape(obj1, circle)
-# ATTR_COLOR removed for black and white
 ATTR_FILL = RuleAtom("fill", 2, ["object", "fill_type"])
 ATTR_SIZE = RuleAtom("size", 2, ["object", "size_type"])
 ATTR_ORIENTATION = RuleAtom("orientation", 2, ["object", "orientation_type"])
@@ -54,14 +53,6 @@ SHAPE_TRIANGLE = RuleAtom("triangle", 0, is_value=True)
 SHAPE_STAR = RuleAtom("star", 0, is_value=True)
 SHAPE_PENTAGON = RuleAtom("pentagon", 0, is_value=True)
 SHAPE_HEXAGON = RuleAtom("hexagon", 0, is_value=True)
-
-# Color atoms removed for black and white
-# COLOR_RED = RuleAtom("red", 0, is_value=True)
-# COLOR_BLUE = RuleAtom("blue", 0, is_value=True)
-# COLOR_GREEN = RuleAtom("green", 0, is_value=True)
-# COLOR_BLACK = RuleAtom("black", 0, is_value=True) # Black/White are fills/strokes, not colors in this context
-# COLOR_WHITE = RuleAtom("white", 0, is_value=True) # Black/White are fills/strokes, not colors in this context
-# COLOR_YELLOW = RuleAtom("yellow", 0, is_value=True)
 
 FILL_SOLID = RuleAtom("solid", 0, is_value=True)
 FILL_HOLLOW = RuleAtom("hollow", 0, is_value=True)
@@ -129,7 +120,7 @@ BOOL_FALSE = RuleAtom("false", 0, is_value=True)
 
 ALL_RULE_ATOMS = {
     # Predicates
-    "shape": ATTR_SHAPE, "fill": ATTR_FILL, # Removed "color"
+    "shape": ATTR_SHAPE, "fill": ATTR_FILL,
     "size": ATTR_SIZE, "orientation": ATTR_ORIENTATION, "texture": ATTR_TEXTURE,
     "left_of": REL_LEFT_OF, "right_of": REL_RIGHT_OF, "above": REL_ABOVE,
     "below": REL_BELOW, "is_close_to": REL_IS_CLOSE_TO,
@@ -145,7 +136,6 @@ ALL_RULE_ATOMS = {
     # Values/Constants
     "circle": SHAPE_CIRCLE, "square": SHAPE_SQUARE, "triangle": SHAPE_TRIANGLE, "star": SHAPE_STAR,
     "pentagon": SHAPE_PENTAGON, "hexagon": SHAPE_HEXAGON,
-    # Color values removed
     "solid": FILL_SOLID, "hollow": FILL_HOLLOW, "striped": FILL_STRIPED, "dotted": FILL_DOTTED, "gradient": FILL_GRADIENT,
     "checker": FILL_CHECKER,
     "small": SIZE_SMALL, "medium": SIZE_MEDIUM, "large": SIZE_LARGE,
@@ -219,7 +209,6 @@ def extract_literals_from_ast(ast_node: Any, pos_feats: List[Dict[str, Any]], ne
             return
 
     # Extract concrete feature-value pairs
-    # Removed "color" from this list
     if op in ["shape", "fill", "size", "orientation", "texture",
               "left_of", "right_of", "above", "below", "is_close_to",
               "aligned_horizontally", "aligned_vertically", "contains", "intersects",
@@ -406,14 +395,6 @@ add_rule_if_new(BongardRule(
     logical_facts=["forall(O, shape(O, circle))"]
 ))
 
-# Rule 2: All objects are the same color (e.g., all red) - REMOVED
-# add_rule_if_new(BongardRule(
-#     name="all_same_color_red",
-#     description="All objects in the image are red.",
-#     program_ast=[{"op": "FORALL", "args": [{"op": "object_variable", "value": "O"}, {"op": "color", "args": [{"op": "object_variable", "value": "O"}, {"op": "red"}]}]}],
-#     logical_facts=["forall(O, color(O, red))"]
-# ))
-
 # Rule 3: There exists at least one large square
 add_rule_if_new(BongardRule(
     name="exists_large_square",
@@ -441,19 +422,6 @@ add_rule_if_new(BongardRule(
     ],
     logical_facts=["not(exists(O, (shape(O, triangle) and fill(O, hollow))))"]
 ))
-
-# Rule 5: All objects are either red or blue - REMOVED
-# add_rule_if_new(BongardRule(
-#     name="all_red_or_blue",
-#     description="All objects in the image are either red or blue.",
-#     program_ast=[
-#         {"op": "FORALL", "args": [{"op": "object_variable", "value": "O"}, {"op": "OR", "args": [
-#             {"op": "color", "args": [{"op": "object_variable", "value": "O"}, {"op": "red"}]},
-#             {"op": "color", "args": [{"op": "object_variable", "value": "O"}, {"op": "blue"}]}
-#         ]}]}
-#     ],
-#     logical_facts=["forall(O, (color(O, red) or color(O, blue)))"]
-# ))
 
 # NEW Rule: all_pentagons (from document)
 add_rule_if_new(BongardRule(
@@ -749,16 +717,10 @@ add_rule_if_new(BongardRule(
     name="exactly_one_right_neighbor",
     description="All objects are arranged such that each has exactly one object to its right.",
     program_ast=[
-        {"op": "FORALL", "args": [{"op": "object_variable", "value": "O1"}, {"op": "AND", "args": [
-            {"op": "EQ", "args": [
-                {"op": "COUNT", "args": [{"op": "object_variable", "value": "O2"}, {"op": "right_of", "args": [{"op": "object_variable", "value": "O1"}, {"op": "object_variable", "value": "O2"}]}]},
-                {"op": "INT_1"}
-            ]},
-            {"op": "NOT", "args": [{"op": "EXISTS", "args": [{"op": "object_variable", "value": "O2"}, {"op": "AND", "args": [
-                {"op": "right_of", "args": [{"op": "object_variable", "value": "O1"}, {"op": "object_variable", "value": "O2"}]},
-                {"op": "NOT", "args": [{"op": "EQ", "args": [{"op": "COUNT", "args": [{"op": "object_variable", "value": "O2"}, {"op": "right_of", "args": [{"op": "object_variable", "value": "O1"}, {"op": "object_variable", "value": "O2"}]}]}, {"op": "INT_1"}]}]}
-            ]}]}]}
-        ]}
+        {"op": "FORALL", "args": [{"op": "object_variable", "value": "O1"}, {"op": "EQ", "args": [
+            {"op": "COUNT", "args": [{"op": "object_variable", "value": "O2"}, {"op": "right_of", "args": [{"op": "object_variable", "value": "O1"}, {"op": "object_variable", "value": "O2"}]}]},
+            {"op": "INT_1"}
+        ]}]}
     ],
     logical_facts=["forall(O1, (count(O2, right_of(O1, O2), N), N = 1))"]
 ))
@@ -804,19 +766,6 @@ add_rule_if_new(BongardRule(
     ],
     logical_facts=["count(O, shape(O, square), N_S), count(O, shape(O, circle), N_C), N_S > N_C"]
 ))
-
-# Rule 12: At least two red objects - REMOVED
-# add_rule_if_new(BongardRule(
-#     name="at_least_two_red",
-#     description="There are at least two red objects in the image.",
-#     program_ast=[
-#         {"op": "GT", "args": [
-#             {"op": "COUNT", "args": [{"op": "object_variable", "value": "O"}, {"op": "color", "args": [{"op": "object_variable", "value": "O"}, {"op": "red"}]}]},
-#             {"op": "INT_1"} # N > 1 means N >= 2
-#         ]}
-#     ],
-#     logical_facts=["count(O, color(O, red), N), N >= 2"]
-# ))
 
 # NEW Rule: exactly_two_large_objects (from document)
 add_rule_if_new(BongardRule(
@@ -958,21 +907,6 @@ add_rule_if_new(BongardRule(
     logical_facts=["not(exists(S_val, forall(O, size(O, S_val))))"]
 ))
 
-# Rule 15: No blue circles - REMOVED
-# add_rule_if_new(BongardRule(
-#     name="no_blue_circles",
-#     description="There are no blue circles in the image.",
-#     program_ast=[
-#         {"op": "NOT", "args": [
-#             {"op": "EXISTS", "args": [{"op": "object_variable", "value": "O"}, {"op": "AND", "args": [
-#                 {"op": "shape", "args": [{"op": "object_variable", "value": "O"}, {"op": "circle"}]},
-#                 {"op": "color", "args": [{"op": "object_variable", "value": "O"}, {"op": "blue"}]}
-#             ]}]}
-#         ]}
-#     ],
-#     logical_facts=["not(exists(O, (shape(O, circle) and color(O, blue))))"]
-# ))
-
 # NEW Rule: no_triangles (from document)
 add_rule_if_new(BongardRule(
     name="no_triangles",
@@ -1033,25 +967,6 @@ add_rule_if_new(BongardRule(
 
 # --- Compositional Rules ---
 
-# Rule 16: A red circle and a blue square - REMOVED
-# add_rule_if_new(BongardRule(
-#     name="red_circle_and_blue_square",
-#     description="There is a red circle AND a blue square in the image.",
-#     program_ast=[
-#         {"op": "AND", "args": [
-#             {"op": "EXISTS", "args": [{"op": "object_variable", "value": "O1"}, {"op": "AND", "args": [
-#                 {"op": "shape", "args": [{"op": "object_variable", "value": "O1"}, {"op": "circle"}]},
-#                 {"op": "color", "args": [{"op": "object_variable", "value": "O1"}, {"op": "red"}]}
-#             ]}]},
-#             {"op": "EXISTS", "args": [{"op": "object_variable", "value": "O2"}, {"op": "AND", "args": [
-#                 {"op": "shape", "args": [{"op": "object_variable", "value": "O2"}, {"op": "square"}]},
-#                 {"op": "color", "args": [{"op": "object_variable", "value": "O2"}, {"op": "blue"}]}
-#             ]}]}
-#         ]}
-#     ],
-#     logical_facts=["exists(O1, (shape(O1, circle) and color(O1, red))), exists(O2, (shape(O2, square) and color(O2, blue)))"]
-# ))
-
 # Rule 17: All circles are small
 add_rule_if_new(BongardRule(
     name="all_circles_are_small",
@@ -1090,32 +1005,6 @@ add_rule_if_new(BongardRule(
     ],
     logical_facts=["forall(O, (shape(O, square) or shape(O, triangle)))"]
 ))
-
-# Rule 20: There is a small red circle - REMOVED
-# add_rule_if_new(BongardRule(
-#     name="exists_small_red_circle",
-#     description="There is at least one small red circle in the image.",
-#     program_ast=[
-#         {"op": "EXISTS", "args": [{"op": "object_variable", "value": "O"}, {"op": "AND", "args": [
-#             {"op": "shape", "args": [{"op": "object_variable", "value": "O"}, {"op": "circle"}]},
-#             {"op": "color", "args": [{"op": "object_variable", "value": "O"}, {"op": "red"}]},
-#             {"op": "size", "args": [{"op": "object_variable", "value": "O"}, {"op": "small"}]}
-#         ]}]}
-#     ],
-#     logical_facts=["exists(O, (shape(O, circle) and color(O, red) and size(O, small)))"]
-# ))
-
-# Rule 21: No objects are green - REMOVED
-# add_rule_if_new(BongardRule(
-#     name="no_green_objects",
-#     description="No object in the image is green.",
-#     program_ast=[
-#         {"op": "NOT", "args": [
-#             {"op": "EXISTS", "args": [{"op": "object_variable", "value": "O"}, {"op": "color", "args": [{"op": "object_variable", "value": "O"}, {"op": "green"}]}]}
-#         ]}
-#     ],
-#     logical_facts=["not(exists(O, color(O, green)))"]
-# ))
 
 # Rule 22: All objects are upright (orientation)
 add_rule_if_new(BongardRule(
@@ -1280,7 +1169,7 @@ add_rule_if_new(BongardRule(
                 {"op": "NOT", "args": [{"op": "EQ", "args": [{"op": "object_variable", "value": "O1"}, {"op": "object_variable", "value": "O2"}]}]},
                 {"op": "aligned_horizontally", "args": [{"op": "object_variable", "value": "O1"}, {"op": "object_variable", "value": "O2"}]}
             ]}]}]}
-        ]}
+        ]}]}
     ],
     logical_facts=["exists(O1, (shape(O1, triangle) and not(exists(O2, (O1!= O2 and aligned_horizontally(O1, O2))))))"]
 ))
@@ -1423,6 +1312,5 @@ add_rule_if_new(BongardRule(
     program_ast=[{"op": "EXISTS", "args": [{"op": "object_variable", "value": "O"}, {"op": "is_spiral", "args": [{"op": "object_variable", "value": "O"}, {"op": "true"}]}]}],
     logical_facts=["exists(O, is_spiral(O, true))"]
 ))
-
 
 logger.info(f"Loaded {len(ALL_BONGARD_RULES)} extended Bongard rules.")
