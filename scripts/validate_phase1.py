@@ -73,11 +73,8 @@ import functools
 def build_synth_holdout(n=None, cache_path="synth_holdout.npz"):
     n = n or config['phase1']['synth_holdout_count']
     if os.path.exists(cache_path):
-        logger.info(f"Loading cached synthetic holdout from {cache_path}")
-        arr = np.load(cache_path, allow_pickle=True)
-        imgs = [Image.fromarray(x) for x in arr['imgs']]
-        labels = arr['labels'].tolist()
-        return imgs, labels
+        logger.info(f"Deleting cached synthetic holdout at {cache_path} to force fresh generation.")
+        os.remove(cache_path)
     logger.info(f"Generating {n} synthetic holdout samples using Genetic BongardSampler...")
     sampler_config = get_sampler_config(img_size=config['phase1']['img_size'], generator_mode='genetic')
     sampler = BongardSampler(sampler_config)
