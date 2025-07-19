@@ -8,6 +8,7 @@ import numpy as np
 from typing import Dict, List, Any, Tuple, Optional
 from pathlib import Path
 from PIL import Image
+from bongard_generator.dataset import BongardDataset
 
 def safe_randint(a: int, b: int) -> int:
     """Safe random integer generator that handles inverted ranges."""
@@ -221,10 +222,7 @@ class BongardSampler:
             else:
                 logger.error("Genetic generator failed to produce a scene")
                 return None
-        # tell the dataset exactly which rule to use
-        self.current_rule_key = rule.name
-        from bongard_generator.dataset import SyntheticBongardDataset
-        ds = SyntheticBongardDataset(
+        ds = BongardDataset(
             rules=[(rule.name, 1)],
             grayscale=True,
             flush_cache=False
