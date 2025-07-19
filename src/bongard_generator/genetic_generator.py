@@ -1,6 +1,9 @@
 import random
 import numpy as np
 from config import CONFIG
+import torch
+from src.bongard_generator.tester_cnn import create_tester_model
+from PIL import Image
 
 class GeneticSceneGenerator:
     """
@@ -24,7 +27,25 @@ class GeneticSceneGenerator:
         self.seed = config.get('seed', 42)
         random.seed(self.seed)
         np.random.seed(self.seed)
+        self.tester = create_tester_model(config.get('tester_checkpoint'), num_rules=config.get('num_rules', 23))
+        self.device = config.get('device', 'cuda')
         # ...initialize other components as needed...
+
+    def evaluate_fitness(self, genome):
+        # Assume genome has 'refined_image' (PIL Image) and 'rule_idx'
+        img_refined = genome.refined_image  # PIL image, B/W
+        rule_idx = genome.rule_idx
+        # 1) CNN semantic confidence
+        conf = self.tester.predict_confidence(np.array(img_refined), rule_idx)
+        # 2) Diversity score (placeholder, implement min_cosine as needed)
+        div = 1.0  # TODO: Replace with actual diversity calculation
+        # 3) Final fitness
+        alpha = self.config.get('alpha', 0.5)
+        beta = self.config.get('beta', 0.5)
+        genome.fitness = alpha * conf + beta * div
+        genome.tester_confidence = conf
+        genome.diversity_score = div
+        return genome.fitness
 
     def generate(self, rule_obj, label):
         """
@@ -35,7 +56,9 @@ class GeneticSceneGenerator:
         # For demonstration, try to generate a scene; fallback if failed.
         scene = self._run_genetic_algorithm(rule_obj, label)
         if scene is not None and self._is_valid_scene(scene):
-            return scene
+            # Scene graph export: return objects metadata as part of scene
+            objects, masks = scene
+            return objects, masks  # objects is a list of dicts
         # Fallback: return a random valid scene
         fallback_scene = self._fallback_scene(rule_obj, label)
         return fallback_scene

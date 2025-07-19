@@ -194,14 +194,26 @@ def extract_literals_from_ast(ast_node: Any, pos_feats: List[Dict[str, Any]], ne
             # Apply the count constraint to the extracted features
             for feat_dict in temp_pos_feats:
                 feat_dict["count_op"] = op
-                feat_dict["count_value"] = int(str(count_value).replace('INT_', '')) # Convert 'INT_3' to 3
+                # Convert 'INT_3' to 3, handle various formats
+                if isinstance(count_value, str) and count_value.startswith('INT_'):
+                    feat_dict["count_value"] = int(count_value.replace('INT_', ''))
+                elif isinstance(count_value, int):
+                    feat_dict["count_value"] = count_value
+                else:
+                    feat_dict["count_value"] = 1  # Default fallback
                 if not is_negated:
                     pos_feats.append(feat_dict)
                 else:
                     neg_feats.append(feat_dict)
             for feat_dict in temp_neg_feats:
                 feat_dict["count_op"] = op # Should be inverted op for negation
-                feat_dict["count_value"] = int(str(count_value).replace('INT_', ''))
+                # Convert 'INT_3' to 3, handle various formats
+                if isinstance(count_value, str) and count_value.startswith('INT_'):
+                    feat_dict["count_value"] = int(count_value.replace('INT_', ''))
+                elif isinstance(count_value, int):
+                    feat_dict["count_value"] = count_value
+                else:
+                    feat_dict["count_value"] = 1  # Default fallback
                 if not is_negated: # If the original count was negated
                     neg_feats.append(feat_dict)
                 else: # If the original count was positive, but we're in a NOT context
@@ -354,27 +366,56 @@ class BongardRule:
         return self._neg_literals
 
 # --- Extended Set of Bongard Rules ---
-ALL_BONGARD_RULES = []
+from bongard_generator.rule_loader import BongardRule
 
-# Helper to avoid adding duplicate rules
-existing_rule_names = set()
+CANONICAL_RULES = [
+  "SHAPE(CIRCLE)", "SHAPE(SQUARE)", "SHAPE(TRIANGLE)", "SHAPE(STAR)",
+  "COLOR(RED)", "COLOR(GREEN)", "COLOR(BLUE)", "COLOR(BLACK)",
+  "FILL(SOLID)", "FILL(HOLLOW)", "FILL(STRIPED)", "FILL(DOTTED)",
+  "COUNT(EQ,1)", "COUNT(EQ,2)", "COUNT(EQ,3)", "COUNT(EQ,4)",
+  "LEFT_OF", "RIGHT_OF", "ABOVE", "BELOW",
+  "CONVEX", "CONCAVE",
+  "NO_INTERSECTIONS",
+]
 
-def add_rule_if_new(rule: BongardRule):
-    if rule.name not in existing_rule_names:
-        ALL_BONGARD_RULES.append(rule)
-        existing_rule_names.add(rule.name)
-    else:
-        # If rule exists, update it if the new one has a different AST (e.g., for 'objects_form_line')
-        for i, existing_rule in enumerate(ALL_BONGARD_RULES):
-            if existing_rule.name == rule.name:
-                # Replace the existing rule with the new one
-                ALL_BONGARD_RULES[i] = rule
-                logger.debug(f"Updated existing rule: {rule.name}")
-                return
+def load_canonical_rules():
+    rules = []
+    for rule in CANONICAL_RULES:
+        pos, neg = [], []
+        if rule.startswith("SHAPE"):
+            v = rule[6:-1].lower()
+            pos = [{"feature":"shape","value":v}]
+        elif rule.startswith("COLOR"):
+            v = rule[6:-1].lower()
+            pos = [{"feature":"color","value":v}]
+        elif rule.startswith("FILL"):
+            v = rule[5:-1].lower()
+            pos = [{"feature":"fill","value":v}]
+        elif rule.startswith("COUNT"):
+            _, args = rule.split("(")
+            _, n = args[:-1].split(",")
+            pos = [{"feature":"count","value":int(n)}]
+        elif rule in {"LEFT_OF","RIGHT_OF","ABOVE","BELOW"}:
+            pos = [{"feature":"relation","value":rule.lower()}]
+        elif rule == "CONVEX":
+            pos = [{"feature":"property","value":"convex"}]
+        elif rule == "CONCAVE":
+            pos = [{"feature":"property","value":"concave"}]
+        elif rule == "NO_INTERSECTIONS":
+            neg = [{"feature":"relation","value":"intersects"}]
+        rules.append(
+            BongardRule(
+                name=rule.lower(),
+                description=rule,
+                pos_literals=pos,
+                neg_literals=neg,
+                program_ast=[],
+                logical_facts=[]
+            )
+        )
+    return rules
 
-
-# Ensure fallback SHAPE(TRIANGLE) rule exists for validation harness
-add_rule_if_new(
+ALL_BONGARD_RULES = load_canonical_rules()
     BongardRule(
         name="shape_triangle_fallback",
         description="SHAPE(TRIANGLE)",
@@ -388,48 +429,7 @@ add_rule_if_new(
 # --- Attribute-based Rules ---
 
 # Rule 1: All objects are circles
-add_rule_if_new(BongardRule(
-    name="all_circles",
-    description="All objects in the image are circles.",
-    program_ast=[{"op": "FORALL", "args": [{"op": "object_variable", "value": "O"}, {"op": "shape", "args": [{"op": "object_variable", "value": "O"}, {"op": "circle"}]}]}],
-    logical_facts=["forall(O, shape(O, circle))"]
-))
 
-# Rule 3: There exists at least one large square
-add_rule_if_new(BongardRule(
-    name="exists_large_square",
-    description="There is at least one large square in the image.",
-    program_ast=[
-        {"op": "EXISTS", "args": [{"op": "object_variable", "value": "O"}, {"op": "AND", "args": [
-            {"op": "shape", "args": [{"op": "object_variable", "value": "O"}, {"op": "square"}]},
-            {"op": "size", "args": [{"op": "object_variable", "value": "O"}, {"op": "large"}]}
-        ]}]}
-    ],
-    logical_facts=["exists(O, (shape(O, square) and size(O, large)))"]
-))
-
-# Rule 4: No object is a hollow triangle
-add_rule_if_new(BongardRule(
-    name="no_hollow_triangle",
-    description="No object in the image is a hollow triangle.",
-    program_ast=[
-        {"op": "NOT", "args": [
-            {"op": "EXISTS", "args": [{"op": "object_variable", "value": "O"}, {"op": "AND", "args": [
-                {"op": "shape", "args": [{"op": "object_variable", "value": "O"}, {"op": "triangle"}]},
-                {"op": "fill", "args": [{"op": "object_variable", "value": "O"}, {"op": "hollow"}]}
-            ]}]}
-        ]}
-    ],
-    logical_facts=["not(exists(O, (shape(O, triangle) and fill(O, hollow))))"]
-))
-
-# NEW Rule: all_pentagons (from document)
-add_rule_if_new(BongardRule(
-    name="all_pentagons",
-    description="All objects in the image are pentagons.",
-    program_ast=[{"op": "FORALL", "args": [{"op": "object_variable", "value": "O"}, {"op": "shape", "args": [{"op": "object_variable", "value": "O"}, {"op": "pentagon"}]}]}],
-    logical_facts=["forall(O, shape(O, pentagon))"]
-))
 
 # NEW Rule: exists_large_solid (from document)
 add_rule_if_new(BongardRule(

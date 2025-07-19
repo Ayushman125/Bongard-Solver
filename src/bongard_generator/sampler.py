@@ -190,12 +190,24 @@ class BongardSampler:
                 from bongard_generator.dataset import SyntheticBongardDataset
                 ds = SyntheticBongardDataset(grayscale=True, flush_cache=False)
                 img, final_masks = ds._generate_scene_image_and_masks(objs)
+                # CNN scoring
+                rule_idx = getattr(rule_obj, 'rule_idx', 0) if hasattr(rule_obj, 'rule_idx') else 0
+                cnn_score = None
+                if hasattr(self.genetic, 'evaluate_fitness'):
+                    # Create a mock genome for scoring
+                    class MockGenome:
+                        pass
+                    genome = MockGenome()
+                    genome.refined_image = img
+                    genome.rule_idx = rule_idx
+                    cnn_score = self.genetic.evaluate_fitness(genome)
                 return {
                     'objects': objs,
                     'scene_graph': {},
                     'image': img,
                     'masks': final_masks,
                     'rule_satisfaction': is_positive,
+                    'cnn_score': cnn_score,
                     'metadata': {
                         'generator': 'genetic',
                         'rule_description': rule.description
