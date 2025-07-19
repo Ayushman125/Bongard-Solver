@@ -190,7 +190,7 @@ class BongardSampler:
                 # Use SyntheticBongardDataset for final rendering
                 from bongard_generator.dataset import BongardDataset
                 # Only pass the current rule for mini-dataset
-                print(f">> sampling rule key: {getattr(rule, 'name', None)}")
+                print(f"→ Sampling dataset with key: {rule.name}")
                 ds = BongardDataset(
                     target_quota=1,  # Generate exactly 1 example for this rule
                     rule_list=[rule.name]
@@ -232,6 +232,7 @@ class BongardSampler:
             else:
                 logger.error("Genetic generator failed to produce a scene")
                 return None
+        print(f"→ Sampling dataset with key: {rule.name}")
         ds = BongardDataset(
             target_quota=1,
             rule_list=[rule.name]

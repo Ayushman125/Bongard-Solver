@@ -20,15 +20,8 @@ def safe_randrange(a: int, b: int) -> int:
     # randrange excludes hi, so we +1
     return random.randrange(lo, hi+1)
 
-# Assuming these modules are in the same package or correctly imported in a real environment
-# from .cp_sampler import sample_scene_cp, SceneParameters
-# from .rule_loader import get_all_rules, get_rule_by_description, BongardRule
-# from .coverage import CoverageTracker
-# from .mask_utils import create_composite_scene
-# from .config_loader import get_config
+from bongard_generator.rule_loader import BongardRule, get_all_rules, get_rule_by_description
 
-# Dummy imports for demonstration purposes if original modules are not available
-# In a real scenario, ensure these are correctly imported from your project structure.
 class SceneParameters:
     def __init__(self, canvas_size, min_obj_size, max_obj_size, max_objects, colors, shapes, fills):
         self.canvas_size = canvas_size
@@ -38,24 +31,6 @@ class SceneParameters:
         self.colors = colors
         self.shapes = shapes
         self.fills = fills
-
-
-from bongard_generator.rule_loader import BongardRule
-
-def get_all_rules():
-    # Dummy rules for demonstration
-    return [
-        BongardRule(description="SHAPE(circle)", positive_features={"shape": "circle"}),
-        BongardRule(description="FILL(solid)", positive_features={"fill": "solid"}),
-        BongardRule(description="COUNT(2)", positive_features={"count": 2}),
-        BongardRule(description="RELATION(overlap)", positive_features={"relation": "overlap"}),
-    ]
-
-def get_rule_by_description(description):
-    for rule in get_all_rules():
-        if rule.description == description:
-            return rule
-    return None
 
 def sample_scene_cp(rule, num_objects, is_positive, canvas_size, min_obj_size, max_obj_size, max_attempts):
     # Dummy implementation for scene sampling
@@ -72,21 +47,34 @@ def sample_scene_cp(rule, num_objects, is_positive, canvas_size, min_obj_size, m
         }
         # Apply rule features if positive, or avoid them if negative
         if is_positive:
-            if 'shape' in rule.positive_features:
-                obj['shape'] = rule.positive_features['shape']
-            if 'fill' in rule.positive_features:
-                obj['fill'] = rule.positive_features['fill']
-            # For count and relation, the logic is more complex and would be handled by the CP-SAT solver
+            # Check pos_literals for features to apply
+            for literal in rule.pos_literals:
+                feature = literal.get('feature')
+                value = literal.get('value')
+                if feature == 'shape' and value:
+                    obj['shape'] = value
+                elif feature == 'fill' and value:
+                    obj['fill'] = value
+                elif feature == 'color' and value:
+                    obj['color'] = value
         else: # is_negative
-            if 'shape' in rule.positive_features: # Negative rule means avoiding positive features
-                # Ensure the generated shape is NOT the positive feature shape
-                available_shapes = [s for s in ['circle', 'triangle', 'square', 'pentagon', 'star'] if s != rule.positive_features['shape']]
-                if available_shapes:
-                    obj['shape'] = random.choice(available_shapes)
-            if 'fill' in rule.positive_features:
-                available_fills = [f for f in ['solid', 'outline', 'striped', 'gradient'] if f != rule.positive_features['fill']]
-                if available_fills:
-                    obj['fill'] = random.choice(available_fills)
+            # Check pos_literals to avoid those features
+            for literal in rule.pos_literals:
+                feature = literal.get('feature')
+                value = literal.get('value')
+                if feature == 'shape' and value:
+                    # Ensure the generated shape is NOT the positive feature shape
+                    available_shapes = [s for s in ['circle', 'triangle', 'square', 'pentagon', 'star'] if s != value]
+                    if available_shapes:
+                        obj['shape'] = random.choice(available_shapes)
+                elif feature == 'fill' and value:
+                    available_fills = [f for f in ['solid', 'outline', 'striped', 'gradient'] if f != value]
+                    if available_fills:
+                        obj['fill'] = random.choice(available_fills)
+                elif feature == 'color' and value:
+                    available_colors = [c for c in ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'black'] if c != value]
+                    if available_colors:
+                        obj['color'] = random.choice(available_colors)
         
         objects.append(obj)
     
@@ -113,25 +101,28 @@ class CoverageTracker:
         # For simplicity, we'll just increment counts for some features based on the rule
         rule = get_rule_by_description(rule_description)
         if rule:
-            features = rule.positive_features if is_positive else rule.negative_features
+            literals = rule.pos_literals if is_positive else rule.neg_literals
             
-            # Simple heuristic to update coverage based on rule features
-            if 'shape' in features:
-                for cell in self.ALL_CELLS:
-                    if cell[0] == features['shape']:
-                        self.coverage[cell] += 1
-            if 'fill' in features:
-                for cell in self.ALL_CELLS:
-                    if cell[1] == features['fill']:
-                        self.coverage[cell] += 1
-            if 'count' in features:
-                for cell in self.ALL_CELLS:
-                    if cell[2] == features['count']:
-                        self.coverage[cell] += 1
-            if 'relation' in features:
-                for cell in self.ALL_CELLS:
-                    if cell[3] == features['relation']:
-                        self.coverage[cell] += 1
+            # Simple heuristic to update coverage based on rule literals
+            for literal in literals:
+                feature = literal.get('feature')
+                value = literal.get('value')
+                if feature == 'shape':
+                    for cell in self.ALL_CELLS:
+                        if cell[0] == value:
+                            self.coverage[cell] += 1
+                elif feature == 'fill':
+                    for cell in self.ALL_CELLS:
+                        if cell[1] == value:
+                            self.coverage[cell] += 1
+                elif feature == 'count':
+                    for cell in self.ALL_CELLS:
+                        if cell[2] == value:
+                            self.coverage[cell] += 1
+                elif feature == 'relation':
+                    for cell in self.ALL_CELLS:
+                        if cell[3] == value:
+                            self.coverage[cell] += 1
 
 
     def get_under_covered_cells(self, target_quota):
@@ -201,10 +192,21 @@ class BongardDataset:
         self.rule_list = rule_list if rule_list is not None else None
         
         # Load rules and initialize tracking
+        all_rules = get_all_rules()
         if rule_list is not None:
-            self.rules = [r for r in get_all_rules() if getattr(r, 'name', None) in rule_list]
+            self.rules = []
+            for key in rule_list:
+                # try matching on .name first
+                match = next((r for r in all_rules if r.name == key), None)
+                if match is None:
+                    # fallback to matching on .description
+                    match = next((r for r in all_rules if r.description == key), None)
+                if match:
+                    self.rules.append(match)
+                else:
+                    logger.warning(f"Rule key '{key}' did not match any canonical rule")
         else:
-            self.rules = get_all_rules()
+            self.rules = all_rules
         self.coverage_tracker = CoverageTracker()
 
         # Dataset statistics
@@ -269,7 +271,16 @@ class BongardDataset:
             num_objects = safe_randint(*max_objects_range)
             adversarial = random.random() < 0.05
             if adversarial:
-                if 'relation' in rule.positive_features and rule.positive_features['relation'] in ['overlap', 'near', 'nested']:
+                # Check if rule has spatial relation literals
+                has_spatial_relation = False
+                spatial_value = None
+                for literal in rule.pos_literals:
+                    if literal.get('feature') == 'relation' and literal.get('value') in ['overlap', 'near', 'nested']:
+                        has_spatial_relation = True
+                        spatial_value = literal.get('value')
+                        break
+                
+                if has_spatial_relation:
                     base_pos = self.canvas_size // 2
                     jitter = int(self.scene_params.max_obj_size * 0.49)
                     positions = [
@@ -282,11 +293,21 @@ class BongardDataset:
                             'x': positions[i % len(positions)]['position'][0],
                             'y': positions[i % len(positions)]['position'][1],
                             'size': self.scene_params.max_obj_size,
-                            'shape': rule.positive_features.get('shape', random.choice(self.scene_params.shapes)),
-                            'fill': rule.positive_features.get('fill', random.choice(self.scene_params.fills)),
+                            'shape': random.choice(self.scene_params.shapes),
+                            'fill': random.choice(self.scene_params.fills),
                             'color': random.choice(self.scene_params.colors),
                             'position': positions[i % len(positions)]['position']
                         }
+                        # Apply rule literals
+                        for literal in rule.pos_literals:
+                            feature = literal.get('feature')
+                            value = literal.get('value')
+                            if feature == 'shape':
+                                obj['shape'] = value
+                            elif feature == 'fill':
+                                obj['fill'] = value
+                            elif feature == 'color':
+                                obj['color'] = value
                         objects.append(obj)
                     scene = {
                         'objects': objects,
@@ -363,12 +384,15 @@ class BongardDataset:
             
             # Try to find a rule that matches this cell
             for rule in self.rules:
-                features = rule.positive_features
-                if (features.get('shape') == shape or
-                    features.get('fill') == fill or
-                    features.get('count') == count or
-                    features.get('relation') == relation):
-                    return rule
+                # Check pos_literals for matching features
+                for literal in rule.pos_literals:
+                    feature = literal.get('feature')
+                    value = literal.get('value')
+                    if ((feature == 'shape' and value == shape) or
+                        (feature == 'fill' and value == fill) or
+                        (feature == 'count' and value == count) or
+                        (feature == 'relation' and value == relation)):
+                        return rule
         
         # Fallback to random rule selection
         return random.choice(self.rules)
@@ -432,37 +456,52 @@ class BongardDataset:
     def _validate_scene(self, objects: List[Dict[str, Any]], rule: BongardRule, is_positive: bool) -> bool:
         """Validate that the scene follows the rule correctly."""
         try:
-            features = rule.positive_features if is_positive else rule.negative_features
-            # Check shape constraints
-            if 'shape' in features:
-                shapes = [obj.get('shape') for obj in objects]
-                target_shape = features['shape']
-                if is_positive:
-                    if target_shape not in shapes:
-                        return False
-                else:
-                    if target_shape in shapes:
-                        return False
-            # Check fill constraints
-            if 'fill' in features:
-                fills = [obj.get('fill') for obj in objects]
-                target_fill = features['fill']
-                if is_positive:
-                    if target_fill not in fills:
-                        return False
-                else:
-                    if target_fill in fills:
-                        return False
-            # Check count constraints
-            if 'count' in features:
-                target_count = features['count']
-                actual_count = len(objects)
-                if is_positive:
-                    if actual_count != target_count:
-                        return False
-                else:
-                    if actual_count == target_count:
-                        return False
+            literals = rule.pos_literals if is_positive else rule.neg_literals
+            
+            for literal in literals:
+                feature = literal.get('feature')
+                value = literal.get('value')
+                
+                # Check shape constraints
+                if feature == 'shape':
+                    shapes = [obj.get('shape') for obj in objects]
+                    if is_positive:
+                        if value not in shapes:
+                            return False
+                    else:
+                        if value in shapes:
+                            return False
+                
+                # Check fill constraints
+                elif feature == 'fill':
+                    fills = [obj.get('fill') for obj in objects]
+                    if is_positive:
+                        if value not in fills:
+                            return False
+                    else:
+                        if value in fills:
+                            return False
+                
+                # Check color constraints
+                elif feature == 'color':
+                    colors = [obj.get('color') for obj in objects]
+                    if is_positive:
+                        if value not in colors:
+                            return False
+                    else:
+                        if value in colors:
+                            return False
+                
+                # Check count constraints
+                elif feature == 'count':
+                    actual_count = len(objects)
+                    if is_positive:
+                        if actual_count != value:
+                            return False
+                    else:
+                        if actual_count == value:
+                            return False
+            
             return True
         except Exception as e:
             logger.error(f"Scene validation failed: {e}")

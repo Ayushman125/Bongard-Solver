@@ -160,17 +160,54 @@ class RockSolidPipeline:
         return pipeline_results
     
     def _run_genetic_phase(self, enable_neural_feedback: bool) -> Dict[str, Any]:
-        """Run genetic evolution phase with neural tester feedback."""
+        """Run genetic and CP-SAT scene generation according to hybrid_split config."""
         self.phase_stats['genetic_evolution'] = time.time()
-        
+
         # Configure neural feedback if enabled
         if enable_neural_feedback:
-            # Mock: Load or train neural tester
             self.neural_tester.confidence_threshold = self.confidence_threshold
-        
-        # Run genetic evolution
-        genetic_stats = self.genetic_pipeline.run_evolution(target_coverage=0.8)
-        
+
+        # Read hybrid_split from config
+        import yaml
+        config_path = Path(__file__).parent.parent.parent / 'config_template.yaml'
+        with open(config_path, 'r') as f:
+            config_yaml = yaml.safe_load(f)
+        split = config_yaml['data'].get('hybrid_split', {'cp': 0.7, 'ga': 0.3})
+        cp_ratio = split.get('cp', 0.7)
+        ga_ratio = split.get('ga', 0.3)
+
+        # Total scenes to generate for this phase
+        total_scenes = self.min_quota * len(self.genetic_pipeline.all_cells)
+        cp_scenes = int(total_scenes * cp_ratio)
+        ga_scenes = total_scenes - cp_scenes
+
+        # Run genetic evolution for ga_scenes
+        genetic_stats = self.genetic_pipeline.run_evolution(target_coverage=ga_scenes / total_scenes)
+
+        # Run CP-SAT for cp_scenes
+        cp_sat_generated = 0
+        for cell in self.genetic_pipeline.all_cells:
+            needed = self.min_quota - len(self.genetic_pipeline.cell_coverage.get(cell, []))
+            cp_needed = int(needed * cp_ratio)
+            for _ in range(cp_needed):
+                rule_desc = f"COMBINED({cell[0]},{cell[1]},{cell[2]},{cell[3]})"
+                solution = self.cp_solver.solve_scene_constraints(
+                    rule_desc=rule_desc,
+                    is_positive=True,
+                    num_objects=cell[2],
+                    target_cell=cell
+                )
+                if solution.is_valid:
+                    self.coverage_tracker.record_scene(
+                        solution.objects,
+                        solution.scene_graph,
+                        rule_desc,
+                        1
+                    )
+                    self.total_scenes_generated += 1
+                    self.total_scenes_validated += 1
+                    cp_sat_generated += 1
+
         # Collect generated scenes from genetic pipeline
         genetic_scenes = 0
         for cell_examples in self.genetic_pipeline.cell_coverage.values():
@@ -179,8 +216,6 @@ class RockSolidPipeline:
                 self.total_scenes_generated += 1
                 if example['genome'].tester_confidence >= self.confidence_threshold:
                     self.total_scenes_validated += 1
-                
-                # Record in main coverage tracker
                 scene_data = example['scene_data']
                 self.coverage_tracker.record_scene(
                     scene_data['objects'],
@@ -188,12 +223,14 @@ class RockSolidPipeline:
                     scene_data['rule'],
                     scene_data['label']
                 )
-        
+
         self.phase_stats['genetic_evolution'] = time.time() - self.phase_stats['genetic_evolution']
-        
+
         return {
             'genetic_stats': genetic_stats,
-            'scenes_generated': genetic_scenes,
+            'scenes_generated': genetic_scenes + cp_sat_generated,
+            'genetic_scenes': genetic_scenes,
+            'cp_sat_scenes': cp_sat_generated,
             'phase_duration': self.phase_stats['genetic_evolution']
         }
     
