@@ -130,6 +130,31 @@ class CoverageTracker:
             return True
             
         return False
+
+    def get_coverage_stats(self) -> Dict[str, Any]:
+        """Return a dictionary of coverage statistics for reporting and validation."""
+        total_cells = len(self.ALL_CELLS)
+        covered_cells = len([cell for cell in self.ALL_CELLS if self.coverage[cell] > 0])
+        coverage_percentage = 100.0 * covered_cells / total_cells if total_cells > 0 else 0.0
+        min_quota = 1
+        under_covered = [cell for cell in self.ALL_CELLS if not self.is_covered(cell, min_quota)]
+        rule_stats = dict(self.rule_coverage.most_common(10))
+        most_covered = self.coverage.most_common(5)
+        least_covered = [(cell, count) for cell, count in self.coverage.items() if count > 0]
+        least_covered = sorted(least_covered, key=lambda x: x[1])[:5]
+        return {
+            'total_scenes': self.total_scenes_generated,
+            'total_cells': total_cells,
+            'covered_cells': covered_cells,
+            'coverage_percentage': coverage_percentage,
+            'under_covered_count': len(under_covered),
+            'under_covered_cells': under_covered[:10],
+            'validation_failures': self.validation_failures,
+            'rule_distribution': rule_stats,
+            'most_covered_cells': most_covered,
+            'least_covered_cells': least_covered,
+            'unique_scene_signatures': len(self.scene_coverage)
+        }
         min_quota = 1
         under_covered = [cell for cell in self.ALL_CELLS if not self.is_covered(cell, min_quota)]
         
