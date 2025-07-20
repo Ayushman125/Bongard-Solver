@@ -85,7 +85,9 @@ class CompleteBongardPipeline:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.validation_dir = Path("complete_validation_output")
-        self.synthetic_dir = Path("data/synthetic_bongard")
+        self.validation_dir.mkdir(exist_ok=True, parents=True)
+        self.synthetic_dir = self.validation_dir / "synthetic"
+        self.synthetic_dir.mkdir(exist_ok=True, parents=True)
         self.nvlabs_dir = Path("data/Bongard-LOGO")  # NVlabs repo location
         self.shapebongard_dir = Path("ShapeBongard_V2")  # Real dataset location
         
@@ -314,7 +316,11 @@ def main():
         return
 
     # Run validation
-    pipeline.run_complete_validation()
+    try:
+        pipeline.run_complete_validation()
+    except Exception as e:
+        logger.error(f"❌ An error occurred during pipeline validation: {e}", exc_info=True)
+
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 # src/bongard_generator/builder.py (master generator)
-import random
-import torch
 import logging
+from pathlib import Path
+import random
 from .cp_sampler       import CPSATSampler as CPSampler
 from .genetic_generator import GeneticSceneGenerator as GeneticSampler
 from .prototype_action import PrototypeAction
@@ -21,6 +21,14 @@ class BongardGenerator:
         """
         self.cfg = cfg
         
+        # Ensure output_dir is a Path object for safe joining
+        if hasattr(self.cfg, 'output_dir'):
+            self.output_dir = Path(self.cfg.output_dir)
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            self.output_dir = Path("generated_scenes")
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+
         # COMPREHENSIVE TYPE CONVERSION - Fix all string/int division errors
         self._ensure_numeric_config_types(self.cfg)
         
@@ -239,7 +247,7 @@ class BongardGenerator:
         """Filter scenes using GNN and render final images."""
         filtered_scenes = []
         
-        for objects, metadata in scenes:
+        for scene_index, (objects, metadata) in enumerate(scenes):
             try:
                 # GNN filtering if enabled
                 if hasattr(self.cfg, 'use_gnn') and self.cfg.use_gnn and hasattr(self, '_gnn'):
@@ -263,6 +271,13 @@ class BongardGenerator:
                 
                 scene_image = create_composite_scene(objects, self.cfg)
                 
+                # --- DEBUG LOGGING ---
+                filename = f"{rule.name}_{metadata['generation_method']}_{scene_index}.png"
+                output_path = self.output_dir / filename
+                logger.debug(f"SAVING to {output_path} (type: {type(output_path)})")
+                scene_image.save(output_path)
+                # --- END DEBUG ---
+
                 # Record coverage information
                 if hasattr(self, 'coverage'):
                     self.coverage.record(rule, objects)
@@ -274,7 +289,7 @@ class BongardGenerator:
                 filtered_scenes.append((scene_image, objects, metadata))
                 
             except Exception as e:
-                logger.error(f"Failed to filter/render scene: {e}")
+                logger.error(f"Failed to filter/render scene: {e}", exc_info=True)
                 continue
         
         return filtered_scenes
