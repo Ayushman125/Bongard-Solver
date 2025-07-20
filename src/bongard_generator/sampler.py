@@ -8,7 +8,7 @@ import numpy as np
 from typing import Dict, List, Any, Tuple, Optional
 from pathlib import Path
 from PIL import Image
-from bongard_generator.dataset import BongardDataset
+from .dataset import BongardDataset
 
 def safe_randint(a: int, b: int) -> int:
     """Safe random integer generator that handles inverted ranges."""

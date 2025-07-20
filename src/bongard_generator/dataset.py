@@ -8,14 +8,15 @@ import logging
 import os
 import random
 from typing import List
-from PIL import Image
-
 from PIL import Image, ImageDraw, ImageFilter
+from .config import GeneratorConfig
 from .shape_renderer import draw_shape
 from .styler import apply_noise, apply_checker
 
 def create_composite_scene(objects, cfg):
-    img = Image.new("RGB",(cfg.canvas_size,cfg.canvas_size),"white")
+    # Ensure canvas_size is always int
+    canvas_size = int(getattr(cfg, 'canvas_size', 128))
+    img = Image.new("RGB",(canvas_size,canvas_size),"white")
     draw = ImageDraw.Draw(img)
 
     for obj in objects:

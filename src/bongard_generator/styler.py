@@ -4,7 +4,7 @@ Applies a pre-trained CycleGAN model to images and ensures the output
 remains strictly black and white to adhere to the problem constraints.
 """
 import logging
-from PIL import Image
+from PIL import Image, ImageDraw
 
 try:
     import torch
@@ -76,3 +76,48 @@ class Styler:
         except Exception as e:
             logger.error(f"GAN stylization failed: {e}")
             return image
+
+
+def apply_noise(image: Image.Image, cfg) -> Image.Image:
+    """Apply noise texture to background."""
+    try:
+        # Create noise texture
+        import numpy as np
+        if hasattr(cfg, 'canvas_size'):
+            size = int(cfg.canvas_size)
+        else:
+            size = image.size[0]
+        
+        noise_array = np.random.randint(200, 255, (size, size), dtype=np.uint8)
+        noise_img = Image.fromarray(noise_array, mode='L').convert('RGB')
+        
+        # Blend with original image
+        return Image.blend(image, noise_img, 0.1)
+    except Exception as e:
+        logger.error(f"Failed to apply noise: {e}")
+        return image
+
+
+def apply_checker(image: Image.Image, cfg) -> Image.Image:
+    """Apply checkerboard texture to background."""
+    try:
+        if hasattr(cfg, 'canvas_size'):
+            size = int(cfg.canvas_size)
+        else:
+            size = image.size[0]
+        
+        checker_img = Image.new('RGB', (size, size), 'white')
+        draw = ImageDraw.Draw(checker_img)
+        
+        # Create checkerboard pattern
+        checker_size = max(4, size // 32)  # Adaptive checker size
+        for i in range(0, size, checker_size * 2):
+            for j in range(0, size, checker_size * 2):
+                draw.rectangle([i, j, i + checker_size, j + checker_size], fill='lightgray')
+                draw.rectangle([i + checker_size, j + checker_size, i + checker_size * 2, j + checker_size * 2], fill='lightgray')
+        
+        # Blend with original image
+        return Image.blend(image, checker_img, 0.1)
+    except Exception as e:
+        logger.error(f"Failed to apply checker: {e}")
+        return image

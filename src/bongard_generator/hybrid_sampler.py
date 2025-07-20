@@ -10,13 +10,11 @@ from typing import List, Dict, Tuple, Optional, Any
 from dataclasses import dataclass, field
 import copy
 from collections import defaultdict
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 from .cp_sampler import CPSATSampler
 from .coverage import CoverageTracker, CoverageDimensions, CoverageCell
-from .models import build_scene_graph, create_scene_gnn
 
 
 @dataclass
@@ -48,9 +46,6 @@ class HybridSampler:
                  coverage_weight: float = 0.4,
                  constraint_weight: float = 0.4,
                  diversity_weight: float = 0.2,
-                 use_gnn: bool = False,
-                 gnn_checkpoint: str = None,
-                 gnn_threshold: float = 0.5,
                  **kwargs):
         
         self.canvas_size = canvas_size
@@ -59,19 +54,11 @@ class HybridSampler:
         self.mutation_rate = mutation_rate
         self.crossover_rate = crossover_rate
         self.elite_ratio = elite_ratio
-        self.use_gnn = use_gnn
-        self.gnn_threshold = gnn_threshold
         
         # Fitness weights
         self.coverage_weight = coverage_weight
         self.constraint_weight = constraint_weight
         self.diversity_weight = diversity_weight
-        
-        # Initialize GNN if enabled
-        self._gnn_model = None
-        self._gnn_device = 'cpu'
-        if use_gnn:
-            self._initialize_gnn(gnn_checkpoint)
         
         # Initialize CP-SAT sampler for constraint handling
         try:
@@ -101,94 +88,12 @@ class HybridSampler:
         # Statistics
         self.fitness_history = []
         self.coverage_history = []
-        self.gnn_filtered_count = 0
-    
-    def _initialize_gnn(self, checkpoint_path: str = None):
-        """Initialize GNN model for scene filtering."""
-        try:
-            import torch
-            self._gnn_device = 'cuda' if torch.cuda.is_available() else 'cpu'
-            
-            # Create a simple config object for GNN
-            class Config:
-                def __init__(self, canvas_size):
-                    self.canvas_size = max(canvas_size) if isinstance(canvas_size, tuple) else canvas_size
-                    self.img_size = self.canvas_size
-                    self.gnn_radius = 0.3
-                    self.gnn_hidden = 64
-                    self.gnn_layers = 2
-                    self.gnn_dropout = 0.1
-                    self.gnn_attention = False
-            
-            config = Config(self.canvas_size)
-            self._gnn_model = create_scene_gnn(config)
-            
-            if self._gnn_model is None:
-                logger.warning("Could not create GNN model, disabling GNN filtering")
-                self.use_gnn = False
-                return
-            
-            # Load checkpoint if provided
-            if checkpoint_path and Path(checkpoint_path).exists():
-                self._gnn_model.load_state_dict(torch.load(checkpoint_path, map_location=self._gnn_device))
-                logger.info(f"Loaded GNN checkpoint from {checkpoint_path}")
-            else:
-                logger.warning("No GNN checkpoint found, using randomly initialized model")
-            
-            self._gnn_model.to(self._gnn_device)
-            self._gnn_model.eval()
-            
-        except ImportError:
-            logger.warning("PyTorch not available, disabling GNN filtering")
-            self.use_gnn = False
-        except Exception as e:
-            logger.error(f"Failed to initialize GNN: {e}")
-            self.use_gnn = False
-    
-    def _gnn_filter_objects(self, objects: List[Dict]) -> bool:
-        """Filter scene using GNN quality assessment."""
-        if not self.use_gnn or self._gnn_model is None:
-            return True
-        
-        try:
-            import torch
-            # Create simple config for graph building
-            class Config:
-                def __init__(self, canvas_size):
-                    self.canvas_size = max(canvas_size) if isinstance(canvas_size, tuple) else canvas_size
-                    self.gnn_radius = 0.3
-            
-            config = Config(self.canvas_size)
-            scene_graph = build_scene_graph(objects, config)
-            
-            if scene_graph is None:
-                return True
-            
-            scene_graph = scene_graph.to(self._gnn_device)
-            
-            with torch.no_grad():
-                quality_score = self._gnn_model(scene_graph).item()
-            
-            if quality_score < self.gnn_threshold:
-                self.gnn_filtered_count += 1
-                return False
-            
-            return True
-            
-        except Exception as e:
-            logger.warning(f"GNN filtering failed: {e}")
-            return True
         
     def initialize_population(self) -> None:
         """Initialize population with diverse individuals using CP-SAT."""
         self.population.clear()
         
-        attempts = 0
-        max_attempts = self.population_size * 3  # Allow more attempts with GNN filtering
-        
-        while len(self.population) < self.population_size and attempts < max_attempts:
-            attempts += 1
-            
+        for _ in range(self.population_size):
             # Use CP-SAT to generate valid object configurations
             try:
                 objects = self.cp_sampler.sample(
@@ -196,40 +101,23 @@ class HybridSampler:
                     object_types=['circle', 'rectangle', 'triangle', 'ellipse', 'polygon']
                 )
                 
-                if not objects:
+                if objects:
+                    individual = Individual(objects=objects)
+                    self.population.append(individual)
+                else:
                     # Fallback to random generation if CP-SAT fails
                     objects = self._generate_random_objects()
-                
-                # Apply GNN filtering if enabled
-                if self.use_gnn and not self._gnn_filter_objects(objects):
-                    continue  # Skip this configuration, GNN rejected it
-                
-                individual = Individual(objects=objects)
-                self.population.append(individual)
+                    individual = Individual(objects=objects)
+                    self.population.append(individual)
                     
             except Exception as e:
-                logger.warning(f"CP-SAT failed, using random generation: {e}")
+                print(f"Warning: CP-SAT failed, using random generation: {e}")
                 objects = self._generate_random_objects()
-                
-                # Apply GNN filtering to random objects too
-                if self.use_gnn and not self._gnn_filter_objects(objects):
-                    continue
-                
                 individual = Individual(objects=objects)
                 self.population.append(individual)
-        
-        # If we couldn't generate enough individuals due to GNN filtering, fill with random ones
-        while len(self.population) < self.population_size:
-            logger.warning("GNN filtering too restrictive, adding random individuals")
-            objects = self._generate_random_objects()
-            individual = Individual(objects=objects)
-            self.population.append(individual)
         
         # Evaluate initial population
         self._evaluate_population()
-        
-        if self.use_gnn:
-            logger.info(f"GNN filtered {self.gnn_filtered_count} configurations during initialization")
         
     def _generate_random_objects(self, num_objects: Optional[int] = None) -> List[Dict]:
         """Generate random objects as fallback."""

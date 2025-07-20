@@ -6,7 +6,7 @@ def draw_shape(draw: ImageDraw.Draw, obj: dict, cfg):
     x, y, s = obj['x'], obj['y'], obj['size']
     shape = obj['shape']
     fill  = obj.get('fill', 'solid')
-    stroke = obj.get('stroke_width', cfg.stroke_min)
+    stroke = obj.get('stroke_width', getattr(cfg, 'stroke_min', 1))
     angle = obj.get('rotation', random.uniform(0,360))
     pts = []
 

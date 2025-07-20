@@ -19,6 +19,12 @@ def build_scene_graph(objects, cfg):
     """
     node_feats, edge_index = [], [[],[]]
     N = len(objects)
+    # Ensure canvas_size is always int
+    if hasattr(cfg, 'canvas_size'):
+        try:
+            cfg.canvas_size = int(cfg.canvas_size)
+        except Exception:
+            cfg.canvas_size = 128
     # Build node features
     for obj in objects:
         fv = []

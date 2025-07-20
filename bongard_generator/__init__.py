@@ -1,1 +1,0 @@
-# Bongard Generator Package

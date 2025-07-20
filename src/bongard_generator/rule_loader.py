@@ -42,6 +42,9 @@ class AbstractRule(abc.ABC):
         """
         pass
 
+# Alias for backward compatibility
+BongardRule = AbstractRule
+
 class RuleLoader:
     """Dynamically loads all rule classes from the 'rules' directory."""
 
@@ -76,3 +79,21 @@ class RuleLoader:
     def get_rules(self) -> List[AbstractRule]:
         """Returns the list of loaded rule instances."""
         return self.rules
+
+def get_all_rules() -> List[AbstractRule]:
+    """
+    Global function to get all available rules.
+    Creates a RuleLoader instance and returns all loaded rules.
+    """
+    loader = RuleLoader()
+    return loader.get_rules()
+
+def get_rule_by_description(description: str) -> AbstractRule:
+    """
+    Get a rule by its description.
+    """
+    rules = get_all_rules()
+    for rule in rules:
+        if rule.description.lower() == description.lower():
+            return rule
+    return None
