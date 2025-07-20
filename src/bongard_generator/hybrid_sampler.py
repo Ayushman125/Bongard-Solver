@@ -1,163 +1,435 @@
-import math
+"""
+Hybrid sampler combining CP-SAT constraint solving with genetic algorithms
+for coverage-driven diverse dataset generation.
+"""
+
+import logging
 import random
-from typing import List, Tuple, Any
-from .rule_loader import get_all_rules
-from .dataset import BongardDataset
-from .genetic_generator import GeneticSceneGenerator
+import numpy as np
+from typing import List, Dict, Tuple, Optional, Any
+from dataclasses import dataclass, field
+import copy
+from collections import defaultdict
+
+logger = logging.getLogger(__name__)
+
+from .cp_sampler import CPSATSampler
+from .coverage import CoverageTracker, CoverageDimensions, CoverageCell
+
+
+@dataclass
+class Individual:
+    """Represents an individual in the genetic algorithm."""
+    objects: List[Dict]
+    fitness: float = 0.0
+    coverage_score: float = 0.0
+    constraint_score: float = 0.0
+    diversity_score: float = 0.0
+    metadata: Dict = field(default_factory=dict)
+
 
 class HybridSampler:
-    """Hybrid sampler that combines CP-SAT seeding with genetic diversification."""
+    """
+    Hybrid sampler that combines:
+    1. CP-SAT for constraint satisfaction and valid object placement
+    2. Genetic algorithms for coverage-driven optimization
+    3. Domain randomization for realistic variation
+    """
     
-    def __init__(self, cfg, tester=None):
-        self.cfg = cfg
+    def __init__(self, 
+                 canvas_size: Tuple[int, int] = (200, 200),
+                 population_size: int = 50,
+                 generations: int = 100,
+                 mutation_rate: float = 0.1,
+                 crossover_rate: float = 0.7,
+                 elite_ratio: float = 0.2,
+                 coverage_weight: float = 0.4,
+                 constraint_weight: float = 0.4,
+                 diversity_weight: float = 0.2,
+                 **kwargs):
         
-        # Handle both dict and SamplerConfig object
-        if hasattr(cfg, 'data'):
-            # YAML config structure
-            total = cfg['data']['total']
-            hybrid_split = cfg['data'].get('hybrid_split', {'cp': 0.7, 'ga': 0.3})
-        else:
-            # SamplerConfig object or different structure
-            total = getattr(cfg, 'total', 1000)
-            hybrid_split = getattr(cfg, 'hybrid_split', {'cp': 0.7, 'ga': 0.3})
+        self.canvas_size = canvas_size
+        self.population_size = population_size
+        self.generations = generations
+        self.mutation_rate = mutation_rate
+        self.crossover_rate = crossover_rate
+        self.elite_ratio = elite_ratio
         
-        self.cp_quota = int(total * hybrid_split['cp'])
-        self.ga_quota = total - self.cp_quota  # Ensure exact total
-        self.rules = get_all_rules()
+        # Fitness weights
+        self.coverage_weight = coverage_weight
+        self.constraint_weight = constraint_weight
+        self.diversity_weight = diversity_weight
         
-        # Two samplers with unified API
-        self.cp_sampler = BongardSampler(cfg, generator_mode="cp_sat")
-        self.ga_sampler = BongardSampler(cfg, generator_mode="genetic")
-        
-        print(f"→ Hybrid build: total={total}, cp={self.cp_quota}, ga={self.ga_quota}")
-        print("→ Rules:", [r.description for r in self.rules])
-
-    def build_synth_holdout(self, n=None) -> Tuple[List[Any], List[int]]:
-        """Build synthetic holdout dataset using hybrid CP-SAT + genetic approach."""
-        imgs, lbls = [], []
-        
-        # Phase A: CP-SAT Seeding
-        per_rule_cp = math.ceil(self.cp_quota / len(self.rules))
-        for rule in self.rules:
-            for _ in range(per_rule_cp):
-                pos, neg = self.cp_sampler.sample_problem(
-                    rule_description=rule.description, num_pos=1, num_neg=1
-                )
-                imgs += pos + neg
-                lbls += [1]*len(pos) + [0]*len(neg)
-                print(f"  • CP pass: rule={rule.description}, got pos={len(pos)}, neg={len(neg)}")
-        
-        # Phase B: Genetic Diversification  
-        per_rule_ga = math.ceil(self.ga_quota / len(self.rules))
-        for rule in self.rules:
-            for _ in range(per_rule_ga):
-                pos, neg = self.ga_sampler.sample_problem(
-                    rule_description=rule.description, num_pos=1, num_neg=1
-                )
-                imgs += pos + neg
-                lbls += [1]*len(pos) + [0]*len(neg)
-                print(f"  • GA pass: rule={rule.description}, got pos={len(pos)}, neg={len(neg)}")
-        
-        # Final Assembly & Shuffle
-        combined = list(zip(imgs, lbls))
-        random.shuffle(combined)
-        imgs, lbls = zip(*combined)
-        
-        return list(imgs), list(lbls)
-
-class BongardSampler:
-    """Unified sampler interface for both CP-SAT and genetic modes."""
-    
-    def __init__(self, cfg, generator_mode="cp_sat"):
-        self.cfg = cfg
-        self.mode = generator_mode
-        if generator_mode == "genetic":
-            self.ga_generator = GeneticSceneGenerator(cfg, None)
-    
-    def sample_problem(self, rule_description: str, num_pos: int = 1, num_neg: int = 1):
-        """Sample a problem with positive and negative scenes."""
-        if self.mode == "cp_sat":
-            return self._sample_cp_sat(rule_description, num_pos, num_neg)
-        elif self.mode == "genetic":
-            return self._sample_genetic(rule_description, num_pos, num_neg)
-        else:
-            raise ValueError(f"Unknown generator mode: {self.mode}")
-    
-    def _sample_cp_sat(self, rule_description: str, num_pos: int, num_neg: int):
-        """Sample using CP-SAT/dataset approach."""
+        # Initialize CP-SAT sampler for constraint handling
         try:
-            # Find rule by description
-            rules = get_all_rules()
-            rule = next((r for r in rules if r.description == rule_description), None)
-            if not rule:
-                rule = next((r for r in rules if getattr(r, 'name', '') == rule_description), None)
-            
-            if rule:
-                # Create dataset with consistent key passing - use rule.name if available, otherwise description
-                rule_key = rule.name if hasattr(rule, 'name') and rule.name else rule.description
-                print(f"→ CP-SAT Dataset sees rule key: '{rule_key}' for description: '{rule_description}'")
-                ds = BongardDataset(target_quota=max(num_pos, num_neg, 2), rule_list=[rule_key])
-                pos_imgs, neg_imgs = [], []
-                
-                # Collect examples from dataset
-                for sample in ds:
-                    if sample['label'] == 1 and len(pos_imgs) < num_pos:
-                        pos_imgs.append(sample['image'])
-                    elif sample['label'] == 0 and len(neg_imgs) < num_neg:
-                        neg_imgs.append(sample['image'])
-                    
-                    # Stop once we have enough
-                    if len(pos_imgs) >= num_pos and len(neg_imgs) >= num_neg:
-                        break
-                
-                # Fill missing with mock images if needed
-                from PIL import Image
-                while len(pos_imgs) < num_pos:
-                    pos_imgs.append(Image.new('L', (128, 128), color=255))
-                while len(neg_imgs) < num_neg:
-                    neg_imgs.append(Image.new('L', (128, 128), color=255))
-                
-                return pos_imgs, neg_imgs
+            from .cp_sampler import SceneParameters
+            scene_params = SceneParameters(
+                canvas_size=canvas_size,
+                min_obj_size=kwargs.get('min_obj_size', 20),
+                max_obj_size=kwargs.get('max_obj_size', 60),
+                max_objects=kwargs.get('max_objects', 6),
+                colors=['red', 'blue', 'green', 'yellow', 'black'],
+                shapes=['circle', 'square', 'triangle'],
+                fills=['solid', 'outline', 'striped']
+            )
+            self.cp_sampler = CPSATSampler(scene_params)
         except Exception as e:
-            print(f"CP-SAT sampling failed for {rule_description}: {e}")
+            logger.warning(f"Could not initialize CP-SAT sampler: {e}")
+            self.cp_sampler = None
+        
+        # Coverage tracker for diversity metrics
+        self.coverage_tracker = CoverageTracker()
+        
+        # Population and evolution state
+        self.population: List[Individual] = []
+        self.generation = 0
+        self.best_individual: Optional[Individual] = None
+        
+        # Statistics
+        self.fitness_history = []
+        self.coverage_history = []
+        
+    def initialize_population(self) -> None:
+        """Initialize population with diverse individuals using CP-SAT."""
+        self.population.clear()
+        
+        for _ in range(self.population_size):
+            # Use CP-SAT to generate valid object configurations
+            try:
+                objects = self.cp_sampler.sample(
+                    num_objects=random.randint(3, 8),
+                    object_types=['circle', 'rectangle', 'triangle', 'ellipse', 'polygon']
+                )
+                
+                if objects:
+                    individual = Individual(objects=objects)
+                    self.population.append(individual)
+                else:
+                    # Fallback to random generation if CP-SAT fails
+                    objects = self._generate_random_objects()
+                    individual = Individual(objects=objects)
+                    self.population.append(individual)
+                    
+            except Exception as e:
+                print(f"Warning: CP-SAT failed, using random generation: {e}")
+                objects = self._generate_random_objects()
+                individual = Individual(objects=objects)
+                self.population.append(individual)
+        
+        # Evaluate initial population
+        self._evaluate_population()
+        
+    def _generate_random_objects(self, num_objects: Optional[int] = None) -> List[Dict]:
+        """Generate random objects as fallback."""
+        if num_objects is None:
+            num_objects = random.randint(3, 8)
             
-        # Fallback: return mock images
-        from PIL import Image
-        pos_imgs = [Image.new('L', (128, 128), color=255) for _ in range(num_pos)]
-        neg_imgs = [Image.new('L', (128, 128), color=255) for _ in range(num_neg)]
-        return pos_imgs, neg_imgs
+        objects = []
+        object_types = ['circle', 'rectangle', 'triangle', 'ellipse']
+        
+        for _ in range(num_objects):
+            obj = {
+                'type': random.choice(object_types),
+                'x': random.randint(20, self.canvas_size[0] - 20),
+                'y': random.randint(20, self.canvas_size[1] - 20),
+                'size': random.randint(15, 40),
+                'color': (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)),
+                'stroke_width': random.randint(1, 4),
+                'fill_pattern': random.choice(['solid', 'striped', 'dotted']),
+                'rotation': random.uniform(0, 360)
+            }
+            objects.append(obj)
+            
+        return objects
     
-    def _sample_genetic(self, rule_description: str, num_pos: int, num_neg: int):
-        """Sample using genetic generator."""
-        try:
-            # Find rule by description  
-            rules = get_all_rules()
-            rule = next((r for r in rules if r.description == rule_description), None)
-            if not rule:
-                rule = next((r for r in rules if getattr(r, 'name', '') == rule_description), None)
-                
-            if rule and hasattr(self.ga_generator, 'generate_problem'):
-                # Use consistent key passing - same as CP-SAT
-                rule_key = rule.name if hasattr(rule, 'name') and rule.name else rule.description
-                print(f"→ GA sees rule key: '{rule_key}' for description: '{rule_description}'")
-                pos_imgs, neg_imgs = [], []
-                
-                # Generate positive samples
-                for _ in range(num_pos):
-                    img, lbl = self.ga_generator.generate_problem(rule, is_positive=True)
-                    pos_imgs.append(img)
-                    
-                # Generate negative samples  
-                for _ in range(num_neg):
-                    img, lbl = self.ga_generator.generate_problem(rule, is_positive=False)
-                    neg_imgs.append(img)
-                    
-                return pos_imgs, neg_imgs
-        except Exception as e:
-            print(f"Genetic sampling failed for {rule_description}: {e}")
+    def _evaluate_population(self) -> None:
+        """Evaluate fitness for all individuals in population."""
+        for individual in self.population:
+            individual.fitness = self._calculate_fitness(individual)
             
-        # Fallback: return mock images
-        from PIL import Image
-        pos_imgs = [Image.new('L', (128, 128), color=255) for _ in range(num_pos)]
-        neg_imgs = [Image.new('L', (128, 128), color=255) for _ in range(num_neg)]
-        return pos_imgs, neg_imgs
+        # Update best individual
+        self.population.sort(key=lambda x: x.fitness, reverse=True)
+        if self.best_individual is None or self.population[0].fitness > self.best_individual.fitness:
+            self.best_individual = copy.deepcopy(self.population[0])
+    
+    def _calculate_fitness(self, individual: Individual) -> float:
+        """Calculate comprehensive fitness score for an individual."""
+        # Coverage score: How well does this fill coverage gaps?
+        coverage_score = self._calculate_coverage_score(individual)
+        
+        # Constraint score: How well does this satisfy spatial constraints?
+        constraint_score = self._calculate_constraint_score(individual)
+        
+        # Diversity score: How different is this from existing population?
+        diversity_score = self._calculate_diversity_score(individual)
+        
+        # Store component scores
+        individual.coverage_score = coverage_score
+        individual.constraint_score = constraint_score
+        individual.diversity_score = diversity_score
+        
+        # Weighted combination
+        fitness = (self.coverage_weight * coverage_score +
+                  self.constraint_weight * constraint_score +
+                  self.diversity_weight * diversity_score)
+        
+        return fitness
+    
+    def _calculate_coverage_score(self, individual: Individual) -> float:
+        """Calculate how well individual fills coverage gaps."""
+        try:
+            # Convert individual to coverage dimensions
+            dims = self._extract_coverage_dimensions(individual)
+            
+            # Get priority cells (underrepresented combinations)
+            priority_cells = self.coverage_tracker.get_priority_cells(threshold=0.1)
+            
+            if not priority_cells:
+                return 0.5  # Neutral score if no priority gaps
+            
+            # Score based on matching priority patterns
+            matches = 0
+            for cell in priority_cells:
+                if self._matches_coverage_cell(dims, cell):
+                    matches += 1
+            
+            return min(matches / len(priority_cells), 1.0)
+            
+        except Exception:
+            return 0.0
+    
+    def _calculate_constraint_score(self, individual: Individual) -> float:
+        """Calculate constraint satisfaction score."""
+        score = 1.0
+        
+        # Check object overlaps
+        objects = individual.objects
+        overlap_penalty = 0
+        
+        for i in range(len(objects)):
+            for j in range(i + 1, len(objects)):
+                if self._objects_overlap(objects[i], objects[j]):
+                    overlap_penalty += 0.1
+        
+        score -= min(overlap_penalty, 0.8)
+        
+        # Check boundary violations
+        boundary_penalty = 0
+        for obj in objects:
+            if (obj['x'] - obj['size']//2 < 0 or 
+                obj['x'] + obj['size']//2 > self.canvas_size[0] or
+                obj['y'] - obj['size']//2 < 0 or 
+                obj['y'] + obj['size']//2 > self.canvas_size[1]):
+                boundary_penalty += 0.1
+        
+        score -= min(boundary_penalty, 0.5)
+        
+        return max(score, 0.0)
+    
+    def _calculate_diversity_score(self, individual: Individual) -> float:
+        """Calculate diversity relative to population."""
+        if len(self.population) <= 1:
+            return 1.0
+        
+        # Calculate average distance to other individuals
+        total_distance = 0
+        count = 0
+        
+        for other in self.population:
+            if other is individual:
+                continue
+            distance = self._individual_distance(individual, other)
+            total_distance += distance
+            count += 1
+        
+        if count == 0:
+            return 1.0
+        
+        avg_distance = total_distance / count
+        return min(avg_distance, 1.0)
+    
+    def _individual_distance(self, ind1: Individual, ind2: Individual) -> float:
+        """Calculate distance between two individuals."""
+        # Simple distance based on object differences
+        distance = 0.0
+        
+        # Object count difference
+        distance += abs(len(ind1.objects) - len(ind2.objects)) * 0.1
+        
+        # Object type distribution difference
+        types1 = defaultdict(int)
+        types2 = defaultdict(int)
+        
+        for obj in ind1.objects:
+            types1[obj['type']] += 1
+        for obj in ind2.objects:
+            types2[obj['type']] += 1
+        
+        all_types = set(types1.keys()) | set(types2.keys())
+        for obj_type in all_types:
+            distance += abs(types1[obj_type] - types2[obj_type]) * 0.05
+        
+        return min(distance, 1.0)
+    
+    def _objects_overlap(self, obj1: Dict, obj2: Dict) -> bool:
+        """Check if two objects overlap."""
+        dx = abs(obj1['x'] - obj2['x'])
+        dy = abs(obj1['y'] - obj2['y'])
+        min_distance = (obj1['size'] + obj2['size']) // 2 + 5  # 5px separation
+        
+        return (dx * dx + dy * dy) < (min_distance * min_distance)
+    
+    def evolve(self) -> Individual:
+        """Run genetic algorithm evolution."""
+        self.initialize_population()
+        
+        for gen in range(self.generations):
+            self.generation = gen
+            
+            # Selection
+            parents = self._selection()
+            
+            # Crossover and mutation
+            offspring = []
+            for i in range(0, len(parents) - 1, 2):
+                child1, child2 = self._crossover(parents[i], parents[i + 1])
+                child1 = self._mutate(child1)
+                child2 = self._mutate(child2)
+                offspring.extend([child1, child2])
+            
+            # Combine population with offspring
+            combined = self.population + offspring
+            
+            # Evaluate all individuals
+            for individual in combined:
+                if individual.fitness == 0.0:  # Not evaluated yet
+                    individual.fitness = self._calculate_fitness(individual)
+            
+            # Select next generation
+            combined.sort(key=lambda x: x.fitness, reverse=True)
+            self.population = combined[:self.population_size]
+            
+            # Update statistics
+            best_fitness = self.population[0].fitness
+            avg_coverage = np.mean([ind.coverage_score for ind in self.population])
+            
+            self.fitness_history.append(best_fitness)
+            self.coverage_history.append(avg_coverage)
+            
+            # Update best individual
+            if self.best_individual is None or self.population[0].fitness > self.best_individual.fitness:
+                self.best_individual = copy.deepcopy(self.population[0])
+            
+            if gen % 10 == 0:
+                print(f"Generation {gen}: Best fitness = {best_fitness:.3f}, "
+                      f"Avg coverage = {avg_coverage:.3f}")
+        
+        return self.best_individual
+    
+    def _selection(self) -> List[Individual]:
+        """Tournament selection."""
+        tournament_size = 3
+        parents = []
+        
+        for _ in range(self.population_size):
+            tournament = random.sample(self.population, tournament_size)
+            winner = max(tournament, key=lambda x: x.fitness)
+            parents.append(winner)
+        
+        return parents
+    
+    def _crossover(self, parent1: Individual, parent2: Individual) -> Tuple[Individual, Individual]:
+        """Crossover between two individuals."""
+        if random.random() > self.crossover_rate:
+            return copy.deepcopy(parent1), copy.deepcopy(parent2)
+        
+        # Object-level crossover
+        objects1 = parent1.objects[:]
+        objects2 = parent2.objects[:]
+        
+        # Mix objects from both parents
+        min_len = min(len(objects1), len(objects2))
+        crossover_point = random.randint(1, min_len - 1)
+        
+        new_objects1 = objects1[:crossover_point] + objects2[crossover_point:]
+        new_objects2 = objects2[:crossover_point] + objects1[crossover_point:]
+        
+        child1 = Individual(objects=new_objects1)
+        child2 = Individual(objects=new_objects2)
+        
+        return child1, child2
+    
+    def _mutate(self, individual: Individual) -> Individual:
+        """Mutate an individual."""
+        if random.random() > self.mutation_rate:
+            return individual
+        
+        individual = copy.deepcopy(individual)
+        objects = individual.objects
+        
+        mutation_type = random.choice(['add', 'remove', 'modify', 'swap'])
+        
+        if mutation_type == 'add' and len(objects) < 10:
+            # Add new object
+            new_obj = self._generate_random_objects(1)[0]
+            objects.append(new_obj)
+            
+        elif mutation_type == 'remove' and len(objects) > 2:
+            # Remove random object
+            objects.pop(random.randint(0, len(objects) - 1))
+            
+        elif mutation_type == 'modify' and objects:
+            # Modify random object
+            obj_idx = random.randint(0, len(objects) - 1)
+            obj = objects[obj_idx]
+            
+            # Randomly modify one attribute
+            attr = random.choice(['x', 'y', 'size', 'color', 'rotation'])
+            if attr in ['x', 'y']:
+                obj[attr] += random.randint(-20, 20)
+                obj[attr] = max(20, min(obj[attr], self.canvas_size[0] - 20))
+            elif attr == 'size':
+                obj[attr] += random.randint(-10, 10)
+                obj[attr] = max(10, min(obj[attr], 60))
+            elif attr == 'color':
+                obj[attr] = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
+            elif attr == 'rotation':
+                obj[attr] += random.uniform(-30, 30)
+                
+        elif mutation_type == 'swap' and len(objects) >= 2:
+            # Swap two objects
+            idx1, idx2 = random.sample(range(len(objects)), 2)
+            objects[idx1], objects[idx2] = objects[idx2], objects[idx1]
+        
+        individual.fitness = 0.0  # Mark for re-evaluation
+        return individual
+    
+    def sample(self, **kwargs) -> List[Dict]:
+        """Main sampling interface - returns best evolved solution."""
+        best_individual = self.evolve()
+        return best_individual.objects if best_individual else []
+    
+    def _extract_coverage_dimensions(self, individual: Individual) -> CoverageDimensions:
+        """Extract coverage dimensions from individual for evaluation."""
+        objects = individual.objects
+        
+        if not objects:
+            return CoverageDimensions()
+        
+        # Extract features from objects
+        shape_types = [obj['type'] for obj in objects]
+        fill_patterns = [obj.get('fill_pattern', 'solid') for obj in objects]
+        
+        return CoverageDimensions(
+            shape_count=len(objects),
+            dominant_shape=max(set(shape_types), key=shape_types.count),
+            fill_pattern=max(set(fill_patterns), key=fill_patterns.count),
+            spatial_relation='scattered',  # Simplified for now
+            stroke_pattern='normal'  # Simplified for now
+        )
+    
+    def _matches_coverage_cell(self, dims: CoverageDimensions, cell: CoverageCell) -> bool:
+        """Check if dimensions match a coverage cell."""
+        return (dims.shape_count == cell.shape_count and
+                dims.dominant_shape == cell.dominant_shape and
+                dims.fill_pattern == cell.fill_pattern)

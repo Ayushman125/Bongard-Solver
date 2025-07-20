@@ -17,12 +17,6 @@ except ImportError:
 from .rule_loader import BongardRule
 from .spatial_sampler import RelationSampler
 
-# Constants from unified generator for enhanced constraint building
-SHAPE_IDX = {'circle': 0, 'square': 1, 'triangle': 2, 'star': 3, 'pentagon': 4}
-COLOR_IDX = {'red': 0, 'blue': 1, 'green': 2, 'black': 3, 'white': 4}
-SIZE_IDX = {'small': 0, 'medium': 1, 'large': 2}
-TEXTURE_IDX = {'none': 0, 'striped': 1, 'dotted': 2, 'crosshatch': 3, 'gradient': 4, 'checker': 5}
-
 @dataclass
 class SceneParameters:
     """Parameters for scene generation."""
@@ -177,25 +171,35 @@ class CPSATSampler:
         return relation not in ['overlap', 'nested', 'inside']
     
     def _add_non_overlap_constraints(self, model, objects: List[Dict]):
-        """Add non-overlap constraints between objects."""
+        """Add enhanced non-overlap constraints between objects."""
         for i in range(len(objects)):
             for j in range(i + 1, len(objects)):
                 obj1, obj2 = objects[i], objects[j]
                 
-                # Create boolean variables for each direction
-                left = model.NewBoolVar(f'left_{i}_{j}')
-                right = model.NewBoolVar(f'right_{i}_{j}')
-                above = model.NewBoolVar(f'above_{i}_{j}')
-                below = model.NewBoolVar(f'below_{i}_{j}')
+                # Minimum separation distance
+                min_sep = 10
                 
-                # At least one direction must be true (no overlap)
-                model.AddBoolOr([left, right, above, below])
+                # Create boolean variables for separation in each direction
+                sep_x_left = model.NewBoolVar(f'sep_x_left_{i}_{j}')
+                sep_x_right = model.NewBoolVar(f'sep_x_right_{i}_{j}')
+                sep_y_above = model.NewBoolVar(f'sep_y_above_{i}_{j}')
+                sep_y_below = model.NewBoolVar(f'sep_y_below_{i}_{j}')
                 
-                # Define the constraints for each direction
-                model.Add(obj1['x'] + obj1['size'] <= obj2['x']).OnlyEnforceIf(left)
-                model.Add(obj2['x'] + obj2['size'] <= obj1['x']).OnlyEnforceIf(right)
-                model.Add(obj1['y'] + obj1['size'] <= obj2['y']).OnlyEnforceIf(above)
-                model.Add(obj2['y'] + obj2['size'] <= obj1['y']).OnlyEnforceIf(below)
+                # At least one separation direction must be true
+                model.AddBoolOr([sep_x_left, sep_x_right, sep_y_above, sep_y_below])
+                
+                # Define separation constraints for each direction
+                # Object 1 is to the left of object 2
+                model.Add(obj1['x'] + obj1['size']//2 + min_sep <= obj2['x'] - obj2['size']//2).OnlyEnforceIf(sep_x_left)
+                
+                # Object 1 is to the right of object 2  
+                model.Add(obj2['x'] + obj2['size']//2 + min_sep <= obj1['x'] - obj1['size']//2).OnlyEnforceIf(sep_x_right)
+                
+                # Object 1 is above object 2
+                model.Add(obj1['y'] + obj1['size']//2 + min_sep <= obj2['y'] - obj2['size']//2).OnlyEnforceIf(sep_y_above)
+                
+                # Object 1 is below object 2
+                model.Add(obj2['y'] + obj2['size']//2 + min_sep <= obj1['y'] - obj1['size']//2).OnlyEnforceIf(sep_y_below)
     
     def _solution_to_objects(self, solution: Dict, num_objects: int) -> List[Dict[str, Any]]:
         """Convert CP-SAT solution to object list."""
@@ -220,92 +224,73 @@ class CPSATSampler:
         objects = []
         features = rule.positive_features if positive else rule.negative_features
         
-        # Handle spatial relations
-        relation = features.get('relation')
-        if relation:
-            positions = self.relation_sampler.sample(num_objects, relation)
-        else:
-            positions = self.relation_sampler.sample(num_objects, 'random')
+        # Non-overlap rejection sampling
+        max_attempts = num_objects * 20
+        min_sep = 15  # Minimum separation between objects
         
-        # Generate objects with required properties
-        for i in range(num_objects):
-            pos = positions[i] if i < len(positions) else positions[0]
+        for obj_idx in range(num_objects):
+            attempts = 0
+            placed = False
             
-            obj = {
-                'x': int(pos['position'][0]),
-                'y': int(pos['position'][1]),
-                'size': pos.get('size', random.randint(self.params.min_obj_size, self.params.max_obj_size)),
-                'position': pos['position']
-            }
-            
-            # Apply rule constraints
-            if positive:
-                obj['shape'] = features.get('shape', random.choice(self.params.shapes))
-                obj['fill'] = features.get('fill', random.choice(self.params.fills))
-            else:
-                # For negative examples, avoid the specified features
-                available_shapes = [s for s in self.params.shapes 
-                                 if s != features.get('shape')]
-                available_fills = [f for f in self.params.fills 
-                                 if f != features.get('fill')]
+            while attempts < max_attempts and not placed:
+                attempts += 1
                 
-                obj['shape'] = random.choice(available_shapes if available_shapes else self.params.shapes)
-                obj['fill'] = random.choice(available_fills if available_fills else self.params.fills)
+                # Generate candidate object
+                size = random.randint(self.params.min_obj_size, self.params.max_obj_size)
+                margin = size // 2 + min_sep
+                
+                x = random.randint(margin, self.params.canvas_size - margin)
+                y = random.randint(margin, self.params.canvas_size - margin)
+                
+                obj = {
+                    'x': x,
+                    'y': y,
+                    'size': size,
+                    'position': (x, y)
+                }
+                
+                # Check for overlaps with existing objects
+                overlaps = False
+                for existing_obj in objects:
+                    if self._objects_overlap(obj, existing_obj, min_sep):
+                        overlaps = True
+                        break
+                
+                if not overlaps:
+                    # Apply rule constraints
+                    if positive:
+                        obj['shape'] = features.get('shape', random.choice(self.params.shapes))
+                        obj['fill'] = features.get('fill', random.choice(self.params.fills))
+                    else:
+                        # For negative examples, avoid the specified features
+                        available_shapes = [s for s in self.params.shapes 
+                                         if s != features.get('shape')]
+                        available_fills = [f for f in self.params.fills 
+                                         if f != features.get('fill')]
+                        
+                        obj['shape'] = random.choice(available_shapes if available_shapes else self.params.shapes)
+                        obj['fill'] = random.choice(available_fills if available_fills else self.params.fills)
+                    
+                    obj['color'] = random.choice(self.params.colors)
+                    objects.append(obj)
+                    placed = True
             
-        obj['color'] = random.choice(self.params.colors)
-        objects.append(obj)
-    
+            if not placed:
+                logger.warning(f"Could only place {len(objects)}/{num_objects} objects without overlap")
+                break
+        
         return objects
-
-    def add_literal_constraints(self, model, vars_, literals):
-        """Enhanced constraint building from unified generator."""
-        for lit in literals:
-            f, v = lit.get('feature'), lit.get('value')
-            if f == 'color' and v in COLOR_IDX:
-                idx = COLOR_IDX[v]
-                for obj in vars_:
-                    model.Add(obj['color_idx'] == idx)
-            elif f == 'shape' and v in SHAPE_IDX:
-                idx = SHAPE_IDX[v]
-                for obj in vars_:
-                    model.Add(obj['shape_idx'] == idx)
-            elif f == 'size' and v in SIZE_IDX:
-                idx = SIZE_IDX[v]
-                for obj in vars_:
-                    model.Add(obj['size'] == idx)
-            elif f == 'count_op':
-                # Enhanced count constraints
-                bools = []
-                idx = SHAPE_IDX.get(v, 0)
-                for obj in vars_:
-                    b = model.NewBoolVar(f'is_{v}_{id(obj)}')
-                    model.Add(obj['shape_idx'] == idx).OnlyEnforceIf(b)
-                    model.Add(obj['shape_idx'] != idx).OnlyEnforceIf(b.Not())
-                    bools.append(b)
-                
-                op, cnt = lit.get('count_op'), lit.get('count_value', 1)
-                if op == 'EQ':
-                    model.Add(sum(bools) == cnt)
-                elif op == 'GT':
-                    model.Add(sum(bools) > cnt)
-                elif op == 'LT':
-                    model.Add(sum(bools) < cnt)
-
-    def block_previous_solution(self, model, vars_, solution):
-        """Block a previous solution to encourage diversity."""
-        if not solution:
-            return
+    
+    def _objects_overlap(self, obj1: Dict[str, Any], obj2: Dict[str, Any], min_sep: int) -> bool:
+        """Check if two objects overlap with minimum separation."""
+        dx = obj1['x'] - obj2['x']
+        dy = obj1['y'] - obj2['y']
+        r1 = obj1['size'] / 2
+        r2 = obj2['size'] / 2
+        min_distance = r1 + r2 + min_sep
         
-        clause = []
-        for i, obj_vars in enumerate(vars_):
-            if i < len(solution):
-                sol_obj = solution[i]
-                for key, var in obj_vars.items():
-                    if key in sol_obj:
-                        clause.append(var != sol_obj[key])
-        
-        if clause:
-            model.AddBoolOr(clause)
+        actual_distance = (dx*dx + dy*dy) ** 0.5
+        return actual_distance < min_distance
 
 def sample_scene_cp(rule: BongardRule, 
                    num_objects: int, 
