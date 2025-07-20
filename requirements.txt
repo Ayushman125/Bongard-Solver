@@ -1,0 +1,38 @@
+# Bongard-Solver requirements.txt
+
+# Core scientific stack
+numpy==1.26.4
+scipy==1.16.0
+pandas>=2.0.0
+matplotlib==3.10.3
+scikit-learn==1.7.0
+tqdm==4.67.1
+
+# Image processing
+Pillow==11.3.0
+opencv-python==4.11.0.86
+
+# Data handling
+h5py==3.14.0
+
+# Utility
+pyyaml==6.0.2
+
+# Deep learning (PyTorch with CUDA 12.1)
+pytorch-lightning==2.2.4
+
+torch==2.2.0+cu121
+torchvision==0.17.0+cu121
+torchaudio==2.2.0+cu121
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+# For Google Drive dataset download (if needed)
+gdown==5.2.0
+
+# ONNX export support
+onnx==1.18.0
+onnxscript==0.3.2
+onnx_ir==0.1.4
+protobuf==6.31.1
+ml_dtypes==0.5.1
+ortools>=9.6.2532
