@@ -190,7 +190,7 @@ class PrototypeAction:
         x0, y0 = center
         
         # 4) Jitter position
-        jitter_range = config.get('jitter_px', 5)
+        jitter_range = float(config.get('jitter_px', 5))
         if jitter_range > 0:
             jitter_x = x0 + random.uniform(-jitter_range, jitter_range)
             jitter_y = y0 + random.uniform(-jitter_range, jitter_range)
@@ -198,7 +198,7 @@ class PrototypeAction:
             jitter_x, jitter_y = x0, y0
         
         # 5) Convert mask to binary
-        threshold = config.get('threshold', 128)
+        threshold = int(config.get('threshold', 128))
         bin_mask = mask.point(lambda p: 255 if p > threshold else 0, mode='1')
         
         # 6) Create shape with desired color/fill

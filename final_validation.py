@@ -131,17 +131,10 @@ class CompleteBongardPipeline:
                 if not isinstance(cov_goals, dict):
                     # Convert SimpleNamespace to dict
                     self.config.coverage.coverage_goals = cov_goals.__dict__
-            # Ensure canvas_size is always int in config and config.generator
-            if hasattr(self.config, 'canvas_size'):
-                try:
-                    self.config.canvas_size = int(self.config.canvas_size)
-                except Exception:
-                    self.config.canvas_size = 128
-            if hasattr(self.config, 'generator') and hasattr(self.config.generator, 'canvas_size'):
-                try:
-                    self.config.generator.canvas_size = int(self.config.generator.canvas_size)
-                except Exception:
-                    self.config.generator.canvas_size = 128
+            
+            # COMPREHENSIVE CONFIG TYPE CONVERSION - Fix all string/int division errors
+            self._fix_config_types(self.config)
+            
             self.generator = BongardGenerator(self.config)
             logger.info("   ✅ BongardGenerator initialized (all logics integrated)")
         except Exception as e:
@@ -157,6 +150,40 @@ class CompleteBongardPipeline:
     def _check_real_dataset_availability(self) -> bool:
         """Check if ShapeBongard_V2 dataset is available."""
         return os.path.exists(self.shapebongard_dir)
+    
+    def _fix_config_types(self, config):
+        """Comprehensive config type conversion to prevent string/int division errors."""
+        # List of numeric config attributes that should be converted
+        numeric_attrs = [
+            'canvas_size', 'stroke_min', 'jitter_px', 'threshold',
+            'img_size', 'image_size', 'min_objects', 'max_objects'
+        ]
+        
+        def convert_numeric_attrs(obj, attrs):
+            """Convert string numeric values to proper types."""
+            for attr in attrs:
+                if hasattr(obj, attr):
+                    try:
+                        val = getattr(obj, attr)
+                        if isinstance(val, str):
+                            # Try int first, then float
+                            try:
+                                setattr(obj, attr, int(val))
+                            except ValueError:
+                                setattr(obj, attr, float(val))
+                    except Exception:
+                        continue
+        
+        # Convert at root level
+        convert_numeric_attrs(config, numeric_attrs)
+        
+        # Convert at sub-config levels
+        if hasattr(config, 'generator'):
+            convert_numeric_attrs(config.generator, numeric_attrs)
+        if hasattr(config, 'coverage'):
+            convert_numeric_attrs(config.coverage, numeric_attrs)
+        if hasattr(config, 'data'):
+            convert_numeric_attrs(config.data, numeric_attrs)
 
     def run_complete_validation(self):
         """Run the complete integrated pipeline validation."""

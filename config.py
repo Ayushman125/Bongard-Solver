@@ -478,6 +478,30 @@ def load_config(config_path: str = 'config.yaml') -> Dict[str, Any]:
     if os.path.exists(config_path):
         with open(config_path, 'r') as f:
             yaml_config = yaml.safe_load(f)
+        
+        # Fix string/int division errors by converting numeric string values
+        def fix_numeric_types(obj):
+            """Recursively convert numeric string values to proper types"""
+            if isinstance(obj, dict):
+                for key, value in obj.items():
+                    obj[key] = fix_numeric_types(value)
+                return obj
+            elif isinstance(obj, list):
+                return [fix_numeric_types(item) for item in obj]
+            elif isinstance(obj, str):
+                # Try to convert string numbers to appropriate types
+                if obj.isdigit():
+                    return int(obj)
+                try:
+                    # Try float conversion for decimal numbers
+                    if '.' in obj:
+                        return float(obj)
+                except ValueError:
+                    pass
+            return obj
+        
+        yaml_config = fix_numeric_types(yaml_config)
+        
         # Deep merge YAML config into default CONFIG
         def deep_merge(dict1, dict2):
             for k, v in dict2.items():

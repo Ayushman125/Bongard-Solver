@@ -6,7 +6,10 @@ def draw_shape(draw: ImageDraw.Draw, obj: dict, cfg):
     x, y, s = obj['x'], obj['y'], obj['size']
     shape = obj['shape']
     fill  = obj.get('fill', 'solid')
-    stroke = obj.get('stroke_width', getattr(cfg, 'stroke_min', 1))
+    
+    # Ensure numeric values are proper types
+    stroke_min = int(getattr(cfg, 'stroke_min', 1))
+    stroke = int(obj.get('stroke_width', stroke_min))
     angle = obj.get('rotation', random.uniform(0,360))
     pts = []
 
@@ -28,12 +31,14 @@ def draw_shape(draw: ImageDraw.Draw, obj: dict, cfg):
             base.append((x + r*math.cos(theta), y + r*math.sin(theta)))
         # rotate & jitter
         pts = []
+        # Ensure jitter_px is numeric
+        jitter_px = float(getattr(cfg, 'jitter_px', 0.5))
         for px,py in base:
             dx,dy = px-x, py-y
             rdx = dx*math.cos(math.radians(angle)) - dy*math.sin(math.radians(angle))
             rdy = dx*math.sin(math.radians(angle)) + dy*math.cos(math.radians(angle))
-            jittered = (x + rdx + random.uniform(-cfg.jitter_px,cfg.jitter_px),
-                        y + rdy + random.uniform(-cfg.jitter_px,cfg.jitter_px))
+            jittered = (x + rdx + random.uniform(-jitter_px, jitter_px),
+                        y + rdy + random.uniform(-jitter_px, jitter_px))
             pts.append(jittered)
         # fill
         if fill=='solid':

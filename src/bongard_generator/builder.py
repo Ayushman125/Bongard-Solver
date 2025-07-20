@@ -257,6 +257,10 @@ class BongardGenerator:
                     metadata['gnn_quality_score'] = quality_score
                 
                 # Render the scene to an image
+                # Ensure config has proper numeric types before rendering
+                if hasattr(self.cfg, 'canvas_size') and isinstance(self.cfg.canvas_size, str):
+                    self.cfg.canvas_size = int(self.cfg.canvas_size)
+                
                 scene_image = create_composite_scene(objects, self.cfg)
                 
                 # Record coverage information
