@@ -45,13 +45,34 @@ class EnhancedCoverageTracker:
             ('color', 'red'), ('color', 'blue')
         ]
 
-    def record(self, features: Dict[str, Any]):
+    def record(self, features):
         """Record the features of a generated example."""
-        for key, value in features.items():
-            cell = (key, value)
-            if cell in self.cells:
-                self.coverage[cell] += 1
-        self.total_recorded += 1
+        # Handle list of objects by extracting features from each object
+        if isinstance(features, list):
+            for obj in features:
+                if isinstance(obj, dict):
+                    # Extract key features from each object
+                    obj_features = {}
+                    if 'shape' in obj:
+                        obj_features['shape'] = obj['shape']
+                    if 'color' in obj:
+                        obj_features['color'] = obj['color']
+                    if 'size' in obj:
+                        obj_features['size'] = obj['size']
+                    if 'fill' in obj:
+                        obj_features['fill'] = obj['fill']
+                    # Record features for this object
+                    if obj_features:
+                        self.record(obj_features)
+            return
+        
+        # Original logic: features is a dict
+        if isinstance(features, dict):
+            for key, value in features.items():
+                cell = (key, value)
+                if cell in self.cells:
+                    self.coverage[cell] += 1
+            self.total_recorded += 1
 
     def get_under_covered_cells(self, min_quota: Optional[int] = None) -> List[Tuple]:
         """
