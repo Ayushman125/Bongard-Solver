@@ -1,0 +1,7 @@
+generator:
+  mode: hybrid                  # options: cp_sat, genetic, prototype, hybrid
+  cp_quota:   0.5               # fraction of total scenes from CP-SAT
+  ga_quota:   0.3               # fraction from Genetic
+  pt_quota:   0.2               # fraction from PrototypeAction
+  use_gan:    true
+  bg_texture: noise             # options: none, noise, checker

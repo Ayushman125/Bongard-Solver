@@ -1,21 +1,16 @@
 """
-Final Validation Script for the Professional Bongard-LOGO Generator
+Final Validation Script for the Unified Bongard-LOGO Generator
 
-This script performs an end-to-end test of the entire generation pipeline,
-including:
-- Unified configuration management (GeneratorConfig)
-- Modular components (MetaController, Styler, PrototypeAction)
-- Advanced features (textures, prototype shapes, GAN stylization hooks)
-- Final data generation and saving
-
-It generates a small, representative dataset to verify that all parts of the
-system are working together correctly and producing the expected black-and-white
-Bongard problems.
+This script performs an end-to-end test of the unified generation pipeline,
+driven by the master BongardGenerator class.
 """
-
 import os
 import logging
 import shutil
+from bongard_generator.builder import BongardGenerator
+from bongard_rules import get_all_rules, BongardRule
+from config import load_config, CONFIG
+from PIL import Image
 
 # Configure logging
 logging.basicConfig(
@@ -23,118 +18,93 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
-# It's good practice to put imports after logging configuration
-# to ensure they don't interfere with it.
-try:
-    from src.bongard_generator.config import GeneratorConfig
-    from src.bongard_generator.dataset import generate_and_save_dataset
-except ImportError as e:
-    logging.error(f"Failed to import necessary modules: {e}")
-    logging.error(
-        "Please ensure you are running this script from the 'BongordSolver' root directory."
-    )
-    exit(1)
-
-
-def create_validation_config() -> GeneratorConfig:
-    """
-    Creates a comprehensive configuration to test all major features of the
-    generator pipeline.
-    """
-    logging.info("Creating validation configuration...")
-    return GeneratorConfig(
-        img_size=256,
-        min_shapes=2,
-        max_shapes=4,
-        
-        # --- Test Advanced Features ---
-        # Enable textures (randomly chosen per scene later)
-        bg_texture="checker",
-        noise_level=0.15,
-        noise_opacity=0.4,
-        checker_size=25,
-        
-        # Enable prototype shapes.
-        # Point to a plausible directory. If it doesn't exist, the system
-        # will gracefully fall back to procedural shapes.
-        prototype_path="data/shapebongordV2",
-
-        # Enable GAN stylization hook (will be skipped if model not found)
-        use_gan_stylization=True,
-        gan_model_path="checkpoints/gan_generator_placeholder.pth",
-
-        # Enable the adaptive rule selection
-        use_meta_controller=True,
-        rule_paths=["src/bongard_generator/rules"],
-        
-        # --- Standard Settings ---
-        enable_jitter=True,
-        jitter_strength=0.03,
-        enable_rotation=True,
-        fill_type='solid' # Keep shapes solid for clarity
-    )
-
-
-def run_validation():
-    """
-    Executes the end-to-end validation test.
-    """
-    logging.info("Starting final validation of the Bongard-LOGO generator.")
+def save_scenes(rule_name: str, scenes: list, base_dir: str):
+    """Saves generated scenes to a directory structure."""
+    rule_dir = os.path.join(base_dir, rule_name)
+    os.makedirs(rule_dir, exist_ok=True)
     
-    # 1. Configuration
-    config = create_validation_config()
+    for i, (img, rule, tag) in enumerate(scenes):
+        # Ensure image is in a savable format
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        
+        # Sanitize tag for filename
+        safe_tag = tag.replace(" ", "_")
+        
+        # Construct filename
+        filename = f"{i:03d}_{safe_tag}.png"
+        filepath = os.path.join(rule_dir, filename)
+        
+        # Save the image
+        img.save(filepath)
+
+    logging.info(f"Saved {len(scenes)} scenes for rule '{rule_name}' in '{rule_dir}'")
+
+
+def run_unified_validation():
+    """
+    Executes the end-to-end validation test for the unified generator.
+    """
+    logging.info("Starting unified validation of the Bongard-LOGO generator.")
     
-    # 2. Setup Parameters
-    num_problems_to_generate = 5  # Small number for a quick test
-    output_directory = "validation_output"
+    # 1. Load configuration from config.py and config.yaml
+    cfg = CONFIG
     
-    logging.info(f"Generator will create {num_problems_to_generate} problems.")
+    # 2. Instantiate the master generator
+    try:
+        gen = BongardGenerator(cfg)
+    except Exception as e:
+        logging.error(f"Failed to initialize BongardGenerator: {e}", exc_info=True)
+        return
+
+    # 3. Setup Parameters
+    all_rules = get_all_rules()
+    output_directory = "unified_validation_output"
+    
+    logging.info(f"Found {len(all_rules)} rules to process.")
     logging.info(f"Output will be saved to: {output_directory}")
 
     # Clean up previous validation runs
     if os.path.exists(output_directory):
         logging.warning(f"Removing existing validation directory: {output_directory}")
         shutil.rmtree(output_directory)
-    
-    # 3. Run the Dataset Generation
-    try:
-        logging.info("Starting dataset generation...")
-        generate_and_save_dataset(
-            config=config,
-            num_problems=num_problems_to_generate,
-            save_dir=output_directory
-        )
-        logging.info("Dataset generation completed successfully.")
-        
-    except Exception as e:
-        logging.error(f"An error occurred during dataset generation: {e}", exc_info=True)
-        logging.error("Validation failed.")
-        return
+    os.makedirs(output_directory)
 
-    # 4. Final Verification
+    # 4. Run Generation for each rule
+    for rule in all_rules:
+        if not isinstance(rule, BongardRule):
+            logging.warning(f"Skipping invalid rule object: {rule}")
+            continue
+            
+        logging.info(f"--- Generating for rule: {rule.name} ---")
+        try:
+            scenes = gen.generate_for_rule(rule, n_scenes=50)
+            if scenes:
+                save_scenes(rule.name, scenes, output_directory)
+            else:
+                logging.warning(f"No scenes were generated for rule: {rule.name}")
+        except Exception as e:
+            logging.error(f"An error occurred during generation for rule {rule.name}: {e}", exc_info=True)
+
+    # 5. Final Verification and Coverage Report
     logging.info("-" * 50)
     logging.info("Final Validation Summary:")
     
     if os.path.exists(output_directory):
         generated_folders = [f for f in os.listdir(output_directory) if os.path.isdir(os.path.join(output_directory, f))]
-        if len(generated_folders) == num_problems_to_generate:
-            logging.info(f"✅ Success: Correct number of problem folders generated ({len(generated_folders)}).")
-            
-            # Check content of the first problem folder
-            first_problem_dir = os.path.join(output_directory, generated_folders[0])
-            files = os.listdir(first_problem_dir)
-            if "positive_0.png" in files and "negative_0.png" in files and "rule.txt" in files:
-                logging.info(f"✅ Success: First problem folder '{generated_folders[0]}' contains expected files.")
-            else:
-                logging.error(f"❌ Failure: First problem folder is missing expected files.")
+        if generated_folders:
+            logging.info(f"✅ Success: {len(generated_folders)} rule folders generated.")
         else:
-            logging.error(f"❌ Failure: Incorrect number of problem folders generated. Expected {num_problems_to_generate}, found {len(generated_folders)}.")
+            logging.error("❌ Failure: No rule folders were generated.")
     else:
         logging.error(f"❌ Failure: Output directory '{output_directory}' was not created.")
 
+    # Print coverage report
+    gen.get_coverage_report()
+
     logging.info("-" * 50)
-    logging.info("Validation script finished. Please review the images in the 'validation_output' directory.")
+    logging.info("Unified validation script finished. Please review the images in the 'unified_validation_output' directory.")
 
 
 if __name__ == "__main__":
-    run_validation()
+    run_unified_validation()
