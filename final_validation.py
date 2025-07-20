@@ -20,6 +20,7 @@ import numpy as np
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple
+from types import SimpleNamespace
 
 # Add src path for imports
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
@@ -83,10 +84,10 @@ class CompleteBongardPipeline:
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.validation_dir = "complete_validation_output"
-        self.synthetic_dir = "data/synthetic_bongard"
-        self.nvlabs_dir = "data/Bongard-LOGO"  # NVlabs repo location
-        self.shapebongard_dir = "ShapeBongard_V2"  # Real dataset location
+        self.validation_dir = Path("complete_validation_output")
+        self.synthetic_dir = Path("data/synthetic_bongard")
+        self.nvlabs_dir = Path("data/Bongard-LOGO")  # NVlabs repo location
+        self.shapebongard_dir = Path("ShapeBongard_V2")  # Real dataset location
         
         # Initialize core components
         self._initialize_components()
@@ -151,39 +152,46 @@ class CompleteBongardPipeline:
         """Check if ShapeBongard_V2 dataset is available."""
         return os.path.exists(self.shapebongard_dir)
     
-    def _fix_config_types(self, config):
-        """Comprehensive config type conversion to prevent string/int division errors."""
-        # List of numeric config attributes that should be converted
-        numeric_attrs = [
-            'canvas_size', 'stroke_min', 'jitter_px', 'threshold',
-            'img_size', 'image_size', 'min_objects', 'max_objects'
+    def _fix_config_types(self, config_obj):
+        """
+        Recursively traverse a config object (SimpleNamespace or dict) 
+        and convert numeric string values to int or float.
+        """
+        
+        numeric_keys = [
+            'canvas_size', 'stroke_min', 'stroke_max', 'jitter_px', 'threshold',
+            'img_size', 'image_size', 'min_objects', 'max_objects', 'num_workers',
+            'batch_size', 'epochs', 'learning_rate', 'weight_decay', 'gnn_thresh',
+            'gnn_radius', 'cp_quota', 'ga_quota', 'population_size', 'generations',
+            'mutation_rate', 'crossover_rate', 'feature_consistency_weight',
+            'gradient_accumulation_steps', 'mixup_alpha', 'cutmix_alpha',
+            'label_smoothing_epsilon', 'detection_confidence_threshold'
         ]
-        
-        def convert_numeric_attrs(obj, attrs):
-            """Convert string numeric values to proper types."""
-            for attr in attrs:
-                if hasattr(obj, attr):
+
+        if isinstance(config_obj, SimpleNamespace):
+            for key, value in config_obj.__dict__.items():
+                if key in numeric_keys and isinstance(value, str):
                     try:
-                        val = getattr(obj, attr)
-                        if isinstance(val, str):
-                            # Try int first, then float
-                            try:
-                                setattr(obj, attr, int(val))
-                            except ValueError:
-                                setattr(obj, attr, float(val))
-                    except Exception:
-                        continue
-        
-        # Convert at root level
-        convert_numeric_attrs(config, numeric_attrs)
-        
-        # Convert at sub-config levels
-        if hasattr(config, 'generator'):
-            convert_numeric_attrs(config.generator, numeric_attrs)
-        if hasattr(config, 'coverage'):
-            convert_numeric_attrs(config.coverage, numeric_attrs)
-        if hasattr(config, 'data'):
-            convert_numeric_attrs(config.data, numeric_attrs)
+                        setattr(config_obj, key, int(value))
+                    except (ValueError, TypeError):
+                        try:
+                            setattr(config_obj, key, float(value))
+                        except (ValueError, TypeError):
+                            pass  # Keep as string if conversion fails
+                elif isinstance(value, (SimpleNamespace, dict)):
+                    self._fix_config_types(value)
+        elif isinstance(config_obj, dict):
+            for key, value in config_obj.items():
+                if key in numeric_keys and isinstance(value, str):
+                    try:
+                        config_obj[key] = int(value)
+                    except (ValueError, TypeError):
+                        try:
+                            config_obj[key] = float(value)
+                        except (ValueError, TypeError):
+                            pass
+                elif isinstance(value, (SimpleNamespace, dict)):
+                    self._fix_config_types(value)
 
     def run_complete_validation(self):
         """Run the complete integrated pipeline validation."""
@@ -203,7 +211,8 @@ class CompleteBongardPipeline:
 
     def generate_synthetic_data(self):
         logger.info("📦 Generating synthetic dataset (6+6 format, all logics)...")
-        OUT_ROOT = os.path.join(self.validation_dir, "synthetic")
+        OUT_ROOT = Path(self.validation_dir) / "synthetic"
+        OUT_ROOT.mkdir(parents=True, exist_ok=True)
 
         if self.generator is None:
             logger.error("Generator not available. Cannot generate synthetic data.")
@@ -215,10 +224,10 @@ class CompleteBongardPipeline:
             return
 
         for rule in rules:
-            rule_dir = os.path.join(OUT_ROOT, rule.name)
+            rule_dir = OUT_ROOT / rule.name
             for side, label in [("1", True), ("0", False)]:
-                side_dir = os.path.join(rule_dir, side)
-                os.makedirs(side_dir, exist_ok=True)
+                side_dir = rule_dir / side
+                side_dir.mkdir(parents=True, exist_ok=True)
 
                 # --- Integrate all generation logics ---
                 # CP-SAT, Genetic, Prototype, Coverage, GNN filtering
@@ -226,7 +235,8 @@ class CompleteBongardPipeline:
                 self.stats['generated_problems'] += 1
 
                 for i, (img, objs, tag) in enumerate(scenes):
-                    img.save(os.path.join(side_dir, f"{i:02d}_{tag}.png"))
+                    img_path = side_dir / f"{i:02d}_{tag}.png"
+                    img.save(img_path)
                     self.stats['generated_images'] += 1
             logger.info(f"✓ Generated 6+6 for rule: {rule.name} (all logics)")
 
@@ -291,7 +301,6 @@ def main():
             'stroke_min': 1,
             'jitter_px': 0.5,
         }
-        from types import SimpleNamespace
         def dict_to_namespace(d):
             if isinstance(d, dict):
                 return SimpleNamespace(**{k: dict_to_namespace(v) for k, v in d.items()})
