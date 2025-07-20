@@ -153,3 +153,6 @@ __MACOSX/
 # Other
 .wandb_run_id
 developer/
+
+# Specific large files causing issues
+scripts/validate_enhanced.py
