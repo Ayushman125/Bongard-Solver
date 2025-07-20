@@ -116,11 +116,21 @@ class CompleteBongardPipeline:
             gnn_trained = os.path.exists(gnn_ckpt)
             if use_gnn and not gnn_trained:
                 logger.info(f"   🧠 Training SceneGNN model (checkpoint: {gnn_ckpt}) ...")
-                from src.bongard_generator.gnn_model import SceneGNN
-                # Dummy training logic (replace with actual training if available)
+                from src.bongard_generator.gnn_model import SceneGNN, train_gnn
+                # --- Synthetic data for GNN training ---
+                def make_synthetic_graph(label):
+                    import torch
+                    from torch_geometric.data import Data
+                    # 16 features, random values
+                    x = torch.randn((5, 16))
+                    edge_index = torch.tensor([[0,1,2,3,4,0,2,3],[1,2,3,4,0,2,3,1]], dtype=torch.long)
+                    y = torch.tensor([label])
+                    batch = torch.zeros(5, dtype=torch.long)
+                    return Data(x=x, edge_index=edge_index, y=y, batch=batch)
+                train_data = [make_synthetic_graph(1) for _ in range(50)] + [make_synthetic_graph(0) for _ in range(50)]
+                val_data = [make_synthetic_graph(1) for _ in range(10)] + [make_synthetic_graph(0) for _ in range(10)]
                 gnn = SceneGNN(in_feats=16)
-                # ... training code here ...
-                torch.save(gnn.state_dict(), gnn_ckpt)
+                train_gnn(gnn, train_data, val_data, device=self.config.device, epochs=5, lr=1e-3, checkpoint_path=gnn_ckpt)
                 logger.info(f"   ✅ SceneGNN trained and saved to {gnn_ckpt}")
             elif use_gnn:
                 logger.info(f"   ✅ SceneGNN checkpoint found: {gnn_ckpt}")
@@ -134,10 +144,8 @@ class CompleteBongardPipeline:
                 if not isinstance(cov_goals, dict):
                     # Convert SimpleNamespace to dict
                     self.config.coverage.coverage_goals = cov_goals.__dict__
-            
             # COMPREHENSIVE CONFIG TYPE CONVERSION - Fix all string/int division errors
             self._fix_config_types(self.config)
-            
             self.generator = BongardGenerator(self.config)
             logger.info("   ✅ BongardGenerator initialized (all logics integrated)")
         except Exception as e:
@@ -269,10 +277,10 @@ class CompleteBongardPipeline:
         logger.info("="*70)
         logger.info(f"Synthetic Problems Generated: {self.stats['generated_problems']}")
         logger.info(f"Synthetic Images Generated:   {self.stats['generated_images']}")
+        # GNN filtering stats
+        gnn_filtered = getattr(self.generator, 'gnn_filter_count', None)
         if hasattr(self, 'generator') and self.generator and hasattr(self.generator, 'cfg') and getattr(self.generator.cfg, 'use_gnn', False):
-            # This stat would be tracked inside the generator
-            # self.stats['gnn_filtered'] = self.generator.gnn_filter_count 
-            logger.info(f"Images Filtered by GNN:     {self.stats['gnn_filtered']}")
+            logger.info(f"Images Filtered by GNN:     {gnn_filtered if gnn_filtered is not None else 'N/A'}")
         logger.info(f"Validation output in:         {os.path.abspath(self.validation_dir)}")
         logger.info("="*70)
 
@@ -292,7 +300,7 @@ def main():
             'prototypes_dir': 'data/prototypes',
             'device': 'cuda' if torch.cuda.is_available() else 'cpu',
             'generator': {
-                'use_gnn': False, # Set to True to test GNN filtering
+                'use_gnn': True, # Set to True to test GNN filtering
                 'gnn_ckpt': "checkpoints/scene_gnn.pth",
                 'gnn_thresh': 0.5,
                 'gnn_radius': 0.3,

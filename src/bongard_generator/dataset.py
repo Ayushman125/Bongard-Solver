@@ -7,7 +7,7 @@ and a centralized configuration.
 import logging
 import os
 import random
-from typing import List
+from typing import List, Dict, Any
 from PIL import Image, ImageDraw, ImageFilter
 from .config import GeneratorConfig
 from .shape_renderer import draw_shape
@@ -65,41 +65,25 @@ class PrototypeAction:
     def __init__(self, shapes_dir):
         self.shapes = []
 
-def create_composite_scene(objects, cfg):
-    # Ensure canvas_size is always int - comprehensive type conversion
-    canvas_size = cfg.img_size if hasattr(cfg, 'img_size') else 128
-    if isinstance(canvas_size, (str, tuple, list)):
-        if isinstance(canvas_size, str):
-            canvas_size = int(canvas_size)
-        elif isinstance(canvas_size, (tuple, list)):
-            canvas_size = int(canvas_size[0]) if len(canvas_size) > 0 else 128
-        else:
-            canvas_size = 128
-    canvas_size = int(canvas_size)
-    
-    img = Image.new("RGB",(canvas_size,canvas_size),"white")
+def create_composite_scene(objects: List[Dict[str, Any]], cfg: Any) -> Image.Image:
+    """
+    Create a composite scene from a list of objects using professional rendering.
+    """
+    canvas_size = getattr(cfg, 'canvas_size', 128)
+    if isinstance(canvas_size, str):
+        canvas_size = int(canvas_size)
+        
+    # Create a white canvas for better contrast
+    img = Image.new('RGB', (canvas_size, canvas_size), 'white')
     draw = ImageDraw.Draw(img)
 
     for obj in objects:
-        if obj.get('prototype'):
-            # Assuming prototype_action is an object with a draw method
-            obj['prototype_action'].draw(img, obj['center'], obj['size'], cfg)
-        else:
+        try:
             draw_shape(draw, obj, cfg)
-
-    # background texture
-    if hasattr(cfg, 'bg_texture') and cfg.bg_texture=='noise':
-        img = apply_noise(img, cfg)
-    elif hasattr(cfg, 'bg_texture') and cfg.bg_texture=='checker':
-        img = apply_checker(img, cfg)
-
-    # GAN stylization
-    if hasattr(cfg, 'styler') and hasattr(cfg, 'generator') and cfg.generator.use_gan and cfg.styler:
-        img = cfg.styler.stylize(img)
-
-    # final binarize
-    img = img.convert("L").filter(ImageFilter.GaussianBlur(0.5))
-    return img.point(lambda p:255 if p>128 else 0,'1')
+        except Exception as e:
+            logger.error(f"Failed to draw object {obj.get('object_id', '')}: {e}", exc_info=True)
+            
+    return img
 
 class BongardDataset:
     """
@@ -148,7 +132,7 @@ class BongardDataset:
             "rule_description": rule.description if rule else "No rule applied",
         }
 
-    def _generate_example(self, rule: 'AbstractRule', is_positive: bool) -> Image.Image:
+    def _generate_example(self, rule, is_positive: bool) -> Image.Image:
         """Generates a single image that either follows or violates the rule."""
         # This part needs to be connected to a sampler that generates objects
         # For now, we'll assume a function generate_objects exists

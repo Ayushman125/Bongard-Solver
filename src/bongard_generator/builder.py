@@ -2,6 +2,7 @@
 import logging
 from pathlib import Path
 import random
+import torch
 from .cp_sampler       import CPSATSampler as CPSampler
 from .genetic_generator import GeneticSceneGenerator as GeneticSampler
 from .prototype_action import PrototypeAction
@@ -148,8 +149,8 @@ class BongardGenerator:
         SHAPES = ["circle","square","triangle","pentagon","star","arc","zigzag","prototype"]
         COLORS = ["black","white","red","blue","green"]
         FILLS  = ["solid","hollow","striped","dotted"]
-        feat_dim = len(SHAPES)+len(COLORS)+len(FILLS)+3
-        gnn = SceneGNN(feat_dim).to(cfg.device)
+        # Always use in_feats=16 for checkpoint compatibility
+        gnn = SceneGNN(in_feats=16).to(cfg.device)
         gnn.load_state_dict(torch.load(cfg.generator.gnn_ckpt))
         gnn.eval()
         return gnn
@@ -245,51 +246,41 @@ class BongardGenerator:
     
     def _filter_and_render_scenes(self, scenes, rule):
         """Filter scenes using GNN and render final images."""
+        from tqdm import tqdm
         filtered_scenes = []
-        
-        for scene_index, (objects, metadata) in enumerate(scenes):
+        gnn_filtered_count = 0
+        for scene_index, (objects, metadata) in enumerate(tqdm(scenes, desc=f"Filtering/Rendering scenes for {rule.name}")):
             try:
                 # GNN filtering if enabled
                 if hasattr(self.cfg, 'use_gnn') and self.cfg.use_gnn and hasattr(self, '_gnn'):
                     scene_graph = build_scene_graph(objects, self.cfg)
                     scene_graph = scene_graph.to(self.cfg.device)
-                    
                     with torch.no_grad():
                         quality_score = self._gnn(scene_graph).item()
-                    
                     # Skip low-quality scenes
                     gnn_threshold = getattr(self.cfg, 'gnn_thresh', 0.5)
                     if quality_score < gnn_threshold:
+                        gnn_filtered_count += 1
                         continue
-                    
                     metadata['gnn_quality_score'] = quality_score
-                
                 # Render the scene to an image
-                # Ensure config has proper numeric types before rendering
                 if hasattr(self.cfg, 'canvas_size') and isinstance(self.cfg.canvas_size, str):
                     self.cfg.canvas_size = int(self.cfg.canvas_size)
-                
                 scene_image = create_composite_scene(objects, self.cfg)
-                
                 # --- DEBUG LOGGING ---
                 filename = f"{rule.name}_{metadata['generation_method']}_{scene_index}.png"
                 output_path = self.output_dir / filename
                 logger.debug(f"SAVING to {output_path} (type: {type(output_path)})")
                 scene_image.save(output_path)
                 # --- END DEBUG ---
-
                 # Record coverage information
                 if hasattr(self, 'coverage'):
                     self.coverage.record(objects)
-                
-                # Add final metadata
                 metadata['object_count'] = len(objects)
                 metadata['render_success'] = True
-                
                 filtered_scenes.append((scene_image, objects, metadata))
-                
             except Exception as e:
                 logger.error(f"Failed to filter/render scene: {e}", exc_info=True)
                 continue
-        
+        self.gnn_filter_count = gnn_filtered_count
         return filtered_scenes
