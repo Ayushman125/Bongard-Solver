@@ -280,7 +280,7 @@ class BongardGenerator:
 
                 # Record coverage information
                 if hasattr(self, 'coverage'):
-                    self.coverage.record(rule, objects)
+                    self.coverage.record(objects)
                 
                 # Add final metadata
                 metadata['object_count'] = len(objects)
