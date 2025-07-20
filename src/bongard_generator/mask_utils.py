@@ -75,7 +75,7 @@ def _generate_initial_objects(num_objects: int, config: GeneratorConfig, prototy
     return objects
 
 def _render_objects(canvas: Image.Image, objects: List[Dict[str, Any]], config: GeneratorConfig, prototype_action: PrototypeAction):
-    """Renders all objects onto the canvas using proper geometric primitives."""
+    """Renders all objects onto the canvas using professional geometric primitives."""
     import math
     
     # Robust sorting that handles string/int conversion issues  
@@ -96,7 +96,6 @@ def _render_objects(canvas: Image.Image, objects: List[Dict[str, Any]], config: 
         return size if isinstance(size, (int, float)) else 30
     
     sorted_objects = sorted(objects, key=get_size, reverse=True)
-    draw = ImageDraw.Draw(canvas)
 
     for obj in sorted_objects:
         # Get object properties with fallbacks
@@ -109,11 +108,22 @@ def _render_objects(canvas: Image.Image, objects: List[Dict[str, Any]], config: 
         
         size = get_size(obj)
         shape = obj.get("shape", "circle")  # Use rule-specified shape
-        color = _get_color(obj.get("color", "black"))
+        color = obj.get("color", "black")
         rotation = obj.get("rotation", 0)
+        fill_type = obj.get("fill_type", "solid")
+        stroke_style = obj.get("stroke_style", "solid")
+        stroke_width = obj.get("stroke_width", 2)
         
-        # Draw the actual geometric shape
-        _draw_geometric_shape(draw, center_x, center_y, size, shape, color, rotation)
+        # Use the professional shape renderer
+        try:
+            draw_shape(canvas, shape, (center_x, center_y), size, color, 
+                      fill_type=fill_type, stroke_style=stroke_style, 
+                      stroke_width=stroke_width, rotation=rotation)
+        except Exception as e:
+            logging.warning(f"Failed to draw shape {shape} with shape renderer: {e}, falling back to basic shapes")
+            # Fallback to basic drawing if shape renderer fails
+            draw = ImageDraw.Draw(canvas)
+            _draw_geometric_shape(draw, center_x, center_y, size, shape, _get_color(color), rotation)
 
 def _get_color(color_spec):
     """Convert color specification to RGB tuple."""

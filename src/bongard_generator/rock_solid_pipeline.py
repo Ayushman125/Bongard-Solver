@@ -14,6 +14,7 @@ import numpy as np
 from .genetic_pipeline import GeneticPipeline, SceneGenome, NeuralTester
 from .enhanced_cp_solver import EnhancedCPSolver, ConstraintSolution
 from .coverage import CoverageTracker, AdversarialSampler
+from .models import SceneGNN, build_scene_graph, create_scene_gnn
 
 # Safe random functions
 def safe_randint(a: int, b: int) -> int:
@@ -39,7 +40,10 @@ class RockSolidPipeline:
                  canvas_size: int = 128,
                  min_quota: int = 100,
                  population_size: int = 50,
-                 max_generations: int = 500):
+                 max_generations: int = 500,
+                 use_gnn: bool = False,
+                 gnn_checkpoint: str = None,
+                 gnn_threshold: float = 0.5):
         """
         Initialize the rock-solid pipeline.
         
@@ -49,18 +53,29 @@ class RockSolidPipeline:
             min_quota: Minimum examples per coverage cell
             population_size: Genetic algorithm population size
             max_generations: Maximum evolutionary generations
+            use_gnn: Whether to use GNN filtering
+            gnn_checkpoint: Path to GNN model checkpoint
+            gnn_threshold: Threshold for GNN filtering
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
         
         self.canvas_size = canvas_size
         self.min_quota = min_quota
+        self.use_gnn = use_gnn
+        self.gnn_threshold = gnn_threshold
         
         # Initialize components
         self.cp_solver = EnhancedCPSolver(canvas_size=canvas_size)
         self.neural_tester = NeuralTester()
         self.coverage_tracker = CoverageTracker()
         self.adversarial_sampler = AdversarialSampler(img_size=canvas_size)
+        
+        # Initialize GNN if enabled
+        self._gnn_model = None
+        self._gnn_device = 'cpu'
+        if use_gnn:
+            self._initialize_gnn(gnn_checkpoint)
         
         # Initialize genetic pipeline
         self.genetic_pipeline = GeneticPipeline(
@@ -72,6 +87,7 @@ class RockSolidPipeline:
         # Pipeline statistics
         self.total_scenes_generated = 0
         self.total_scenes_validated = 0
+        self.gnn_filtered_scenes = 0
         self.phase_stats = {
             'genetic_evolution': 0,
             'targeted_generation': 0,
@@ -84,6 +100,80 @@ class RockSolidPipeline:
         self.diversity_threshold = 0.3
         
         logger.info("Initialized Rock-Solid Pipeline")
+        if use_gnn:
+            logger.info("GNN filtering enabled")
+    
+    def _initialize_gnn(self, checkpoint_path: str = None):
+        """Initialize GNN model for scene filtering."""
+        try:
+            import torch
+            self._gnn_device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            
+            # Create a simple config object for GNN
+            class Config:
+                def __init__(self):
+                    self.canvas_size = self.canvas_size
+                    self.img_size = self.canvas_size
+                    self.gnn_radius = 0.3
+                    self.gnn_hidden = 64
+                    self.gnn_layers = 2
+                    self.gnn_dropout = 0.1
+                    self.gnn_attention = False
+            
+            config = Config()
+            self._gnn_model = create_scene_gnn(config)
+            
+            if self._gnn_model is None:
+                logger.warning("Could not create GNN model, disabling GNN filtering")
+                self.use_gnn = False
+                return
+            
+            # Load checkpoint if provided
+            if checkpoint_path and Path(checkpoint_path).exists():
+                self._gnn_model.load_state_dict(torch.load(checkpoint_path, map_location=self._gnn_device))
+                logger.info(f"Loaded GNN checkpoint from {checkpoint_path}")
+            else:
+                logger.warning("No GNN checkpoint found, using randomly initialized model")
+            
+            self._gnn_model.to(self._gnn_device)
+            self._gnn_model.eval()
+            
+        except ImportError:
+            logger.warning("PyTorch not available, disabling GNN filtering")
+            self.use_gnn = False
+        except Exception as e:
+            logger.error(f"Failed to initialize GNN: {e}")
+            self.use_gnn = False
+    
+    def _gnn_filter_scene(self, objects: list) -> bool:
+        """Filter scene using GNN quality assessment."""
+        if not self.use_gnn or self._gnn_model is None:
+            return True
+        
+        try:
+            import torch
+            # Create simple config for graph building
+            class Config:
+                def __init__(self):
+                    self.canvas_size = self.canvas_size
+                    self.gnn_radius = 0.3
+            
+            config = Config()
+            scene_graph = build_scene_graph(objects, config)
+            
+            if scene_graph is None:
+                return True
+            
+            scene_graph = scene_graph.to(self._gnn_device)
+            
+            with torch.no_grad():
+                quality_score = self._gnn_model(scene_graph).item()
+            
+            return quality_score >= self.gnn_threshold
+            
+        except Exception as e:
+            logger.warning(f"GNN filtering failed: {e}")
+            return True
     
     def run_complete_pipeline(self, target_coverage: float = 1.0, enable_neural_feedback: bool = True) -> Dict[str, Any]:
         """
@@ -237,6 +327,13 @@ class RockSolidPipeline:
                             confidence, is_valid = self.neural_tester.evaluate_scene(
                                 scene_image, rule_desc, 1
                             )
+                            
+                            # Apply GNN filtering if enabled
+                            if is_valid and self.use_gnn:
+                                gnn_valid = self._gnn_filter_scene(solution.objects)
+                                if not gnn_valid:
+                                    self.gnn_filtered_scenes += 1
+                                    is_valid = False
                             
                             if is_valid:
                                 # Record successful scene

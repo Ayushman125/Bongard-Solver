@@ -357,6 +357,29 @@ CONFIG: Dict[str, Any] = {
         'max_rules': 1000   # Maximum number of candidate rules to score
     },
 
+    # --- Generator Configuration ---
+    'generator': {
+        'cp_quota': 0.5,      # Fraction of scenes generated with CP-SAT
+        'ga_quota': 0.3,      # Fraction of scenes generated with genetic algorithms
+        'pt_quota': 0.2,      # Fraction of scenes generated with prototype templates
+        'use_gan': False,     # Enable GAN-based stylization
+        'use_gnn': False,     # Enable GNN-based scene filtering
+        'gnn_ckpt': 'checkpoints/scene_gnn.pth',  # Path to GNN model checkpoint
+        'gnn_thresh': 0.5,    # Quality threshold for GNN filtering (0-1)
+        'gnn_radius': 0.3,    # Connectivity radius for scene graphs (fraction of canvas)
+        'gnn_hidden': 64,     # Hidden dimensions for GNN
+        'gnn_layers': 2,      # Number of GNN layers
+        'gnn_dropout': 0.1,   # Dropout rate for GNN
+        'gnn_attention': False, # Use Graph Attention Networks instead of GCN
+        'bg_texture': 'none', # Background texture: 'none', 'noise', 'checker'
+        'canvas_size': 256,   # Canvas size for generated scenes
+        'enable_rotation': True,  # Enable random rotation of objects
+        'jitter_px': 2,       # Maximum jitter in pixels
+        'stroke_min': 2,      # Minimum stroke width
+        'shapes_dir': 'src/bongard_generator/shapes',  # Directory for prototype shapes
+        'coverage_target': 100  # Target coverage per rule
+    },
+
     # --- Phase 1 Validation/Training Script Configs ---
     'phase1': {
         'best_model_path': 'checkpoints/bongard_perception_best.pth',

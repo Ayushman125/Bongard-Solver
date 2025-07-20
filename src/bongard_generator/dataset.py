@@ -10,14 +10,34 @@ import random
 from typing import List
 from PIL import Image
 
-from .config import GeneratorConfig
-from .coverage import EnhancedCoverageTracker
-from .mask_utils import create_composite_scene
-from .meta_controller import MetaController
-from .prototype_action import PrototypeAction
-from .styler import Styler
+from PIL import Image, ImageDraw, ImageFilter
+from .shape_renderer import draw_shape
+from .styler import apply_noise, apply_checker
 
-logger = logging.getLogger(__name__)
+def create_composite_scene(objects, cfg):
+    img = Image.new("RGB",(cfg.canvas_size,cfg.canvas_size),"white")
+    draw = ImageDraw.Draw(img)
+
+    for obj in objects:
+        if obj.get('prototype'):
+            # Assuming prototype_action is an object with a draw method
+            obj['prototype_action'].draw(img, obj['center'], obj['size'], cfg)
+        else:
+            draw_shape(draw, obj, cfg)
+
+    # background texture
+    if cfg.bg_texture=='noise':
+        img = apply_noise(img, cfg)
+    elif cfg.bg_texture=='checker':
+        img = apply_checker(img, cfg)
+
+    # GAN stylization
+    if hasattr(cfg, 'styler') and cfg.generator.use_gan and cfg.styler:
+        img = cfg.styler.stylize(img)
+
+    # final binarize
+    img = img.convert("L").filter(ImageFilter.GaussianBlur(0.5))
+    return img.point(lambda p:255 if p>128 else 0,'1')
 
 class BongardDataset:
     """
@@ -66,26 +86,22 @@ class BongardDataset:
             "rule_description": rule.description if rule else "No rule applied",
         }
 
-    def _generate_example(self, rule: AbstractRule, is_positive: bool) -> Image.Image:
+    def _generate_example(self, rule: 'AbstractRule', is_positive: bool) -> Image.Image:
         """Generates a single image that either follows or violates the rule."""
-        img, features = create_composite_scene(
-            self.config,
-            rule,
-            is_positive,
-            self.prototype_action  # Pass the action object itself
+        # This part needs to be connected to a sampler that generates objects
+        # For now, we'll assume a function generate_objects exists
+        # In the final implementation, this would call the BongardGenerator/Builder
+        objects = [] # Placeholder: self.generator.sample(rule, is_positive)
+        
+        img = create_composite_scene(
+            objects,
+            self.config
         )
 
         # Record the generated features for coverage analysis
-        self.coverage_tracker.record(features)
-
-        # Apply GAN-based stylization if enabled
-        if self.config.use_gan_stylization:
-            img = self.styler.apply(img)
+        # self.coverage_tracker.record(features)
         
-        # CRITICAL: Final binarization to ensure pure black and white output
-        bw_img = img.convert("L").point(lambda p: 255 if p > 128 else 0, mode='L')
-        
-        return bw_img
+        return img
 
 def generate_and_save_dataset(config: GeneratorConfig, num_problems: int, save_dir: str):
     """High-level function to generate and save a dataset based on a given config."""

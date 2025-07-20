@@ -1,4 +1,3 @@
-# src/bongard_generator/shape_renderer.py
 import math, random
 from PIL import ImageDraw
 
