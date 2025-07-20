@@ -237,7 +237,14 @@ class CompleteBongardPipeline:
                 self.stats['generated_problems'] += 1
 
                 for i, (img, objs, tag) in enumerate(scenes):
-                    img_path = side_dir / f"{i:02d}_{tag}.png"
+                    # Ensure tag is a valid string for filenames
+                    if isinstance(tag, dict):
+                        tag_str = tag.get('generation_method', 'scene')
+                    else:
+                        tag_str = str(tag)
+                    # Remove any illegal filename characters
+                    tag_str = ''.join(c for c in tag_str if c.isalnum() or c in ('-', '_'))
+                    img_path = side_dir / f"{i:02d}_{tag_str}.png"
                     img.save(img_path)
                     self.stats['generated_images'] += 1
             logger.info(f"✓ Generated 6+6 for rule: {rule.name} (all logics)")
