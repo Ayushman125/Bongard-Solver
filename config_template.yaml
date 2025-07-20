@@ -11,10 +11,6 @@ data:
   use_synthetic_data: true
   data_root_path: ./data
   dataloader_workers: 4
-  total: 1000  # Total examples for hybrid generation
-  hybrid_split:
-    cp: 0.7
-    ga: 0.3
   synthetic_data_config:
     num_train_problems: 10000
     num_val_problems: 1000

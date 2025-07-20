@@ -59,7 +59,7 @@ class RuleConfig:
     name: str
     parameters: Dict[str, Any]
 
-@dataclasses.dataclass
+@dataclass
 class BongardProblemConfig:
     """Overall configuration for generating a Bongard problem."""
     positive_config: GeneratorConfig

@@ -162,7 +162,14 @@ class PrototypeAction:
         w, h = mask.size
         if max(w, h) == 0:
             return mask
-            
+        
+        # Ensure target_size is numeric
+        if isinstance(target_size, str):
+            try:
+                target_size = int(target_size)
+            except ValueError:
+                target_size = 32  # fallback
+        
         scale = target_size / max(w, h)
         new_w, new_h = int(w * scale), int(h * scale)
         

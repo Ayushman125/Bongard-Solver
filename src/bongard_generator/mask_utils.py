@@ -2,14 +2,15 @@
 Utilities for creating and rendering scenes with various objects,
 shapes, and textures, driven by a central configuration.
 This module orchestrates the rendering pipeline, delegating shape-specific
-drawing to the PrototypeAction class.
+drawing to the PrototypeAction class and the new shape renderer.
 """
 
 import logging
 import random
 from typing import Any, Dict, List, Tuple
-
+import numpy as np
 from PIL import Image, ImageDraw
+from .shape_renderer import draw_shape, render_scene
 
 from .config import GeneratorConfig
 from .prototype_action import PrototypeAction, create_prototype_config
@@ -74,25 +75,92 @@ def _generate_initial_objects(num_objects: int, config: GeneratorConfig, prototy
     return objects
 
 def _render_objects(canvas: Image.Image, objects: List[Dict[str, Any]], config: GeneratorConfig, prototype_action: PrototypeAction):
-    """Renders all objects onto the canvas using the PrototypeAction system."""
-    sorted_objects = sorted(objects, key=lambda o: o.get("size", 0), reverse=True)
+    """Renders all objects onto the canvas using proper geometric primitives."""
+    import math
+    
+    # Robust sorting that handles string/int conversion issues  
+    def get_size(obj):
+        size = obj.get("size", 0)
+        if isinstance(size, str):
+            # Convert string sizes to numeric
+            if size == "small":
+                return 20
+            elif size == "medium": 
+                return 40
+            elif size == "large":
+                return 60
+            try:
+                return int(size)
+            except ValueError:
+                return 30
+        return size if isinstance(size, (int, float)) else 30
+    
+    sorted_objects = sorted(objects, key=get_size, reverse=True)
+    draw = ImageDraw.Draw(canvas)
 
     for obj in sorted_objects:
-        # Create a specific drawing configuration for this object
-        draw_config = create_prototype_config(
-            jitter_px=config.jitter_strength * config.img_size,
-            enable_rotation=config.enable_rotation,
-            fill_color=(0, 0, 0),  # Always black
-            fill_pattern=obj.get("fill_type", "solid"),
-        )
+        # Get object properties with fallbacks
+        pos = obj.get("position", (config.img_size//2, config.img_size//2))
+        if isinstance(pos, tuple) and len(pos) == 2:
+            center_x, center_y = pos
+        else:
+            center_x = obj.get("center_x", config.img_size//2)  
+            center_y = obj.get("center_y", config.img_size//2)
         
-        # Delegate drawing entirely to the prototype action instance
-        prototype_action.draw(
-            img=canvas,
-            center=obj["position"],
-            size=obj["size"],
-            config=draw_config
-        )
+        size = get_size(obj)
+        shape = obj.get("shape", "circle")  # Use rule-specified shape
+        color = _get_color(obj.get("color", "black"))
+        rotation = obj.get("rotation", 0)
+        
+        # Draw the actual geometric shape
+        _draw_geometric_shape(draw, center_x, center_y, size, shape, color, rotation)
+
+def _get_color(color_spec):
+    """Convert color specification to RGB tuple."""
+    if isinstance(color_spec, tuple) and len(color_spec) == 3:
+        return color_spec
+    elif isinstance(color_spec, str):
+        color_map = {
+            "black": (0, 0, 0),
+            "red": (255, 0, 0), 
+            "blue": (0, 0, 255),
+            "green": (0, 255, 0),
+            "yellow": (255, 255, 0),
+            "white": (255, 255, 255)
+        }
+        return color_map.get(color_spec, (0, 0, 0))
+    return (0, 0, 0)
+
+def _draw_geometric_shape(draw, center_x, center_y, size, shape, color, rotation):
+    """Draw a specific geometric shape."""
+    half_size = size // 2
+    
+    if shape == "circle":
+        # Draw circle
+        bbox = [center_x - half_size, center_y - half_size, 
+                center_x + half_size, center_y + half_size]
+        draw.ellipse(bbox, fill=color, outline=color)
+        
+    elif shape == "square" or shape == "rectangle":
+        # Draw square/rectangle
+        bbox = [center_x - half_size, center_y - half_size,
+                center_x + half_size, center_y + half_size] 
+        draw.rectangle(bbox, fill=color, outline=color)
+        
+    elif shape == "triangle":
+        # Draw triangle (pointing up)
+        points = [
+            (center_x, center_y - half_size),           # Top point
+            (center_x - half_size, center_y + half_size), # Bottom left
+            (center_x + half_size, center_y + half_size)  # Bottom right
+        ]
+        draw.polygon(points, fill=color, outline=color)
+        
+    else:
+        # Default to circle for unknown shapes
+        bbox = [center_x - half_size, center_y - half_size,
+                center_x + half_size, center_y + half_size]
+        draw.ellipse(bbox, fill=color, outline=color)
 
 def _apply_advanced_textures(canvas: Image.Image, config: GeneratorConfig):
     """Applies advanced procedural textures to the background."""

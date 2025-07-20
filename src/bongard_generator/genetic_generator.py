@@ -1,34 +1,24 @@
 import random
 import numpy as np
-try:
-    from config import CONFIG
-except ImportError:
-    # Fallback config
-    CONFIG = {'data': {'synthetic_data_config': {}}}
+from config import CONFIG
 import torch
-from .tester_cnn import create_tester_model
+from src.bongard_generator.tester_cnn import create_tester_model
 from PIL import Image
 
 class GeneticSceneGenerator:
     """
     Genetic algorithm-based Bongard scene generator using config values.
     """
-    def __init__(self, config=None, tester=None):
+    def __init__(self, config=None):
         # Use config from main CONFIG dict if not provided
         if config is None:
-            try:
-                from genetic_config import GENETIC_CONFIG
-                config = GENETIC_CONFIG
-            except ImportError:
-                # Fallback to empty config
-                config = {}
+            from genetic_config import GENETIC_CONFIG
+            config = GENETIC_CONFIG
         self.config = config
         # Prefer config.data.genetic if available
         gd = getattr(config, 'data', None)
         if gd and hasattr(gd, 'genetic'):
             gd = gd.genetic
-        elif isinstance(config, dict) and 'data' in config:
-            gd = config['data'].get('genetic', config)
         else:
             gd = config
         self.population_size = getattr(config, 'population_size', getattr(gd, 'population_size', 50))
@@ -123,41 +113,3 @@ class GeneticSceneGenerator:
         }]
         masks = np.zeros((1, 64, 64), dtype=np.uint8).tolist()  # Convert to list for JSON
         return (objects, masks)
-
-    def generate_problem(self, rule, is_positive=True):
-        """
-        Generate a single problem image for the given rule.
-        Returns (image, label) tuple compatible with HybridSampler.
-        """
-        try:
-            # Generate scene using existing method
-            objects, masks = self.generate(rule, label=1 if is_positive else 0)
-            
-            # Create PIL image from objects (mock implementation)
-            img = Image.new('L', (128, 128), color=255)  # White background
-            
-            # Simple rendering of objects (in real implementation, use proper renderer)
-            import PIL.ImageDraw as ImageDraw
-            draw = ImageDraw.Draw(img)
-            
-            for obj in objects:
-                pos = obj.get('position', [64, 64])
-                size = obj.get('size', 16)
-                shape = obj.get('shape', 'circle')
-                
-                # Draw simple shapes
-                bbox = [pos[0] - size//2, pos[1] - size//2, 
-                       pos[0] + size//2, pos[1] + size//2]
-                
-                if shape == 'circle':
-                    draw.ellipse(bbox, fill=0)  # Black
-                elif shape == 'square':
-                    draw.rectangle(bbox, fill=0)
-                # Add more shapes as needed
-            
-            return img, 1 if is_positive else 0
-            
-        except Exception as e:
-            # Return fallback image
-            img = Image.new('L', (128, 128), color=255)
-            return img, 1 if is_positive else 0
