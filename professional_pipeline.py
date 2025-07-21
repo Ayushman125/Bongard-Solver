@@ -5,40 +5,76 @@ import os
 
 from src.system1_al import System1AbstractionLayer
 
-def load_dummy_problem():
+import numpy as np
+import time
+import json
+import os
+import random
+from PIL import Image
+
+from src.system1_al import System1AbstractionLayer
+
+def find_bongard_problems(root_dir):
+    """Scans the directory for valid Bongard problem folders."""
+    problem_paths = []
+    if not os.path.isdir(root_dir):
+        return []
+        
+    for level1 in os.listdir(root_dir):
+        path1 = os.path.join(root_dir, level1)
+        if os.path.isdir(path1):
+            images_path = os.path.join(path1, 'images')
+            if os.path.isdir(images_path):
+                for problem_name in os.listdir(images_path):
+                    problem_path = os.path.join(images_path, problem_name)
+                    # A valid problem has '0' and '1' subdirectories
+                    if os.path.isdir(problem_path) and \
+                       os.path.isdir(os.path.join(problem_path, '0')) and \
+                       os.path.isdir(os.path.join(problem_path, '1')):
+                        problem_paths.append(problem_path)
+    return problem_paths
+
+def load_bongard_problem(problem_path):
     """
-    Generates a dummy Bongard problem for demonstration.
-    In a real pipeline, this would load images from a dataset.
-    
-    Problem: "Left set has squares, right set has circles."
+    Loads a real Bongard problem from the specified path.
+    It loads PNG images, converts them to binary numpy arrays,
+    and returns the images and their ground truth labels.
     """
-    print("INFO: Loading dummy Bongard problem...")
+    print(f"INFO: Loading Bongard problem from: {problem_path}")
     left_set = []
     right_set = []
+    
+    right_path = os.path.join(problem_path, '0')
+    left_path = os.path.join(problem_path, '1')
 
-    # Create 6 "left" images (squares of varying sizes)
-    for i in range(6):
-        size = 50 + i * 5
-        img = np.zeros((100, 100), dtype=np.uint8)
-        start = (100 - size) // 2
-        end = start + size
-        img[start:end, start:end] = 1
-        left_set.append(img)
+    def load_images_from_dir(directory):
+        images = []
+        if not os.path.isdir(directory):
+            return images
+        for fname in sorted(os.listdir(directory)):
+            if fname.endswith('.png'):
+                try:
+                    img_path = os.path.join(directory, fname)
+                    # Open image, convert to grayscale, then to binary numpy array
+                    with Image.open(img_path).convert('L') as img:
+                        img_array = np.array(img)
+                        # Binarize the image: non-black pixels become 1, black pixels remain 0
+                        binary_array = (img_array > 10).astype(np.uint8)
+                        images.append(binary_array)
+                except Exception as e:
+                    print(f"WARNING: Could not load or process image {fname}: {e}")
+        return images
 
-    # Create 6 "right" images (circles of varying sizes)
-    for i in range(6):
-        radius = 25 + i * 3
-        img = np.zeros((100, 100), dtype=np.uint8)
-        cx, cy = 50, 50
-        y, x = np.ogrid[-cy:100-cy, -cx:100-cx]
-        mask = x*x + y*y <= radius*radius
-        img[mask] = 1
-        right_set.append(img)
-        
-    # The full problem consists of all 12 images
+    left_set = load_images_from_dir(left_path)
+    right_set = load_images_from_dir(right_path)
+    
+    if not left_set or not right_set:
+        raise FileNotFoundError(f"Could not load a complete problem set from {problem_path}")
+
+    # The full problem consists of all images
     all_images = left_set + right_set
     # Ground truth labels: 1 for left set, 0 for right set
-    true_labels = [1] * 6 + [0] * 6
+    true_labels = [1] * len(left_set) + [0] * len(right_set)
     
     return all_images, true_labels
 
@@ -80,25 +116,35 @@ def main():
     print("--- Professional Bongard-Solver Pipeline ---")
     
     # --- 1. Initialization ---
-    # On worker startup, initialize the S1 Abstraction Layer.
     print("INFO: Initializing System-1 Abstraction Layer...")
     s1_al = System1AbstractionLayer(
         fuzzy_model_path="data/fuzzy_tree.pkl",
         replay_path="data/system1_replay.pkl"
     )
     
-    # --- 2. Load Problem ---
-    # This would typically be in a loop, processing many problems.
-    problem_id = "dummy_problem_01"
-    images, true_labels = load_dummy_problem()
+    # --- 2. Discover and Load a Real Problem ---
+    problem_root = 'ShapeBongard_V2'
+    problem_paths = find_bongard_problems(problem_root)
+    
+    if not problem_paths:
+        print(f"ERROR: No Bongard problems found in '{problem_root}'. Please check the directory structure.")
+        return
+
+    # Select a random problem to process
+    problem_path = random.choice(problem_paths)
+    problem_id = os.path.basename(problem_path)
+    
+    try:
+        images, true_labels = load_bongard_problem(problem_path)
+    except FileNotFoundError as e:
+        print(f"ERROR: {e}")
+        return
     
     # --- 3. S1-AL Processing ---
-    # Get the initial "intuitive" analysis from the S1-AL.
     print(f"INFO: Processing problem '{problem_id}' with S1-AL...")
     s1_output = s1_al.process(images, problem_id=problem_id)
     
     print("\n--- S1-AL Output Bundle ---")
-    # print(json.dumps(s1_output, indent=2))
     print(f"  Problem ID: {s1_output['problem_id']}")
     print(f"  Duration: {s1_output['duration_ms']:.2f} ms")
     print(f"  Top Heuristic: {s1_output['heuristics'][0] if s1_output['heuristics'] else 'None'}")
@@ -108,18 +154,14 @@ def main():
     # context["s1_output"] = s1_output
     
     # --- 4. Downstream Solving (Simulated) ---
-    # The rest of the pipeline works to find the final rule.
     final_rule = simulate_downstream_solver(s1_output)
     
     # --- 5. Self-Supervision Step ---
-    # Once the final rule is known, feed the outcome back to the S1-AL.
     print("INFO: Starting self-supervision step...")
     s1_al.self_supervise(s1_output, true_labels)
     print(f"INFO: Replay buffer size is now: {s1_al.replay_buffer.size()}")
     
     # --- 6. Periodic Model Update ---
-    # Periodically, the fuzzy model can be retrained on the replay buffer.
-    # We'll force an update for demonstration if the buffer has samples.
     if s1_al.replay_buffer.size() > 0:
         print("\nINFO: Triggering periodic model update...")
         s1_al.periodic_update(batch_size=1) # Lower batch size for demo

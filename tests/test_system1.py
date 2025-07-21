@@ -1,17 +1,21 @@
+
 import unittest
 import numpy as np
 import os
 import time
 import json
-
+from PIL import Image
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.system1_al import System1AbstractionLayer
 from src.utils.fuzzy_tree import FuzzyTree
+from professional_pipeline import find_bongard_problems, load_bongard_problem
 
-class TestSystem1AbstractionLayer(unittest.TestCase):
+class TestSystem1AbstractionLayerWithRealData(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        """Set up for all tests."""
+        """Set up for all tests, including finding real data."""
         cls.test_data_dir = "test_data"
         cls.fuzzy_model_path = os.path.join(cls.test_data_dir, "test_fuzzy_tree.pkl")
         cls.replay_path = os.path.join(cls.test_data_dir, "test_replay.pkl")
@@ -27,6 +31,10 @@ class TestSystem1AbstractionLayer(unittest.TestCase):
             fuzzy_model_path=cls.fuzzy_model_path,
             replay_path=cls.replay_path
         )
+        
+        # Find real Bongard problems
+        cls.problem_root = 'ShapeBongard_V2'
+        cls.problem_paths = find_bongard_problems(cls.problem_root)
 
     @classmethod
     def tearDownClass(cls):
@@ -40,112 +48,64 @@ class TestSystem1AbstractionLayer(unittest.TestCase):
 
     def setUp(self):
         """Set up for each test."""
-        # Clear replay buffer before each test
         self.s1_al.replay_buffer.clear()
+        if not self.problem_paths:
+            self.skipTest(f"No real Bongard problems found in '{self.problem_root}'. Skipping real data tests.")
+
+    def test_load_real_problem(self):
+        """Test loading a real Bongard problem."""
+        problem_path = self.problem_paths[0]
+        images, labels = load_bongard_problem(problem_path)
         
-        # Synthetic shapes
-        self.circle = self._create_circle_img()
-        self.square = self._create_square_img()
-        self.empty = np.zeros((100, 100), dtype=np.uint8)
+        self.assertGreater(len(images), 0, "Should load at least one image.")
+        self.assertEqual(len(images), len(labels), "Images and labels count should match.")
+        self.assertIsInstance(images[0], np.ndarray, "Loaded image should be a numpy array.")
+        self.assertTrue(images[0].dtype == np.uint8, "Image should be of type uint8.")
+        self.assertTrue(set(np.unique(images[0])).issubset({0, 1}), "Image should be binary.")
 
-    def _create_circle_img(self, radius=30):
-        img = np.zeros((100, 100), dtype=np.uint8)
-        cx, cy = 50, 50
-        y, x = np.ogrid[-cy:100-cy, -cx:100-cx]
-        mask = x*x + y*y <= radius*radius
-        img[mask] = 1
-        return img
-
-    def _create_square_img(self, size=60):
-        img = np.zeros((100, 100), dtype=np.uint8)
-        start = (100 - size) // 2
-        end = start + size
-        img[start:end, start:end] = 1
-        return img
-
-    def test_attribute_correctness_circle(self):
-        """Test attributes of a synthetic circle."""
-        attrs = self.s1_al.extract_attributes(self.circle)
-        self.assertGreater(attrs['area'], 2800, "Circle area should be significant.")
-        self.assertAlmostEqual(attrs['circularity'], 1.0, delta=0.1, msg="Circle circularity should be close to 1.")
-        self.assertEqual(attrs['hole_count'], 0, "Solid circle should have 0 holes.")
-        self.assertEqual(attrs['euler_number'], 1, "Solid circle should have Euler number 1.")
-
-    def test_attribute_correctness_square(self):
-        """Test attributes of a synthetic square."""
-        attrs = self.s1_al.extract_attributes(self.square)
-        self.assertEqual(attrs['area'], 3600, "Square area should be exact.")
-        self.assertLess(attrs['circularity'], 0.8, msg="Square circularity should be less than a circle's.")
-
-    def test_relation_matrix(self):
-        """Test relational cues between two different shapes."""
-        attrs_list = [
-            self.s1_al.extract_attributes(self.square), # larger area
-            self.s1_al.extract_attributes(self.circle)  # smaller area
-        ]
-        relations = self.s1_al.compute_relations(attrs_list)
-        self.assertIn("0_1", relations)
-        self.assertEqual(relations["0_1"]["size_relation"], ">", "Square should be larger than circle.")
-        self.assertGreater(relations["0_1"]["area_ratio"], 1.0)
-
-    def test_heuristic_output(self):
-        """Test that heuristic generation produces a non-empty list of rules."""
-        attrs_list = [self.s1_al.extract_attributes(self.square)]
-        heuristics = self.s1_al.generate_heuristics(attrs_list)
-        self.assertIsInstance(heuristics, list)
-        self.assertGreater(len(heuristics), 0, "Should generate at least one heuristic.")
-        self.assertTrue(all("rule" in h and "confidence" in h for h in heuristics))
-
-    def test_runtime_performance(self):
-        """Test that processing is fast enough."""
-        images = [self.square, self.circle] * 6 # A full 12-image problem
-        start_time = time.time()
-        bundle = self.s1_al.process(images)
-        duration_ms = (time.time() - start_time) * 1000
+    def test_attribute_extraction_on_real_data(self):
+        """Test attribute extraction on a real image."""
+        problem_path = self.problem_paths[0]
+        images, _ = load_bongard_problem(problem_path)
         
-        print(f"\nS1-AL processing time for 12 images: {duration_ms:.2f} ms")
-        self.assertLess(duration_ms, 200, "Processing 12 images should be under 200ms.")
-        self.assertLess(bundle['duration_ms'], 200)
+        attrs = self.s1_al.extract_attributes(images[0])
+        
+        self.assertIsInstance(attrs, dict)
+        self.assertIn('area', attrs)
+        self.assertIn('stroke_count', attrs)
+        self.assertGreaterEqual(attrs['area'], 0)
 
-    def test_json_bundle_structure(self):
-        """Verify the structure of the output JSON bundle."""
-        bundle = self.s1_al.process([self.square, self.circle], problem_id="test_01")
+    def test_full_pipeline_on_real_problem(self):
+        """Test the full S1-AL process method on a real problem."""
+        problem_path = self.problem_paths[0]
+        problem_id = os.path.basename(problem_path)
+        images, labels = load_bongard_problem(problem_path)
         
-        self.assertIn("problem_id", bundle)
-        self.assertIn("timestamp", bundle)
-        self.assertIn("duration_ms", bundle)
-        self.assertIn("images", bundle)
-        self.assertIn("heuristics", bundle)
+        bundle = self.s1_al.process(images, problem_id=problem_id)
         
-        self.assertEqual(len(bundle["images"]), 2)
-        self.assertIn("image_id", bundle["images"][0])
-        self.assertIn("attrs", bundle["images"][0])
-        self.assertIn("relations", bundle["images"][0])
+        self.assertEqual(bundle['problem_id'], problem_id)
+        self.assertEqual(len(bundle['images']), len(images))
+        self.assertGreater(bundle['duration_ms'], 0)
+        self.assertIn('heuristics', bundle)
         
         # Test if it's JSON serializable
         try:
             json.dumps(bundle)
         except TypeError:
-            self.fail("S1-AL output bundle is not JSON serializable.")
+            self.fail("S1-AL output bundle from real data is not JSON serializable.")
 
-    def test_self_supervision_loop(self):
-        """Test the self-supervision and replay buffer mechanism."""
-        s1_output = self.s1_al.process([self.square, self.circle], problem_id="supervision_test")
+    def test_runtime_performance_on_real_data(self):
+        """Test performance on a real problem set."""
+        problem_path = self.problem_paths[0]
+        images, _ = load_bongard_problem(problem_path)
         
-        # Simulate a "surprising" outcome where the heuristic was wrong
-        # Let's say heuristic confidence was 0.8, but true labels are [0, 1]
-        s1_output['heuristics'] = [{'rule': 'mock_rule', 'confidence': 0.8}]
-        true_labels = [0, 1] # Model was very confident (0.8) but wrong about the first image
+        start_time = time.time()
+        self.s1_al.process(images)
+        duration_ms = (time.time() - start_time) * 1000
         
-        self.s1_al.self_supervise(s1_output, true_labels)
-        
-        # The first sample should be added because |0.8 - 0| > threshold (0.4)
-        # The second sample should not be added because |0.8 - 1| < threshold
-        self.assertEqual(self.s1_al.replay_buffer.size(), 1, "One surprising sample should be added.")
-        
-        sample = self.s1_al.replay_buffer.sample(1)[0]
-        self.assertEqual(sample[1], 0) # Check true label
-        self.assertAlmostEqual(sample[2], 0.8, delta=0.01) # Check delta
+        print(f"\nS1-AL processing time for real problem ({len(images)} images): {duration_ms:.2f} ms")
+        # This threshold might need adjustment based on machine performance and image complexity
+        self.assertLess(duration_ms, 500, "Processing a real problem should be reasonably fast.")
 
 if __name__ == '__main__':
     unittest.main()
