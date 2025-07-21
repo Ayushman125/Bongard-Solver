@@ -1,3 +1,4 @@
+
 import time
 import json
 import numpy as np
@@ -7,8 +8,16 @@ import networkx as nx
 from scipy.spatial.distance import pdist, squareform
 import joblib
 import os
+import logging
+from typing import List, Dict, Any
 
 from src.utils.fuzzy_tree import FuzzyTree
+
+# Configure logging
+logger = logging.getLogger("System1AL")
+if not logger.hasHandlers():
+    logging.basicConfig(level=logging.INFO)
+    logger.setLevel(logging.INFO)
 
 class ReplayBuffer:
     """A simple replay buffer for self-supervision."""
@@ -56,7 +65,7 @@ class System1AbstractionLayer:
     System-1 Abstraction Layer (S1-AL).
     Extracts low-level features and generates fast heuristic guesses.
     """
-    def __init__(self, fuzzy_model_path="data/fuzzy_tree.pkl", replay_path="data/system1_replay.pkl", threshold=0.4):
+    def __init__(self, fuzzy_model_path: str = "data/fuzzy_tree.pkl", replay_path: str = "data/system1_replay.pkl", threshold: float = 0.4):
         self.fuzzy_tree = FuzzyTree.load(fuzzy_model_path)
         self.replay_buffer = ReplayBuffer(replay_path)
         self.update_threshold = threshold
@@ -74,36 +83,42 @@ class System1AbstractionLayer:
         G.remove_nodes_from(list(filter(lambda n: skeleton[n[1], n[0]] == 0, G.nodes())))
         return G
 
-    def extract_attributes(self, bin_img):
+    def extract_attributes(self, bin_img: np.ndarray) -> Dict[str, Any]:
         """
         Extracts a dictionary of visual attributes from a single binary image.
-        This is a partial implementation of the full attribute list.
+        Handles dtype normalization and error cases.
         """
-        if not np.any(bin_img):
-            return {} # Return empty dict for empty image
-
-        skeleton = skeletonize(bin_img)
-        G = self._build_stroke_graph(skeleton)
-        props = regionprops(bin_img.astype(np.uint8))
-        main_prop = props[0] if props else None
-
-        attrs = {
-            "stroke_count": len(G.nodes), # Simplified: node count
-            "endpoint_count": sum(1 for node, degree in G.degree() if degree == 1),
-            "branch_point_count": sum(1 for node, degree in G.degree() if degree > 2),
-            "skeleton_length": skeleton.sum(),
-            "area": main_prop.area if main_prop else 0,
-            "perimeter": main_prop.perimeter if main_prop else 0,
-            "convex_hull_area": main_prop.convex_area if main_prop else 0,
-            "solidity": main_prop.solidity if main_prop else 0,
-            "circularity": (4 * np.pi * main_prop.area) / (main_prop.perimeter**2) if main_prop and main_prop.perimeter > 0 else 0,
-            "euler_number": main_prop.euler_number if main_prop else 0,
-            "hole_count": (main_prop.euler_number - 1) * -1 if main_prop else 0,
-            # Placeholder for more complex features
-            "curvature_histogram": [0.1, 0.2, 0.7], 
-            "symmetry": {"vertical": 0.9, "horizontal": 0.5},
-        }
-        return attrs
+        if bin_img is None or not np.any(bin_img):
+            logger.warning("Empty or None image passed to extract_attributes.")
+            return {}
+        # Normalize dtype
+        bin_img = (bin_img > 0).astype(np.uint8)
+        try:
+            skeleton = skeletonize(bin_img)
+            G = self._build_stroke_graph(skeleton)
+            props = regionprops(bin_img.astype(np.uint8))
+            main_prop = props[0] if props else None
+            attrs = {
+                "stroke_count": len(G.nodes),
+                "endpoint_count": sum(1 for node, degree in G.degree() if degree == 1),
+                "branch_point_count": sum(1 for node, degree in G.degree() if degree > 2),
+                "skeleton_length": skeleton.sum(),
+                "area": main_prop.area if main_prop else 0,
+                "perimeter": main_prop.perimeter if main_prop else 0,
+                "convex_hull_area": main_prop.convex_area if main_prop else 0,
+                "solidity": main_prop.solidity if main_prop else 0,
+                "circularity": (4 * np.pi * main_prop.area) / (main_prop.perimeter**2) if main_prop and main_prop.perimeter > 0 else 0,
+                "euler_number": main_prop.euler_number if main_prop else 0,
+                "hole_count": (main_prop.euler_number - 1) * -1 if main_prop else 0,
+                # Placeholder for more complex features
+                "curvature_histogram": [0.1, 0.2, 0.7],
+                "symmetry": {"vertical": 0.9, "horizontal": 0.5},
+            }
+            logger.debug(f"Extracted attributes: {attrs}")
+            return attrs
+        except Exception as e:
+            logger.error(f"Error extracting attributes: {e}")
+            return {}
 
     def compute_relations(self, attrs_list):
         """
@@ -146,36 +161,35 @@ class System1AbstractionLayer:
         """Generates fast heuristic guesses using the fuzzy tree."""
         return self.fuzzy_tree.predict(attrs_list)
 
-    def process(self, bin_imgs, problem_id="unknown"):
+    def process(self, bin_imgs: List[np.ndarray], problem_id: str = "unknown") -> Dict[str, Any]:
         """
         Processes a list of binary images to produce the full S1-AL feature bundle.
+        Handles empty input and logs runtime.
         """
         self.current_problem_id = problem_id
         start_time = time.time()
-
+        if not bin_imgs:
+            logger.warning("Empty input to process(); returning empty bundle.")
+            return {
+                "problem_id": problem_id,
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "duration_ms": 0.0,
+                "images": [],
+                "heuristics": []
+            }
         attrs_list = [self.extract_attributes(img) for img in bin_imgs]
-        
-        # This is a simplified version. A full implementation would handle multiple objects per image.
-        # Here we create a flat list of relations between all objects across all images.
-        all_object_attrs = attrs_list 
+        all_object_attrs = attrs_list
         relations = self.compute_relations(all_object_attrs)
-
-        # Heuristics are generated based on the attributes of all objects.
         heuristics = self.generate_heuristics(all_object_attrs)
-        
         end_time = time.time()
         duration_ms = (end_time - start_time) * 1000
-
-        # Structure the output bundle
         image_bundles = []
         for i, attrs in enumerate(attrs_list):
             image_bundles.append({
                 "image_id": f"img_{i}",
                 "attrs": attrs,
-                # Relations are problem-wide, not per-image in this simplified model
                 "relations": {k: v for k, v in relations.items() if k.startswith(f"{i}_") or k.endswith(f"_{i}")}
             })
-
         bundle = {
             "problem_id": problem_id,
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -183,6 +197,7 @@ class System1AbstractionLayer:
             "images": image_bundles,
             "heuristics": heuristics
         }
+        logger.info(f"Processed {len(bin_imgs)} images in {duration_ms:.2f} ms.")
         return bundle
 
     def self_supervise(self, s1_output, true_labels):
