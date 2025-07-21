@@ -107,7 +107,7 @@ class GeneticSceneGenerator:
             'fill': 'solid',
             'position': [32, 32],  # Use list for JSON compatibility
             'size': 16,
-            'color': 'black',
+            'color': 'black', # Force black color
             'label': int(label),
             'rule': str(getattr(rule_obj, 'description', ''))
         }]

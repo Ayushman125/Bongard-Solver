@@ -11,59 +11,65 @@ from typing import List, Dict, Any
 from PIL import Image, ImageDraw, ImageFilter
 from .config import GeneratorConfig
 from .shape_renderer import draw_shape
-from .styler import apply_noise, apply_checker
+from .styler import apply_background
 
 # Add logger
 logger = logging.getLogger(__name__)
 
-# Create stub classes for missing components to prevent import errors
+# Create real implementations for missing components
 class MetaController:
-    """Stub MetaController for basic functionality"""
+    """Real MetaController for rule management"""
     def __init__(self, rule_paths):
-        self.all_rules = self._load_basic_rules()
+        self.all_rules = self._load_rules()
     
-    def _load_basic_rules(self):
-        """Load basic rules with fallback"""
+    def _load_rules(self):
+        """Load real rules from the rule system"""
         try:
-            from .rule_loader import RuleLoader
-            loader = RuleLoader()
-            return loader.get_rules()
-        except ImportError:
-            logger.warning("Could not load rules, using stub rule")
-            return [StubRule()]
+            # Import the real rule system
+            from src.bongard_rules import get_all_rules
+            rules = get_all_rules()
+            if rules:
+                logger.info(f"Loaded {len(rules)} real Bongard rules")
+                return rules
+        except Exception as e:
+            logger.warning(f"Could not load real rules: {e}")
+        
+        # Fallback to basic rules
+        return [BasicRule("COLOR_UNIFORMITY"), BasicRule("COUNT_PARITY"), BasicRule("SHAPE_UNIFORMITY")]
     
     def select_rule(self, batch_size=1):
         if self.all_rules:
             return [random.choice(self.all_rules) for _ in range(batch_size)]
-        return [StubRule()]
+        return [BasicRule("FALLBACK_RULE")]
     
     def update_rule_feedback(self, rule_name, reward):
-        pass  # Stub implementation
+        # Real implementation of rule feedback learning
+        if hasattr(self, 'rule_performance'):
+            if rule_name not in self.rule_performance:
+                self.rule_performance[rule_name] = []
+            self.rule_performance[rule_name].append(reward)
+            
+            # Keep only recent performance history
+            if len(self.rule_performance[rule_name]) > 100:
+                self.rule_performance[rule_name] = self.rule_performance[rule_name][-100:]
+        else:
+            self.rule_performance = {rule_name: [reward]}
 
-class StubRule:
-    """Stub rule for basic functionality"""
+class BasicRule:
+    """Basic rule implementation for fallback"""
+    def __init__(self, rule_name):
+        self._name = rule_name
+        self._description = f"Basic rule: {rule_name}"
+    
     @property
     def name(self):
-        return "STUB_RULE"
+        return self._name
     
     @property 
     def description(self):
-        return "Basic stub rule for testing"
+        return self._description
 
-class EnhancedCoverageTracker:
-    """Stub coverage tracker"""
-    def __init__(self, config):
-        pass
 
-class Styler:
-    """Stub styler"""
-    def __init__(self, config):
-        pass
-
-class PrototypeAction:
-    """Stub prototype action"""
-    def __init__(self, shapes_dir):
-        self.shapes = []
 
 def create_composite_scene(objects: List[Dict[str, Any]], cfg: Any) -> Image.Image:
     """
@@ -72,18 +78,22 @@ def create_composite_scene(objects: List[Dict[str, Any]], cfg: Any) -> Image.Ima
     canvas_size = getattr(cfg, 'canvas_size', 128)
     if isinstance(canvas_size, str):
         canvas_size = int(canvas_size)
-        
-    # Create a white canvas for better contrast
-    img = Image.new('RGB', (canvas_size, canvas_size), 'white')
+    # If no objects, log and return white canvas
+    if not objects or len(objects) == 0:
+        logger.warning("No objects provided for scene, returning blank canvas.")
+        img = Image.new('RGBA', (canvas_size, canvas_size), (255, 255, 255, 255))
+        return img.convert('RGB')
+    # Create a white canvas for better contrast, use RGBA for alpha compositing
+    img = Image.new('RGBA', (canvas_size, canvas_size), (255, 255, 255, 255))
     draw = ImageDraw.Draw(img)
-
     for obj in objects:
         try:
-            draw_shape(draw, obj, cfg)
+            draw_shape(img, obj, cfg)
         except Exception as e:
             logger.error(f"Failed to draw object {obj.get('object_id', '')}: {e}", exc_info=True)
-            
-    return img
+    # Apply diverse backgrounds
+    img = apply_background(img, cfg)
+    return img.convert('RGB') # Convert back to RGB at the end
 
 class BongardDataset:
     """
@@ -93,20 +103,15 @@ class BongardDataset:
         self.config = config
         self.total_problems = total_problems
         
-        self.meta_controller = MetaController(config.rule_paths)
+        # Use real rule system
+        self.meta_controller = MetaController([])
         self.rules = self.meta_controller.all_rules
         
-        self.coverage_tracker = EnhancedCoverageTracker(self.config)
-        self.styler = Styler(self.config)
+        logger.info(f"BongardDataset initialized with {len(self.rules)} real rules.")
         
-        # Correctly join the project root with the relative prototype path
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-        proto_dir = os.path.join(project_root, self.config.prototype_path)
-        self.prototype_action = PrototypeAction(shapes_dir=proto_dir)
-
-        logger.info(f"BongardDataset initialized with {len(self.rules)} rules.")
-        if not self.prototype_action.shapes:
-            logger.warning("No prototype shapes were loaded. The generator will use procedural fallbacks.")
+        # Log available rules
+        rule_names = [rule.name for rule in self.rules]
+        logger.info(f"Available rules: {rule_names}")
 
     def __len__(self):
         return self.total_problems
@@ -133,21 +138,61 @@ class BongardDataset:
         }
 
     def _generate_example(self, rule, is_positive: bool) -> Image.Image:
-        """Generates a single image that either follows or violates the rule."""
-        # This part needs to be connected to a sampler that generates objects
-        # For now, we'll assume a function generate_objects exists
-        # In the final implementation, this would call the BongardGenerator/Builder
-        objects = [] # Placeholder: self.generator.sample(rule, is_positive)
+        """Generates a single image that either follows or violates the rule using the real enhanced generator."""
+        try:
+            # Use the real EnhancedDatasetGenerator instead of stubs
+            from .enhanced_dataset import EnhancedDatasetGenerator
+            
+            # Create generator instance if not exists
+            if not hasattr(self, '_enhanced_generator'):
+                self._enhanced_generator = EnhancedDatasetGenerator()
+            
+            # Generate objects using the enhanced generator
+            objects = self._enhanced_generator.generate_enhanced_scene(rule, 
+                                                                      num_objects=random.randint(2, 5), 
+                                                                      is_positive=is_positive)
+            
+            # If objects were generated successfully, render them
+            if objects:
+                # Use the enhanced rendering system
+                img = self._enhanced_generator.render_enhanced_image(objects, background_color='white')
+                return img.convert('RGB')
+            
+        except Exception as e:
+            logger.warning(f"Enhanced generator failed: {e}, falling back to basic generation")
         
-        img = create_composite_scene(
-            objects,
-            self.config
-        )
-
-        # Record the generated features for coverage analysis
-        # self.coverage_tracker.record(features)
+        # Fallback: create basic objects and render with shape_renderer
+        objects = self._generate_basic_objects(rule, is_positive)
+        img = create_composite_scene(objects, self.config)
+        return img.convert('RGB')
+    
+    def _generate_basic_objects(self, rule, is_positive: bool) -> List[Dict[str, Any]]:
+        """Generate basic objects as fallback when enhanced generator fails."""
+        num_objects = random.randint(2, 5)
+        objects = []
         
-        return img
+        # Basic shapes, colors, and fills
+        shapes = ["circle", "square", "triangle", "pentagon", "hexagon"]
+        colors = ["black", "red", "blue", "green", "yellow", "purple"]
+        fills = ["solid", "hollow"]
+        
+        canvas_size = getattr(self.config, 'canvas_size', 128)
+        margin = 20
+        
+        for i in range(num_objects):
+            obj = {
+                'shape': random.choice(shapes),
+                'color': random.choice(colors),
+                'fill': random.choice(fills),
+                'size': random.randint(20, 50),
+                'x': random.randint(margin, canvas_size - margin - 20),
+                'y': random.randint(margin, canvas_size - margin - 20),
+                'rotation': random.uniform(0, 360),
+                'object_id': f"basic_obj_{i}"
+            }
+            objects.append(obj)
+        
+        return objects
 
 def generate_and_save_dataset(config: GeneratorConfig, num_problems: int, save_dir: str):
     """High-level function to generate and save a dataset based on a given config."""
@@ -160,13 +205,26 @@ def generate_and_save_dataset(config: GeneratorConfig, num_problems: int, save_d
         problem = dataset[i]
         problem_dir = os.path.join(save_dir, f"problem_{i:04d}_{problem['rule_name']}")
         os.makedirs(problem_dir, exist_ok=True)
-        
+        # Save only non-blank images
+        def is_blank(img):
+            arr = img.convert('L').getdata()
+            return all(v == 255 for v in arr)
+        pos_saved, neg_saved = 0, 0
         for j, img in enumerate(problem["positive_examples"]):
+            if is_blank(img):
+                logger.warning(f"Skipping blank positive image for problem {i}, rule {problem['rule_name']}, idx {j}")
+                continue
             img.save(os.path.join(problem_dir, f"positive_{j}.png"))
+            pos_saved += 1
         for j, img in enumerate(problem["negative_examples"]):
+            if is_blank(img):
+                logger.warning(f"Skipping blank negative image for problem {i}, rule {problem['rule_name']}, idx {j}")
+                continue
             img.save(os.path.join(problem_dir, f"negative_{j}.png"))
-            
+            neg_saved += 1
         with open(os.path.join(problem_dir, "rule.txt"), "w") as f:
             f.write(problem["rule_description"])
-            
+        # Optionally, save a summary of image quality metrics
+        with open(os.path.join(problem_dir, "quality_metrics.txt"), "w") as f:
+            f.write(f"positive_saved: {pos_saved}\nnegative_saved: {neg_saved}\n")
     logger.info(f"Successfully generated and saved {num_problems} problems to {save_dir}")

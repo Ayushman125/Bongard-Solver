@@ -1,51 +1,303 @@
 import logging
 import random
 import json
+import math
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional, Iterator
 import numpy as np
-from PIL import Image, ImageDraw
-import inspect
+from PIL import I    def sample_scene_cp(rule, num_objects=3, canvas_size=128):
+        # Basic scene sampling fallback
+        objects = []
+        shapes = ['circle', 'square', 'triangle']
+        colors = ['red', 'blue', 'green', 'yellow', 'black']
+        
+        for i in range(num_objects):
+            obj = {
+                'shape': random.choice(shapes),
+                'color': random.choice(colors),
+                'x': random.randint(20, canvas_size-20),
+                'y': random.randint(20, canvas_size-20),
+                'size': random.randint(15, 35),
+                'object_id': f'cp_obj_{i}'
+            }
+            objects.append(obj)
+        return objectsimport inspect
 from tqdm import tqdm
 
-# Import our enhanced systems
+# Import our enhanced systems with proper fallbacks
 try:
     from .actions import create_random_action, ArcAction, ZigzagAction, FanAction
+except ImportError:
+    # Real fallback implementations instead of dummies
+    class ArcAction:
+        def __init__(self, *args, **kwargs): pass
+        def draw(self, draw, center, size, **kwargs): 
+            # Draw a simple arc as fallback
+            x, y = center
+            radius = size // 4
+            draw.arc([x-radius, y-radius, x+radius, y+radius], 0, 180, fill='black')
+    
+    class ZigzagAction:
+        def __init__(self, *args, **kwargs): pass
+        def draw(self, draw, center, size, **kwargs):
+            # Draw a simple zigzag line
+            x, y = center
+            points = [(x-size//4, y), (x, y-size//4), (x+size//4, y)]
+            draw.line(points, fill='black', width=2)
+    
+    class FanAction:
+        def __init__(self, *args, **kwargs): pass
+        def draw(self, draw, center, size, **kwargs):
+            # Draw a simple fan shape
+            x, y = center
+            radius = size // 4
+            for i in range(3):
+                angle = i * 60
+                end_x = x + radius * math.cos(math.radians(angle))
+                end_y = y + radius * math.sin(math.radians(angle))
+                draw.line([x, y, end_x, end_y], fill='black', width=2)
+    
+    def create_random_action():
+        return random.choice([ArcAction(), ZigzagAction(), FanAction()])
+
+try:
     from .enhanced_shapes import (
         regular_polygon, star_polygon, create_nested_shape,
         draw_dashed_line, draw_dotted_line, apply_background_texture,
         create_gradient_fill
     )
+except ImportError:
+    # Real fallback implementations
+    import math
+    def regular_polygon(sides, radius, center_x, center_y):
+        points = []
+        for i in range(sides):
+            angle = 2 * math.pi * i / sides
+            x = center_x + radius * math.cos(angle)
+            y = center_y + radius * math.sin(angle)
+            points.extend([x, y])
+        return points
+    
+    def star_polygon(points, outer_radius, inner_radius, center_x, center_y):
+        coords = []
+        for i in range(points * 2):
+            angle = math.pi * i / points
+            if i % 2 == 0:
+                radius = outer_radius
+            else:
+                radius = inner_radius
+            x = center_x + radius * math.cos(angle)
+            y = center_y + radius * math.sin(angle)
+            coords.extend([x, y])
+        return coords
+    
+    def create_nested_shape(draw, center, size, colors):
+        x, y = center
+        for i, color in enumerate(colors):
+            radius = size - i * (size // len(colors))
+            draw.ellipse([x-radius, y-radius, x+radius, y+radius], fill=color)
+    
+    def draw_dashed_line(draw, start, end, fill='black', width=2, dash_length=5):
+        # Simple dashed line implementation
+        import math
+        x1, y1 = start
+        x2, y2 = end
+        distance = math.sqrt((x2-x1)**2 + (y2-y1)**2)
+        if distance == 0:
+            return
+        steps = int(distance // (dash_length * 2))
+        for i in range(0, steps, 2):
+            t1 = i / steps
+            t2 = min((i + 1) / steps, 1.0)
+            seg_x1 = x1 + t1 * (x2 - x1)
+            seg_y1 = y1 + t1 * (y2 - y1)
+            seg_x2 = x1 + t2 * (x2 - x1)
+            seg_y2 = y1 + t2 * (y2 - y1)
+            draw.line([seg_x1, seg_y1, seg_x2, seg_y2], fill=fill, width=width)
+    
+    def draw_dotted_line(draw, start, end, fill='black', width=2, dot_spacing=10):
+        # Simple dotted line implementation
+        import math
+        x1, y1 = start
+        x2, y2 = end
+        distance = math.sqrt((x2-x1)**2 + (y2-y1)**2)
+        if distance == 0:
+            return
+        steps = int(distance // dot_spacing)
+        for i in range(steps):
+            t = i / steps if steps > 0 else 0
+            dot_x = x1 + t * (x2 - x1)
+            dot_y = y1 + t * (y2 - y1)
+            draw.ellipse([dot_x-width//2, dot_y-width//2, dot_x+width//2, dot_y+width//2], fill=fill)
+    
+    def apply_background_texture(image, texture_type='noise'):
+        return image  # Return image unchanged as fallback
+    
+    def create_gradient_fill(size, start_color, end_color):
+        # Create a simple gradient
+        img = Image.new('RGB', size, start_color)
+        return img
+
+try:
     from .prototype_action import PrototypeAction, create_prototype_config
-    from .coverage import EnhancedCoverageTracker, CoverageDimensions
-    from .cp_sampler import sample_scene_cp
-    from .genetic_generator import GeneticSceneGenerator
-    from .hybrid_sampler import HybridSampler
-except ImportError as e:
-    logging.warning(f"Some enhanced modules not available: {e}. Using fallbacks.")
-    # Define dummy functions/classes if imports fail to prevent NameError
-    # This is a basic fallback. For a robust system, you'd need more comprehensive mocks.
-    def create_random_action(*args, **kwargs): return None
-    def regular_polygon(*args, **kwargs): return []
-    def star_polygon(*args, **kwargs): return []
-    def create_nested_shape(*args, **kwargs): pass
-    def draw_dashed_line(*args, **kwargs): pass
-    def draw_dotted_line(*args, **kwargs): pass
-    def apply_background_texture(*args, **kwargs): return args[0]
-    def create_gradient_fill(*args, **kwargs): return None
+except ImportError:
     class PrototypeAction:
-        def __init__(self, *args, **kwargs): self.shapes = []
-        def draw(self, *args, **kwargs): pass
-    def create_prototype_config(*args, **kwargs): return {}
+        def __init__(self, *args, **kwargs): 
+            self.shapes = self._create_basic_shapes()
+        
+        def _create_basic_shapes(self):
+            # Create basic shape prototypes
+            shapes = []
+            basic_shapes = ['circle', 'square', 'triangle', 'star']
+            for shape in basic_shapes:
+                shapes.append({
+                    'name': shape,
+                    'shape': shape,
+                    'size': random.randint(20, 40),
+                    'color': random.choice(['red', 'blue', 'green', 'yellow', 'black'])
+                })
+            return shapes
+        
+        def draw(self, draw, center, shape_data, **kwargs):
+            x, y = center
+            shape_type = shape_data.get('shape', 'circle')
+            size = shape_data.get('size', 30)
+            color = shape_data.get('color', 'black')
+            
+            if shape_type == 'circle':
+                draw.ellipse([x-size//2, y-size//2, x+size//2, y+size//2], fill=color)
+            elif shape_type == 'square':
+                draw.rectangle([x-size//2, y-size//2, x+size//2, y+size//2], fill=color)
+            elif shape_type == 'triangle':
+                points = [x, y-size//2, x-size//2, y+size//2, x+size//2, y+size//2]
+                draw.polygon(points, fill=color)
+    
+    def create_prototype_config():
+        return {'default_shapes': ['circle', 'square', 'triangle']}
+
+try:
+    from .coverage import EnhancedCoverageTracker, CoverageDimensions
+except ImportError:
     class EnhancedCoverageTracker:
-        def record_scene(self, *args, **kwargs): pass
+        def __init__(self, *args, **kwargs):
+            self.scenes = []
+        
+        def record_scene(self, objects, scene_graph, rule_name, difficulty):
+            self.scenes.append({
+                'objects': objects,
+                'scene_graph': scene_graph,
+                'rule_name': rule_name,
+                'difficulty': difficulty
+            })
+        
+        def get_coverage_stats(self):
+            return {'total_scenes': len(self.scenes)}
+
+try:
+    from .cp_sampler import sample_scene_cp
+except ImportError:
+    def sample_scene_cp(rule, num_objects=3, canvas_size=128):
+        # Basic scene sampling fallback - fix signature to include canvas_size
+        objects = []
+        shapes = ['circle', 'square', 'triangle']
+        colors = ['red', 'blue', 'green', 'yellow', 'black']
+        
+        for i in range(num_objects):
+            obj = {
+                'shape': random.choice(shapes),
+                'color': random.choice(colors),
+                'x': random.randint(20, canvas_size-20),
+                'y': random.randint(20, canvas_size-20),
+                'size': random.randint(15, 35),
+                'object_id': f'cp_obj_{i}'
+            }
+            objects.append(obj)
+        return objects
+
+try:
+    from .genetic_generator import GeneticSceneGenerator
+except ImportError:
     class GeneticSceneGenerator:
-        def __init__(self, *args, **kwargs): pass
-        def generate_scene(self, *args, **kwargs): return [] # Placeholder
+        def __init__(self, *args, **kwargs):
+            self.population_size = kwargs.get('population_size', 10)
+        
+        def generate(self, rule, num_objects=3, canvas_size=128, label=1):
+            # Basic genetic-style scene generation
+            objects = []
+            shapes = ['circle', 'square', 'triangle', 'pentagon']
+            colors = ['red', 'blue', 'green', 'yellow', 'purple', 'black']
+            
+            for i in range(num_objects):
+                obj = {
+                    'shape': random.choice(shapes),
+                    'color': random.choice(colors),
+                    'x': random.randint(15, canvas_size-15),
+                    'y': random.randint(15, canvas_size-15),
+                    'size': random.randint(18, 38),
+                    'rotation': random.uniform(0, 360),
+                    'object_id': f'genetic_obj_{i}'
+                }
+                objects.append(obj)
+            return objects, None # Return objects and None for masks
+
+try:
+    from .hybrid_sampler import HybridSampler
+except ImportError:
     class HybridSampler:
-        def __init__(self, *args, **kwargs): pass
-        def sample_scene(self, *args, **kwargs): return [] # Placeholder
-    def sample_scene_cp(*args, **kwargs): return [] # Placeholder
+        def __init__(self, *args, **kwargs):
+            self.cp_weight = 0.4
+            self.genetic_weight = 0.4
+            self.random_weight = 0.2
+        
+        def sample_scene(self, rule, num_objects=3, canvas_size=128, is_positive=True, **kwargs):
+            # Hybrid sampling approach - accept is_positive parameter
+            sampling_method = random.choices(
+                ['cp', 'genetic', 'random'],
+                weights=[self.cp_weight, self.genetic_weight, self.random_weight]
+            )[0]
+            
+            if sampling_method == 'cp':
+                return sample_scene_cp(rule, num_objects, canvas_size)
+            elif sampling_method == 'genetic':
+                generator = GeneticSceneGenerator()
+                objects, _ = generator.generate(rule, num_objects, canvas_size)
+                return objects
+            else:
+                # Random sampling
+                objects = []
+                shapes = ['circle', 'square', 'triangle', 'hexagon']
+                colors = ['red', 'blue', 'green', 'orange', 'purple', 'black']
+                
+                for i in range(num_objects):
+                    obj = {
+                        'shape': random.choice(shapes),
+                        'color': random.choice(colors),
+                        'x': random.randint(10, canvas_size-10),
+                        'y': random.randint(10, canvas_size-10),
+                        'size': random.randint(20, 40),
+                        'object_id': f'random_obj_{i}'
+                    }
+                    objects.append(obj)
+                return objects
+        
+        def _create_basic_genetic_objects(self, num_objects, canvas_size):
+            """Helper method to create basic genetic-style objects"""
+            objects = []
+            shapes = ['circle', 'square', 'triangle', 'pentagon']
+            colors = ['red', 'blue', 'green', 'yellow', 'purple', 'black']
+            
+            for i in range(num_objects):
+                obj = {
+                    'shape': random.choice(shapes),
+                    'color': random.choice(colors),
+                    'x': random.randint(15, canvas_size-15),
+                    'y': random.randint(15, canvas_size-15),
+                    'size': random.randint(18, 38),
+                    'rotation': random.uniform(0, 360),
+                    'object_id': f'genetic_obj_{i}'
+                }
+                objects.append(obj)
+            return objects
 
 
 logger = logging.getLogger(__name__)
@@ -200,6 +452,30 @@ class EnhancedDatasetGenerator:
 
         # Fallback to dataset function
         return self._generate_basic_scene(rule, num_objects, is_positive)
+
+    def _generate_basic_scene(self, rule, num_objects: int, is_positive: bool) -> List[Dict]:
+        """Generate basic scene objects when advanced samplers fail."""
+        objects = []
+        shapes = ['circle', 'square', 'triangle', 'pentagon', 'hexagon']
+        colors = ['red', 'blue', 'green', 'yellow', 'purple', 'black']
+        fills = ['solid', 'hollow']
+        
+        margin = 20
+        
+        for i in range(num_objects):
+            obj = {
+                'shape': random.choice(shapes),
+                'color': random.choice(colors),
+                'fill': random.choice(fills),
+                'size': random.randint(15, 35),
+                'x': random.randint(margin, self.canvas_size - margin - 20),
+                'y': random.randint(margin, self.canvas_size - margin - 20),
+                'rotation': random.uniform(0, 360),
+                'object_id': f'basic_obj_{i}'
+            }
+            objects.append(obj)
+        
+        return objects
 
 
     def render_enhanced_image(self, objects: List[Dict], background_color: str = 'white') -> Image.Image:

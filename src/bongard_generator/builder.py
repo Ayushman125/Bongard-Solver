@@ -3,6 +3,8 @@ import logging
 from pathlib import Path
 import random
 import torch
+from PIL import Image, ImageDraw
+from tqdm import tqdm
 from .cp_sampler       import CPSATSampler as CPSampler
 from .genetic_generator import GeneticSceneGenerator as GeneticSampler
 from .prototype_action import PrototypeAction
@@ -18,54 +20,75 @@ class BongardGenerator:
     
     def __init__(self, cfg):
         """
-        Initialize the BongardGenerator with professional configuration handling.
+        Initialize the BongardGenerator with robust configuration handling.
+        Ensures all required attributes are present and correctly typed.
         """
+        # Accept either a full config or just the generator config
+        # Always work with self.cfg as the unified config object
         self.cfg = cfg
-        
-        # Ensure output_dir is a Path object for safe joining
-        if hasattr(self.cfg, 'output_dir'):
-            self.output_dir = Path(self.cfg.output_dir)
-            self.output_dir.mkdir(parents=True, exist_ok=True)
-        else:
-            self.output_dir = Path("generated_scenes")
-            self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # COMPREHENSIVE TYPE CONVERSION - Fix all string/int division errors
-        self._ensure_numeric_config_types(self.cfg)
-        
-        # Extract generator config with safe defaults
+        # Unify generator config: if passed only generator section, treat as main config
+        # If there's a nested generator config, merge its keys
+        generator_keys = [
+            'min_objects', 'max_objects', 'canvas_size', 'output_dir',
+            'cp_quota', 'ga_quota', 'prototype_quota', 'use_gnn', 'gnn_thresh',
+            'stroke_min', 'num_backgrounds', 'jitter_px', 'noise_strength', 'checker_opacity'
+        ]
         if hasattr(cfg, 'generator'):
-            self.generator_cfg = cfg.generator
-        else:
-            # Create default generator config
-            from types import SimpleNamespace
-            self.generator_cfg = SimpleNamespace(
-                use_gnn=False,
-                gnn_thresh=0.5,
-                cp_quota=0.3,
-                ga_quota=0.4,
-                prototype_quota=0.3,
-                canvas_size=128
-            )
-        
-        # Initialize coverage tracker with correct config object
+            gen_cfg = cfg.generator
+            for key in generator_keys:
+                if hasattr(gen_cfg, key) and not hasattr(self.cfg, key):
+                    setattr(self.cfg, key, getattr(gen_cfg, key))
+        # Set defaults for any missing keys
+        defaults = {
+            'min_objects': 1,
+            'max_objects': 5,
+            'canvas_size': 128,
+            'output_dir': 'generated_scenes',
+            'cp_quota': 0.3,
+            'ga_quota': 0.4,
+            'prototype_quota': 0.3,
+            'use_gnn': False,
+            'gnn_thresh': 0.5,
+            'stroke_min': 1,
+            'num_backgrounds': 10,
+            'jitter_px': 0.5,
+            'noise_strength': 0.1,
+            'checker_opacity': 0.3
+        }
+        for key, value in defaults.items():
+            if not hasattr(self.cfg, key):
+                setattr(self.cfg, key, value)
+
+        # Ensure all numeric config values are correct types
+        self._ensure_numeric_config_types(self.cfg)
+
+        # Output directory
+        self.output_dir = Path(getattr(self.cfg, 'output_dir', 'generated_scenes'))
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Coverage tracker
         coverage_cfg = getattr(cfg, 'coverage', None)
         if coverage_cfg is None and isinstance(cfg, dict):
             coverage_cfg = cfg.get('coverage', None)
         if coverage_cfg is None:
             raise ValueError("Config must provide a 'coverage' dictionary with 'coverage_goals'.")
-        # Convert dict to SimpleNamespace for attribute access
         from types import SimpleNamespace
         if isinstance(coverage_cfg, dict):
             coverage_cfg = SimpleNamespace(**coverage_cfg)
         self.coverage = CoverageTracker(coverage_cfg)
-        
+
         # Initialize samplers based on availability
-        self._init_samplers(cfg)
-        
+        self._init_samplers(self.cfg)
+
         # Initialize GNN if enabled
-        if getattr(self.generator_cfg, 'use_gnn', False):
-            self._gnn = self._lazy_load_gnn(cfg)
+        if getattr(self.cfg, 'use_gnn', False):
+            try:
+                self._gnn = self._lazy_load_gnn(self.cfg)
+            except FileNotFoundError:
+                logger.warning(f"GNN checkpoint not found at {getattr(self.cfg, 'gnn_ckpt', 'N/A')}. GNN filtering disabled.")
+                self.cfg.use_gnn = False
+                self._gnn = None
         
         logger.info(f"BongardGenerator initialized with samplers: {self._get_available_samplers()}")
     
@@ -113,7 +136,21 @@ class BongardGenerator:
         try:
             if hasattr(cfg, 'cp') or hasattr(cfg, 'constraint_solver'):
                 cp_cfg = getattr(cfg, 'cp', getattr(cfg, 'constraint_solver', None))
-                self.samplers['cp_sat'] = CPSampler(cp_cfg) if cp_cfg else None
+                if cp_cfg:
+                    # Construct the SceneParameters object required by CPSATSampler
+                    from .cp_sampler import SceneParameters
+                    scene_params = SceneParameters(
+                        canvas_size=getattr(cfg, 'canvas_size', 128),
+                        min_obj_size=getattr(cp_cfg, 'min_obj_size', 10),
+                        max_obj_size=getattr(cp_cfg, 'max_obj_size', 50),
+                        max_objects=getattr(cfg, 'max_objects', 5),
+                        colors=["black", "white"],  # Force black and white
+                        shapes=getattr(cp_cfg, 'shapes', ["circle", "square", "triangle"]),
+                        fills=getattr(cp_cfg, 'fills', ["solid", "hollow"])
+                    )
+                    self.samplers['cp_sat'] = CPSampler(scene_params)
+                else:
+                    self.samplers['cp_sat'] = None
         except Exception as e:
             logger.warning(f"CP-SAT sampler unavailable: {e}")
             self.samplers['cp_sat'] = None
@@ -125,16 +162,22 @@ class BongardGenerator:
                 if ga_cfg:
                     self.samplers['genetic'] = GeneticSampler(ga_cfg)
                 else:
-                    # Fallback to default genetic config
+                    # Fallback to default genetic config from genetic_config.py
                     self.samplers['genetic'] = GeneticSampler()
+            else:
+                self.samplers['genetic'] = None
         except Exception as e:
             logger.warning(f"Genetic sampler unavailable: {e}")
             self.samplers['genetic'] = None
         
+        # Always enable the random sampler as a fallback
+        self.samplers['random'] = True  # Flag to enable random generation
+        
         # Try to initialize Prototype Action system
         try:
             prototypes_dir = getattr(cfg, 'prototypes_dir', 'data/prototypes')
-            self.samplers['prototype'] = PrototypeAction(prototypes_dir)
+            action_programs_path = getattr(cfg, 'action_programs_path', None)
+            self.samplers['prototype'] = PrototypeAction(prototypes_dir, action_programs_path)
         except Exception as e:
             logger.warning(f"Prototype sampler unavailable: {e}")
             self.samplers['prototype'] = None
@@ -162,16 +205,6 @@ class BongardGenerator:
         """
         scenes = []
         
-        # Get sampling quotas from config (with fallbacks)
-        cp_quota = getattr(self.cfg, 'cp_quota', 0.3)
-        ga_quota = getattr(self.cfg, 'ga_quota', 0.4) 
-        prototype_quota = getattr(self.cfg, 'prototype_quota', 0.3)
-        
-        # Calculate how many scenes each sampler should generate
-        cp_n = max(1, int(N * cp_quota))
-        ga_n = max(1, int(N * ga_quota))
-        pt_n = max(1, N - cp_n - ga_n)
-        
         # Generate base scenes using different strategies
         base_scenes = self._generate_base_scenes(N, rule)
         
@@ -179,6 +212,9 @@ class BongardGenerator:
         for i, (base_objects, generation_method) in enumerate(base_scenes):
             try:
                 # Apply the rule to modify objects according to the rule logic
+                if not base_objects:
+                    logger.warning(f"Skipping rule application for empty base scene {i}")
+                    continue
                 modified_objects, rule_features = rule.apply(base_objects, is_positive)
                 
                 # Add metadata for tracking
@@ -199,48 +235,145 @@ class BongardGenerator:
         # Filter and render scenes
         return self._filter_and_render_scenes(scenes, rule)
     
+    def _check_overlap(self, new_obj, existing_objects):
+        """Check if a new object overlaps with any existing objects, adding a small buffer."""
+        for old_obj in existing_objects:
+            # Simple bounding box collision detection
+            dist_x = abs(new_obj['x'] - old_obj['x'])
+            dist_y = abs(new_obj['y'] - old_obj['y'])
+            
+            # Approximate size check (sum of half-sizes) with a 5px buffer
+            buffer = 5
+            min_dist_x = (new_obj['size'] + old_obj['size']) / 2 + buffer
+            min_dist_y = (new_obj['size'] + old_obj['size']) / 2 + buffer
+            
+            if dist_x < min_dist_x and dist_y < min_dist_y:
+                return True  # Overlap detected
+        return False
+
+    def _place_object_without_overlap(self, generated_objects, object_id, shapes, color_palette, fills):
+        """
+        Tries to place a new object without overlap, reducing its size on failure.
+        Returns the new object or None if placement fails.
+        """
+        max_initial_attempts = 250  # Increased attempts
+        size_reduction_factor = 0.95 # Slower size reduction
+        min_size_ratio = 0.25 # Allow smaller objects if needed
+
+        canvas_size = self.cfg.canvas_size
+        margin = 15
+        # More reasonable size range, e.g., 15% to 40% of canvas size
+        initial_size = random.randint(
+            int(canvas_size * 0.15), int(canvas_size * 0.40)
+        )
+        size = initial_size
+
+        for attempt in range(max_initial_attempts):
+            # Ensure x, y are valid for the current size
+            half_size = int(size) // 2
+            if canvas_size - margin - half_size <= margin + half_size:
+                # Size is too large for the canvas with margins, cannot place.
+                logger.debug(f"Object {object_id} with size {size} is too large for canvas {canvas_size} with margin {margin}.")
+                # Reduce size and retry
+                size = int(size * size_reduction_factor)
+                continue
+
+            obj = {
+                'shape': random.choice(shapes),
+                'color': random.choice(color_palette),
+                'fill': random.choice(fills),
+                'size': int(size),
+                'x': random.randint(margin + half_size, canvas_size - margin - half_size),
+                'y': random.randint(margin + half_size, canvas_size - margin - half_size),
+                'object_id': object_id,
+                'rotation': random.uniform(0, 360),
+            }
+
+            if not self._check_overlap(obj, generated_objects):
+                return obj # Placement successful
+
+            # After a certain number of failures, reduce size
+            if attempt > 0 and attempt % 10 == 0: # Reduce size more often
+                new_size = int(size * size_reduction_factor)
+                if new_size < int(initial_size * min_size_ratio):
+                    logger.warning(f"Could not place object {object_id}, size reduced below minimum threshold.")
+                    return None
+                size = new_size
+                logger.debug(f"Reducing size for object {object_id} to {size}")
+
+        logger.warning(f"Could not place object {object_id} without overlap after {max_initial_attempts} attempts.")
+        return None
+
     def _generate_base_scenes(self, N, rule):
-        """Generate base scenes using different sampling strategies."""
+        """Generate base scenes using different sampling strategies with anti-overlap."""
         base_scenes = []
         
+        # Get sampling quotas from config
+        cp_quota = getattr(self.cfg, 'cp_quota', 0.2)
+        ga_quota = getattr(self.cfg, 'ga_quota', 0.2)
+        random_quota = getattr(self.cfg, 'random_quota', 0.5)
+        prototype_quota = 1.0 - cp_quota - ga_quota - random_quota
+
+        sampler_choices = []
+        sampler_choices.extend(['cp_sat'] * int(N * cp_quota))
+        sampler_choices.extend(['genetic'] * int(N * ga_quota))
+        sampler_choices.extend(['random'] * int(N * random_quota))
+        sampler_choices.extend(['prototype'] * int(N * prototype_quota))
+        random.shuffle(sampler_choices)
+
         for i in range(N):
-            # Create base objects with reasonable diversity
-            num_objects = random.randint(1, 6)  # Reasonable range for Bongard problems
-            objects = []
+            generation_method = sampler_choices[i] if i < len(sampler_choices) else 'random'
             
-            # Available attributes for generating diverse objects
-            shapes = ["circle", "square", "triangle", "pentagon", "star"]
-            colors = ["black", "white", "red", "blue", "green"] 
-            fills = ["solid", "hollow", "striped", "dotted"]
-            sizes = ["small", "medium", "large"]
+            num_objects = random.randint(self.cfg.min_objects, self.cfg.max_objects)
+            objects = None
+
+            # This block handles object generation from various samplers
+            if generation_method == 'cp_sat' and self.samplers.get('cp_sat'):
+                logger.debug(f"Using CP-SAT sampler for scene {i}")
+                objects = self.samplers['cp_sat'].sample_scene_cp(rule, num_objects, positive=True)
             
-            for j in range(num_objects):
-                # Generate spatially distributed objects
-                canvas_size = 128
-                margin = 20
-                obj = {
-                    'shape': random.choice(shapes),
-                    'color': random.choice(colors),
-                    'fill': random.choice(fills),
-                    'size': random.choice(sizes),
-                    'x': random.randint(margin, canvas_size - margin),
-                    'y': random.randint(margin, canvas_size - margin),
-                    'width': random.randint(10, 30),
-                    'height': random.randint(10, 30),
-                    'object_id': f"obj_{i}_{j}",
-                    'rotation': random.uniform(0, 360)
-                }
-                objects.append(obj)
+            elif generation_method == 'genetic' and self.samplers.get('genetic'):
+                logger.debug(f"Using Genetic sampler for scene {i}")
+                generated_data = self.samplers['genetic'].generate(rule, label=1)
+                if generated_data and isinstance(generated_data, tuple) and len(generated_data) > 0:
+                    objects = generated_data[0]
             
-            # Determine generation method based on scene index
-            if i < N // 3:
-                method = 'constraint_based'  # Simulating CP-SAT approach
-            elif i < 2 * N // 3:
-                method = 'genetic_optimization'  # Simulating GA approach  
-            else:
-                method = 'prototype_injection'  # Simulating prototype approach
+            # The random and prototype samplers now include anti-overlap logic
+            elif generation_method in ['random', 'prototype'] or objects is None:
+                generation_method = 'random' if objects is None else generation_method
+                logger.debug(f"Using {generation_method} sampler with anti-overlap for scene {i}")
+
+                # Force black and white color palette
+                color_palette = ["black", "white"]
                 
-            base_scenes.append((objects, method))
+                shapes = ["circle", "square", "triangle", "pentagon", "star", "hexagon"]
+                fills = ["solid", "hollow", "striped", "dotted"]
+                
+                generated_objects = []
+                for j in range(num_objects):
+                    obj = self._place_object_without_overlap(
+                        generated_objects,
+                        f"obj_{i}_{j}",
+                        shapes,
+                        color_palette,
+                        fills
+                    )
+                    if obj:
+                        generated_objects.append(obj)
+                
+                objects = generated_objects
+
+            # Final fallback if all else fails
+            if objects is None:
+                    logger.error(f"All samplers failed for scene {i}. Generating a minimal random scene.")
+                    # Fallback: force black and white palette
+                    objects = [{
+                        'shape': 'circle', 'color': 'black', 'fill': 'solid', 'size': 30,
+                        'x': self.cfg.canvas_size // 2, 'y': self.cfg.canvas_size // 2,
+                        'object_id': 'fallback_obj', 'rotation': 0
+                    }]
+
+            base_scenes.append((objects, generation_method))
         
         return base_scenes
     
@@ -252,7 +385,7 @@ class BongardGenerator:
         for scene_index, (objects, metadata) in enumerate(tqdm(scenes, desc=f"Filtering/Rendering scenes for {rule.name}")):
             try:
                 # GNN filtering if enabled
-                if hasattr(self.cfg, 'use_gnn') and self.cfg.use_gnn and hasattr(self, '_gnn'):
+                if getattr(self.cfg, 'use_gnn', False) and self._gnn:
                     scene_graph = build_scene_graph(objects, self.cfg)
                     scene_graph = scene_graph.to(self.cfg.device)
                     with torch.no_grad():
@@ -266,7 +399,31 @@ class BongardGenerator:
                 # Render the scene to an image
                 if hasattr(self.cfg, 'canvas_size') and isinstance(self.cfg.canvas_size, str):
                     self.cfg.canvas_size = int(self.cfg.canvas_size)
-                scene_image = create_composite_scene(objects, self.cfg)
+                
+                # If the generation method was prototype, use the prototype sampler to draw
+                if metadata['generation_method'] == 'prototype' and self.samplers.get('prototype'):
+                    scene_image = Image.new('RGBA', (self.cfg.canvas_size, self.cfg.canvas_size), (255, 255, 255, 255))
+                    prototype_sampler = self.samplers['prototype']
+                    for obj in objects:
+                        # Ensure obj['size'] is always an int for drawing
+                        size = obj.get('size', 32)
+                        if isinstance(size, str):
+                            try:
+                                size = int(size)
+                            except Exception:
+                                size = 32  # fallback default
+                        
+                        # Create a mock shape_data dictionary for the draw method
+                        shape_data = {
+                            'shape': obj.get('shape', 'circle'),
+                            'size': size,
+                            'color': obj.get('color', 'black'),
+                            'fill': obj.get('fill', 'solid')
+                        }
+                        prototype_sampler.draw(ImageDraw.Draw(scene_image), (obj['x'], obj['y']), shape_data)
+                else:
+                    scene_image = create_composite_scene(objects, self.cfg)
+
                 # --- DEBUG LOGGING ---
                 filename = f"{rule.name}_{metadata['generation_method']}_{scene_index}.png"
                 output_path = self.output_dir / filename

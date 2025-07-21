@@ -7,6 +7,7 @@ class GeneratorConfig:
     
     # General settings
     img_size: int = 256
+    canvas_size: int = 128  # Add canvas_size for compatibility
     
     # Shape generation
     min_shapes: int = 2

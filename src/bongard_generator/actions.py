@@ -25,7 +25,11 @@ class Action:
             size: Size parameter for scaling
             **kwargs: Additional drawing parameters
         """
-        raise NotImplementedError
+        # Default implementation draws a simple circle
+        x, y = center
+        radius = size // 4
+        color = kwargs.get('color', 'black')
+        draw.ellipse([x-radius, y-radius, x+radius, y+radius], outline=color, width=2)
 
 class ArcAction(Action):
     """Draws an arc segment with specified parameters."""

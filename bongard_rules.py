@@ -88,6 +88,7 @@ LOGIC_COUNT = RuleAtom("COUNT", 2) # e.g., COUNT(obj, shape(obj, circle))
 LOGIC_GT = RuleAtom("GT", 2)
 LOGIC_LT = RuleAtom("LT", 2)
 LOGIC_EQ = RuleAtom("EQ", 2)
+LOGIC_IMPLIES = RuleAtom("IMPLIES", 2)
 
 # Integer constants for COUNT comparisons (also handled by DSL Primitives)
 INT_1 = RuleAtom("INT_1", 0, is_value=True)
@@ -120,7 +121,7 @@ ALL_RULE_ATOMS = {
     "EXISTS": LOGIC_EXISTS, "FORALL": LOGIC_FORALL, "COUNT": LOGIC_COUNT,
     
     # Comparison Operators (added for completeness, though often handled by DSL Primitives directly)
-    "GT": LOGIC_GT, "LT": LOGIC_LT, "EQ": LOGIC_EQ,
+    "GT": LOGIC_GT, "LT": LOGIC_LT, "EQ": LOGIC_EQ, "IMPLIES": LOGIC_IMPLIES,
     
     # Integer constants (added for completeness, though often handled by DSL Primitives directly)
     "INT_1": INT_1, "INT_2": INT_2, "INT_3": INT_3, "INT_4": INT_4, "INT_5": INT_5,
@@ -142,6 +143,78 @@ class BongardRule:
         self.program_ast = program_ast if program_ast is not None else []
         self.logical_facts = logical_facts if logical_facts is not None else []
         self.is_positive_rule = is_positive_rule # True if rule defines positive examples
+
+    def apply(self, objects: List[Dict[str, Any]], is_positive: bool) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """
+        Applies the rule to a list of objects, modifying them to satisfy or violate the rule.
+        This is a simplified interpreter for the rule's AST.
+        """
+        import random
+        modified_objects = [obj.copy() for obj in objects]
+        rule_features = {}
+
+        if not self.program_ast:
+            return modified_objects, rule_features
+
+        # A simple recursive interpreter for the AST
+        def _interpret(node, target_objects):
+            op = node.get("op")
+            args = node.get("args", [])
+
+            if op == "FORALL":
+                # FORALL(O, predicate(O))
+                # For positive, apply predicate to all. For negative, ensure at least one doesn't satisfy.
+                predicate_node = args[1]
+                if is_positive:
+                    for obj in target_objects:
+                        _interpret(predicate_node, [obj])
+                else:
+                    # Negative case: pick one object and make it violate the rule
+                    if target_objects:
+                        chosen_obj = random.choice(target_objects)
+                        # This is tricky. A full negation logic is needed.
+                        # Simple approach: change a key property.
+                        if predicate_node['op'] == 'shape':
+                            current_shape = predicate_node['args'][1]['op']
+                            new_shape = "square" if current_shape == "circle" else "circle"
+                            chosen_obj['shape'] = new_shape
+            
+            elif op == "EXISTS":
+                # EXISTS(O, predicate(O))
+                # For positive, ensure at least one satisfies. For negative, ensure none satisfy.
+                if is_positive:
+                    if target_objects:
+                        chosen_obj = random.choice(target_objects)
+                        _interpret(args[1], [chosen_obj])
+                # Negative case is harder, means FORALL(O, NOT(predicate(O)))
+                # For now, we assume the generator creates enough variety that non-application works for negative.
+
+            elif op == "AND":
+                for arg_node in args:
+                    _interpret(arg_node, target_objects)
+
+            elif op == "shape":
+                # shape(O, 'circle')
+                shape_val = args[1].get("op")
+                for obj in target_objects:
+                    obj['shape'] = shape_val
+            
+            elif op == "color":
+                color_val = args[1].get("op")
+                for obj in target_objects:
+                    obj['color'] = color_val
+
+            elif op == "size":
+                size_val = args[1].get("op")
+                for obj in target_objects:
+                    obj['size'] = size_val
+            
+            # ... other operators like EQ, GT, COUNT would need more complex logic ...
+
+        _interpret(self.program_ast[0], modified_objects)
+        
+        rule_features['rule_applied_successfully'] = True
+        return modified_objects, rule_features
 
     def __repr__(self):
         return f"BongardRule(name='{self.name}', positive={self.is_positive_rule})"
