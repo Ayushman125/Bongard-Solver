@@ -1,7 +1,0 @@
-# Phase 0 Thresholds Configuration
-# This YAML file stores the best-found thresholds for S1-AL attribute extraction.
-# These can be loaded by System1AbstractionLayer for robust, data-driven operation.
-
-θ_hole: 5.0
-θ_sym: 0.8
-δ_size: 0.05
