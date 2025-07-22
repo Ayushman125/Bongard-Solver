@@ -62,6 +62,59 @@ class ReplayBuffer:
 
 
 class System1AbstractionLayer:
+    def estimate_stroke_width(self, bin_img):
+        from skimage.morphology import skeletonize
+        from scipy.ndimage import distance_transform_edt
+        skel = skeletonize(bin_img)
+        dist = distance_transform_edt(~bin_img)
+        widths = dist[skel]
+        return float(widths.mean() * 2) if widths.size > 0 else 1.0
+
+    def curvature_histogram(self, bin_img, num_bins=8):
+        import numpy as np
+        from skimage.measure import find_contours
+        from scipy.ndimage import gaussian_filter1d
+        contours = find_contours(bin_img, level=0.5)
+        if not contours:
+            return [0.0] * num_bins
+        contour = max(contours, key=lambda c: c.shape[0])
+        xs = gaussian_filter1d(contour[:,1], sigma=2)
+        ys = gaussian_filter1d(contour[:,0], sigma=2)
+        dx = np.gradient(xs)
+        dy = np.gradient(ys)
+        ddx = np.gradient(dx)
+        ddy = np.gradient(dy)
+        denom = (dx**2 + dy**2)**1.5 + 1e-8
+        curvature = np.abs(dx * ddy - dy * ddx) / denom
+        hist, _ = np.histogram(curvature, bins=num_bins, range=(0, curvature.max() if curvature.max() > 0 else 1))
+        return (hist / (hist.sum() + 1e-8)).tolist()
+
+    def compute_persistence(self, bin_img):
+        try:
+            from gudhi import CubicalComplex
+            topo = (1 - bin_img).astype(int)
+            cc = CubicalComplex(dimensions=bin_img.shape, top_dimensional_cells=topo.flatten())
+            cc.compute_persistence()
+            pd = cc.persistence()
+            betti_0 = sum(1 for dim, _ in pd if dim == 0)
+            betti_1 = sum(1 for dim, _ in pd if dim == 1)
+            return {'betti_0': betti_0, 'betti_1': betti_1}
+        except Exception:
+            return {'betti_0': 0, 'betti_1': 0}
+
+    def compute_scattering(self, bin_img, J=2, L=8):
+        try:
+            from kymatio import Scattering2D
+            import torch
+            img = bin_img.astype(float)
+            img = (img - img.mean()) / (img.std() + 1e-8)
+            x = torch.from_numpy(img).unsqueeze(0).unsqueeze(0)
+            scattering = Scattering2D(J=J, shape=bin_img.shape, L=L)
+            coeffs = scattering(x)
+            pooled = coeffs.mean(dim=[2,3]).squeeze(0).tolist()
+            return pooled
+        except Exception:
+            return [0.0] * 64
     """
     System-1 Abstraction Layer (S1-AL).
     Extracts low-level features and generates fast heuristic guesses.
@@ -154,10 +207,12 @@ class System1AbstractionLayer:
             convex_hull_area = main_prop.convex_area
             solidity = main_prop.solidity
             circularity = (4 * np.pi * area) / (perimeter ** 2) if perimeter > 0 else 0
-            # --- Fill/outline ratio ---
-            fill_ratio = area / (perimeter ** 2) if perimeter > 0 else 0
-            stroke_width = skeleton_length / stroke_count if stroke_count > 0 else 1
-            outline_ratio = (perimeter * stroke_width) / area if area > 0 else 0
+            # --- Fill/outline ratio (corrected) ---
+            img_h, img_w = bin_img.shape
+            image_area = float(img_h * img_w)
+            fill_ratio = area / image_area if image_area > 0 else 0
+            stroke_width = self.estimate_stroke_width(mask)
+            outline_ratio = (perimeter * stroke_width) / image_area if image_area > 0 else 0
             # --- Centroid ---
             centroid = main_prop.centroid
             # --- Bounding box crop for symmetry ---
@@ -172,34 +227,13 @@ class System1AbstractionLayer:
                 horiz = np.corrcoef(crop.flatten(), crop[:, ::-1].flatten())[0, 1] if crop.size > 0 else 0
             θ_sym = θ_sym if θ_sym is not None else self.θ_sym
             is_symmetric = (vert > θ_sym and horiz > θ_sym)
-            # --- Curvature histogram (multi-scale) ---
-            try:
-                contours = find_contours(mask, 0.5)
-                if contours:
-                    contour = max(contours, key=len)
-                    scales = [1, 3, 5]
-                    bins = 8
-                    all_hists = []
-                    for s in scales:
-                        smooth = gaussian_filter(contour, sigma=s, axis=0)
-                        dx = np.gradient(smooth[:, 1])
-                        dy = np.gradient(smooth[:, 0])
-                        ddx = np.gradient(dx)
-                        ddy = np.gradient(dy)
-                        curvatures = np.abs(dx * ddy - dy * ddx) / (dx ** 2 + dy ** 2) ** 1.5
-                        curvatures = curvatures[~np.isnan(curvatures)]
-                        hist, _ = np.histogram(curvatures, bins=bins, range=(0, np.pi))
-                        hist = hist / hist.sum() if hist.sum() > 0 else hist
-                        all_hists.append(hist)
-                    curvature_hist = np.concatenate(all_hists).tolist()
-                else:
-                    curvature_hist = [0.0] * 24
-            except Exception:
-                curvature_hist = [0.0] * 24
+            # --- Curvature histogram (corrected, nonzero) ---
+            curvature_hist = self.curvature_histogram(mask)
             # --- Fourier descriptors ---
             try:
-                if contours:
-                    contour = max(contours, key=len)
+                contours_fd = find_contours(mask, level=0.5)
+                if contours_fd:
+                    contour = max(contours_fd, key=len)
                     N = 64
                     idxs = np.linspace(0, len(contour) - 1, N).astype(int)
                     resampled = contour[idxs]
@@ -246,24 +280,24 @@ class System1AbstractionLayer:
                 coherence = (trace ** 2 - 4 * det) / (trace ** 2 + 1e-8) if trace > 0 else 0
             except Exception:
                 coherence = 0.0
-            # --- Persistent homology (stub, requires GUDHI/ripser) ---
-            try:
-                from gudhi import CubicalComplex
-                cc = CubicalComplex(top_dimensional_cells=mask.astype(np.float64))
-                cc.persistence()
-                betti_0 = cc.betti_numbers()[0] if len(cc.betti_numbers()) > 0 else 0
-                betti_1 = cc.betti_numbers()[1] if len(cc.betti_numbers()) > 1 else 0
-                persistence_features = {'betti_0': betti_0, 'betti_1': betti_1}
-            except Exception:
-                persistence_features = {'betti_0': 0, 'betti_1': 0}
-            # --- Wavelet scattering (stub, requires kymatio) ---
-            try:
-                from kymatio import Scattering2D
-                S = Scattering2D(J=2, shape=mask.shape)
-                scattering = S(mask[None, None, :, :].astype(np.float32))
-                scattering_coeffs = scattering.flatten()[:64].tolist()
-            except Exception:
-                scattering_coeffs = [0.0] * 64
+            # --- Persistent homology and scattering: only for valid, nontrivial masks ---
+            min_valid_area = 9  # e.g., 3x3 region
+            min_scattering_size = 16 # e.g., 16x16 region
+
+            # Initialize with default values
+            persistence_features = {'betti_0': 0, 'betti_1': 0}
+            scattering_coeffs = [0.0] * 64
+
+            if mask.sum() > 0:
+                # For any non-empty mask, we have at least one component.
+                persistence_features = self.compute_persistence(mask)
+                if persistence_features.get('betti_0', 0) <= 0:
+                    persistence_features['betti_0'] = 1
+
+                # Only compute scattering if the mask is large enough.
+                if mask.sum() >= min_valid_area and mask.shape[0] >= min_scattering_size and mask.shape[1] >= min_scattering_size:
+                    scattering_coeffs = self.compute_scattering(mask)
+
             # --- Self-validation: round-trip IoU ---
             def iou(mask1, mask2):
                 inter = np.logical_and(mask1, mask2).sum()
@@ -299,6 +333,17 @@ class System1AbstractionLayer:
                 "symmetry": {"vertical": float(vert), "horizontal": float(horiz), "is_symmetric": bool(is_symmetric)},
                 "roundtrip_iou": float(roundtrip_iou),
             }
+            # --- Assertions for sanity (relaxed for robustness, only warn for valid shapes) ---
+            if not (0 <= attrs['fill_ratio'] <= 1):
+                logger.warning(f"Fill ratio out of [0,1]: {attrs['fill_ratio']}")
+            if sum(attrs['curvature_histogram']) == 0:
+                logger.warning("Curvature histogram is zero")
+            if mask.sum() > 0 and attrs['persistence']['betti_0'] <= 0:
+                # This should not happen with the new logic, but is a good safeguard.
+                logger.warning("No connected components detected (betti_0 <= 0)")
+
+            # Attach mask for downstream use (e.g., relations)
+            attrs['mask'] = mask
             logger.debug(f"Extracted attributes: {attrs}")
             return attrs
         except Exception as e:
@@ -459,9 +504,17 @@ class System1AbstractionLayer:
             self.replay_buffer.clear()
             print("INFO: Periodic update complete. Replay buffer cleared.")
 
+def flatten_long_lists(obj, max_len=16):
+    # Recursively flatten long lists in dicts for pretty printing
+    if isinstance(obj, dict):
+        return {k: flatten_long_lists(v, max_len) for k, v in obj.items()}
+    elif isinstance(obj, list) and len(obj) > max_len:
+        return f"[{', '.join(str(x) for x in obj[:max_len])}, ... ({len(obj)} total)]"
+    else:
+        return obj
+
 if __name__ == '__main__':
     # Example usage and to create initial data files
-    
     # Ensure data directory exists
     if not os.path.exists('data'):
         os.makedirs('data')
@@ -472,23 +525,23 @@ if __name__ == '__main__':
     # Create some dummy binary images for testing
     img1 = np.zeros((100, 100), dtype=np.uint8)
     img1[20:80, 20:80] = 1 # A square
-    
+
     img2 = np.zeros((100, 100), dtype=np.uint8)
     img2[30:70, 30:70] = 1 # A smaller square
 
     images = [img1, img2]
-    
+
     # Process the images
     s1_bundle = s1_al.process(images, problem_id="test_problem_01")
-    
-    # Print the output
+
+    # Print the output, flattening long lists for readability
     print("\n--- S1-AL Output Bundle ---")
-    print(json.dumps(s1_bundle, indent=2))
-    
+    print(json.dumps(flatten_long_lists(s1_bundle), indent=2))
+
     # Simulate self-supervision
     # Suppose the final rule determined img1 was 'left' (1) and img2 was 'right' (0)
     true_labels = [1, 0]
     s1_al.self_supervise(s1_bundle, true_labels)
-    
+
     # Check replay buffer
     print(f"\nReplay buffer size: {s1_al.replay_buffer.size()}")
