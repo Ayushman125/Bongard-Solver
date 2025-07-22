@@ -170,8 +170,35 @@ def compute_skeleton(mask):
     sk = skel_bool.astype(int)
     nb4  = convolve(sk, four_k,  mode='constant', cval=0)
     nb8  = convolve(sk, eight_k, mode='constant', cval=0)
-    diag_spur_mask = (nb4 == 0) & (nb8 > 0) & (sk == 1)
-    skel_bool[diag_spur_mask] = False
+    # Only prune spurs if there is a branch (junction) in the skeleton
+    if np.any((skel_bool) & (nb4 >= 3)):
+        endpoints = np.argwhere((skel_bool) & (nb4 == 1))
+        branches  = set(map(tuple, np.argwhere((skel_bool) & (nb4 >= 3))))
+        to_prune = []
+        for ep in endpoints:
+            visited = {tuple(ep)}
+            queue = deque([(tuple(ep), 0)])
+            found_branch = False
+            while queue:
+                (r, c), dist = queue.popleft()
+                if (r, c) in branches:
+                    found_branch = True
+                    break
+                if dist >= 2:
+                    continue
+                for dr in (-1, 0, 1):
+                    for dc in (-1, 0, 1):
+                        if dr == 0 and dc == 0:
+                            continue
+                        nr, nc = r + dr, c + dc
+                        if 0 <= nr < skel_bool.shape[0] and 0 <= nc < skel_bool.shape[1]:
+                            if skel_bool[nr, nc] and (nr, nc) not in visited:
+                                visited.add((nr, nc))
+                                queue.append(((nr, nc), dist + 1))
+            if not found_branch:
+                to_prune.append(tuple(ep))
+        for pix in to_prune:
+            skel_bool[pix] = False
 
     # 4-connectivity for metrics
     stroke_count     = int(skel_bool.sum())
