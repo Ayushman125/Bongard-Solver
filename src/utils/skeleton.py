@@ -152,9 +152,9 @@ def compute_skeleton(mask):
         metrics = {'stroke_count': 0, 'endpoint_count': 0, 'branch_point_count': 0, 'skeleton_length': 0}
         return skel_img, metrics
     binary = clean > 0
-    skel_bool = skeletonize(binary)
+    skel_bool = skeletonize(binary).astype(np.uint8)
     # Prune spurs (short branches) to make endpoint count robust for thick junctions
-    skel_bool = prune_spurs(skel_bool, max_spur_length=10)
+    skel_bool = prune_spurs(skel_bool, max_spur_length=10)  # Aggressive spur pruning
     # 4-connectivity for metrics
     from scipy.ndimage import convolve
     four_k = np.array([[0,1,0],[1,0,1],[0,1,0]], dtype=int)
@@ -163,7 +163,7 @@ def compute_skeleton(mask):
     endpoints = np.argwhere(np.logical_and(skel_bool, nb4 == 1))
     branch_points = np.argwhere(np.logical_and(skel_bool, nb4 >= 3))
     # Cluster endpoints that are very close (to handle thick Y-junctions)
-    def cluster_points(points, eps=2):
+    def cluster_points(points, eps=6):
         if len(points) == 0:
             return points
         try:
@@ -177,9 +177,33 @@ def compute_skeleton(mask):
             centroid = np.mean(cluster, axis=0)
             clustered.append(centroid)
         return np.array(clustered, dtype=int)
-    endpoints_clustered = cluster_points(endpoints, eps=2)
+    endpoints_clustered = cluster_points(endpoints, eps=6)
+    # Post-process: merge any endpoints within a 7x7 box (manhattan distance <= 3)
+    def merge_close_points(points, dist=3):
+        if len(points) <= 1:
+            return points
+        merged = []
+        used = set()
+        for i, p1 in enumerate(points):
+            if i in used:
+                continue
+            group = [p1]
+            for j, p2 in enumerate(points):
+                if j != i and j not in used:
+                    if abs(p1[0]-p2[0]) <= dist and abs(p1[1]-p2[1]) <= dist:
+                        group.append(p2)
+                        used.add(j)
+            merged.append(np.mean(group, axis=0).astype(int))
+            used.add(i)
+        return np.array(merged)
+    endpoints_merged = merge_close_points(endpoints_clustered, dist=3)
+    # Debug: print endpoint locations and count for diagnosis
+    print(f"[DEBUG] Raw endpoints: {endpoints.tolist()}")
+    print(f"[DEBUG] Clustered endpoints: {endpoints_clustered.tolist()} (count: {len(endpoints_clustered)})")
+    print(f"[DEBUG] Merged endpoints: {endpoints_merged.tolist()} (count: {len(endpoints_merged)})")
+    endpoint_count = len(endpoints_merged)
     stroke_count     = int(skel_bool.sum())
-    endpoint_count   = len(endpoints_clustered)
+    # endpoint_count is now from merged endpoints
     branch_point_count = len(branch_points)
     skeleton_length  = stroke_count
     skel_img = (skel_bool.astype(np.uint8) * 255)
