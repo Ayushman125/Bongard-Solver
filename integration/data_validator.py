@@ -2,26 +2,25 @@
 Data Validator
 Version: 0.1.0
 
-A module for validating data against predefined schemas.
-This will be implemented using a library like jsonschema or protobuf.
+Enforces JSON schemas for event logs using jsonschema.
+Glob-loads all schemas in schemas/.
 """
 
 __version__ = "0.1.0"
 
+import json, glob
+from jsonschema import validate, RefResolver
+
+SCHEMA_DIR = "schemas/"
+
 class DataValidator:
-    def __init__(self, schema):
-        self.schema = schema
-        print("Data Validator initialized with a schema (placeholder).")
+    def __init__(self):
+        self._schemas = {
+            path.rsplit("/",1)[-1]: json.load(open(path))
+            for path in glob.glob(f"{SCHEMA_DIR}/*.schema.json")
+        }
+        self._resolver = RefResolver(f"file:///{SCHEMA_DIR}/", None)
 
-    def validate(self, data):
-        """
-        Validates data against the schema (placeholder).
-        """
-        print("Validating data... (placeholder)")
-        # Placeholder for actual validation logic
-        return True
-
-# Example usage:
-# schema = {"type": "object", "properties": {"name": {"type": "string"}}}
-# validator = DataValidator(schema)
-# validator.validate({"name": "example"})
+    def validate(self, data: dict, schema_name: str):
+        schema = self._schemas[schema_name]
+        validate(instance=data, schema=schema, resolver=self._resolver)
