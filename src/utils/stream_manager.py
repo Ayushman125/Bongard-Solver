@@ -18,25 +18,7 @@ Overlap host↔device transfers and compute using PyTorch streams:
   mgr.compute(kernel_fn, args…)
   mgr.synchronize()
 """
-    def async_transfer(self, dst: torch.Tensor, src: torch.Tensor):
-        """
-        Copy src→dst asynchronously on stream_in.
-        """
-        with torch.cuda.stream(self.stream_in):
-            dst.copy_(src, non_blocking=True)
 
-    def compute(self, fn, *args, **kwargs):
-        """
-        Execute fn(*args,**kwargs) on stream_compute.
-        """
-        with torch.cuda.stream(self.stream_compute):
-            return fn(*args, **kwargs)
-
-    def synchronize(self):
-        """
-        Wait for both streams to finish.
-        """
-        torch.cuda.synchronize()
 """
 CUDAStreamManager: overlap host<->device transfers with compute.
 Version: 0.1.0

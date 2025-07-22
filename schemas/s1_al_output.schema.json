@@ -3,24 +3,31 @@
   "title": "S1-AL Output",
   "type": "object",
   "properties": {
+    "module": { "const": "s1_al" },
+    "timestamp": { "type": "number" },
+    "latency_ms": { "type": "number" },
     "com": {
       "type": "array",
       "items": { "type": "number" },
-      "minItems": 2,
-      "maxItems": 2
+      "minItems": 2, "maxItems": 2
     },
     "inertia_tensor": {
       "type": "array",
       "items": {
         "type": "array",
         "items": { "type": "number" },
-        "minItems": 2,
-        "maxItems": 2
+        "minItems": 2, "maxItems": 2
       },
-      "minItems": 2,
-      "maxItems": 2
+      "minItems": 2, "maxItems": 2
     },
-    "timestamp_ms": { "type": "number" }
+    "support_polygon": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": { "type": "number" },
+        "minItems": 2, "maxItems": 2
+      }
+    }
   },
-  "required": ["com", "inertia_tensor", "timestamp_ms"]
+  "required": ["module", "timestamp", "latency_ms", "com", "inertia_tensor", "support_polygon"]
 }

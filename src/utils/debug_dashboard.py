@@ -40,14 +40,6 @@ if __name__ == "__main__":
     threading.Thread(target=_start_watcher, daemon=True).start()
     app.run(port=5000)
 
-@app.route("/")
-def index():
-    return render_template_string(_HTML, events=_EVENTS)
-
-@app.route("/api/events")
-def api_events():
-    return jsonify(_EVENTS)
-
 if __name__ == "__main__":
     threading.Thread(target=start_watcher, daemon=True).start()
     app.run(host="0.0.0.0", port=5000)
