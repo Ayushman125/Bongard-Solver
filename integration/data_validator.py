@@ -13,12 +13,14 @@ from jsonschema import validate, RefResolver
 SCHEMA_DIR = "schemas/"
 
 class DataValidator:
-    def __init__(self):
-        self._schemas = {
-            path.rsplit("/",1)[-1]: json.load(open(path))
-            for path in glob.glob(f"{SCHEMA_DIR}/*.schema.json")
-        }
-        self._resolver = RefResolver(f"file:///{SCHEMA_DIR}/", None)
+    def __init__(self, schema_dir="schemas"):
+        import os
+        self._schemas = {}
+        for path in glob.glob(os.path.join(schema_dir, "*.schema.json")):
+            name = os.path.basename(path)
+            with open(path) as f:
+                self._schemas[name] = json.load(f)
+        self._resolver = RefResolver(f"file:///{schema_dir}/", None)
 
     def validate(self, data: dict, schema_name: str):
         schema = self._schemas[schema_name]
