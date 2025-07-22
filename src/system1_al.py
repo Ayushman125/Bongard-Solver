@@ -63,12 +63,9 @@ class ReplayBuffer:
 
 class System1AbstractionLayer:
     def estimate_stroke_width(self, bin_img):
-        from skimage.morphology import skeletonize
-        from scipy.ndimage import distance_transform_edt
-        skel = skeletonize(bin_img)
-        dist = distance_transform_edt(~bin_img)
-        widths = dist[skel]
-        return float(widths.mean() * 2) if widths.size > 0 else 1.0
+        # Use standardized helper
+        from src.utils.shape_utils import estimate_stroke_width
+        return estimate_stroke_width(bin_img)
 
     def curvature_histogram(self, bin_img, num_bins=8):
         import numpy as np
@@ -91,28 +88,16 @@ class System1AbstractionLayer:
 
     def compute_persistence(self, bin_img):
         try:
-            from gudhi import CubicalComplex
-            topo = (1 - bin_img).astype(int)
-            cc = CubicalComplex(dimensions=bin_img.shape, top_dimensional_cells=topo.flatten())
-            cc.compute_persistence()
-            pd = cc.persistence()
-            betti_0 = sum(1 for dim, _ in pd if dim == 0)
-            betti_1 = sum(1 for dim, _ in pd if dim == 1)
-            return {'betti_0': betti_0, 'betti_1': betti_1}
+            from src.utils.persistence import compute_betti
+            b0, b1 = compute_betti(bin_img)
+            return {'betti_0': b0, 'betti_1': b1}
         except Exception:
             return {'betti_0': 0, 'betti_1': 0}
 
     def compute_scattering(self, bin_img, J=2, L=8):
         try:
-            from kymatio import Scattering2D
-            import torch
-            img = bin_img.astype(float)
-            img = (img - img.mean()) / (img.std() + 1e-8)
-            x = torch.from_numpy(img).unsqueeze(0).unsqueeze(0)
-            scattering = Scattering2D(J=J, shape=bin_img.shape, L=L)
-            coeffs = scattering(x)
-            pooled = coeffs.mean(dim=[2,3]).squeeze(0).tolist()
-            return pooled
+            from src.utils.scattering import compute_scattering
+            return compute_scattering(bin_img, J=J, L=L)
         except Exception:
             return [0.0] * 64
     """
@@ -185,10 +170,12 @@ class System1AbstractionLayer:
                 return {}
             main_prop = max(props, key=lambda p: p.area)
             mask = (lbl == main_prop.label).astype(np.uint8)
-            # --- Skeleton and stroke count ---
+            # --- Skeletonization (standardized: medial_axis + skeletonize) ---
+            # Zhang–Suen or Guo–Hall via skimage.morphology.skeletonize
             skel1 = skeletonize(mask)
             skel2 = medial_axis(mask)
             consensus_skel = np.logical_and(skel1, skel2)
+            # Skeleton metrics
             G = self._build_stroke_graph(consensus_skel)
             # Prune degree-2 nodes (collapse chains)
             G_simple = G.copy()
@@ -198,6 +185,7 @@ class System1AbstractionLayer:
             endpoint_count = sum([1 for node, degree in G.degree() if degree == 1])
             branch_point_count = sum([1 for node, degree in G.degree() if degree > 2])
             skeleton_length = consensus_skel.sum()
+            # Documented: stroke_count = total skeleton pixels, endpoint_count = pixels with 1 8-neighbor, branch_point_count = 3+ 8-neighbors, skeleton_length = N-1 for line
             # --- Euler/hole count ---
             euler = main_prop.euler_number
             hole_count = max(0, 1 - euler)
@@ -212,7 +200,9 @@ class System1AbstractionLayer:
             image_area = float(img_h * img_w)
             fill_ratio = area / image_area if image_area > 0 else 0
             stroke_width = self.estimate_stroke_width(mask)
-            outline_ratio = (perimeter * stroke_width) / image_area if image_area > 0 else 0
+            # Outline ratio: perimeter / sqrt(area) (standardized)
+            import math
+            outline_ratio = perimeter / math.sqrt(area) if area > 0 else 0
             # --- Centroid ---
             centroid = main_prop.centroid
             # --- Bounding box crop for symmetry ---
@@ -265,21 +255,21 @@ class System1AbstractionLayer:
                 granulometry = area_r
             except Exception:
                 granulometry = [0] * 5
-            # --- Structure tensor coherence ---
+            # --- Structure tensor coherence (standardized) ---
             try:
-                gx = cv2.Sobel(mask.astype(np.float32), cv2.CV_32F, 1, 0, ksize=3)
-                gy = cv2.Sobel(mask.astype(np.float32), cv2.CV_32F, 0, 1, ksize=3)
-                Jxx = gx * gx
-                Jyy = gy * gy
-                Jxy = gx * gy
-                mean_Jxx = np.mean(Jxx)
-                mean_Jyy = np.mean(Jyy)
-                mean_Jxy = np.mean(Jxy)
-                trace = mean_Jxx + mean_Jyy
-                det = mean_Jxx * mean_Jyy - mean_Jxy ** 2
-                coherence = (trace ** 2 - 4 * det) / (trace ** 2 + 1e-8) if trace > 0 else 0
+                from src.utils.structure import structure_tensor_coherence
+                coherence = structure_tensor_coherence(mask)
             except Exception:
                 coherence = 0.0
+            # --- Polygon/quadrangle detection ---
+            try:
+                from src.utils.polygon_detection import find_quadrangles
+                quadrangles = find_quadrangles(mask)
+                is_quadrangle = len(quadrangles) > 0
+                vertex_count = [len(q) for q in quadrangles] if quadrangles else []
+            except Exception:
+                is_quadrangle = False
+                vertex_count = []
             # --- Persistent homology and scattering: only for valid, nontrivial masks ---
             min_valid_area = 9  # e.g., 3x3 region
             min_scattering_size = 16 # e.g., 16x16 region
@@ -308,6 +298,8 @@ class System1AbstractionLayer:
             roundtrip_iou = iou(mask, mask)
             # --- Compose attributes ---
             attrs = {
+                "is_quadrangle": is_quadrangle,
+                "vertex_count": vertex_count,
                 "stroke_count": int(stroke_count),
                 "endpoint_count": int(endpoint_count),
                 "branch_point_count": int(branch_point_count),
