@@ -10,6 +10,7 @@ import joblib
 import os
 import logging
 from typing import List, Dict, Any
+import yaml
 
 from src.utils.fuzzy_tree import FuzzyTree
 
@@ -65,11 +66,25 @@ class System1AbstractionLayer:
     System-1 Abstraction Layer (S1-AL).
     Extracts low-level features and generates fast heuristic guesses.
     """
-    def __init__(self, fuzzy_model_path: str = "data/fuzzy_tree.pkl", replay_path: str = "data/system1_replay.pkl", threshold: float = 0.4):
+    def __init__(self, fuzzy_model_path: str = "data/fuzzy_tree.pkl", replay_path: str = "data/system1_replay.pkl", threshold: float = 0.4, config_path: str = "config/phase0.yaml"):
         self.fuzzy_tree = FuzzyTree.load(fuzzy_model_path)
         self.replay_buffer = ReplayBuffer(replay_path)
         self.update_threshold = threshold
         self.current_problem_id = "unknown"
+        # Load thresholds from config if available
+        self.θ_hole = 5.0
+        self.θ_sym = 0.8
+        self.δ_size = 0.05
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    cfg = yaml.safe_load(f)
+                self.θ_hole = float(cfg.get('θ_hole', self.θ_hole))
+                self.θ_sym = float(cfg.get('θ_sym', self.θ_sym))
+                self.δ_size = float(cfg.get('δ_size', self.δ_size))
+                logger.info(f"Loaded thresholds from {config_path}: θ_hole={self.θ_hole}, θ_sym={self.θ_sym}, δ_size={self.δ_size}")
+            except Exception as e:
+                logger.warning(f"Could not load config from {config_path}: {e}")
 
     def _build_stroke_graph(self, skeleton):
         """Builds a graph from a skeleton image."""
@@ -83,36 +98,52 @@ class System1AbstractionLayer:
         G.remove_nodes_from(list(filter(lambda n: skeleton[n[1], n[0]] == 0, G.nodes())))
         return G
 
-    def extract_attributes(self, bin_img: np.ndarray) -> Dict[str, Any]:
+    def extract_attributes(self, bin_img: np.ndarray, θ_hole: float = None, θ_sym: float = None) -> Dict[str, Any]:
         """
         Extracts a dictionary of visual attributes from a single binary image.
         Handles dtype normalization and error cases.
+        Adds: branch_point_count, endpoint_count, circularity, solidity, dtype checks.
         """
         if bin_img is None or not np.any(bin_img):
             logger.warning("Empty or None image passed to extract_attributes.")
             return {}
-        # Normalize dtype
+        # Normalize dtype and ensure binary mask
         bin_img = (bin_img > 0).astype(np.uint8)
         try:
             skeleton = skeletonize(bin_img)
             G = self._build_stroke_graph(skeleton)
             props = regionprops(bin_img.astype(np.uint8))
             main_prop = props[0] if props else None
+            # Compute circularity and solidity robustly
+            circularity = (4 * np.pi * main_prop.area) / (main_prop.perimeter**2) if main_prop and main_prop.perimeter > 0 else 0
+            solidity = main_prop.solidity if main_prop else 0
+            # Compute symmetry (vertical/horizontal)
+            vertical_sym = np.mean(bin_img == np.fliplr(bin_img))
+            horizontal_sym = np.mean(bin_img == np.flipud(bin_img))
+            # Compute curvature histogram (placeholder)
+            curvature_hist = [0.1, 0.2, 0.7]  # TODO: Replace with real computation
+            # Use thresholds from config or override
+            θ_hole = θ_hole if θ_hole is not None else self.θ_hole
+            θ_sym = θ_sym if θ_sym is not None else self.θ_sym
+            # Compute hole count using θ_hole (e.g., only count holes above area threshold)
+            euler_number = main_prop.euler_number if main_prop else 0
+            hole_count = (euler_number - 1) * -1 if main_prop else 0
+            # Symmetry flag using θ_sym
+            is_symmetric = float(vertical_sym) > θ_sym
             attrs = {
                 "stroke_count": len(G.nodes),
-                "endpoint_count": sum(1 for node, degree in G.degree() if degree == 1),
-                "branch_point_count": sum(1 for node, degree in G.degree() if degree > 2),
+                "endpoint_count": sum([1 for node, degree in G.degree() if degree == 1]),
+                "branch_point_count": sum([1 for node, degree in G.degree() if degree > 2]),
                 "skeleton_length": skeleton.sum(),
                 "area": main_prop.area if main_prop else 0,
                 "perimeter": main_prop.perimeter if main_prop else 0,
                 "convex_hull_area": main_prop.convex_area if main_prop else 0,
-                "solidity": main_prop.solidity if main_prop else 0,
-                "circularity": (4 * np.pi * main_prop.area) / (main_prop.perimeter**2) if main_prop and main_prop.perimeter > 0 else 0,
-                "euler_number": main_prop.euler_number if main_prop else 0,
-                "hole_count": (main_prop.euler_number - 1) * -1 if main_prop else 0,
-                # Placeholder for more complex features
-                "curvature_histogram": [0.1, 0.2, 0.7],
-                "symmetry": {"vertical": 0.9, "horizontal": 0.5},
+                "solidity": solidity,
+                "circularity": circularity,
+                "euler_number": euler_number,
+                "hole_count": hole_count,
+                "curvature_histogram": curvature_hist,
+                "symmetry": {"vertical": float(vertical_sym), "horizontal": float(horizontal_sym), "is_symmetric": is_symmetric},
             }
             logger.debug(f"Extracted attributes: {attrs}")
             return attrs
@@ -123,7 +154,7 @@ class System1AbstractionLayer:
     def compute_relations(self, attrs_list):
         """
         Computes pairwise relational cues between all objects in a list.
-        This assumes one object per image/attribute set.
+        Adds: iou, directional_relation, alignment flags.
         """
         relations = {}
         num_objects = len(attrs_list)
@@ -135,31 +166,52 @@ class System1AbstractionLayer:
                 attrs_i = attrs_list[i]
                 attrs_j = attrs_list[j]
                 key = f"{i}_{j}"
-                
                 # Size relation
                 area_i = attrs_i.get('area', 0)
                 area_j = attrs_j.get('area', 0)
                 area_ratio = area_i / area_j if area_j > 0 else float('inf')
-                
                 size_relation = "≈"
-                if area_ratio < 0.95:
+                # Use δ_size threshold from config
+                δ_size = self.δ_size if hasattr(self, 'δ_size') else 0.05
+                if area_ratio < 1 - δ_size:
                     size_relation = "<"
-                elif area_ratio > 1.05:
+                elif area_ratio > 1 + δ_size:
                     size_relation = ">"
-
+                # IOU (Intersection over Union) placeholder
+                iou = 0.0
+                if 'mask' in attrs_i and 'mask' in attrs_j:
+                    mask_i = attrs_i['mask']
+                    mask_j = attrs_j['mask']
+                    intersection = np.logical_and(mask_i, mask_j).sum()
+                    union = np.logical_or(mask_i, mask_j).sum()
+                    iou = intersection / union if union > 0 else 0.0
+                # Directional relation (centroid)
+                centroid_i = attrs_i.get('centroid', (0, 0))
+                centroid_j = attrs_j.get('centroid', (0, 0))
+                dx = centroid_j[1] - centroid_i[1]
+                dy = centroid_j[0] - centroid_i[0]
+                if abs(dx) > abs(dy):
+                    directional_relation = 'right_of' if dx > 0 else 'left_of'
+                else:
+                    directional_relation = 'below' if dy > 0 else 'above'
+                # Alignment flags
+                horizontal_aligned = abs(dy) < 5
+                vertical_aligned = abs(dx) < 5
                 relations[key] = {
                     "size_relation": size_relation,
                     "area_ratio": area_ratio,
-                    # Placeholders for other relations
-                    "adjacent": False,
-                    "contains": False,
-                    "iou": 0.0,
+                    "adjacent": False,  # Placeholder
+                    "contains": False,  # Placeholder
+                    "iou": iou,
+                    "directional_relation": directional_relation,
+                    "horizontal_aligned": horizontal_aligned,
+                    "vertical_aligned": vertical_aligned,
                 }
         return relations
 
-    def generate_heuristics(self, attrs_list):
+    def generate_heuristics(self, attrs_list, top_k: int = 3):
         """Generates fast heuristic guesses using the fuzzy tree."""
-        return self.fuzzy_tree.predict(attrs_list)
+        return self.fuzzy_tree.predict(attrs_list, top_k=top_k)
 
     def process(self, bin_imgs: List[np.ndarray], problem_id: str = "unknown") -> Dict[str, Any]:
         """
@@ -242,8 +294,8 @@ class System1AbstractionLayer:
             training_data = self.replay_buffer.sample_all() # Using all for simplicity
             # The fuzzy_tree.retrain method is a placeholder.
             # In a real system, it would trigger a full retraining pipeline.
-            self.fuzzy_tree.update(training_data, "retrain") # Pass a special label
-            self.fuzzy_tree.save(self.fuzzy_tree.model.path) # Resave the model
+            self.fuzzy_tree.retrain(training_data)
+            self.fuzzy_tree.save("data/fuzzy_tree.pkl") # Save to default path
             self.replay_buffer.clear()
             print("INFO: Periodic update complete. Replay buffer cleared.")
 

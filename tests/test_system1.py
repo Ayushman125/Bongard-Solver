@@ -67,27 +67,37 @@ class TestSystem1AbstractionLayerWithRealData(unittest.TestCase):
         """Test attribute extraction on a real image."""
         problem_path = self.problem_paths[0]
         images, _ = load_bongard_problem(problem_path)
-        
         attrs = self.s1_al.extract_attributes(images[0])
-        
         self.assertIsInstance(attrs, dict)
-        self.assertIn('area', attrs)
-        self.assertIn('stroke_count', attrs)
+        for key in [
+            'area', 'stroke_count', 'endpoint_count', 'branch_point_count',
+            'circularity', 'solidity', 'perimeter', 'convex_hull_area',
+            'euler_number', 'hole_count', 'curvature_histogram', 'symmetry']:
+            self.assertIn(key, attrs)
         self.assertGreaterEqual(attrs['area'], 0)
+        self.assertGreaterEqual(attrs['stroke_count'], 0)
+        self.assertGreaterEqual(attrs['endpoint_count'], 0)
+        self.assertGreaterEqual(attrs['branch_point_count'], 0)
+        self.assertGreaterEqual(attrs['circularity'], 0)
+        self.assertGreaterEqual(attrs['solidity'], 0)
 
     def test_full_pipeline_on_real_problem(self):
-        """Test the full S1-AL process method on a real problem."""
+        """Test the full S1-AL process method on a real problem, including new relations and JSON serialization."""
         problem_path = self.problem_paths[0]
         problem_id = os.path.basename(problem_path)
         images, labels = load_bongard_problem(problem_path)
-        
         bundle = self.s1_al.process(images, problem_id=problem_id)
-        
         self.assertEqual(bundle['problem_id'], problem_id)
         self.assertEqual(len(bundle['images']), len(images))
         self.assertGreater(bundle['duration_ms'], 0)
         self.assertIn('heuristics', bundle)
-        
+        # Check new relations in at least one image
+        if bundle['images'] and len(bundle['images']) > 1:
+            rels = list(bundle['images'][0]['relations'].values())
+            if rels:
+                rel = rels[0]
+                for key in ['iou', 'directional_relation', 'horizontal_aligned', 'vertical_aligned']:
+                    self.assertIn(key, rel)
         # Test if it's JSON serializable
         try:
             json.dumps(bundle)

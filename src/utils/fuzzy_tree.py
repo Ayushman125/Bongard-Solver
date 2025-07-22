@@ -18,7 +18,15 @@ class FuzzyTree:
         if model_path:
             self.load(model_path)
 
-    def predict(self, attrs_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def predict(self, attrs_list: List[Dict[str, Any]], top_k: int = 3) -> List[Dict[str, Any]]:
+        """
+        Generate heuristic rule guesses for a list of attribute dicts.
+        Args:
+            attrs_list: List of attribute dicts for each object/image.
+            top_k: Number of top rules to return (default 3).
+        Returns:
+            List of rule dicts, sorted by confidence.
+        """
         heuristics = []
         avg_stroke_count = np.mean([attrs.get('stroke_count', 0) for attrs in attrs_list])
         if avg_stroke_count > 5:
@@ -31,7 +39,7 @@ class FuzzyTree:
         avg_symmetry = np.mean([attrs.get('symmetry', {}).get('vertical', 0) for attrs in attrs_list])
         if avg_symmetry > 0.8:
             heuristics.append({"rule": "strong_vertical_symmetry", "confidence": 0.85})
-        return sorted(heuristics, key=lambda x: x['confidence'], reverse=True)[:3]
+        return sorted(heuristics, key=lambda x: x['confidence'], reverse=True)[:top_k]
 
 
     def update(self, attrs: dict, label: int) -> None:
@@ -45,7 +53,13 @@ class FuzzyTree:
     def retrain(self, samples: List[Tuple[dict, int, float, float]]) -> None:
         """
         Batch retrain stub for periodic offline retraining.
-        samples: List of (attrs, label, delta, timestamp)
+        Args:
+            samples: List of (attrs, label, delta, timestamp)
+                - attrs: attribute dict
+                - label: int label (e.g., correct/incorrect)
+                - delta: float, surprise or error signal
+                - timestamp: float, time of sample
+        This is a placeholder for actual retraining logic.
         """
         print(f"INFO: FuzzyTree batch retrain called with {len(samples)} samples. (Not implemented)")
         pass
