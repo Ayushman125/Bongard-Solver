@@ -1,6 +1,10 @@
 """
-CUDAStreamManager: overlap host<->device transfers with compute.
-Version: 0.1.0
+CUDAStreamManager: overlap host<->device transfers with compute via PyTorch streams.
+Version 0.1.0
+Public API:
+  - async_transfer(dst: torch.Tensor, src: torch.Tensor)
+  - compute(fn, *args, **kwargs)
+  - synchronize()
 """
 
 __version__ = "0.1.0"
@@ -13,14 +17,23 @@ class CUDAStreamManager:
         self.stream_compute = torch.cuda.Stream()
 
     def async_transfer(self, dst: torch.Tensor, src: torch.Tensor):
+        """
+        Copy src→dst asynchronously on stream_in.
+        """
         with torch.cuda.stream(self.stream_in):
             dst.copy_(src, non_blocking=True)
 
     def compute(self, fn, *args, **kwargs):
+        """
+        Execute fn(*args,**kwargs) on stream_compute.
+        """
         with torch.cuda.stream(self.stream_compute):
             return fn(*args, **kwargs)
 
     def synchronize(self):
+        """
+        Wait for both streams to finish.
+        """
         torch.cuda.synchronize()
 """
 CUDAStreamManager: overlap host<->device transfers with compute.
