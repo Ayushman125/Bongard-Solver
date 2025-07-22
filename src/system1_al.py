@@ -1,4 +1,5 @@
 
+
 import time
 import json
 import numpy as np
@@ -13,6 +14,9 @@ from typing import List, Dict, Any
 import yaml
 
 from src.utils.fuzzy_tree import FuzzyTree
+# --- Robust segmentation and attribute extraction imports ---
+from src.crop_extractor import segment_shapes
+from src.perception.primitive_extractor import extract_all_attributes_per_shape
 
 # Configure logging
 logger = logging.getLogger("System1AL")
@@ -144,202 +148,38 @@ class System1AbstractionLayer:
 
     def extract_attributes(self, bin_img: np.ndarray, θ_hole: float = None, θ_sym: float = None) -> Dict[str, Any]:
         """
-        Extracts a dictionary of visual attributes from a single binary image.
-        Implements robust stroke, hole, symmetry, curvature, Fourier, Hough, granulometry, structure tensor, outline/fill ratio, and self-validation.
-        - Each label refers to one connected component (not the whole image).
-        - Solidity: area/convex_hull_area (density of convex hull).
-        - fill_ratio: area/perimeter area. outline_ratio: (perimeter*stroke_width)/area.
-        - IOU: intersection over union of two masks.
+        Extracts a dictionary of visual attributes from a single binary image using robust segmentation and per-shape attribute extraction.
+        Uses segment_shapes from crop_extractor and extract_all_attributes_per_shape from primitive_extractor.
+        Returns the attributes for the largest shape (by area) for compatibility with previous logic.
         """
-        import warnings
-        from skimage.measure import regionprops, label, euler_number as sk_euler_number, find_contours
-        from skimage.morphology import medial_axis, skeletonize, disk, opening
-        from scipy.ndimage import gaussian_filter
-        from scipy.fft import fft
-        import cv2
         try:
             if bin_img is None or not np.any(bin_img):
                 logger.warning("Empty or None image passed to extract_attributes.")
                 return {}
-            bin_img = (bin_img > 0).astype(np.uint8)
-            # --- Connected components: treat each as an object ---
-            lbl = label(bin_img, connectivity=2)
-            props = regionprops(lbl)
-            # For now, only extract for the largest component
-            if not props:
+            # Use robust segmentation to get shape masks
+            # segment_shapes expects a uint8 image, so ensure correct type
+            img_uint8 = (bin_img * 255).astype(np.uint8) if bin_img.max() <= 1 else bin_img.astype(np.uint8)
+            shape_dicts = segment_shapes(img_uint8)
+            if not shape_dicts:
+                logger.warning("No shapes found in segmentation.")
                 return {}
-            main_prop = max(props, key=lambda p: p.area)
-            mask = (lbl == main_prop.label).astype(np.uint8)
-            # --- Skeletonization (standardized: medial_axis + skeletonize) ---
-            # Zhang–Suen or Guo–Hall via skimage.morphology.skeletonize
-            skel1 = skeletonize(mask)
-            skel2 = medial_axis(mask)
-            consensus_skel = np.logical_and(skel1, skel2)
-            # Skeleton metrics
-            G = self._build_stroke_graph(consensus_skel)
-            # Prune degree-2 nodes (collapse chains)
-            G_simple = G.copy()
-            deg2 = [n for n, d in G_simple.degree() if d == 2]
-            G_simple.remove_nodes_from(deg2)
-            stroke_count = nx.number_connected_components(G_simple)
-            endpoint_count = sum([1 for node, degree in G.degree() if degree == 1])
-            branch_point_count = sum([1 for node, degree in G.degree() if degree > 2])
-            skeleton_length = consensus_skel.sum()
-            # Documented: stroke_count = total skeleton pixels, endpoint_count = pixels with 1 8-neighbor, branch_point_count = 3+ 8-neighbors, skeleton_length = N-1 for line
-            # --- Euler/hole count ---
-            euler = main_prop.euler_number
-            hole_count = max(0, 1 - euler)
-            # --- Area, perimeter, convex hull, solidity ---
-            area = main_prop.area
-            perimeter = main_prop.perimeter
-            convex_hull_area = main_prop.convex_area
-            solidity = main_prop.solidity
-            circularity = (4 * np.pi * area) / (perimeter ** 2) if perimeter > 0 else 0
-            # --- Fill/outline ratio (corrected) ---
-            img_h, img_w = bin_img.shape
-            image_area = float(img_h * img_w)
-            fill_ratio = area / image_area if image_area > 0 else 0
-            stroke_width = self.estimate_stroke_width(mask)
-            # Outline ratio: perimeter / sqrt(area) (standardized)
-            import math
-            outline_ratio = perimeter / math.sqrt(area) if area > 0 else 0
-            # --- Centroid ---
-            centroid = main_prop.centroid
-            # --- Bounding box crop for symmetry ---
-            coords = np.argwhere(mask)
-            y0, x0 = coords.min(axis=0)
-            y1, x1 = coords.max(axis=0) + 1
-            crop = mask[y0:y1, x0:x1].astype(float)
-            # Mirror and correlate within crop
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", category=RuntimeWarning)
-                vert = np.corrcoef(crop.flatten(), crop[::-1, :].flatten())[0, 1] if crop.size > 0 else 0
-                horiz = np.corrcoef(crop.flatten(), crop[:, ::-1].flatten())[0, 1] if crop.size > 0 else 0
-            θ_sym = θ_sym if θ_sym is not None else self.θ_sym
-            is_symmetric = (vert > θ_sym and horiz > θ_sym)
-            # --- Curvature histogram (corrected, nonzero) ---
-            curvature_hist = self.curvature_histogram(mask)
-            # --- Fourier descriptors ---
-            try:
-                contours_fd = find_contours(mask, level=0.5)
-                if contours_fd:
-                    contour = max(contours_fd, key=len)
-                    N = 64
-                    idxs = np.linspace(0, len(contour) - 1, N).astype(int)
-                    resampled = contour[idxs]
-                    complex_contour = resampled[:, 1] + 1j * resampled[:, 0]
-                    coeffs = fft(complex_contour)
-                    fourier_coeffs = np.abs(coeffs[1:9]) / np.abs(coeffs[0]) if np.abs(coeffs[0]) > 0 else np.zeros(8)
-                    fourier_coeffs = fourier_coeffs.tolist()
-                else:
-                    fourier_coeffs = [0.0] * 8
-            except Exception:
-                fourier_coeffs = [0.0] * 8
-            # --- Hough transform features (lines/circles) ---
-            try:
-                edges = cv2.Canny((mask * 255).astype(np.uint8), 50, 150)
-                lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=10, minLineLength=10, maxLineGap=5)
-                num_lines = len(lines) if lines is not None else 0
-                circles = cv2.HoughCircles((mask * 255).astype(np.uint8), cv2.HOUGH_GRADIENT, 1, 20, param1=50, param2=30, minRadius=5, maxRadius=50)
-                num_circles = circles.shape[1] if circles is not None else 0
-            except Exception:
-                num_lines = 0
-                num_circles = 0
-            # --- Granulometry (morphological openings) ---
-            try:
-                R = 5
-                area_r = []
-                for r in range(1, R + 1):
-                    opened = opening(mask, disk(r))
-                    area_r.append(opened.sum())
-                granulometry = area_r
-            except Exception:
-                granulometry = [0] * 5
-            # --- Structure tensor coherence (standardized) ---
-            try:
-                from src.utils.structure import structure_tensor_coherence
-                coherence = structure_tensor_coherence(mask)
-            except Exception:
-                coherence = 0.0
-            # --- Polygon/quadrangle detection ---
-            try:
-                from src.utils.polygon_detection import find_quadrangles
-                quadrangles = find_quadrangles(mask)
-                is_quadrangle = len(quadrangles) > 0
-                vertex_count = [len(q) for q in quadrangles] if quadrangles else []
-            except Exception:
-                is_quadrangle = False
-                vertex_count = []
-            # --- Persistent homology and scattering: only for valid, nontrivial masks ---
-            min_valid_area = 9  # e.g., 3x3 region
-            min_scattering_size = 16 # e.g., 16x16 region
-
-            # Initialize with default values
-            persistence_features = {'betti_0': 0, 'betti_1': 0}
-            scattering_coeffs = [0.0] * 64
-
-            if mask.sum() > 0:
-                # For any non-empty mask, we have at least one component.
-                persistence_features = self.compute_persistence(mask)
-                if persistence_features.get('betti_0', 0) <= 0:
-                    persistence_features['betti_0'] = 1
-
-                # Only compute scattering if the mask is large enough.
-                if mask.sum() >= min_valid_area and mask.shape[0] >= min_scattering_size and mask.shape[1] >= min_scattering_size:
-                    scattering_coeffs = self.compute_scattering(mask)
-
-            # --- Self-validation: round-trip IoU ---
-            def iou(mask1, mask2):
-                inter = np.logical_and(mask1, mask2).sum()
-                union = np.logical_or(mask1, mask2).sum()
-                return inter / union if union > 0 else 0
-            # For round-trip, try to reconstruct a simple shape (circle/square) and compare IoU
-            # (Stub: just compare mask to itself)
-            roundtrip_iou = iou(mask, mask)
-            # --- Compose attributes ---
-            attrs = {
-                "is_quadrangle": is_quadrangle,
-                "vertex_count": vertex_count,
-                "stroke_count": int(stroke_count),
-                "endpoint_count": int(endpoint_count),
-                "branch_point_count": int(branch_point_count),
-                "skeleton_length": int(skeleton_length),
-                "area": float(area),
-                "perimeter": float(perimeter),
-                "convex_hull_area": float(convex_hull_area),
-                "solidity": float(solidity),
-                "circularity": float(circularity),
-                "fill_ratio": float(fill_ratio),
-                "outline_ratio": float(outline_ratio),
-                "centroid": tuple(float(x) for x in centroid),
-                "euler_number": int(euler),
-                "hole_count": int(hole_count),
-                "curvature_histogram": curvature_hist,
-                "fourier_coeffs": fourier_coeffs,
-                "num_lines": int(num_lines),
-                "num_circles": int(num_circles),
-                "granulometry": granulometry,
-                "structure_tensor_coherence": float(coherence),
-                "persistence": persistence_features,
-                "scattering_coeffs": scattering_coeffs,
-                "symmetry": {"vertical": float(vert), "horizontal": float(horiz), "is_symmetric": bool(is_symmetric)},
-                "roundtrip_iou": float(roundtrip_iou),
-            }
-            # --- Assertions for sanity (relaxed for robustness, only warn for valid shapes) ---
-            if not (0 <= attrs['fill_ratio'] <= 1):
-                logger.warning(f"Fill ratio out of [0,1]: {attrs['fill_ratio']}")
-            if sum(attrs['curvature_histogram']) == 0:
-                logger.warning("Curvature histogram is zero")
-            if mask.sum() > 0 and attrs['persistence']['betti_0'] <= 0:
-                # This should not happen with the new logic, but is a good safeguard.
-                logger.warning("No connected components detected (betti_0 <= 0)")
-
+            # Extract per-shape masks
+            shape_masks = [d['mask'] for d in shape_dicts]
+            # Use robust per-shape attribute extraction
+            attributes_list = extract_all_attributes_per_shape(shape_masks)
+            if not attributes_list:
+                logger.warning("No attributes extracted for any shape.")
+                return {}
+            # For compatibility, return the largest shape's attributes
+            areas = [a.get('area', 0) for a in attributes_list]
+            idx_largest = int(np.argmax(areas))
+            attrs = attributes_list[idx_largest]
             # Attach mask for downstream use (e.g., relations)
-            attrs['mask'] = mask
-            logger.debug(f"Extracted attributes: {attrs}")
+            attrs['mask'] = shape_masks[idx_largest]
+            logger.debug(f"Extracted attributes (robust): {attrs}")
             return attrs
         except Exception as e:
-            logger.error(f"Error extracting attributes: {e}")
+            logger.error(f"Error extracting attributes (robust): {e}")
             return {}
 
     def compute_relations(self, attrs_list):

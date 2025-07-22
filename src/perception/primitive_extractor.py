@@ -1,3 +1,75 @@
+def extract_all_attributes_per_shape(shape_masks, orig_image=None, debug_dir=None, expected_circles=None, expected_lines=None):
+    """
+    For each shape mask, compute geometric, topological, and primitive attributes robustly.
+    Optionally saves overlays for debugging and validates primitive counts if expected values are given.
+    Args:
+        shape_masks: list of boolean np.ndarray masks (one per shape)
+        orig_image: (optional) original image for overlays
+        debug_dir: (optional) directory to save overlays
+        expected_circles: (optional) list of expected circle counts per shape
+        expected_lines: (optional) list of expected line counts per shape
+    Returns:
+        List[dict] of attribute dicts, one per shape
+    """
+    import os
+    import skimage.measure as meas
+    from skimage.morphology import skeletonize
+    import cv2
+    import numpy as np
+    attributes = []
+    img_area = shape_masks[0].shape[0] * shape_masks[0].shape[1] if shape_masks else 0
+    for idx, mask in enumerate(shape_masks):
+        props = meas.regionprops(mask.astype(int))[0]
+        area      = props.area
+        perimeter = props.perimeter
+        solidity  = props.solidity
+        circ      = 4 * np.pi * area / (perimeter**2 + 1e-8)
+        euler     = meas.euler_number(mask)
+        holes     = 1 - euler
+        # --- Robust circle detection ---
+        mask_uint8 = (mask*255).astype(np.uint8)
+        circles = cv2.HoughCircles(mask_uint8, cv2.HOUGH_GRADIENT, dp=1.2, minDist=10, param1=50, param2=15, minRadius=5, maxRadius=100)
+        n_circles = 0
+        if circles is not None:
+            n_circles = len(circles[0])
+        # --- Robust line detection ---
+        skel = skeletonize(mask)
+        # Remove short branches (spur pruning)
+        from scipy.ndimage import label
+        labeled, n = label(skel)
+        # Only count lines longer than 10 pixels
+        num_lines = 0
+        for i in range(1, n+1):
+            if (labeled == i).sum() >= 10:
+                num_lines += 1
+        # --- Save overlays for debugging ---
+        if debug_dir is not None and orig_image is not None:
+            os.makedirs(debug_dir, exist_ok=True)
+            overlay = orig_image.copy() if orig_image is not None else np.zeros(mask.shape, dtype=np.uint8)
+            color = (0,255,0)
+            cnts, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(overlay, cnts, -1, color, 2)
+            cv2.imwrite(os.path.join(debug_dir, f"shape_{idx}_overlay.png"), overlay)
+        # --- Validation ---
+        if expected_circles is not None:
+            assert n_circles == expected_circles[idx], f"Detected {n_circles} circles, expected {expected_circles[idx]} for shape {idx}"
+        if expected_lines is not None:
+            assert num_lines == expected_lines[idx], f"Detected {num_lines} lines, expected {expected_lines[idx]} for shape {idx}"
+        attributes.append({
+            "area": area,
+            "perimeter": perimeter,
+            "solidity": solidity,
+            "circularity": circ,
+            "euler_number": euler,
+            "hole_count": holes,
+            "num_circles": n_circles,
+            "num_lines": num_lines
+        })
+    # Sanity check: total shape area fraction
+    total_shape_area = sum(a["area"] for a in attributes)
+    if img_area:
+        assert 0.005 < total_shape_area / img_area < 0.2, f"Shapes cover unexpected fraction of image: {total_shape_area/img_area:.3f}"
+    return attributes
 # --- Exported model loader for external use ---
 import sys
 import os
