@@ -10,6 +10,15 @@ import numpy as np
 from collections import deque
 
 class DriftMonitor:
+    def detect_drift(self, embeddings: np.ndarray) -> bool:
+        """
+        Batch‐process a set of embeddings and return whether drift occurred.
+        """
+        if embeddings.ndim != 2:
+            raise ValueError("Expected 2D array of embeddings.")
+        for emb in embeddings:
+            self.update(emb)
+        return self.check_drift()
     def __init__(self, window_size: int = 100, threshold: float = 3.0):
         """
         Args:
