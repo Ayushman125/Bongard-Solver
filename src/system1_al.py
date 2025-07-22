@@ -1,83 +1,69 @@
+
 """
-System-1 Abstraction Layer
+System-1 Abstraction Layer (S1-AL)
 Version: 0.1.0
 
-This module is the core of the System-1, responsible for perception and
-feature extraction from Bongard problem images. It will use a combination of
-pre-trained models and specialized networks to generate a rich, structured
-representation of the visual input.
+Extract domain-invariant features from puzzle images:
+- Center of Mass (COM)
+- Inertia Tensor
+- Support Surface polygon
+
+All functions must complete in ≤100 ms/image on target hardware.
 """
 
 __version__ = "0.1.0"
 
 import numpy as np
+from shapely.geometry import Polygon
 
-class CommonsenseKB:
+def extract_com(mask: np.ndarray) -> tuple[float, float]:
     """
-    A placeholder for a commonsense knowledge base interface.
-    This might be populated from sources like ConceptNet.
+    Compute 2D center of mass of a binary mask.
+
+    Args:
+        mask: Boolean numpy array of shape (H, W).
+
+    Returns:
+        (x_com, y_com): Coordinates in pixel space.
+
+    Raises:
+        ValueError if mask.sum() == 0.
     """
-    def __init__(self):
-        self.relations = {}
-        print("Commonsense Knowledge Base initialized (placeholder).")
+    if mask.sum() == 0:
+        raise ValueError("Empty mask: cannot compute COM.")
+    ys, xs = np.nonzero(mask)
+    return float(xs.mean()), float(ys.mean())
 
-    def get_relation(self, concept1, concept2):
-        """Retrieves the relationship between two concepts."""
-        return self.relations.get((concept1, concept2), "unknown")
-
-class System1AbstractionLayer:
+def extract_inertia_tensor(mask: np.ndarray) -> np.ndarray:
     """
-    The main class for the System-1 Abstraction Layer. It orchestrates
-    the perception pipeline.
+    Compute the 2×2 inertia tensor of a binary mask.
+
+    Args:
+        mask: Boolean numpy array of shape (H, W).
+
+    Returns:
+        inertia: 2×2 numpy array [[Ixx, Ixy], [Ixy, Iyy]].
     """
-    def __init__(self, commonsense_kb=None):
-        self.kb = commonsense_kb if commonsense_kb else CommonsenseKB()
-        print("System-1 Abstraction Layer initialized.")
+    y, x = np.nonzero(mask)
+    x0, y0 = extract_com(mask)
+    x_rel, y_rel = x - x0, y - y0
+    Ixx = (y_rel**2).sum()
+    Iyy = (x_rel**2).sum()
+    Ixy = -(x_rel * y_rel).sum()
+    return np.array([[Ixx, Ixy], [Ixy, Iyy]], dtype=float)
 
-    def extract_features(self, image: np.ndarray) -> dict:
-        """
-        Processes an image and extracts a structured dictionary of features.
-        Args:
-            image (np.ndarray): The input image.
-        Returns:
-            dict: A dictionary containing extracted features like objects,
-                  attributes, and spatial relationships.
-        """
-        print(f"Extracting features from image of shape {image.shape}...")
-        # Placeholder for the perception pipeline.
-        return {
-            "object_count": 2,
-            "objects": [
-                {"id": 1, "shape": "circle", "color": "red"},
-                {"id": 2, "shape": "triangle", "color": "blue"}
-            ],
-            "relationships": [
-                {"type": "spatial", "from": 1, "to": 2, "relation": "above"}
-            ]
-        }
+from shapely.geometry.base import BaseGeometry
 
-    def process(self, masks, problem_id=None):
-        """
-        Processes a batch of masks and returns a bundle of extracted features.
-        Args:
-            masks (list of np.ndarray): List of binary masks.
-            problem_id (str): Optional problem identifier.
-        Returns:
-            dict: Bundle with features for each image.
-        """
-        images = []
-        for mask in masks:
-            features = self.extract_features(mask)
-            images.append({"attrs": features})
-        return {"images": images, "problem_id": problem_id}
+def extract_support_polygon(mask: np.ndarray) -> BaseGeometry:
+    """
+    Compute the convex hull of the mask as the support surface.
 
-    def extract_attributes(self, image: np.ndarray) -> dict:
-        """
-        Extracts attributes for calibration/thresholding.
-        Args:
-            image (np.ndarray): The input image.
-        Returns:
-            dict: Extracted attributes (mocked).
-        """
-        # Placeholder for attribute extraction logic
-        return {"hole_count": 1, "symmetry": {"vertical": 0.9}}
+    Args:
+        mask: Boolean numpy array of shape (H, W).
+
+    Returns:
+        Polygon: Shapely polygon of the convex hull.
+    """
+    ys, xs = np.nonzero(mask)
+    pts = list(zip(xs, ys))
+    return Polygon(pts).convex_hull
