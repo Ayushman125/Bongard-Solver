@@ -20,13 +20,13 @@ class AdaptiveScheduler:
             device: "cpu" or "gpu"
         """
         if device == "gpu":
-            self.gpu_queue.append(fn)
+            self.gpu_q.append(fn)
         else:
-            self.cpu_queue.append(fn)
+            self.cpu_q.append(fn)
 
     def run_all(self):
         """Execute all queued tasks, preferring CPU first."""
-        while self.cpu_queue:
-            self.cpu_queue.popleft()()
-        while self.gpu_queue:
-            self.gpu_queue.popleft()()
+        while self.cpu_q:
+            self.cpu_q.popleft()()
+        while self.gpu_q:
+            self.gpu_q.popleft()()
