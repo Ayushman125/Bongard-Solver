@@ -1,3 +1,4 @@
+__version__ = "0.1.0"
 """
 Data Validator
 Version: 0.1.0
@@ -5,8 +6,6 @@ Version: 0.1.0
 Enforces JSON schemas for event logs using jsonschema.
 Glob-loads all schemas in schemas/.
 """
-
-__version__ = "0.1.0"
 
 import json, glob
 from jsonschema import validate, RefResolver
