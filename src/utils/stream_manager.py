@@ -8,14 +8,16 @@ Public API:
 """
 
 __version__ = "0.1.0"
+"""
+CUDAStreamManager
 
-import torch
+Overlap host↔device transfers and compute using PyTorch streams:
 
-class CUDAStreamManager:
-    def __init__(self):
-        self.stream_in = torch.cuda.Stream()
-        self.stream_compute = torch.cuda.Stream()
-
+  mgr = CUDAStreamManager()
+  mgr.async_transfer(dst, src)
+  mgr.compute(kernel_fn, args…)
+  mgr.synchronize()
+"""
     def async_transfer(self, dst: torch.Tensor, src: torch.Tensor):
         """
         Copy src→dst asynchronously on stream_in.

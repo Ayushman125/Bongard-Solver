@@ -1,3 +1,13 @@
+__version__ = "0.1.0"
+"""
+AdaptiveScheduler
+
+Simple CPU/GPU task queue. Ensures CPU tasks drain before GPU:
+
+  sched = AdaptiveScheduler()
+  sched.submit(fn, device="cpu"|"gpu")
+  sched.run_all()
+"""
 """
 AdaptiveScheduler: simple task batching for CPU vs GPU workloads.
 Version: 0.1.0

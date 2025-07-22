@@ -1,3 +1,14 @@
+__version__ = "0.1.0"
+"""
+DriftMonitor
+
+Sliding-window Mahalanobis‐distance detector on 1D embeddings:
+
+  dm = DriftMonitor(window_size=100, threshold=3.0)
+  dm.update(embedding)
+  if dm.check_drift():  # handle OOD
+      …
+"""
 import numpy as np
 from collections import deque
 

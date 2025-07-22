@@ -1,15 +1,15 @@
+__version__ = "0.1.0"
 """
 System-1 Abstraction Layer (S1-AL)
-Version 0.1.0
 
-Public API (all must run ≤100 ms/image on target hardware):
+Extract domain-invariant features with strict latency SLAs (≤100 ms/image):
+
   - extract_com(mask: np.ndarray) -> (float, float)
   - extract_inertia_tensor(mask: np.ndarray) -> np.ndarray
   - extract_support_polygon(mask: np.ndarray) -> shapely.geometry.Polygon
   - extract_all(mask: np.ndarray) -> dict
 
-Logs a JSON line per call to logs/s1_al.jsonl:
-  {"module":"s1_al", "timestamp":…, "latency_ms":…, "com":[…], "inertia_tensor":[[…]], "support_polygon":[[…]]}
+Logs JSON events to logs/s1_al.jsonl.
 """
 
 __version__ = "0.1.0"

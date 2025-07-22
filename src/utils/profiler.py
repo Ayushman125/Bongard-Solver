@@ -1,3 +1,15 @@
+__version__ = "0.1.0"
+"""
+TaskProfiler
+
+Decorator to measure and log function latency:
+
+  @profile("module_name")
+  def fn(...):
+      …
+
+Logs events to logs/profiler.jsonl.
+"""
 import time, json, threading
 from pathlib import Path
 
