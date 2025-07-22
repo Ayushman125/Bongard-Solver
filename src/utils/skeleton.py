@@ -159,43 +159,27 @@ def compute_skeleton(mask):
     """
     clean = preprocess_mask(mask)
     binary = clean > 0
+    skel_bool = skeletonize(binary)
 
-    # Define a kernel to count neighbors in a 3x3 grid
-    nb_kernel = np.ones((3, 3), dtype=np.uint8)
-    nb_kernel[1, 1] = 0
+    # Prune diagonal-only spur pixels
+    import numpy as np
+    from scipy.ndimage import convolve
+    four_k = np.array([[0,1,0],[1,0,1],[0,1,0]], dtype=int)
+    eight_k = np.ones((3,3), dtype=int)
+    eight_k[1,1] = 0
+    sk = skel_bool.astype(int)
+    nb4  = convolve(sk, four_k,  mode='constant', cval=0)
+    nb8  = convolve(sk, eight_k, mode='constant', cval=0)
+    diag_spur_mask = (nb4 == 0) & (nb8 > 0) & (sk == 1)
+    skel_bool[diag_spur_mask] = False
 
-    # Check if the shape has any junctions (pixels with 3+ neighbors)
-    neigh_count_check = cv2.filter2D(binary.astype(np.uint8), -1, nb_kernel, borderType=cv2.BORDER_CONSTANT)
-    has_junction_in_input = np.any(neigh_count_check >= 3)
-    
-    # Only skip skeletonization if it's a simple line with no junctions
-    if np.count_nonzero(binary) > 0 and not has_junction_in_input and np.all(neigh_count_check <= 2):
-        skel_bool = binary
-    else:
-        skel_bool = skeletonize(binary)
+    # 4-connectivity for metrics
+    stroke_count     = int(skel_bool.sum())
+    endpoint_count   = int(np.logical_and(skel_bool, nb4 == 1).sum())
+    branch_point_count = int(np.logical_and(skel_bool, nb4 >= 3).sum())
+    skeleton_length  = stroke_count
 
-    # Calculate neighbor count on raw skeleton
-    neigh_count_raw = cv2.filter2D(skel_bool.astype(np.uint8), -1, nb_kernel, borderType=cv2.BORDER_CONSTANT)
-    has_junction = np.any(np.logical_and(skel_bool, neigh_count_raw >= 3))
-
-    # For 'Y' shapes, prune until 3 endpoints remain
-    if has_junction:
-        skel_pruned_bool = _simple_prune_to_target(skel_bool.astype(np.uint8), target_endpoints=3) > 0
-    else:
-        skel_pruned_bool = skel_bool
-
-    skel = (skel_pruned_bool.astype(np.uint8) * 255)
-    neigh_count = cv2.filter2D(skel_pruned_bool.astype(np.uint8), -1, nb_kernel, borderType=cv2.BORDER_CONSTANT)
-    endpoint_count = int(np.logical_and(skel_pruned_bool, neigh_count == 1).sum())
-
-    # --- Robust branch point counting: cluster branch pixels ---
-    branch_mask = np.logical_and(skel_pruned_bool, neigh_count >= 3).astype(np.uint8)
-    num_labels, labels = cv2.connectedComponents(branch_mask, connectivity=8)
-    branch_point_count = num_labels - 1  # subtract background
-
-    stroke_count = int(skel_pruned_bool.sum())
-    skeleton_length = stroke_count
-
+    skel = (skel_bool.astype(np.uint8) * 255)
     metrics = {
       "stroke_count": stroke_count,
       "endpoint_count": endpoint_count,
