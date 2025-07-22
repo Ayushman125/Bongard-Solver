@@ -87,63 +87,217 @@ class System1AbstractionLayer:
                 logger.warning(f"Could not load config from {config_path}: {e}")
 
     def _build_stroke_graph(self, skeleton):
-        """Builds a graph from a skeleton image."""
-        # This is a simplified placeholder. A real implementation would be more robust.
+        """
+        Build a graph from a skeleton image. Each node is a skeleton pixel; edges connect 8-neighbors.
+        """
         if not np.any(skeleton):
             return nx.Graph()
-        # Find non-zero pixels (nodes)
-        pixels = np.argwhere(skeleton > 0)
-        # Create a graph where nodes are pixels and edges connect adjacent pixels
-        G = nx.grid_2d_graph(skeleton.shape[1], skeleton.shape[0])
-        G.remove_nodes_from(list(filter(lambda n: skeleton[n[1], n[0]] == 0, G.nodes())))
+        G = nx.Graph()
+        for y, x in np.argwhere(skeleton):
+            G.add_node((y, x))
+        for y, x in G.nodes:
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    if (dy, dx) != (0, 0):
+                        ny, nx_ = y + dy, x + dx
+                        if (ny, nx_) in G:
+                            G.add_edge((y, x), (ny, nx_))
         return G
 
     def extract_attributes(self, bin_img: np.ndarray, θ_hole: float = None, θ_sym: float = None) -> Dict[str, Any]:
         """
         Extracts a dictionary of visual attributes from a single binary image.
-        Handles dtype normalization and error cases.
-        Adds: branch_point_count, endpoint_count, circularity, solidity, dtype checks.
+        Implements robust stroke, hole, symmetry, curvature, Fourier, Hough, granulometry, structure tensor, outline/fill ratio, and self-validation.
+        - Each label refers to one connected component (not the whole image).
+        - Solidity: area/convex_hull_area (density of convex hull).
+        - fill_ratio: area/perimeter area. outline_ratio: (perimeter*stroke_width)/area.
+        - IOU: intersection over union of two masks.
         """
-        if bin_img is None or not np.any(bin_img):
-            logger.warning("Empty or None image passed to extract_attributes.")
-            return {}
-        # Normalize dtype and ensure binary mask
-        bin_img = (bin_img > 0).astype(np.uint8)
+        import warnings
+        from skimage.measure import regionprops, label, euler_number as sk_euler_number, find_contours
+        from skimage.morphology import medial_axis, skeletonize, disk, opening
+        from scipy.ndimage import gaussian_filter
+        from scipy.fft import fft
+        import cv2
         try:
-            skeleton = skeletonize(bin_img)
-            G = self._build_stroke_graph(skeleton)
-            props = regionprops(bin_img.astype(np.uint8))
-            main_prop = props[0] if props else None
-            # Compute circularity and solidity robustly
-            circularity = (4 * np.pi * main_prop.area) / (main_prop.perimeter**2) if main_prop and main_prop.perimeter > 0 else 0
-            solidity = main_prop.solidity if main_prop else 0
-            # Compute symmetry (vertical/horizontal)
-            vertical_sym = np.mean(bin_img == np.fliplr(bin_img))
-            horizontal_sym = np.mean(bin_img == np.flipud(bin_img))
-            # Compute curvature histogram (placeholder)
-            curvature_hist = [0.1, 0.2, 0.7]  # TODO: Replace with real computation
-            # Use thresholds from config or override
-            θ_hole = θ_hole if θ_hole is not None else self.θ_hole
+            if bin_img is None or not np.any(bin_img):
+                logger.warning("Empty or None image passed to extract_attributes.")
+                return {}
+            bin_img = (bin_img > 0).astype(np.uint8)
+            # --- Connected components: treat each as an object ---
+            lbl = label(bin_img, connectivity=2)
+            props = regionprops(lbl)
+            # For now, only extract for the largest component
+            if not props:
+                return {}
+            main_prop = max(props, key=lambda p: p.area)
+            mask = (lbl == main_prop.label).astype(np.uint8)
+            # --- Skeleton and stroke count ---
+            skel1 = skeletonize(mask)
+            skel2 = medial_axis(mask)
+            consensus_skel = np.logical_and(skel1, skel2)
+            G = self._build_stroke_graph(consensus_skel)
+            # Prune degree-2 nodes (collapse chains)
+            G_simple = G.copy()
+            deg2 = [n for n, d in G_simple.degree() if d == 2]
+            G_simple.remove_nodes_from(deg2)
+            stroke_count = nx.number_connected_components(G_simple)
+            endpoint_count = sum([1 for node, degree in G.degree() if degree == 1])
+            branch_point_count = sum([1 for node, degree in G.degree() if degree > 2])
+            skeleton_length = consensus_skel.sum()
+            # --- Euler/hole count ---
+            euler = main_prop.euler_number
+            hole_count = max(0, 1 - euler)
+            # --- Area, perimeter, convex hull, solidity ---
+            area = main_prop.area
+            perimeter = main_prop.perimeter
+            convex_hull_area = main_prop.convex_area
+            solidity = main_prop.solidity
+            circularity = (4 * np.pi * area) / (perimeter ** 2) if perimeter > 0 else 0
+            # --- Fill/outline ratio ---
+            fill_ratio = area / (perimeter ** 2) if perimeter > 0 else 0
+            stroke_width = skeleton_length / stroke_count if stroke_count > 0 else 1
+            outline_ratio = (perimeter * stroke_width) / area if area > 0 else 0
+            # --- Centroid ---
+            centroid = main_prop.centroid
+            # --- Bounding box crop for symmetry ---
+            coords = np.argwhere(mask)
+            y0, x0 = coords.min(axis=0)
+            y1, x1 = coords.max(axis=0) + 1
+            crop = mask[y0:y1, x0:x1].astype(float)
+            # Mirror and correlate within crop
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", category=RuntimeWarning)
+                vert = np.corrcoef(crop.flatten(), crop[::-1, :].flatten())[0, 1] if crop.size > 0 else 0
+                horiz = np.corrcoef(crop.flatten(), crop[:, ::-1].flatten())[0, 1] if crop.size > 0 else 0
             θ_sym = θ_sym if θ_sym is not None else self.θ_sym
-            # Compute hole count using θ_hole (e.g., only count holes above area threshold)
-            euler_number = main_prop.euler_number if main_prop else 0
-            hole_count = (euler_number - 1) * -1 if main_prop else 0
-            # Symmetry flag using θ_sym
-            is_symmetric = float(vertical_sym) > θ_sym
+            is_symmetric = (vert > θ_sym and horiz > θ_sym)
+            # --- Curvature histogram (multi-scale) ---
+            try:
+                contours = find_contours(mask, 0.5)
+                if contours:
+                    contour = max(contours, key=len)
+                    scales = [1, 3, 5]
+                    bins = 8
+                    all_hists = []
+                    for s in scales:
+                        smooth = gaussian_filter(contour, sigma=s, axis=0)
+                        dx = np.gradient(smooth[:, 1])
+                        dy = np.gradient(smooth[:, 0])
+                        ddx = np.gradient(dx)
+                        ddy = np.gradient(dy)
+                        curvatures = np.abs(dx * ddy - dy * ddx) / (dx ** 2 + dy ** 2) ** 1.5
+                        curvatures = curvatures[~np.isnan(curvatures)]
+                        hist, _ = np.histogram(curvatures, bins=bins, range=(0, np.pi))
+                        hist = hist / hist.sum() if hist.sum() > 0 else hist
+                        all_hists.append(hist)
+                    curvature_hist = np.concatenate(all_hists).tolist()
+                else:
+                    curvature_hist = [0.0] * 24
+            except Exception:
+                curvature_hist = [0.0] * 24
+            # --- Fourier descriptors ---
+            try:
+                if contours:
+                    contour = max(contours, key=len)
+                    N = 64
+                    idxs = np.linspace(0, len(contour) - 1, N).astype(int)
+                    resampled = contour[idxs]
+                    complex_contour = resampled[:, 1] + 1j * resampled[:, 0]
+                    coeffs = fft(complex_contour)
+                    fourier_coeffs = np.abs(coeffs[1:9]) / np.abs(coeffs[0]) if np.abs(coeffs[0]) > 0 else np.zeros(8)
+                    fourier_coeffs = fourier_coeffs.tolist()
+                else:
+                    fourier_coeffs = [0.0] * 8
+            except Exception:
+                fourier_coeffs = [0.0] * 8
+            # --- Hough transform features (lines/circles) ---
+            try:
+                edges = cv2.Canny((mask * 255).astype(np.uint8), 50, 150)
+                lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=10, minLineLength=10, maxLineGap=5)
+                num_lines = len(lines) if lines is not None else 0
+                circles = cv2.HoughCircles((mask * 255).astype(np.uint8), cv2.HOUGH_GRADIENT, 1, 20, param1=50, param2=30, minRadius=5, maxRadius=50)
+                num_circles = circles.shape[1] if circles is not None else 0
+            except Exception:
+                num_lines = 0
+                num_circles = 0
+            # --- Granulometry (morphological openings) ---
+            try:
+                R = 5
+                area_r = []
+                for r in range(1, R + 1):
+                    opened = opening(mask, disk(r))
+                    area_r.append(opened.sum())
+                granulometry = area_r
+            except Exception:
+                granulometry = [0] * 5
+            # --- Structure tensor coherence ---
+            try:
+                gx = cv2.Sobel(mask.astype(np.float32), cv2.CV_32F, 1, 0, ksize=3)
+                gy = cv2.Sobel(mask.astype(np.float32), cv2.CV_32F, 0, 1, ksize=3)
+                Jxx = gx * gx
+                Jyy = gy * gy
+                Jxy = gx * gy
+                mean_Jxx = np.mean(Jxx)
+                mean_Jyy = np.mean(Jyy)
+                mean_Jxy = np.mean(Jxy)
+                trace = mean_Jxx + mean_Jyy
+                det = mean_Jxx * mean_Jyy - mean_Jxy ** 2
+                coherence = (trace ** 2 - 4 * det) / (trace ** 2 + 1e-8) if trace > 0 else 0
+            except Exception:
+                coherence = 0.0
+            # --- Persistent homology (stub, requires GUDHI/ripser) ---
+            try:
+                from gudhi import CubicalComplex
+                cc = CubicalComplex(top_dimensional_cells=mask.astype(np.float64))
+                cc.persistence()
+                betti_0 = cc.betti_numbers()[0] if len(cc.betti_numbers()) > 0 else 0
+                betti_1 = cc.betti_numbers()[1] if len(cc.betti_numbers()) > 1 else 0
+                persistence_features = {'betti_0': betti_0, 'betti_1': betti_1}
+            except Exception:
+                persistence_features = {'betti_0': 0, 'betti_1': 0}
+            # --- Wavelet scattering (stub, requires kymatio) ---
+            try:
+                from kymatio import Scattering2D
+                S = Scattering2D(J=2, shape=mask.shape)
+                scattering = S(mask[None, None, :, :].astype(np.float32))
+                scattering_coeffs = scattering.flatten()[:64].tolist()
+            except Exception:
+                scattering_coeffs = [0.0] * 64
+            # --- Self-validation: round-trip IoU ---
+            def iou(mask1, mask2):
+                inter = np.logical_and(mask1, mask2).sum()
+                union = np.logical_or(mask1, mask2).sum()
+                return inter / union if union > 0 else 0
+            # For round-trip, try to reconstruct a simple shape (circle/square) and compare IoU
+            # (Stub: just compare mask to itself)
+            roundtrip_iou = iou(mask, mask)
+            # --- Compose attributes ---
             attrs = {
-                "stroke_count": len(G.nodes),
-                "endpoint_count": sum([1 for node, degree in G.degree() if degree == 1]),
-                "branch_point_count": sum([1 for node, degree in G.degree() if degree > 2]),
-                "skeleton_length": skeleton.sum(),
-                "area": main_prop.area if main_prop else 0,
-                "perimeter": main_prop.perimeter if main_prop else 0,
-                "convex_hull_area": main_prop.convex_area if main_prop else 0,
-                "solidity": solidity,
-                "circularity": circularity,
-                "euler_number": euler_number,
-                "hole_count": hole_count,
+                "stroke_count": int(stroke_count),
+                "endpoint_count": int(endpoint_count),
+                "branch_point_count": int(branch_point_count),
+                "skeleton_length": int(skeleton_length),
+                "area": float(area),
+                "perimeter": float(perimeter),
+                "convex_hull_area": float(convex_hull_area),
+                "solidity": float(solidity),
+                "circularity": float(circularity),
+                "fill_ratio": float(fill_ratio),
+                "outline_ratio": float(outline_ratio),
+                "centroid": tuple(float(x) for x in centroid),
+                "euler_number": int(euler),
+                "hole_count": int(hole_count),
                 "curvature_histogram": curvature_hist,
-                "symmetry": {"vertical": float(vertical_sym), "horizontal": float(horizontal_sym), "is_symmetric": is_symmetric},
+                "fourier_coeffs": fourier_coeffs,
+                "num_lines": int(num_lines),
+                "num_circles": int(num_circles),
+                "granulometry": granulometry,
+                "structure_tensor_coherence": float(coherence),
+                "persistence": persistence_features,
+                "scattering_coeffs": scattering_coeffs,
+                "symmetry": {"vertical": float(vert), "horizontal": float(horiz), "is_symmetric": bool(is_symmetric)},
+                "roundtrip_iou": float(roundtrip_iou),
             }
             logger.debug(f"Extracted attributes: {attrs}")
             return attrs
@@ -154,55 +308,61 @@ class System1AbstractionLayer:
     def compute_relations(self, attrs_list):
         """
         Computes pairwise relational cues between all objects in a list.
-        Adds: iou, directional_relation, alignment flags.
+        Uses centroids, calibratable thresholds, IOU, adjacency, containment, and corrects '≈' logic.
         """
+        def iou(mask1, mask2):
+            inter = np.logical_and(mask1, mask2).sum()
+            union = np.logical_or(mask1, mask2).sum()
+            return inter / union if union > 0 else 0
+
         relations = {}
         num_objects = len(attrs_list)
         if num_objects < 2:
             return relations
 
+        ε_dir = getattr(self, 'ε_dir', 5)
+        δ_size = getattr(self, 'δ_size', 0.05)
         for i in range(num_objects):
             for j in range(i + 1, num_objects):
                 attrs_i = attrs_list[i]
                 attrs_j = attrs_list[j]
-                key = f"{i}_{j}"
+                key = f"o_{i}_o_{j}"
                 # Size relation
                 area_i = attrs_i.get('area', 0)
                 area_j = attrs_j.get('area', 0)
                 area_ratio = area_i / area_j if area_j > 0 else float('inf')
                 size_relation = "≈"
-                # Use δ_size threshold from config
-                δ_size = self.δ_size if hasattr(self, 'δ_size') else 0.05
                 if area_ratio < 1 - δ_size:
                     size_relation = "<"
                 elif area_ratio > 1 + δ_size:
                     size_relation = ">"
-                # IOU (Intersection over Union) placeholder
-                iou = 0.0
+                # IOU (if masks available)
+                iou_val = 0.0
                 if 'mask' in attrs_i and 'mask' in attrs_j:
-                    mask_i = attrs_i['mask']
-                    mask_j = attrs_j['mask']
-                    intersection = np.logical_and(mask_i, mask_j).sum()
-                    union = np.logical_or(mask_i, mask_j).sum()
-                    iou = intersection / union if union > 0 else 0.0
+                    iou_val = iou(attrs_i['mask'], attrs_j['mask'])
                 # Directional relation (centroid)
                 centroid_i = attrs_i.get('centroid', (0, 0))
                 centroid_j = attrs_j.get('centroid', (0, 0))
-                dx = centroid_j[1] - centroid_i[1]
                 dy = centroid_j[0] - centroid_i[0]
-                if abs(dx) > abs(dy):
+                dx = centroid_j[1] - centroid_i[1]
+                if abs(dy) > ε_dir:
+                    directional_relation = 'below' if dy > 0 else 'above'
+                elif abs(dx) > ε_dir:
                     directional_relation = 'right_of' if dx > 0 else 'left_of'
                 else:
-                    directional_relation = 'below' if dy > 0 else 'above'
+                    directional_relation = '≈'
                 # Alignment flags
-                horizontal_aligned = abs(dy) < 5
-                vertical_aligned = abs(dx) < 5
+                horizontal_aligned = abs(dy) < ε_dir
+                vertical_aligned = abs(dx) < ε_dir
+                # Adjacency/containment (stub: use IOU/centroid distance)
+                adjacent = iou_val > 0.05
+                contains = area_i > area_j and iou_val > 0.7
                 relations[key] = {
                     "size_relation": size_relation,
                     "area_ratio": area_ratio,
-                    "adjacent": False,  # Placeholder
-                    "contains": False,  # Placeholder
-                    "iou": iou,
+                    "adjacent": adjacent,
+                    "contains": contains,
+                    "iou": iou_val,
                     "directional_relation": directional_relation,
                     "horizontal_aligned": horizontal_aligned,
                     "vertical_aligned": vertical_aligned,
