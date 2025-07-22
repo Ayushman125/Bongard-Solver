@@ -148,98 +148,39 @@ def compute_skeleton(mask):
     """
     clean = preprocess_mask(mask)
     if clean.sum() == 0:
-        # Empty mask, return zeros
         skel_img = np.zeros_like(clean, dtype=np.uint8)
         metrics = {'stroke_count': 0, 'endpoint_count': 0, 'branch_point_count': 0, 'skeleton_length': 0}
         return skel_img, metrics
     binary = clean > 0
     skel_bool = skeletonize(binary)
-    # Prune diagonal-only spur pixels
+    # Prune spurs (short branches) to make endpoint count robust for thick junctions
+    skel_bool = prune_spurs(skel_bool, max_spur_length=10)
+    # 4-connectivity for metrics
     from scipy.ndimage import convolve
     four_k = np.array([[0,1,0],[1,0,1],[0,1,0]], dtype=int)
     nb4  = convolve(skel_bool.astype(int), four_k,  mode='constant', cval=0)
-    # Only prune spurs if there is a branch (junction) in the skeleton
-    if np.any((skel_bool) & (nb4 >= 3)):
-        # Optionally add spur pruning here if needed
-        pass
-    # 4-connectivity for metrics
+    # Find endpoints and branch points
+    endpoints = np.argwhere(np.logical_and(skel_bool, nb4 == 1))
+    branch_points = np.argwhere(np.logical_and(skel_bool, nb4 >= 3))
+    # Cluster endpoints that are very close (to handle thick Y-junctions)
+    def cluster_points(points, eps=2):
+        if len(points) == 0:
+            return points
+        try:
+            from sklearn.cluster import DBSCAN
+        except ImportError:
+            return points  # fallback: no clustering
+        clustering = DBSCAN(eps=eps, min_samples=1).fit(points)
+        clustered = []
+        for label in np.unique(clustering.labels_):
+            cluster = points[clustering.labels_ == label]
+            centroid = np.mean(cluster, axis=0)
+            clustered.append(centroid)
+        return np.array(clustered, dtype=int)
+    endpoints_clustered = cluster_points(endpoints, eps=2)
     stroke_count     = int(skel_bool.sum())
-    endpoint_count   = int(np.logical_and(skel_bool, nb4 == 1).sum())
-    branch_point_count = int(np.logical_and(skel_bool, nb4 >= 3).sum())
-    skeleton_length  = stroke_count
-    skel_img = (skel_bool.astype(np.uint8) * 255)
-    metrics = {
-        'stroke_count': stroke_count,
-        'endpoint_count': endpoint_count,
-        'branch_point_count': branch_point_count,
-        'skeleton_length': skeleton_length
-    }
-    # The following block was misplaced in the original input, it seems to be
-    # a duplicate or an incomplete attempt at further pruning within compute_skeleton.
-    # I've commented it out as it was causing syntax errors and redundancy.
-    # If it was intended to be part of the pruning logic, it needs to be properly integrated.
-    #
-    # found_branch = False
-    # while queue:
-    #     (r, c), dist = queue.popleft()
-    #     if (r, c) in branches:
-    #         found_branch = True
-    #         break
-    #     if dist >= 2:
-    #         continue
-    #     for dr in (-1, 0, 1):
-    #         for dc in (-1, 0, 1):
-    #             if dr == 0 and dc == 0:
-    #                 continue
-    #             nr, nc = r + dr, c + dc
-    #             if 0 <= nr < skel_bool.shape[0] and 0 <= nc < skel_bool.shape[1]:
-    #                 if skel_bool[nr, nc] and (nr, nc) not in visited:
-    #                     visited.add((nr, nc))
-    #                     queue.append(((nr, nc), dist + 1))
-    # if not found_branch:
-    #     to_prune.append(tuple(ep))
-    # for pix in to_prune:
-    #     skel_bool[pix] = False
-
-    # The metrics calculation was duplicated, keeping the first one.
-    # stroke_count     = int(skel_bool.sum())
-    # endpoint_count   = int(np.logical_and(skel_bool, nb4 == 1).sum())
-    # branch_point_count = int(np.logical_and(skel_bool, nb4 >= 3).sum())
-    # skeleton_length  = stroke_count
-
-    # skel = (skel_bool.astype(np.uint8) * 255)
-    # metrics = {
-    #   "stroke_count": stroke_count,
-    #   "endpoint_count": endpoint_count,
-    #   "branch_point_count": branch_point_count,
-    #   "skeleton_length": skeleton_length
-    # }
-    return skel_img, metrics
-
-# The following block was part of the original input but seemed misplaced.
-# I've included it here, assuming it was intended to be part of a larger process
-# or a separate function. It's not directly called by compute_skeleton.
-def process_and_analyze_skeleton(mask):
-    """
-    Preprocesses mask, computes skeleton, prunes spurs, and extracts metrics.
-    Args:
-        mask (np.ndarray): 2D uint8 or bool binary image (0/1 or 0/255).
-    Returns:
-        tuple: (skel_img, metrics_dict)
-    """
-    clean = preprocess_mask(mask)
-    if clean.sum() == 0:
-        skel_img = np.zeros_like(clean, dtype=np.uint8)
-        metrics = {'stroke_count': 0, 'endpoint_count': 0, 'branch_point_count': 0, 'skeleton_length': 0}
-        return skel_img, metrics
-    skel_bool = skeletonize(clean > 0)
-    # Optionally prune spurs here if needed
-    from scipy.ndimage import convolve
-    four_k = np.array([[0,1,0],[1,0,1],[0,1,0]], dtype=int)
-    nb4 = convolve(skel_bool.astype(int), four_k, mode='constant', cval=0)
-    stroke_count     = int(skel_bool.sum())
-    endpoint_count   = int(np.logical_and(skel_bool, nb4 == 1).sum())
-    branch_point_count = int(np.logical_and(skel_bool, nb4 >= 3).sum())
+    endpoint_count   = len(endpoints_clustered)
+    branch_point_count = len(branch_points)
     skeleton_length  = stroke_count
     skel_img = (skel_bool.astype(np.uint8) * 255)
     metrics = {
@@ -249,10 +190,6 @@ def process_and_analyze_skeleton(mask):
         'skeleton_length': skeleton_length
     }
     return skel_img, metrics
-
-# This function was also part of the original input, seemingly incomplete or misplaced.
-# It attempts to prune artifacts but its logic for identifying "prunable" endpoints
-# based on branch points seems a bit off. It's included as-is for now.
 def _prune_artifacts(skel):
     pruned_skel = skel.copy()
     nb_kernel = np.ones((3, 3), dtype=np.uint8)
@@ -286,9 +223,47 @@ def _prune_artifacts(skel):
             # If any neighbor is a branch point, prune the endpoint
             if np.any(neighbor_neighbors > 2): # This condition is applied to the small neighborhood
                 pruned_skel[y, x] = 0
-                can_prune = True
-        
-        if not can_prune:
-            break # No more prunable endpoints found in this iteration
-            
-    return pruned_skel
+    clean = preprocess_mask(mask)
+    if clean.sum() == 0:
+        skel_img = np.zeros_like(clean, dtype=np.uint8)
+        metrics = {'stroke_count': 0, 'endpoint_count': 0, 'branch_point_count': 0, 'skeleton_length': 0}
+        return skel_img, metrics
+    binary = clean > 0
+    skel_bool = skeletonize(binary)
+    # Prune spurs (short branches) to make endpoint count robust for thick junctions
+    skel_bool = prune_spurs(skel_bool, max_spur_length=10)
+    # 4-connectivity for metrics
+    from scipy.ndimage import convolve
+    four_k = np.array([[0,1,0],[1,0,1],[0,1,0]], dtype=int)
+    nb4  = convolve(skel_bool.astype(int), four_k,  mode='constant', cval=0)
+    # Find endpoints and branch points
+    endpoints = np.argwhere(np.logical_and(skel_bool, nb4 == 1))
+    branch_points = np.argwhere(np.logical_and(skel_bool, nb4 >= 3))
+    # Cluster endpoints that are very close (to handle thick Y-junctions)
+    def cluster_points(points, eps=2):
+        if len(points) == 0:
+            return points
+        try:
+            from sklearn.cluster import DBSCAN
+        except ImportError:
+            return points  # fallback: no clustering
+        clustering = DBSCAN(eps=eps, min_samples=1).fit(points)
+        clustered = []
+        for label in np.unique(clustering.labels_):
+            cluster = points[clustering.labels_ == label]
+            centroid = np.mean(cluster, axis=0)
+            clustered.append(centroid)
+        return np.array(clustered, dtype=int)
+    endpoints_clustered = cluster_points(endpoints, eps=2)
+    stroke_count     = int(skel_bool.sum())
+    endpoint_count   = len(endpoints_clustered)
+    branch_point_count = len(branch_points)
+    skeleton_length  = stroke_count
+    skel_img = (skel_bool.astype(np.uint8) * 255)
+    metrics = {
+        'stroke_count': stroke_count,
+        'endpoint_count': endpoint_count,
+        'branch_point_count': branch_point_count,
+        'skeleton_length': skeleton_length
+    }
+    return skel_img, metrics
