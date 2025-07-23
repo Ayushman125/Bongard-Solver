@@ -34,7 +34,8 @@ def extract_com(mask: np.ndarray) -> tuple[float, float]:
     if mask.sum() == 0:
         raise ValueError("Empty mask: cannot compute COM.")
     ys, xs = np.nonzero(mask)
-    return float(xs.mean()), float(ys.mean())
+    # shift from array-index to pixel-center coordinates
+    return float(xs.mean() + 0.5), float(ys.mean() + 0.5)
 
 def extract_inertia_tensor(mask: np.ndarray) -> np.ndarray:
     """
