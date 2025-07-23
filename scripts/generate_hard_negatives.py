@@ -4,6 +4,7 @@ import os
 import argparse
 import ijson
 import json
+from collections import defaultdict
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.data_pipeline.logo_parser import BongardLogoParser
 from src.data_pipeline.physics_infer import PhysicsInference
@@ -48,32 +49,28 @@ def main():
     with open(derived_labels_path, 'r') as f:
         all_entries = json.load(f)
 
-    # Group by problem_id
-    problems = {}
+    # Group by problem_id using defaultdict
+    problems = defaultdict(list)
     for entry in all_entries:
-        pid = entry.get('problem_id')
-        if pid not in problems:
-            problems[pid] = []
-        problems[pid].append(entry)
+        problems[entry['problem_id']].append(entry)
 
     hard_negatives = []
     total_problems = 0
     total_samples = 0
-    total_logo_missing = 0
     total_hard_negatives = 0
 
     for pid, entries in problems.items():
         total_problems += 1
-        # NVLabs convention: label 1/category_1 = positive, label 0/category_0 = negative
-        positives = [e for e in entries if e.get('label') == 1 or e.get('label') == 'category_1']
-        negatives = [e for e in entries if e.get('label') == 0 or e.get('label') == 'category_0']
+        labels = [e.get('label') for e in entries]
+        print(f"Problem {total_problems}: {pid} labels: {labels}")
+        positives = [e for e in entries if e.get('label') == 'category_1']
+        negatives = [e for e in entries if e.get('label') == 'category_0']
         print(f"Processing problem {total_problems}: {pid} ({len(positives)} positives)")
         count = 0
         for sample_idx, sample in enumerate(positives):
-            if count >= args.max_per_problem:  # Limit to max-per-problem
+            if count >= args.max_per_problem:
                 break
             total_samples += 1
-            # Use geometry/features directly from JSON
             try:
                 original_features = {
                     'area': sample.get('area', 0),
@@ -83,8 +80,7 @@ def main():
                 print(f"    [ERROR] Failed to get features for sample: {e}")
                 continue
             found_hard_negative = False
-            for _ in range(10):  # Try up to 10 perturbations
-                # Simulate perturbation: add small random noise to area and centroid
+            for _ in range(10):
                 pert_features = {
                     'area': original_features['area'] * (1 + random.uniform(-args.jitter_length, args.jitter_length)),
                     'centroid': [
@@ -93,7 +89,7 @@ def main():
                     ]
                 }
                 if flips_label(original_features, pert_features, concept_test):
-                    entry = f"{pid},{sample['category']},{sample['image_index']},area:{original_features['area']:.2f}->{pert_features['area']:.2f},centroid:{original_features['centroid']}->{pert_features['centroid']}"
+                    entry = f"{pid},{sample.get('image_path','')},area:{original_features['area']:.2f}->{pert_features['area']:.2f},centroid:{original_features['centroid']}->{pert_features['centroid']}"
                     hard_negatives.append(entry)
                     count += 1
                     total_hard_negatives += 1
@@ -106,7 +102,7 @@ def main():
     # Save output
     with open(args.output, 'w') as f:
         for hn in hard_negatives:
-            f.write(json.dumps(hn) + '\n')
+            f.write(hn + '\n')
     print(f"\nSummary:")
     print(f"  Problems processed: {total_problems}")
     print(f"  Samples processed: {total_samples}")
