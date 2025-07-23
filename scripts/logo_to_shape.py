@@ -11,7 +11,7 @@ import logging
 # Ensure src is importable
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.data_pipeline.loader import BongardLoader
-from src.data_pipeline.logo_parser import LogoParser
+from src.data_pipeline.logo_parser import BongardLogoParser
 from src.data_pipeline.physics_infer import PhysicsInference
 from src.data_pipeline.verification import Verification
 
@@ -26,7 +26,7 @@ def main():
     args = parser.parse_args()
 
     loader = BongardLoader(args.input_dir, problems_list=args.problems_list, n_select=args.n_select)
-    logo_parser = LogoParser()
+    logo_parser = BongardLogoParser()
     data = []
     flagged = []
     total = 0
@@ -81,20 +81,12 @@ def main():
                         if isinstance(action_program, list) and len(action_program) == 1 and isinstance(action_program[0], list):
                             action_program = action_program[0]
                         try:
-                            vertices = []
-                            if isinstance(action_program, list):
-                                for cmd in action_program:
-                                    parsed = logo_parser.parse_logo_script_from_lines([cmd])
-                                    print(f"Parsed vertices for cmd '{cmd}': {parsed}")
-                                    vertices.extend(parsed)
-                                print(f"Total vertices for {problem_id} {label}: {len(vertices)}")
-                            elif isinstance(action_program, str):
-                                parsed = logo_parser.parse_logo_script_from_lines([action_program])
-                                print(f"Parsed vertices for cmd '{action_program}': {parsed}")
-                                vertices.extend(parsed)
-                                print(f"Total vertices for {problem_id} {label}: {len(vertices)}")
-                            else:
-                                raise ValueError(f"Unexpected action_program type: {type(action_program)}")
+                            # Use BongardLogoParser to parse the full action program at once
+                            vertices = logo_parser.parse_action_program(action_program, scale=120)
+                            print(f"Total vertices for {problem_id} {label}: {len(vertices)}")
+                            if len(vertices) < 4:
+                                flagged_cases.append({'problem_id': problem_id, 'image_path': img_path, 'error': 'too_few_vertices'})
+                                continue
                             poly = PhysicsInference.polygon_from_vertices(vertices)
                             if poly is None or not poly.is_valid:
                                 flagged_cases.append({'problem_id': problem_id, 'image_path': img_path, 'error': 'Invalid polygon'})
