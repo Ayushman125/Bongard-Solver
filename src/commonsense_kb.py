@@ -14,6 +14,23 @@ class KBLoadError(Exception):
     pass
 
 class CommonsenseKB:
+    def semantic_query(self, term: str, top_k: int = 5) -> list:
+        """Find semantically similar relations using embeddings."""
+        emb = self._get_embedding(term)
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT head, tail, embedding FROM relations")
+        results = []
+        for head, tail, emb_blob in cursor.fetchall():
+            other = np.frombuffer(emb_blob, dtype=np.float32)
+            sim = float(np.dot(emb, other) / (np.linalg.norm(emb)*np.linalg.norm(other)+1e-8))
+            if sim > 0.5:
+                results.append((head, tail, sim))
+        results.sort(key=lambda x: x[2], reverse=True)
+        return results[:top_k]
+
+    def _get_embedding(self, term: str) -> np.ndarray:
+        # Example: load from precomputed dict or call external model
+        return self.embeddings.get(term, np.zeros(300, dtype=np.float32))
     """Enhanced ConceptNet-lite loader with semantic similarity search"""
     def __init__(self, path: str = 'data/conceptnet_lite.json', db_cache_path: str = 'data/kb_cache.db'):
         self.dv = DataValidator()
@@ -55,3 +72,21 @@ class CommonsenseKB:
             """, (predicate, term, term, top_k))
             exact_matches.extend(cursor.fetchall())
         return {'exact_matches': exact_matches[:top_k], 'semantic_matches': []}
+    
+    def semantic_query(self, term: str, top_k: int = 5) -> List[tuple]:
+        """Find semantically similar relations using embeddings."""
+        emb = self._get_embedding(term)
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT head, tail, embedding FROM relations")
+        results = []
+        for head, tail, emb_blob in cursor.fetchall():
+            other = np.frombuffer(emb_blob, dtype=np.float32)
+            sim = float(np.dot(emb, other) / (np.linalg.norm(emb)*np.linalg.norm(other)+1e-8))
+            if sim > 0.5:
+                results.append((head, tail, sim))
+        results.sort(key=lambda x: x[2], reverse=True)
+        return results[:top_k]
+
+    def _get_embedding(self, term: str) -> np.ndarray:
+        # Example: load from precomputed dict or call external model
+        return getattr(self, 'embeddings', {}).get(term, np.zeros(300, dtype=np.float32))

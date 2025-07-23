@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "HardNegative",
+  "type": "object",
+  "properties": {
+    "image": { "type": "string", "description": "Base64-encoded image or file path" },
+    "metadata": { "type": "object" },
+    "difficulty_score": { "type": "number", "minimum": 0, "maximum": 1 },
+    "generation_method": { "type": "string" }
+  },
+  "required": ["image", "metadata", "difficulty_score", "generation_method"]
+}
