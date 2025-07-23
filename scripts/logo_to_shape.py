@@ -71,15 +71,24 @@ def main():
                 # Each problem: [positives, negatives]
                 for label, group in zip(['category_1', 'category_0'], pos_neg_lists):
                     for idx, action_program in enumerate(group):
-                        img_dir = os.path.join(base_dir, f"ShapeBongard_V2/{cat}/images/{problem_id}")
-                        img_name = f"{label}_{idx}.png"
-                        img_path = os.path.join(img_dir, img_name)
+                        img_dir = os.path.join(base_dir, f"ShapeBongard_V2/{cat}/images/{problem_id}", label)
+                        img_path = os.path.join(img_dir, f"{idx}.png")
+                        # Debug: print mapping and action_program type
+                        if idx == 0:
+                            print(f"Processing {problem_id} {label} -> {img_path}")
+                            print(f"Action program type: {type(action_program)}, value: {action_program}")
+                        # Flatten action_program if it's a list of lists (common in JSON)
+                        if isinstance(action_program, list) and len(action_program) == 1 and isinstance(action_program[0], list):
+                            action_program = action_program[0]
                         try:
-                            # Parse LOGO commands: action_program is a list of command strings
-                            # Treat each string as a line in a .logo file
                             vertices = []
-                            for cmd in action_program:
-                                vertices.extend(logo_parser.parse_logo_script_from_lines([cmd]))
+                            if isinstance(action_program, list):
+                                for cmd in action_program:
+                                    vertices.extend(logo_parser.parse_logo_script_from_lines([cmd]))
+                            elif isinstance(action_program, str):
+                                vertices.extend(logo_parser.parse_logo_script_from_lines([action_program]))
+                            else:
+                                raise ValueError(f"Unexpected action_program type: {type(action_program)}")
                             poly = PhysicsInference.polygon_from_vertices(vertices)
                             if poly is None or not poly.is_valid:
                                 flagged_cases.append({'problem_id': problem_id, 'image_path': img_path, 'error': 'Invalid polygon'})
@@ -105,24 +114,13 @@ def main():
     # Add helper to LogoParser for direct command list parsing
 
     with open(output_path, 'w') as out:
-        json.dump(all_results, out)
+        json.dump(all_results, out, indent=2)
     print(f"INFO: Saved {len(all_results)} valid samples to {output_path} (skipped {len(flagged_cases)} of {len(all_results) + len(flagged_cases)})")
     flagged_path = os.path.join(os.path.dirname(output_path), 'flagged_cases.txt')
     with open(flagged_path, 'w') as out:
         for case in flagged_cases:
             out.write(json.dumps(case) + '\n')
     print(f"INFO: Flagged {len(flagged_cases)} cases for review in {flagged_path}")
-
-    with open(args.output, 'w') as f:
-        json.dump(data, f, indent=2)
-    logging.info(f"Saved {valid} valid samples to {args.output} (skipped {skipped} of {total})")
-
-    # Save flagged cases for review
-    flagged_path = os.path.join(out_dir, 'flagged_cases.txt') if out_dir else 'flagged_cases.txt'
-    with open(flagged_path, 'w') as f:
-        for entry in flagged:
-            f.write(f"{entry['problem_id']},{entry['logo_path']},{entry['reason']}\n")
-    logging.info(f"Flagged {len(flagged)} cases for review in {flagged_path}")
 
 if __name__ == '__main__':
     main()
