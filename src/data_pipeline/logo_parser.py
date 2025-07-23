@@ -74,6 +74,8 @@ class BongardLogoParser:
             return []
         style, length_str, angle_str = match.groups()
         length = float(length_str) * scale
+        if length < 1:
+            length = 1  # enforce minimal movement
         if length < 5:
             return []
         angle_change = float(angle_str) * 360

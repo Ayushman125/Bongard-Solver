@@ -5,16 +5,22 @@ import numpy as np
 class PhysicsInference:
     @staticmethod
     def polygon_from_vertices(vertices):
+        from shapely.geometry import Polygon
+        from shapely.ops import unary_union
         try:
             poly = Polygon(vertices)
-            if not poly.is_valid:
+            if not poly or not poly.is_valid or poly.is_empty:
                 # Try to fix with buffer(0)
                 poly = poly.buffer(0)
-                if not poly.is_valid:
-                    from shapely.ops import unary_union
+                if not poly.is_valid or poly.is_empty:
                     poly = unary_union(poly).convex_hull
-                if not poly.is_valid:
-                    return None
+                if poly.is_empty or poly.area == 0:
+                    # fallback: build a tiny convex hull around points
+                    if vertices:
+                        x0, y0 = vertices[0]
+                        poly = Polygon([(x0, y0), (x0+1, y0), (x0+1, y0+1), (x0, y0+1)])
+                    else:
+                        return None
             return poly
         except Exception as e:
             print(f"Polygon creation failed: {e}")
