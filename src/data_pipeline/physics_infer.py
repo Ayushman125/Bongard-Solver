@@ -8,7 +8,13 @@ class PhysicsInference:
         try:
             poly = Polygon(vertices)
             if not poly.is_valid:
-                poly = poly.buffer(0)  # Attempt to fix invalid polygons
+                # Try to fix with buffer(0)
+                poly = poly.buffer(0)
+                if not poly.is_valid:
+                    from shapely.ops import unary_union
+                    poly = unary_union(poly).convex_hull
+                if not poly.is_valid:
+                    return None
             return poly
         except Exception as e:
             print(f"Polygon creation failed: {e}")

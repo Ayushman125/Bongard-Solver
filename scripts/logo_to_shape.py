@@ -81,7 +81,7 @@ def main():
                         if isinstance(action_program, list) and len(action_program) == 1 and isinstance(action_program[0], list):
                             action_program = action_program[0]
                         try:
-                            # Use BongardLogoParser to parse the full action program at once
+                            # Use BongardLogoParser to parse the full action program at once, persisting state
                             vertices = logo_parser.parse_action_program(action_program, scale=120)
                             print(f"Total vertices for {problem_id} {label}: {len(vertices)}")
                             if len(vertices) < 4:

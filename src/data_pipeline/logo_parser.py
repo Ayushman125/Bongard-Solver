@@ -74,6 +74,8 @@ class BongardLogoParser:
             return []
         style, length_str, angle_str = match.groups()
         length = float(length_str) * scale
+        if length < 5:
+            return []
         angle_change = float(angle_str) * 360
         points = []
         # Always simulate movement for all styles
@@ -95,6 +97,7 @@ class BongardLogoParser:
         style, radius_str, arc_span_str, angle_str = match.groups()
         radius = float(radius_str) * scale
         arc_span = float(arc_span_str) * 360
+        arc_span = ((arc_span + 360) % 360) or 360
         angle_change = float(angle_str) * 360
         points = []
         # Always simulate arc movement for all styles
