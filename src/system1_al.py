@@ -19,15 +19,34 @@ _LOG_PATH = Path("logs/s1_al.jsonl")
 _LOG_PATH.parent.mkdir(exist_ok=True, parents=True)
 
 class System1AbstractionLayer:
+    def extract_attributes(self, img: np.ndarray) -> dict:
+        """
+        Extract physics-proxy attributes from a 2D mask image.
+        Returns a dict with keys: com, inertia, support_surfaces.
+        """
+        mask = (img > 0)
+        com = self.extract_com(mask)
+        inertia = self.extract_inertia_tensor(mask)
+        supports = self.extract_support_polygon(mask)
+        return {
+            'com': com,
+            'inertia': inertia,
+            'support_surfaces': supports
+        }
     def __init__(self):
         pass
 
     def extract_com(self, mask: np.ndarray) -> tuple[float, float]:
-        """Compute center of mass of binary mask."""
-        if mask.sum() == 0:
-            raise ValueError("Empty mask")
-        ys, xs = np.nonzero(mask)
-        return float(xs.mean()), float(ys.mean())
+        """Compute center of mass of binary mask. If mask is empty, default to image center."""
+        h, w = mask.shape[:2]
+        coords = np.argwhere(mask)
+        if coords.size == 0:
+            return float(h) / 2, float(w) / 2
+        row_coords = coords[:, 0]
+        col_coords = coords[:, 1]
+        x = row_coords.mean() + 0.5
+        y = col_coords.mean() + 0.5
+        return x, y
 
     def extract_inertia_tensor(self, mask: np.ndarray) -> np.ndarray:
         """Compute 2×2 inertia tensor of binary mask."""
