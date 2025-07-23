@@ -10,7 +10,6 @@ Glob-loads all schemas in schemas/.
 import glob
 import json
 import os
-from integration.data_validator import DataValidator
 
 def validate_all():
     dv = DataValidator()
