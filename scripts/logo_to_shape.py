@@ -81,8 +81,15 @@ def main():
                         if isinstance(action_program, list) and len(action_program) == 1 and isinstance(action_program[0], list):
                             action_program = action_program[0]
                         try:
-                            # Use BongardLogoParser to parse the full action program at once, persisting state
-                            vertices = logo_parser.parse_action_program(action_program, scale=120)
+                            # If action_program is a list of subgroups, parse each subgroup in sequence, persisting turtle state
+                            vertices = []
+                            if isinstance(action_program, list) and all(isinstance(subgroup, list) for subgroup in action_program):
+                                for subgroup in action_program:
+                                    pts = logo_parser.parse_action_program(subgroup, scale=120)
+                                    vertices.extend(pts)
+                                    # parser.reset() removed to persist state
+                            else:
+                                vertices = logo_parser.parse_action_program(action_program, scale=120)
                             print(f"Total vertices for {problem_id} {label}: {len(vertices)}")
                             if len(vertices) < 4:
                                 flagged_cases.append({'problem_id': problem_id, 'image_path': img_path, 'error': 'too_few_vertices'})
