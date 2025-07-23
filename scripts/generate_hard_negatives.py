@@ -4,23 +4,38 @@ import os
 import argparse
 import ijson
 import json
+import re
 from collections import defaultdict
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.data_pipeline.logo_parser import BongardLogoParser
 from src.data_pipeline.physics_infer import PhysicsInference
 
-def perturb_logo_commands(commands, angle_jitter=5, length_jitter=0.05):
-    new_commands = []
-    for cmd, val in commands:
-        if cmd in 'FB':
-            val = val * (1 + random.uniform(-length_jitter, length_jitter))
-        elif cmd in 'RL':
-            val = val + random.uniform(-angle_jitter, angle_jitter)
-        new_commands.append((cmd, val))
-    return new_commands
+def perturb_bongard_cmd(cmd_str, angle_jitter, length_jitter):
+    if cmd_str.startswith('line_'):
+        m = re.match(r'line_(\w+)_([0-9.]+)-([0-9.]+)', cmd_str)
+        if m:
+            style, L, A = m.groups()
+            L = float(L) * (1 + random.uniform(-length_jitter, length_jitter))
+            A = float(A) * (1 + random.uniform(-angle_jitter/360, angle_jitter/360))
+            return f'line_{style}_{L:.3f}-{A:.3f}'
+    if cmd_str.startswith('arc_'):
+        m = re.match(r'arc_(\w+)_([0-9.]+)_([0-9.]+)-([0-9.]+)', cmd_str)
+        if m:
+            style, R, S, T = m.groups()
+            R = float(R) * (1 + random.uniform(-length_jitter, length_jitter))
+            S = float(S) * (1 + random.uniform(-angle_jitter/360, angle_jitter/360))
+            return f'arc_{style}_{R:.3f}_{S:.3f}-{T}'
+    return cmd_str
 
-def commands_to_str(commands):
-    return ' '.join([f"{cmd} {val:.3f}" for cmd, val in commands])
+def flatten_action_program(action_program):
+    # Flatten nested lists to a single list of strings
+    flat = []
+    for item in action_program:
+        if isinstance(item, list):
+            flat.extend(flatten_action_program(item))
+        else:
+            flat.append(item)
+    return flat
 
 def flips_label(original_features, perturbed_features, concept_test):
     original_label = concept_test(original_features)
@@ -41,7 +56,6 @@ def main():
     parser.add_argument('--max-per-problem', type=int, default=3, help='Max hard negatives per problem')
     args = parser.parse_args()
 
-    # Load derived labels (flat array, NVLabs convention)
     derived_labels_path = os.path.join('data', 'derived_labels.json')
     if not os.path.exists(derived_labels_path):
         print(f"Missing derived_labels.json at {derived_labels_path}")
@@ -49,7 +63,6 @@ def main():
     with open(derived_labels_path, 'r') as f:
         all_entries = json.load(f)
 
-    # Group by problem_id using defaultdict
     problems = defaultdict(list)
     for entry in all_entries:
         problems[entry['problem_id']].append(entry)
@@ -59,12 +72,14 @@ def main():
     total_samples = 0
     total_hard_negatives = 0
 
+    parser_obj = BongardLogoParser()
+    physics_infer = PhysicsInference()
+
     for pid, entries in problems.items():
         total_problems += 1
         labels = [e.get('label') for e in entries]
         print(f"Problem {total_problems}: {pid} labels: {labels}")
         positives = [e for e in entries if e.get('label') == 'category_1']
-        negatives = [e for e in entries if e.get('label') == 'category_0']
         print(f"Processing problem {total_problems}: {pid} ({len(positives)} positives)")
         count = 0
         for sample_idx, sample in enumerate(positives):
@@ -72,24 +87,31 @@ def main():
                 break
             total_samples += 1
             try:
-                original_features = {
-                    'area': sample.get('area', 0),
-                    'centroid': sample.get('centroid', [0,0])
-                }
+                # Use the true action program from the sample
+                action_program = sample.get('action_program')
+                if not action_program:
+                    print(f"    [ERROR] No action_program for sample {sample_idx+1}")
+                    continue
+                flat_action = flatten_action_program(action_program)
+                original_cmds = [str(cmd) for cmd in flat_action]
+                # Parse original geometry
+                original_verts = parser_obj.parse_action_program(original_cmds)
+                original_features = physics_infer.compute(original_verts)
             except Exception as e:
                 print(f"    [ERROR] Failed to get features for sample: {e}")
                 continue
             found_hard_negative = False
             for _ in range(10):
-                pert_features = {
-                    'area': original_features['area'] * (1 + random.uniform(-args.jitter_length, args.jitter_length)),
-                    'centroid': [
-                        original_features['centroid'][0] + random.uniform(-args.jitter_angle, args.jitter_angle),
-                        original_features['centroid'][1] + random.uniform(-args.jitter_angle, args.jitter_angle)
-                    ]
-                }
+                # Perturb each command string
+                perturbed_cmds = [perturb_bongard_cmd(cmd, args.jitter_angle, args.jitter_length) for cmd in original_cmds]
+                try:
+                    pert_verts = parser_obj.parse_action_program(perturbed_cmds)
+                    pert_features = physics_infer.compute(pert_verts)
+                except Exception as e:
+                    print(f"    [ERROR] Failed to parse perturbed program: {e}")
+                    continue
                 if flips_label(original_features, pert_features, concept_test):
-                    entry = f"{pid},{sample.get('image_path','')},area:{original_features['area']:.2f}->{pert_features['area']:.2f},centroid:{original_features['centroid']}->{pert_features['centroid']}"
+                    entry = f"{pid},{sample.get('image_path','')},perturbed_cmds:{perturbed_cmds}"
                     hard_negatives.append(entry)
                     count += 1
                     total_hard_negatives += 1
@@ -99,7 +121,6 @@ def main():
             if not found_hard_negative:
                 print(f"    [NO FLIP] No hard negative found for sample {sample_idx+1}")
 
-    # Save output
     with open(args.output, 'w') as f:
         for hn in hard_negatives:
             f.write(hn + '\n')
