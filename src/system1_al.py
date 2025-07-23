@@ -47,7 +47,9 @@ class System1AbstractionLayer:
             "hole_count": hcount,
             "sym_horizontal": hsym,
             "sym_vertical": vsym,
-            "object_count": obj_count
+            "object_count": obj_count,
+            "objects": [],
+            "relationships": []
         }
     def extract_attributes(self, img: np.ndarray) -> dict:
         """
