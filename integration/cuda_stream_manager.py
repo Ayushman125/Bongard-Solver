@@ -9,39 +9,33 @@ This is a placeholder and will be implemented with PyCUDA or torch.cuda.
 __version__ = "0.1.0"
 
 class CUDAStreamManager:
-    def __init__(self, num_streams=1):
+    def __init__(self):
         import torch
-        self.num_streams = num_streams
-        self.streams = [torch.cuda.Stream() for _ in range(num_streams)]
+        self.stream = torch.cuda.Stream()
         self._events = []
-        print(f"CUDA Stream Manager initialized with {num_streams} streams.")
 
-    def get_stream(self, index):
-        if 0 <= index < self.num_streams:
-            return self.streams[index]
-        return None
+    def get_stream(self):
+        return self.stream
 
     def synchronize(self):
-        import torch
-        for stream in self.streams:
-            stream.synchronize()
         for evt in self._events:
             evt.synchronize()
         self._events.clear()
 
-    def async_transfer(self, src, dst, stream_idx=0):
+    def async_transfer(self, dest, src):
         import torch
-        assert src.numel() == dst.numel(), "src/dst must have same shape!"
-        stream = self.get_stream(stream_idx)
-        with torch.cuda.stream(stream):
-            dst.copy_(src, non_blocking=True)
-            evt = torch.cuda.Event()
-            evt.record(stream)
-            self._events.append(evt)
+        assert dest.numel() == src.numel(), "shapes must match"
+        with torch.cuda.stream(self.stream):
+            dest.copy_(src, non_blocking=True)
+        evt = torch.cuda.Event()
+        evt.record(self.stream)
+        self._events.append(evt)
 
-    def compute(self, func, stream_idx=0):
-        # Run a computation on the default stream (after async ops)
-        return func()
+    def compute(self, fn):
+        import torch
+        with torch.cuda.stream(self.stream):
+            result = fn()
+        return result
 
 # Example usage:
 # stream_manager = CUDAStreamManager(num_streams=2)
