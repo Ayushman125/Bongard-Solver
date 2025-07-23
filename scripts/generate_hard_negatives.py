@@ -96,7 +96,17 @@ def main():
                 original_cmds = [str(cmd) for cmd in flat_action]
                 # Parse original geometry
                 original_verts = parser_obj.parse_action_program(original_cmds)
-                original_features = physics_infer.compute(original_verts)
+                poly = PhysicsInference.polygon_from_vertices(original_verts)
+                if poly is None or not hasattr(poly, 'is_valid') or not poly.is_valid:
+                    print(f"    [ERROR] Invalid polygon for sample {sample_idx+1}")
+                    continue
+                original_features = {
+                    'area': poly.area,
+                    'centroid': [poly.centroid.x, poly.centroid.y],
+                    'is_convex': PhysicsInference.is_convex(poly),
+                    'symmetry_score': PhysicsInference.symmetry_score(poly),
+                    'moment_of_inertia': PhysicsInference.moment_of_inertia(poly)
+                }
             except Exception as e:
                 print(f"    [ERROR] Failed to get features for sample: {e}")
                 continue
@@ -106,7 +116,16 @@ def main():
                 perturbed_cmds = [perturb_bongard_cmd(cmd, args.jitter_angle, args.jitter_length) for cmd in original_cmds]
                 try:
                     pert_verts = parser_obj.parse_action_program(perturbed_cmds)
-                    pert_features = physics_infer.compute(pert_verts)
+                    pert_poly = PhysicsInference.polygon_from_vertices(pert_verts)
+                    if pert_poly is None or not hasattr(pert_poly, 'is_valid') or not pert_poly.is_valid:
+                        continue
+                    pert_features = {
+                        'area': pert_poly.area,
+                        'centroid': [pert_poly.centroid.x, pert_poly.centroid.y],
+                        'is_convex': PhysicsInference.is_convex(pert_poly),
+                        'symmetry_score': PhysicsInference.symmetry_score(pert_poly),
+                        'moment_of_inertia': PhysicsInference.moment_of_inertia(pert_poly)
+                    }
                 except Exception as e:
                     print(f"    [ERROR] Failed to parse perturbed program: {e}")
                     continue
