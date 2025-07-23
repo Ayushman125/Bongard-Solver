@@ -14,12 +14,6 @@ class PhysicsInference:
                 poly = MultiPoint(vertices).convex_hull
                 if not poly.is_valid or poly.area == 0:
                     poly = poly.buffer(0.1)
-                if poly.is_empty or poly.area == 0:
-                    if vertices:
-                        x0, y0 = vertices[0]
-                        poly = Polygon([(x0, y0), (x0+1, y0), (x0+1, y0+1), (x0, y0+1)])
-                    else:
-                        return None
             return poly
         except Exception as e:
             print(f"Polygon creation failed: {e}")
