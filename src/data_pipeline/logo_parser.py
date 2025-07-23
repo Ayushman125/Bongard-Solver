@@ -80,25 +80,21 @@ class BongardLogoParser:
             return []
         angle_change = float(angle_str) * 360
         points = []
-        # Always simulate movement for all styles
-        segments = 10 if style != 'normal' else 1
-        for i in range(segments):
-            progress = (i + 1) / segments
-            new_x = self.x + progress * length * math.cos(math.radians(self.angle))
-            new_y = self.y + progress * length * math.sin(math.radians(self.angle))
-            points.append((new_x, new_y))
+        # Dense interpolation: always at least 5 points per segment
+        steps = max(5, int(length / 2))
+        x_prev, y_prev = self.x, self.y
+        dx = length * math.cos(math.radians(self.angle))
+        dy = length * math.sin(math.radians(self.angle))
+        for i in range(1, steps + 1):
+            frac = i / steps
+            xi = x_prev + frac * dx
+            yi = y_prev + frac * dy
+            points.append((xi, yi))
         # Ensure at least 4 distinct points for Shapely
         if len(points) < 4:
-            if len(points) == 2:
-                x0, y0 = points[0]
-                x1, y1 = points[-1]
-                mid = ((x0 + x1) / 2, (y0 + y1) / 2)
-                points.insert(1, mid)
-                # Add a small offset point to guarantee 4
-                points.append((x1 + 2, y1))
-            elif len(points) == 3:
-                x0, y0 = points[-1]
-                points.append((x0 + 2, y0))
+            x0, y0 = points[-1]
+            points.append((x0 + 1, y0))
+            points.append((x0, y0 + 1))
         self.x, self.y = points[-1]
         self.angle += angle_change
         return points
