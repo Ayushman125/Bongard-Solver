@@ -87,7 +87,6 @@ def main():
                                 for subgroup in action_program:
                                     pts = logo_parser.parse_action_program(subgroup, scale=120)
                                     vertices.extend(pts)
-                                    # parser.reset() removed to persist state
                             else:
                                 vertices = logo_parser.parse_action_program(action_program, scale=120)
                             print(f"Total vertices for {problem_id} {label}: {len(vertices)}")
