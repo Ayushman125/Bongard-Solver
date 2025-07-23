@@ -17,6 +17,7 @@ class DataValidator:
         import os
         self._schemas = {}
         for path in glob.glob(os.path.join(schema_dir, "*.schema.json")):
+            import os
             name = os.path.basename(path)
             with open(path) as f:
                 self._schemas[name] = json.load(f)
