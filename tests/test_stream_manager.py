@@ -1,3 +1,4 @@
+import pytest
 import torch
 from src.utils.stream_manager import CUDAStreamManager
 

@@ -18,16 +18,14 @@ __version__ = "0.1.0"
 from collections import deque
 
 class AdaptiveScheduler:
-    def __init__(self, cpu_workers: int = 4, gpu_workers: int = 1):
-        self.cpu_queue = deque()
-        self.gpu_queue = deque()
+    def __init__(self):
+        # match test names exactly
+        self.cpu_q = deque()
+        self.gpu_q = deque()
 
     def submit(self, fn, device: str = "cpu"):
         """
-        Add a task to the CPU or GPU queue.
-        Args:
-            fn: Callable to execute.
-            device: "cpu" or "gpu"
+        Add a no-arg callable to the CPU or GPU queue.
         """
         if device == "gpu":
             self.gpu_q.append(fn)
@@ -35,8 +33,15 @@ class AdaptiveScheduler:
             self.cpu_q.append(fn)
 
     def run_all(self):
-        """Execute all queued tasks, preferring CPU first."""
+        """
+        Execute all CPU tasks first, then all GPU tasks.
+        """
         while self.cpu_q:
-            self.cpu_q.popleft()()
+            task = self.cpu_q.popleft()
+            task()
+
+        while self.gpu_q:
+            task = self.gpu_q.popleft()
+            task()
         while self.gpu_q:
             self.gpu_q.popleft()()
