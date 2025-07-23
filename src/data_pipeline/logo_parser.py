@@ -87,6 +87,27 @@ class BongardLogoParser:
             new_x = self.x + progress * length * math.cos(math.radians(self.angle))
             new_y = self.y + progress * length * math.sin(math.radians(self.angle))
             points.append((new_x, new_y))
+        # Ensure at least 4 distinct points for Shapely
+        if len(points) < 4:
+            if len(points) == 2:
+                x0, y0 = points[-2]
+                x1, y1 = points[-1]
+                points.insert(-1, ((x0 + x1) / 2, (y0 + y1) / 2))
+            elif len(points) == 3:
+                x0, y0 = points[-1]
+                points.append((x0 + 2, y0))
+        self.x, self.y = points[-1]
+        self.angle += angle_change
+        return points
+        angle_change = float(angle_str) * 360
+        points = []
+        # Always simulate movement for all styles
+        segments = 10 if style != 'normal' else 1
+        for i in range(segments):
+            progress = (i + 1) / segments
+            new_x = self.x + progress * length * math.cos(math.radians(self.angle))
+            new_y = self.y + progress * length * math.sin(math.radians(self.angle))
+            points.append((new_x, new_y))
         self.x, self.y = points[-1]
         self.angle += angle_change
         return points

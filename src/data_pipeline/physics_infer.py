@@ -13,9 +13,9 @@ class PhysicsInference:
                 # Try to fix with buffer(0)
                 poly = poly.buffer(0)
                 if not poly.is_valid or poly.is_empty:
-                    poly = unary_union(poly).convex_hull
+                    from shapely.geometry import MultiPoint
+                    poly = MultiPoint(vertices).convex_hull
                 if poly.is_empty or poly.area == 0:
-                    # fallback: build a tiny convex hull around points
                     if vertices:
                         x0, y0 = vertices[0]
                         poly = Polygon([(x0, y0), (x0+1, y0), (x0+1, y0+1), (x0, y0+1)])
