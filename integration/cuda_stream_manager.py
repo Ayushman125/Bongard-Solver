@@ -33,9 +33,11 @@ class CUDAStreamManager:
 
     def compute(self, fn):
         import torch
-        with torch.cuda.stream(self.stream):
-            result = fn()
-        return result
+        default = torch.cuda.current_stream()
+        for evt in self._events:
+            default.wait_event(evt)
+        # Now safe to run fn() on default stream
+        return fn()
 
 # Example usage:
 # stream_manager = CUDAStreamManager(num_streams=2)
