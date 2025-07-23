@@ -22,10 +22,10 @@ class CrossDomainReasoner:
         with self.profiler.profile('cross_domain_infer'):
             # simple heuristic: weight inverse inertia trace + avg affordance weight
             trace = inertia[:,0,0] + inertia[:,1,1]    # (B,)
-            inv_trace = 1.0 / (trace + 1e-6)
+            inv_trace = trace.add_(1e-6).reciprocal_()
             kb_scores = torch.tensor(
-                [np.mean(list(a.values())) if a else 0.0 for a in affordances],
-                dtype=torch.float32
+                [float(np.mean(list(a.values()))) if a else 0.0 for a in affordances],
+                device=inv_trace.device
             )
             score = torch.sigmoid(inv_trace + kb_scores)
         return score

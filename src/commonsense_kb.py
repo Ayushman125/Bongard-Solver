@@ -1,5 +1,8 @@
 import json
-import numpy as np
+from integration.data_validator import DataValidator
+
+class KBLoadError(Exception):
+    pass
 
 class CommonsenseKB:
     """
@@ -7,9 +10,15 @@ class CommonsenseKB:
     Expect file `data/conceptnet_lite.json` with entries:
       { predicate: { "head": [...], "tail": [...], "weight": ... } }
     """
-    def __init__(self, path='data/conceptnet_lite.json'):
-        with open(path, 'r') as f:
-            self.cn = json.load(f)
+    def __init__(self, path: str = 'data/conceptnet_lite.json'):
+        self.dv = DataValidator()
+        try:
+            with open(path, 'r') as f:
+                data = json.load(f)
+            self.dv.validate(data, 'conceptnet_lite.schema.json')
+            self.cn = data
+        except Exception as e:
+            raise KBLoadError(f"Failed to load KB: {e}")
 
     def query(self, predicate: str, context: list) -> dict:
         """
