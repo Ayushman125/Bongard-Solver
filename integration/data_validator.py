@@ -7,22 +7,15 @@ Enforces JSON schemas for event logs using jsonschema.
 Glob-loads all schemas in schemas/.
 """
 
-import json, glob
-from jsonschema import validate, RefResolver
+import glob
+import json
+import os
+from integration.data_validator import DataValidator
 
-SCHEMA_DIR = "schemas/"
-
-class DataValidator:
-    def __init__(self, schema_dir="schemas"):
-        import os
-        self._schemas = {}
-        for path in glob.glob(os.path.join(schema_dir, "*.schema.json")):
-            import os
-            name = os.path.basename(path)
-            with open(path) as f:
-                self._schemas[name] = json.load(f)
-        self._resolver = RefResolver(f"file:///{schema_dir}/", None)
-
-    def validate(self, data: dict, schema_name: str):
-        schema = self._schemas[schema_name]
-        validate(instance=data, schema=schema, resolver=self._resolver)
+def validate_all():
+    dv = DataValidator()
+    for path in glob.glob("schemas/*.schema.json"):
+        schema_name = os.path.basename(path)
+        example = json.load(open(path))
+        dv.validate(example, schema_name)
+    print("Schema validation OK")
