@@ -10,14 +10,16 @@ class PhysicsInference:
         try:
             poly = Polygon(vertices)
             if not poly or not poly.is_valid or poly.is_empty or poly.area == 0:
-                from shapely.geometry import MultiPoint, Polygon
-                hull = MultiPoint(vertices).convex_hull
-                if hull.geom_type == "Point":
-                    x, y = hull.x, hull.y
-                    hull = Polygon([(x, y), (x+1, y), (x+1, y+1), (x, y+1)])
-                poly = hull
-                if not poly.is_valid or poly.area == 0:
-                    poly = poly.buffer(0.1)
+                # Try buffer(0) to fix minor self-intersections
+                poly = poly.buffer(0)
+                if not poly.is_valid or poly.is_empty or poly.area == 0:
+                    # Fallback to convex hull
+                    from shapely.geometry import MultiPoint, Polygon
+                    hull = MultiPoint(vertices).convex_hull
+                    if hull.geom_type == "Point":
+                        x, y = hull.x, hull.y
+                        hull = Polygon([(x, y), (x+1, y), (x+1, y+1), (x, y+1)])
+                    poly = hull
             return poly
         except Exception as e:
             print(f"Polygon creation failed: {e}")

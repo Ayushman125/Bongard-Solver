@@ -89,15 +89,24 @@ class BongardLogoParser:
             frac = i / steps
             xi = x_prev + frac * dx
             yi = y_prev + frac * dy
+            # Skip ultra-short segments
+            if math.hypot(xi - x_prev, yi - y_prev) < 5:
+                continue
             points.append((xi, yi))
+            x_prev, y_prev = xi, yi
+        # Remove consecutive duplicate points
+        dedup_points = [points[0]] if points else []
+        for pt in points[1:]:
+            if pt != dedup_points[-1]:
+                dedup_points.append(pt)
         # Ensure at least 4 distinct points for Shapely
-        if len(points) < 4:
-            x0, y0 = points[-1]
-            points.append((x0 + 1, y0))
-            points.append((x0, y0 + 1))
-        self.x, self.y = points[-1]
+        if len(dedup_points) < 4:
+            x0, y0 = dedup_points[-1] if dedup_points else (self.x, self.y)
+            dedup_points.append((x0 + 1, y0))
+            dedup_points.append((x0, y0 + 1))
+        self.x, self.y = dedup_points[-1] if dedup_points else (self.x, self.y)
         self.angle += angle_change
-        return points
+        return dedup_points
 
     def parse_arc_command(self, cmd: str, scale: float) -> List[Tuple[float, float]]:
         pattern = r'arc_(\w+)_([0-9.]+)_([0-9.]+)-([0-9.]+)'
@@ -107,7 +116,7 @@ class BongardLogoParser:
         style, radius_str, arc_span_str, angle_str = match.groups()
         radius = float(radius_str) * scale
         arc_span = float(arc_span_str) * 360
-        arc_span = ((arc_span + 360) % 360) or 360
+        arc_span = max(0, min(arc_span, 360))
         angle_change = float(angle_str) * 360
         points = []
         # Always simulate arc movement for all styles
