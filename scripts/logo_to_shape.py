@@ -111,6 +111,7 @@ def main():
                                 'image_path': img_path,
                                 'features': features,
                                 'geometry': vertices,
+                                'action_program': action_program if isinstance(action_program, list) else [action_program],
                             }
                             all_results.append(result)
                         except Exception as e:
