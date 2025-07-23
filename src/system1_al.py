@@ -19,20 +19,107 @@ _LOG_PATH = Path("logs/s1_al.jsonl")
 _LOG_PATH.parent.mkdir(exist_ok=True, parents=True)
 
 class System1AbstractionLayer:
+    def extract_features(self, img: np.ndarray) -> dict:
+        """
+        Extract features as a dictionary for explainability and test compatibility.
+        Keys: com_x, com_y, I00, I01, I10, I11, hole_count, sym_horizontal, sym_vertical, object_count
+        """
+        from scipy import ndimage
+        attrs = self.extract_attributes(img)
+
+        com_x, com_y = attrs['com']
+        I = np.asarray(attrs['inertia'], dtype=float).flatten()
+        hcount = float(attrs['hole_count'])
+        sym = attrs['symmetry']
+        hsym = 1.0 if sym.get('horizontal', False) else 0.0
+        vsym = 1.0 if sym.get('vertical', False) else 0.0
+        mask = (img > 0)
+        labeled, count = ndimage.label(mask)
+        obj_count = float(count)
+
+        return {
+            "com_x": com_x,
+            "com_y": com_y,
+            "I00": I[0],
+            "I01": I[1],
+            "I10": I[2],
+            "I11": I[3],
+            "hole_count": hcount,
+            "sym_horizontal": hsym,
+            "sym_vertical": vsym,
+            "object_count": obj_count
+        }
     def extract_attributes(self, img: np.ndarray) -> dict:
         """
         Extract physics-proxy attributes from a 2D mask image.
-        Returns a dict with keys: com, inertia, support_surfaces.
+        Returns a dict with keys: com, inertia, support_surfaces, hole_count, symmetry.
         """
         mask = (img > 0)
         com = self.extract_com(mask)
         inertia = self.extract_inertia_tensor(mask)
         supports = self.extract_support_polygon(mask)
+        hole_count = self._count_holes(mask)
+        symmetry = self._compute_symmetry(mask)
         return {
             'com': com,
             'inertia': inertia,
-            'support_surfaces': supports
+            'support_surfaces': supports,
+            'hole_count': hole_count,
+            'symmetry': symmetry
         }
+
+    def _compute_symmetry(self, mask: np.ndarray) -> dict:
+        """
+        Returns True/False for horizontal and vertical symmetry of the mask.
+        An empty mask or one with perfect mirror symmetry will be True.
+        """
+        horiz = bool(np.all(mask == np.flipud(mask)))
+        vert  = bool(np.all(mask == np.fliplr(mask)))
+        return {'horizontal': horiz, 'vertical': vert}
+
+    def _count_holes(self, mask: np.ndarray) -> int:
+        from collections import deque
+        h, w = mask.shape[:2]
+        bg = ~mask
+        visited = np.zeros((h, w), dtype=bool)
+        q = deque()
+
+        # 1) mark border-connected background
+        for i in range(h):
+            for j in (0, w-1):
+                if bg[i, j] and not visited[i, j]:
+                    visited[i, j] = True
+                    q.append((i, j))
+        for j in range(w):
+            for i in (0, h-1):
+                if bg[i, j] and not visited[i, j]:
+                    visited[i, j] = True
+                    q.append((i, j))
+
+        while q:
+            x, y = q.popleft()
+            for dx, dy in ((1,0),(-1,0),(0,1),(0,-1)):
+                nx, ny = x+dx, y+dy
+                if 0 <= nx < h and 0 <= ny < w and bg[nx, ny] and not visited[nx, ny]:
+                    visited[nx, ny] = True
+                    q.append((nx, ny))
+
+        # 2) anything in bg & not visited is a hole
+        hole_count = 0
+        for i in range(h):
+            for j in range(w):
+                if bg[i, j] and not visited[i, j]:
+                    hole_count += 1
+                    visited[i, j] = True
+                    q.append((i, j))
+                    while q:
+                        x, y = q.popleft()
+                        for dx, dy in ((1,0),(-1,0),(0,1),(0,-1)):
+                            nx, ny = x+dx, y+dy
+                            if 0 <= nx < h and 0 <= ny < w and bg[nx, ny] and not visited[nx, ny]:
+                                visited[nx, ny] = True
+                                q.append((nx, ny))
+        return hole_count
     def __init__(self):
         pass
 
