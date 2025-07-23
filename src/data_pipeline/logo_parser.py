@@ -44,10 +44,15 @@ class BongardLogoParser:
     def __init__(self):
         self.x = 0.0
         self.y = 0.0
-        self.angle = 0.0  # Current heading in degrees
+        self.angle = 0.0  # degrees
+
+    def reset(self):
+        self.x = 0.0
+        self.y = 0.0
+        self.angle = 0.0
 
     def parse_action_program(self, action_list: List[str]) -> List[Tuple[float, float]]:
-        """Parse a list of Bongard-LOGO action commands into coordinate points."""
+        self.reset()
         vertices = [(self.x, self.y)]
         for action_cmd in action_list:
             new_points = self.parse_single_action(action_cmd)
@@ -71,19 +76,13 @@ class BongardLogoParser:
         length = float(length_str)
         angle_change = float(angle_str) * 360
         points = []
-        if moving_type == 'normal':
-            end_x = self.x + length * 100 * math.cos(math.radians(self.angle))
-            end_y = self.y + length * 100 * math.sin(math.radians(self.angle))
+        segments = 10 if moving_type != 'normal' else 1
+        for i in range(segments):
+            progress = (i + 1) / segments
+            end_x = self.x + progress * length * 100 * math.cos(math.radians(self.angle))
+            end_y = self.y + progress * length * 100 * math.sin(math.radians(self.angle))
             points.append((end_x, end_y))
-            self.x, self.y = end_x, end_y
-        elif moving_type in ['zigzag', 'square', 'triangle', 'circle']:
-            segments = 10
-            for i in range(1, segments + 1):
-                progress = i / segments
-                intermediate_x = self.x + progress * length * 100 * math.cos(math.radians(self.angle))
-                intermediate_y = self.y + progress * 100 * length * math.sin(math.radians(self.angle))
-                points.append((intermediate_x, intermediate_y))
-            self.x, self.y = points[-1]
+        self.x, self.y = points[-1]
         self.angle += angle_change
         return points
 
@@ -97,8 +96,8 @@ class BongardLogoParser:
         arc_extent = float(arc_extent_str) * 360
         points = []
         arc_segments = max(6, int(abs(arc_extent) / 15))
-        for i in range(1, arc_segments + 1):
-            progress = i / arc_segments
+        for i in range(arc_segments):
+            progress = (i + 1) / arc_segments
             current_arc_angle = self.angle + progress * arc_extent
             arc_x = self.x + radius * math.cos(math.radians(current_arc_angle))
             arc_y = self.y + radius * math.sin(math.radians(current_arc_angle))
