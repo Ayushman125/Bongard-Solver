@@ -51,60 +51,61 @@ class BongardLogoParser:
         self.y = 0.0
         self.angle = 0.0
 
-    def parse_action_program(self, action_list: List[str]) -> List[Tuple[float, float]]:
+    def parse_action_program(self, action_list: List[str], scale: float = 100.0) -> List[Tuple[float, float]]:
         self.reset()
         vertices = [(self.x, self.y)]
         for action_cmd in action_list:
-            new_points = self.parse_single_action(action_cmd)
+            new_points = self.parse_single_action(action_cmd, scale)
             vertices.extend(new_points)
         return vertices
 
-    def parse_single_action(self, action_cmd: str) -> List[Tuple[float, float]]:
+    def parse_single_action(self, action_cmd: str, scale: float) -> List[Tuple[float, float]]:
         if action_cmd.startswith('line_'):
-            return self.parse_line_command(action_cmd)
+            return self.parse_line_command(action_cmd, scale)
         elif action_cmd.startswith('arc_'):
-            return self.parse_arc_command(action_cmd)
+            return self.parse_arc_command(action_cmd, scale)
         else:
             return []
 
-    def parse_line_command(self, cmd: str) -> List[Tuple[float, float]]:
+    def parse_line_command(self, cmd: str, scale: float) -> List[Tuple[float, float]]:
         pattern = r'line_(\w+)_([0-9.]+)-([0-9.]+)'
         match = re.match(pattern, cmd)
         if not match:
             return []
-        moving_type, length_str, angle_str = match.groups()
-        length = float(length_str)
+        style, length_str, angle_str = match.groups()
+        length = float(length_str) * scale
         angle_change = float(angle_str) * 360
         points = []
-        segments = 10 if moving_type != 'normal' else 1
+        segments = 10 if style != 'normal' else 1
         for i in range(segments):
             progress = (i + 1) / segments
-            end_x = self.x + progress * length * 100 * math.cos(math.radians(self.angle))
-            end_y = self.y + progress * length * 100 * math.sin(math.radians(self.angle))
-            points.append((end_x, end_y))
+            new_x = self.x + progress * length * math.cos(math.radians(self.angle))
+            new_y = self.y + progress * length * math.sin(math.radians(self.angle))
+            points.append((new_x, new_y))
         self.x, self.y = points[-1]
         self.angle += angle_change
         return points
 
-    def parse_arc_command(self, cmd: str) -> List[Tuple[float, float]]:
+    def parse_arc_command(self, cmd: str, scale: float) -> List[Tuple[float, float]]:
         pattern = r'arc_(\w+)_([0-9.]+)_([0-9.]+)-([0-9.]+)'
         match = re.match(pattern, cmd)
         if not match:
             return []
-        moving_type, radius_str, arc_extent_str, angle_str = match.groups()
-        radius = float(radius_str) * 100
-        arc_extent = float(arc_extent_str) * 360
+        style, radius_str, arc_span_str, angle_str = match.groups()
+        radius = float(radius_str) * scale
+        arc_span = float(arc_span_str) * 360
+        angle_change = float(angle_str) * 360
         points = []
-        arc_segments = max(6, int(abs(arc_extent) / 15))
+        arc_segments = max(10, int(abs(arc_span) / 15))
         for i in range(arc_segments):
             progress = (i + 1) / arc_segments
-            current_arc_angle = self.angle + progress * arc_extent
-            arc_x = self.x + radius * math.cos(math.radians(current_arc_angle))
-            arc_y = self.y + radius * math.sin(math.radians(current_arc_angle))
+            theta = math.radians(self.angle + progress * arc_span)
+            arc_x = self.x + radius * math.cos(theta)
+            arc_y = self.y + radius * math.sin(theta)
             points.append((arc_x, arc_y))
         if points:
             self.x, self.y = points[-1]
-        self.angle += arc_extent
+        self.angle += arc_span + angle_change
         return points
 
     def parse_logo_script(self, filepath):
