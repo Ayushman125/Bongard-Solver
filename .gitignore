@@ -10,149 +10,30 @@ __pycache__/
 .Python
 build/
 develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-pip-wheel-metadata/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
 
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-
-# Translations
-*.mo
-*.pot
-
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
-docs/_build/
-
-# PyBuilder
-target/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# Virtual Environments
-.env
-.venv
+# Exclude virtual environment, data, and logs folders
 venv/
-env/
-bongard_env/
-
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# VSCode
-.vscode/
-
-# Project-specific ignores
-# ------------------------
-
-# Large Data and Dataset folders
 data/
-datasets/
-enhanced_dataset/
-enhanced_samples/
-processed_data/
-synthetic_images/
-ShapeBongard_V2/
-backgrounds/
-realtime_cnn_classifier/
-sentiment_analysis_lstm/
-
-# Logs, checkpoints, and results
 logs/
-checkpoints/
-results/
-experiments/
-generated_debug_scenes/
-wandb/
-runs/
-outputs/
-grad_cam_outputs/
-workspace_traces/
-slipnet_snapshots/
 
-# Large data files
-*.zip
-*.npz
-*.pth
-*.pt
-*.h5
-*.onnx
-logo_rules_test.json
-logo_rules_train.json
-difficulty_summary.csv
-
-# Image and cache files
-*.png
-*.jpg
-*.jpeg
-fractal_cache/
-.DS_Store
-Thumbs.db
-__MACOSX/
-
-# Other
-.wandb_run_id
-developer/
-
-# Specific large files causing issues
-scripts/validate_enhanced.py
+# Bongard-LOGO large dataset folders and files
+data/raw/ShapeBongard_V2/
+data/raw/ShapeBongard_V2/bd/images/
+data/raw/ShapeBongard_V2/ff/images/
+data/raw/ShapeBongard_V2/hd/images/
+data/raw/ShapeBongard_V2/bd_action_programs.json
+data/raw/ShapeBongard_V2/ff_action_programs.json
+data/raw/ShapeBongard_V2/hd_action_programs.json
+data/raw/ShapeBongard_V2/ShapeBongard_V2.zip
+data/derived_labels.json
+data/flagged_cases.txt
+data/phase1_50puzzles.txt
+data/raw/ShapeBongard_V2/raw/
+data/raw/ShapeBongard_V2/phase0_smoke/
+data/raw/ShapeBongard_V2/__pycache__/
+data/raw/ShapeBongard_V2/bd/__pycache__/
+data/raw/ShapeBongard_V2/ff/__pycache__/
+data/raw/ShapeBongard_V2/hd/__pycache__/
+data/raw/ShapeBongard_V2/bd/*.zip
+data/raw/ShapeBongard_V2/ff/*.zip
+data/raw/ShapeBongard_V2/hd/*.zip

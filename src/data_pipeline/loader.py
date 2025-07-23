@@ -1,28 +1,43 @@
 import os
+import json
+
+
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+from data.problem_folder_utils import get_problem_folders
 
 class BongardLoader:
-    def __init__(self, root_dir):
+    def __init__(self, root_dir, problems_list=None, n_select=50):
         self.root_dir = root_dir
+        self.problems_list = problems_list
+        self.n_select = n_select
 
-    def iter_problems(self, problem_type=None):
-        # problem_type: "Freeform", "Basic", or "Abstract"
-        types = [problem_type] if problem_type else ['Freeform', 'Basic', 'Abstract']
-        for pt in types:
-            base_dir = os.path.join(self.root_dir, pt)
-            if not os.path.isdir(base_dir):
+    def get_image_dirs(self):
+        # Return ff, bd, hd image directories
+        return [
+            os.path.join(self.root_dir, 'ff', 'images'),
+            os.path.join(self.root_dir, 'bd', 'images'),
+            os.path.join(self.root_dir, 'hd', 'images'),
+        ]
+
+    def iter_problems(self, limit=None):
+        # Enumerate problem folders directly, select random subset, ignore missing metadata
+        all_folders = get_problem_folders(self.get_image_dirs(), self.n_select)
+        allowed_ids = set()
+        if self.problems_list:
+            with open(self.problems_list) as f:
+                allowed_ids = set(line.strip() for line in f.readlines())
+        count = 0
+        for folder in all_folders:
+            pid = os.path.basename(folder)
+            if allowed_ids and pid not in allowed_ids:
                 continue
-            for problem_id in sorted(os.listdir(base_dir)):
-                problem_path = os.path.join(base_dir, problem_id)
-                if not os.path.isdir(problem_path):
-                    continue
-                pos_dir = os.path.join(problem_path, 'category_1')
-                neg_dir = os.path.join(problem_path, 'category_0')
-                positives = [
-                    {'image_path': os.path.join(pos_dir, f), 'label': 1, 'problem_id': problem_id}
-                    for f in os.listdir(pos_dir) if f.endswith('.png')
-                ]
-                negatives = [
-                    {'image_path': os.path.join(neg_dir, f), 'label': 0, 'problem_id': problem_id}
-                    for f in os.listdir(neg_dir) if f.endswith('.png')
-                ]
-                yield {'problem_id': problem_id, 'positives': positives, 'negatives': negatives}
+            if limit and count >= limit:
+                break
+            images = [os.path.join(folder, img) for img in os.listdir(folder) if img.lower().endswith(('.png', '.jpg', '.jpeg'))]
+            positives = [{'image_path': img, 'label': 1, 'problem_id': pid} for img in images]
+            negatives = []  # Negatives can be generated elsewhere if needed
+            yield {'problem_id': pid, 'positives': positives, 'negatives': negatives, 'category': None, 'concept_name': None}
+            count += 1
