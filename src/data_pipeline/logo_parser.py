@@ -76,6 +76,7 @@ class BongardLogoParser:
         length = float(length_str) * scale
         angle_change = float(angle_str) * 360
         points = []
+        # Always simulate movement for all styles
         segments = 10 if style != 'normal' else 1
         for i in range(segments):
             progress = (i + 1) / segments
@@ -96,12 +97,12 @@ class BongardLogoParser:
         arc_span = float(arc_span_str) * 360
         angle_change = float(angle_str) * 360
         points = []
-        arc_segments = max(10, int(abs(arc_span) / 15))
-        for i in range(arc_segments):
-            progress = (i + 1) / arc_segments
-            theta = math.radians(self.angle + progress * arc_span)
-            arc_x = self.x + radius * math.cos(theta)
-            arc_y = self.y + radius * math.sin(theta)
+        # Always simulate arc movement for all styles
+        arc_segments = max(10, int(abs(arc_span) // 18))
+        for i in range(1, arc_segments + 1):
+            seg_angle = self.angle + (arc_span * i / arc_segments)
+            arc_x = self.x + radius * math.cos(math.radians(seg_angle))
+            arc_y = self.y + radius * math.sin(math.radians(seg_angle))
             points.append((arc_x, arc_y))
         if points:
             self.x, self.y = points[-1]
