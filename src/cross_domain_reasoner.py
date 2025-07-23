@@ -33,9 +33,10 @@ class CrossDomainReasoner:
             return self._commonsense_reasoning(visual_features, query_context)
         else:
             return self._fusion_reasoning(physics_data, visual_features, query_context)
-    def _select_reasoning_mode(self, phys, vis, ctx) -> ReasoningMode:
-        score = phys.get('stability_score', 0.0)
-        if 'why' in ctx.lower() or score > 0.85:
+    def _select_reasoning_mode(self, physics: Dict, visuals: Dict, context: str):
+        score = physics.get('stability_score', 0)
+        ctx = context.lower()
+        if 'why' in ctx or (score > 0.85):
             return ReasoningMode.PHYSICS_ONLY
         return ReasoningMode.COMMONSENSE_ONLY
     def _physics_reasoning(self, physics_data, visual_features):
