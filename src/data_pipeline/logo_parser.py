@@ -89,10 +89,12 @@ class BongardLogoParser:
             points.append((new_x, new_y))
         # Ensure at least 4 distinct points for Shapely
         if len(points) < 4:
+            # If two points and effective movement, insert midpoint
             if len(points) == 2:
-                x0, y0 = points[-2]
+                x0, y0 = points[0]
                 x1, y1 = points[-1]
-                points.insert(-1, ((x0 + x1) / 2, (y0 + y1) / 2))
+                mid = ((x0 + x1) / 2, (y0 + y1) / 2)
+                points.insert(1, mid)
             elif len(points) == 3:
                 x0, y0 = points[-1]
                 points.append((x0 + 2, y0))

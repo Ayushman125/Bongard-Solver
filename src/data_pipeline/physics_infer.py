@@ -9,12 +9,15 @@ class PhysicsInference:
         from shapely.ops import unary_union
         try:
             poly = Polygon(vertices)
-            if not poly or not poly.is_valid or poly.is_empty:
+            if not poly or not poly.is_valid or poly.is_empty or poly.area == 0:
                 # Try to fix with buffer(0)
                 poly = poly.buffer(0)
-                if not poly.is_valid or poly.is_empty:
+                if not poly.is_valid or poly.is_empty or poly.area == 0:
                     from shapely.geometry import MultiPoint
                     poly = MultiPoint(vertices).convex_hull
+                    # If still invalid, buffer a tiny amount
+                    if not poly.is_valid:
+                        poly = poly.buffer(0.1)
                 if poly.is_empty or poly.area == 0:
                     if vertices:
                         x0, y0 = vertices[0]
