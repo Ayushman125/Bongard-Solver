@@ -84,9 +84,15 @@ def main():
                             vertices = []
                             if isinstance(action_program, list):
                                 for cmd in action_program:
-                                    vertices.extend(logo_parser.parse_logo_script_from_lines([cmd]))
+                                    parsed = logo_parser.parse_logo_script_from_lines([cmd])
+                                    print(f"Parsed vertices for cmd '{cmd}': {parsed}")
+                                    vertices.extend(parsed)
+                                print(f"Total vertices for {problem_id} {label}: {len(vertices)}")
                             elif isinstance(action_program, str):
-                                vertices.extend(logo_parser.parse_logo_script_from_lines([action_program]))
+                                parsed = logo_parser.parse_logo_script_from_lines([action_program])
+                                print(f"Parsed vertices for cmd '{action_program}': {parsed}")
+                                vertices.extend(parsed)
+                                print(f"Total vertices for {problem_id} {label}: {len(vertices)}")
                             else:
                                 raise ValueError(f"Unexpected action_program type: {type(action_program)}")
                             poly = PhysicsInference.polygon_from_vertices(vertices)
