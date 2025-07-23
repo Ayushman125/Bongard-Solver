@@ -1,13 +1,19 @@
-import numpy as np
-from typing import Sequence
+"""
+1/3 Detection on Repeated Relations
+Phase 1 Module
+"""
+
+from typing import List, Tuple
 
 class QuantifierModule:
-    """
-    Detects universal/existential patterns in a set of grounded relations.
-    If every relation holds → ∀; if at least one → ∃.
-    """
-    def detect(self, relations: Sequence[bool]) -> dict:
-        return {
-            'forall': all(relations),
-            'exists': any(relations)
-        }
+    def detect(self, relations: List[Tuple[object, object]]) -> dict:
+        freq = {}
+        output = {"1": [], "3": []}
+        for r in relations:
+            freq[r] = freq.get(r, 0) + 1
+        for r, count in freq.items():
+            if count > 1:
+                output["1"].append(r)
+            else:
+                output["3"].append(r)
+        return output

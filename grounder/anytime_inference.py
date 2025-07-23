@@ -1,18 +1,26 @@
+"""
+Coarse/Refine Symbol Grounding under Time Budgets
+Phase 1 Module
+"""
+
 import time
-from integration.task_profiler import TaskProfiler
+from typing import Any, Dict
 
 class AnytimeInference:
-    def __init__(self, time_budget_ms: int = 200):
-        self.profiler = TaskProfiler()
-        self.budgets = {'coarse': 50, 'refine': 150, 'full': time_budget_ms}
+    def __init__(self, budgets: Dict[str, float] = None) -> None:
+        self.budgets = budgets or {"coarse": 0.05, "refine": 0.15}
 
-    def ground(self, inputs: dict) -> dict:
-        start = time.perf_counter() * 1000
-        result = {}
-        for stage, budget in self.budgets.items():
-            with self.profiler.profile(f'ground_{stage}'):
-                result[stage] = f"{stage}_output"
-            elapsed = time.perf_counter()*1000 - start
-            if elapsed > budget:
-                break
+    def ground(self, input_rep: Any) -> Any:
+        start = time.time()
+        result = self._coarse_pass(input_rep)
+        elapsed = time.time() - start
+        if elapsed < self.budgets["refine"]:
+            return self._refine_pass(input_rep, result)
         return result
+
+    def _coarse_pass(self, rep: Any) -> Any:
+        return {"symbols": [], "score": 0.0}
+
+    def _refine_pass(self, rep: Any, prev: Any) -> Any:
+        prev["score"] += 1.0
+        return prev

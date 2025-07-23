@@ -1,4 +1,11 @@
+"""
+Meta-Grammar Generator Stub with Deterministic Sampling
+Phase 1 Module
+"""
+
+import random
 import yaml
+from typing import List
 from integration.task_profiler import TaskProfiler
 from integration.data_validator import DataValidator
 
@@ -8,7 +15,8 @@ class GrammarExtender:
       - measure coverage
       - propose new operators
     """
-    def __init__(self, grammar_path: str = 'config/grammar.yaml'):
+    def __init__(self, tau: float = 0.3, grammar_path: str = 'config/grammar.yaml') -> None:
+        self.tau = tau
         self.profiler = TaskProfiler()
         self.dv = DataValidator()
         try:
@@ -18,11 +26,8 @@ class GrammarExtender:
         except Exception as e:
             raise RuntimeError(f"Failed loading grammar: {e}")
 
-    def propose(self, coverage: float, tau: float = 0.3) -> list:
-        """
-        If coverage < 0.8, propose 'diff_ratio' operator stub.
-        """
-        with self.profiler.profile('grammar_extension'):
-            if coverage < 0.8:
-                return [{'op': 'diff_ratio', 'params': {'alpha': 0.1, 'tau': tau}}]
+    def propose(self, coverage: float, held_out: List[str]) -> List[str]:
+        if coverage >= 0.8:
             return []
+        k = max(1, int(len(held_out) * self.tau))
+        return held_out[:k]

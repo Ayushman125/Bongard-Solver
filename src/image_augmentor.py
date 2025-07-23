@@ -1,40 +1,52 @@
+"""
+GPU-Batched Geometric and Relational Augmentations
+Phase 1 Module
+"""
+
 import torch
-import kornia.augmentation as K
+from torch.cuda import Stream
+from typing import List, Dict, Any
+
 from integration.task_profiler import TaskProfiler
-from integration.adaptive_scheduler import AdaptiveScheduler
+from integration.cuda_stream_manager import CUDAStreamManager
 
 class ImageAugmentor:
-    """
-    GPU-batched geometric & stroke augmentations.
-    Uses Kornia to perform random rotations, scalings, shears, and
-    brush-stroke noise in a single fused pipeline.
-    """
-    def __init__(self, device: str = 'cuda'):
-        self.device = torch.device(device)
-        self._float_buf = None
-        self.transform = K.RandomChoice(
-            [
-                K.RandomRotation(30.0, p=0.5),
-                K.RandomResizedCrop(size=(64, 64), scale=(0.8, 1.2), p=0.5),
-                K.ColorJitter(0.2, 0.2, 0.2, p=0.3),
-                K.RandomErasing(scale=(0.02, 0.1), p=0.3),
-            ]
-        ).to(self.device)
-        self.profiler = TaskProfiler()
-        self.scheduler = AdaptiveScheduler()
+    def __init__(self, batch_size: int = 32, : float = 0.5) -> None:
+        """
+        Args:
+            batch_size: Number of images to augment per call.
+            : Probability weight for relational vs. geometric transform.
+        """
+        self.batch_size = batch_size
+        self.rel_weight = 
+        self.stream_mgr = CUDAStreamManager(num_streams=2)
+        self.profiler = TaskProfiler(module_name="ImageAugmentor")
 
-    def augment_batch(self, imgs: torch.Tensor) -> torch.Tensor:
+    def augment(self, images: torch.Tensor, relations: List[Dict[str, Any]]) -> torch.Tensor:
         """
-        imgs: (B, C, H, W) tensor on self.device
-        returns: augmented (B, C, H, W)
+        Perform batched augmentations:
+         - geometric: rotations, scalings, shears
+         - relational: mask perturbations based on object relations
+
+        Returns:
+            Augmented image batch tensor.
         """
-        imgs = imgs.to(self.device, non_blocking=True)
-        B, C, H, W = imgs.shape
-        if self._float_buf is None or self._float_buf.shape != imgs.shape:
-            self._float_buf = torch.empty_like(imgs, dtype=torch.float32)
-        with self.scheduler.allocate('ImageAugmentor'), \
-             self.profiler.profile('augment_batch'):
-            imgs_f = imgs.to(self._float_buf).float().div_(255.0)
-            out_f = self.transform(imgs_f)
-            out = (out_f.mul_(255.0).clamp_(0,255).to(torch.uint8))
+        with self.profiler.profile("augment"):
+            out = torch.empty_like(images)
+            streams = self.stream_mgr.get_streams(len(images))
+            for i, img in enumerate(images):
+                stream = streams[i % len(streams)]
+                with torch.cuda.stream(stream):
+                    geo = self._apply_geometric(img)
+                    rel = self._apply_relational(geo, relations[i])
+                    out[i] = rel
+            torch.cuda.current_stream().synchronize()
         return out
+
+    def _apply_geometric(self, img: torch.Tensor) -> torch.Tensor:
+        # TODO: implement rotation, scaling, shear pipelines
+        return img
+
+    def _apply_relational(self, img: torch.Tensor, relation: Dict[str, Any]) -> torch.Tensor:
+        # TODO: perturb strokes or object masks based on relation semantics
+        return img
