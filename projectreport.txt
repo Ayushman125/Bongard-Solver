@@ -20,7 +20,7 @@ bongard-solver/
 │   ├── data_pipeline/
 │   │   ├── __init__.py
 │   │   ├── loader.py                # Loader: loads images, categories, .logo, built-in splits
-│   │   ├── logo_parser.py           # Parses LOGO scripts into geometry
+│   │   ├── logo_parser.py           # Parses geometry from derived_labels.json
 │   │   ├── physics_infer.py         # All shape/physics feature extractors (shapely, pymunk, etc.)
 │   │   ├── attributes.py            # Categorical label assignment (e.g., Freeform/Basic/Abstract)
 │   │   ├── verification.py          # Human-verifiable checks
@@ -45,8 +45,7 @@ bongard-solver/
 
 ### 2.2 `src/data_pipeline/logo_parser.py`
 
-- Parses `.logo` script files
-- Converts LOGO turtle graphics commands into ordered vertex lists (using regex parsing and state tracking for optimal efficiency)
+- Parses geometry from derived_labels.json
 - Outputs Python list of coordinates per shape
 
 ### 2.3 `src/data_pipeline/physics_infer.py`
@@ -70,8 +69,7 @@ bongard-solver/
 
 ### 2.6 `scripts/logo_to_shape.py`
 
-- CLI pipeline interface for batch-processing `.logo` files:
-  - Parses `.logo`
+- CLI pipeline interface for batch-processing data files:
   - Runs geometry/physics inference
   - Appends meta-labels
   - Saves all outputs as a JSON list under `data/derived_labels.json`
@@ -79,11 +77,10 @@ bongard-solver/
 
 ### 2.7 `scripts/generate_hard_negatives.py`
 
-- Generates adversarial/hard-negative LOGO scripts:
-  - Small rotations, segment jitters, parameter noise
+- Generates adversarial/hard-negative samples:
+  - Simulates feature perturbations (area, centroid, etc.)
   - Verifies label change via concept check (auto or with lightweight neural baseline)
-  - Maintains only “valid” hard negatives, outputs image/logos
-  - Updates `data/hard_negatives.txt`
+  - Maintains only “valid” hard negatives, outputs to `data/hard_negatives.txt`
 
 ### 2.8 `scripts/verify_annotations.py`
 
