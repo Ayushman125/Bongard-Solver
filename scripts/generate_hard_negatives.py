@@ -3,6 +3,7 @@ import sys
 import os
 import argparse
 import ijson
+import json
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.data_pipeline.logo_parser import BongardLogoParser
 from src.data_pipeline.physics_infer import PhysicsInference
@@ -34,68 +35,78 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--input-dir', required=True)
     parser.add_argument('--output', required=True)
-    parser.add_argument('--jitter-angle', type=float, default=5)
-    parser.add_argument('--jitter-length', type=float, default=0.05)
-    parser.add_argument('--max-per-problem', type=int, default=3)
+    parser.add_argument('--jitter-angle', type=float, default=5, help='Angle jitter for centroid perturbation')
+    parser.add_argument('--jitter-length', type=float, default=0.05, help='Length jitter for area perturbation')
+    parser.add_argument('--max-per-problem', type=int, default=3, help='Max hard negatives per problem')
     args = parser.parse_args()
 
-    logo_parser = BongardLogoParser()
-    physics = PhysicsInference()
+    # Load derived labels (flat array, NVLabs convention)
+    derived_labels_path = os.path.join('data', 'derived_labels.json')
+    if not os.path.exists(derived_labels_path):
+        print(f"Missing derived_labels.json at {derived_labels_path}")
+        return
+    with open(derived_labels_path, 'r') as f:
+        all_entries = json.load(f)
+
+    # Group by problem_id
+    problems = {}
+    for entry in all_entries:
+        pid = entry.get('problem_id')
+        if pid not in problems:
+            problems[pid] = []
+        problems[pid].append(entry)
+
     hard_negatives = []
     total_problems = 0
     total_samples = 0
     total_logo_missing = 0
     total_hard_negatives = 0
 
-    # Always load derived_labels.json from canonical location
-    input_json = os.path.join(os.path.dirname(__file__), '..', 'data', 'derived_labels.json')
-    input_json = os.path.abspath(input_json)
-    if not os.path.exists(input_json):
-        print(f"Error: derived_labels.json not found at {input_json}")
-        return
-    print(f"Loading derived_labels.json from: {input_json}")
-    with open(input_json, 'r') as f:
-        objects = ijson.items(f, 'item')
-        for problem_idx, problem in enumerate(objects):
-            pid = problem.get('problem_id', '')
-            positives = problem.get('positives', [])
-            count = 0
-            total_problems += 1
-            print(f"Processing problem {problem_idx+1}: {pid} ({len(positives)} positives)")
-            for sample_idx, sample in enumerate(positives):
-                if count >= args.max_per_problem:
-                    break
-                total_samples += 1
-                # Use only features from derived_labels.json
+    for pid, entries in problems.items():
+        total_problems += 1
+        # NVLabs convention: label 1/category_1 = positive, label 0/category_0 = negative
+        positives = [e for e in entries if e.get('label') == 1 or e.get('label') == 'category_1']
+        negatives = [e for e in entries if e.get('label') == 0 or e.get('label') == 'category_0']
+        print(f"Processing problem {total_problems}: {pid} ({len(positives)} positives)")
+        count = 0
+        for sample_idx, sample in enumerate(positives):
+            if count >= args.max_per_problem:  # Limit to max-per-problem
+                break
+            total_samples += 1
+            # Use geometry/features directly from JSON
+            try:
                 original_features = {
                     'area': sample.get('area', 0),
-                    'centroid': sample.get('centroid', [0, 0])
+                    'centroid': sample.get('centroid', [0,0])
                 }
-                found_hard_negative = False
-                for _ in range(10):  # Try up to 10 perturbations
-                    # Simulate perturbation: jitter area and centroid
-                    perturbed_features = {
-                        'area': original_features['area'] * (1 + random.uniform(-args.jitter_length, args.jitter_length)),
-                        'centroid': [
-                            original_features['centroid'][0] + random.uniform(-args.jitter_angle, args.jitter_angle),
-                            original_features['centroid'][1] + random.uniform(-args.jitter_angle, args.jitter_angle)
-                        ]
-                    }
-                    if flips_label(original_features, perturbed_features, concept_test):
-                        entry = f"{pid},{sample['category']},{sample['image_index']},{original_features}->{perturbed_features}"
-                        hard_negatives.append(entry)
-                        count += 1
-                        total_hard_negatives += 1
-                        found_hard_negative = True
-                        print(f"    [FOUND] Hard negative for sample {sample_idx+1}")
-                        break
-                if not found_hard_negative:
-                    print(f"    [NO FLIP] No hard negative found for sample {sample_idx+1}")
+            except Exception as e:
+                print(f"    [ERROR] Failed to get features for sample: {e}")
+                continue
+            found_hard_negative = False
+            for _ in range(10):  # Try up to 10 perturbations
+                # Simulate perturbation: add small random noise to area and centroid
+                pert_features = {
+                    'area': original_features['area'] * (1 + random.uniform(-args.jitter_length, args.jitter_length)),
+                    'centroid': [
+                        original_features['centroid'][0] + random.uniform(-args.jitter_angle, args.jitter_angle),
+                        original_features['centroid'][1] + random.uniform(-args.jitter_angle, args.jitter_angle)
+                    ]
+                }
+                if flips_label(original_features, pert_features, concept_test):
+                    entry = f"{pid},{sample['category']},{sample['image_index']},area:{original_features['area']:.2f}->{pert_features['area']:.2f},centroid:{original_features['centroid']}->{pert_features['centroid']}"
+                    hard_negatives.append(entry)
+                    count += 1
+                    total_hard_negatives += 1
+                    found_hard_negative = True
+                    print(f"    [FOUND] Hard negative for sample {sample_idx+1}")
+                    break
+            if not found_hard_negative:
+                print(f"    [NO FLIP] No hard negative found for sample {sample_idx+1}")
 
-    # Write output
-    with open(args.output, 'w') as fout:
-        for entry in hard_negatives:
-            fout.write(entry + '\n')
+    # Save output
+    with open(args.output, 'w') as f:
+        for hn in hard_negatives:
+            f.write(json.dumps(hn) + '\n')
     print(f"\nSummary:")
     print(f"  Problems processed: {total_problems}")
     print(f"  Samples processed: {total_samples}")

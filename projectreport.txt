@@ -11,16 +11,16 @@ bongard-solver/
 │   ├── raw/                         # Copy all Bongard-LOGO unmodified files here
 │   ├── derived_labels.json          # Generated: physics/geometry/label attributes
 │   ├── hard_negatives.txt           # Generated: hard negative/adversarial sample listing
+│   ├── flagged_cases.txt            # Output: flagged samples for review (to be generated)
 ├── scripts/
-│   ├── logo_to_shape.py             # Main CLI: parses .logo → computes attributes
-│   ├── generate_hard_negatives.py   # CLI: adversarial LOGO/script perturbations
+│   ├── logo_to_shape.py             # Main CLI: parses JSON → computes attributes
+│   ├── generate_hard_negatives.py   # CLI: adversarial attribute perturbations
 │   ├── verify_annotations.py        # CLI: spot-checks, outputs review queue
 │   ├── crowdsource_review.py        # Optional: prepares Zooniverse batches
 ├── src/
 │   ├── data_pipeline/
 │   │   ├── __init__.py
-│   │   ├── loader.py                # Loader: loads images, categories, .logo, built-in splits
-│   │   ├── logo_parser.py           # Parses geometry from derived_labels.json
+│   │   ├── loader.py                # Loader: loads images, categories, built-in splits
 │   │   ├── physics_infer.py         # All shape/physics feature extractors (shapely, pymunk, etc.)
 │   │   ├── attributes.py            # Categorical label assignment (e.g., Freeform/Basic/Abstract)
 │   │   ├── verification.py          # Human-verifiable checks
@@ -45,8 +45,7 @@ bongard-solver/
 
 ### 2.2 `src/data_pipeline/logo_parser.py`
 
-- Parses geometry from derived_labels.json
-- Outputs Python list of coordinates per shape
+- (Deprecated) LOGO parsing logic removed; all geometry and features now loaded from JSON.
 
 ### 2.3 `src/data_pipeline/physics_infer.py`
 
@@ -69,18 +68,19 @@ bongard-solver/
 
 ### 2.6 `scripts/logo_to_shape.py`
 
-- CLI pipeline interface for batch-processing data files:
-  - Runs geometry/physics inference
+- CLI pipeline interface for batch-processing attribute files:
+  - Loads geometry/physics features from JSON
   - Appends meta-labels
   - Saves all outputs as a JSON list under `data/derived_labels.json`
 - Arguments: input dir, output file, option to run only on new files
 
 ### 2.7 `scripts/generate_hard_negatives.py`
 
-- Generates adversarial/hard-negative samples:
-  - Simulates feature perturbations (area, centroid, etc.)
+- Generates adversarial/hard-negative attribute perturbations:
+  - Small random noise to geometry/physics features
   - Verifies label change via concept check (auto or with lightweight neural baseline)
-  - Maintains only “valid” hard negatives, outputs to `data/hard_negatives.txt`
+  - Maintains only “valid” hard negatives, outputs attribute changes
+  - Updates `data/hard_negatives.txt`
 
 ### 2.8 `scripts/verify_annotations.py`
 
@@ -513,7 +513,6 @@ integration/cuda_stream_manager.py	Double-buffered host-to-device transfers via 
 integration/adaptive_scheduler.py	Batches GPU/CPU tasks based on profiling insights
 integration/data_validator.py	CI schema enforcement for all Phase 2 modules
 integration/debug_dashboard.py	Real-time UI panels for Phase 2 metrics
-src/drift_monitor.py (stub)	Early warning on perception embedding shifts
 ________________________________________
 Milestones & Timeline
 Week	Deliverable
@@ -523,15 +522,15 @@ Week	Deliverable
 7–8	Stabilize MVI-1 slice on 50 puzzles; enforce CI checks & update dependency graphs; extend dashboard
 ________________________________________
 Testing & CI
-•	tests/test_augmentor.py – augmentation batching & profiling
-•	tests/test_physics_inference.py – GPU physics metrics & KB queries
-•	tests/test_commonsense_kb.py – predicate similarity lookups
-•	tests/test_cross_domain_reasoner.py – fused reasoning outputs
-•	tests/test_anytime_inference.py – grounding budgets & fallbacks
-•	tests/test_grammar_extender.py – coverage estimation & stub proposals
-•	tests/test_hard_negative_miner.py – adversarial diversity sampling
-•	tests/test_data_validator.py – schema conformance for Phase 2
-•	tests/test_debug_dashboard.py – integrity of new UI panels
+•	tests/test_augmentor.py — augmentation batching & profiling
+•	tests/test_physics_inference.py — GPU physics metrics & KB queries
+•	tests/test_commonsense_kb.py — predicate similarity lookups
+•	tests/test_cross_domain_reasoner.py — fused reasoning outputs
+•	tests/test_anytime_inference.py — grounding budgets & fallbacks
+•	tests/test_grammar_extender.py — coverage estimation & stub proposals
+•	tests/test_hard_negative_miner.py — adversarial diversity sampling
+•	tests/test_data_validator.py — schema conformance for Phase 2
+•	tests/test_debug_dashboard.py — integrity of new UI panels
 ________________________________________
 Phase 3: Emergent Codelet Swarm & Hierarchical Schema Induction
 Objective & Scope
@@ -578,14 +577,14 @@ Week	Deliverable
 7–8	Deploy Debug Dashboard extensions; stabilize MVI-2 slice on 200 puzzles under relaxed budgets
 ________________________________________
 Testing & CI
-•	tests/test_codelet_system.py – concurrency, isolation, timeout behavior
-•	tests/test_timeout_manager.py – per-call deadline enforcement
-•	tests/test_sma.py – spawn distribution normalization & policy updates
-•	tests/test_graph_kernel.py – WL kernel similarity rankings
-•	tests/test_schema_induction.py – cluster counts & novelty scores
-•	tests/test_grammar_extender.py – hook firing on simulated gaps
-•	tests/test_data_validator.py – schema checks for codelet & schema outputs
-•	tests/test_debug_dashboard.py – new codelet/swarm UI panels
+•	tests/test_codelet_system.py — concurrency, isolation, timeout behavior
+•	tests/test_timeout_manager.py — per-call deadline enforcement
+•	tests/test_sma.py — spawn distribution normalization & policy updates
+•	tests/test_graph_kernel.py — WL kernel similarity rankings
+•	tests/test_schema_induction.py — cluster counts & novelty scores
+•	tests/test_grammar_extender.py — hook firing on simulated gaps
+•	tests/test_data_validator.py — schema checks for codelet & schema outputs
+•	tests/test_debug_dashboard.py — new codelet/swarm UI panels
 ________________________________________
 Phase 4: Continuous Causal Engine – Updated Integrations
 Objective & Scope
