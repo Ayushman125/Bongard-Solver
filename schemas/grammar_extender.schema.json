@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GrammarExtender Output",
+  "type": "object",
+  "properties": {
+    "proposed_operators": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "scores": {
+      "type": "object",
+      "additionalProperties": {"type": "number"}
+    }
+  },
+  "required": ["proposed_operators", "scores"]
+}

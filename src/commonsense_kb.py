@@ -14,19 +14,16 @@ class KBLoadError(Exception):
     pass
 
 class CommonsenseKB:
-    def semantic_query(self, term: str, top_k: int = 5) -> list:
-        """Find semantically similar relations using embeddings."""
+    def semantic_query(self, term: str, top_k: int = 6) -> list:
         emb = self._get_embedding(term)
         cursor = self.conn.cursor()
         cursor.execute("SELECT head, tail, embedding FROM relations")
-        results = []
+        sims = []
         for head, tail, emb_blob in cursor.fetchall():
-            other = np.frombuffer(emb_blob, dtype=np.float32)
-            sim = float(np.dot(emb, other) / (np.linalg.norm(emb)*np.linalg.norm(other)+1e-8))
-            if sim > 0.5:
-                results.append((head, tail, sim))
-        results.sort(key=lambda x: x[2], reverse=True)
-        return results[:top_k]
+            vec = np.frombuffer(emb_blob, dtype=np.float32)
+            sim = np.dot(emb, vec) / (np.linalg.norm(emb)+1e-9) / (np.linalg.norm(vec)+1e-9)
+            sims.append({'head': head, 'tail': tail, 'score': float(sim)})
+        return sorted(sims, key=lambda r: r['score'], reverse=True)[:top_k]
 
     def _get_embedding(self, term: str) -> np.ndarray:
         # Example: load from precomputed dict or call external model
