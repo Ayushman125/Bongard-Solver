@@ -1,60 +1,62 @@
-import torch
+"""
+Batched COM, stability, affordance calculations with commonsense KB lookups
+Phase 1 Module
+"""
+
 import numpy as np
-from integration.task_profiler import TaskProfiler
-from integration.adaptive_scheduler import AdaptiveScheduler
+from scipy.ndimage import center_of_mass
+import cv2
 from src.commonsense_kb import CommonsenseKB
+from integration.task_profiler import TaskProfiler
+from typing import List, Dict
 
 class PhysicsInference:
-    """
-    Batched center-of-mass, inertia tensor, and affordance estimates,
-    plus commonsense predicate lookups.
-    """
-    def __init__(self, device: str = 'cuda'):
-        self.device = torch.device(device)
+    """Batched physics-proxy calculations with GPU acceleration where possible"""
+    def __init__(self, kb_path: str = 'data/conceptnet_lite.json'):
+        self.kb = CommonsenseKB(kb_path)
         self.profiler = TaskProfiler()
-        self.scheduler = AdaptiveScheduler()
-        self.kb = CommonsenseKB()
-        self._cache = {}
-
-    def _get_coords(self, H: int, W: int):
-        key = (H, W)
-        if key not in self._cache:
-            inds = torch.arange(H * W, device=self.device)
-            rows = (inds // W).float()
-            cols = (inds %  W).float()
-            self._cache[key] = (rows, cols)
-        return self._cache[key]
-
-    def compute_proxies(self, masks: torch.Tensor) -> dict:
-        """
-        masks: (B, 1, H, W) boolean tensor on self.device
-        returns dict of:
-          - com: (B,2) float tensor
-          - inertia: (B,2,2) float tensor
-          - affordance_preds: List[B] of KB query results
-        """
-        B, _, H, W = masks.shape
-        masks = masks.to(self.device).float()
-        with self.scheduler.allocate('PhysicsInference'), \
-             self.profiler.profile('compute_proxies'):
-            rows, cols = self._get_coords(H, W)
-            flattened = masks.view(B, -1)
-            mass = flattened.sum(dim=1, keepdim=True)
-            mass_safe = mass.clone().clamp_min_(1.0)
-            com_x = (flattened * rows).sum(dim=1, keepdim=True).div_(mass_safe)
-            com_y = (flattened * cols).sum(dim=1, keepdim=True).div_(mass_safe)
-            com = torch.cat([com_x, com_y], dim=1)
-            dx = rows.unsqueeze(0) - com_x
-            dy = cols.unsqueeze(0) - com_y
-            Ixx = (flattened * dy**2).sum(dim=1)
-            Iyy = (flattened * dx**2).sum(dim=1)
-            Ixy = -(flattened * dx * dy).sum(dim=1)
-            inertia = torch.stack([
-                torch.stack([Ixx, Ixy], dim=1),
-                torch.stack([Ixy, Iyy], dim=1)
-            ], dim=1)
-        affordances = [
-            self.kb.query('support', com[b].cpu().tolist())
-            for b in range(B)
-        ]
-        return {'com': com, 'inertia': inertia, 'affordances': affordances}
+    def extract_center_of_mass_batch(self, masks: List[np.ndarray]) -> np.ndarray:
+        coms = []
+        for mask in masks:
+            if mask.sum() == 0:
+                h, w = mask.shape
+                com = [h/2, w/2]
+            else:
+                com = list(center_of_mass(mask))
+            coms.append(com)
+        return np.array(coms)
+    def compute_stability_batch(self, masks: List[np.ndarray], coms: np.ndarray = None) -> List[Dict]:
+        if coms is None:
+            coms = self.extract_center_of_mass_batch(masks)
+        stabilities = []
+        for mask, com in zip(masks, coms):
+            stability = self._compute_single_stability(mask, com)
+            stabilities.append(stability)
+        return stabilities
+    def _compute_single_stability(self, mask: np.ndarray, com: np.ndarray) -> Dict:
+        h, w = mask.shape
+        support_base = []
+        for x in range(w):
+            col = mask[:, x]
+            if col.sum() > 0:
+                bottom_y = np.where(col > 0)[0][-1]
+                support_base.append([bottom_y, x])
+        if len(support_base) == 0:
+            support_width = 0
+            stability_score = 0.0
+        else:
+            support_width = max([x for _, x in support_base]) - min([x for _, x in support_base]) + 1
+            stability_score = float(support_width) / w
+        return {
+            'com': com,
+            'is_stable': stability_score > 0.3,
+            'support_width': float(support_width),
+            'stability_score': float(stability_score)
+        }
+    def compute_affordances(self, masks: List[np.ndarray], predicates: List[str]) -> List[Dict]:
+        affordances = []
+        for mask, predicate in zip(masks, predicates):
+            context = [str(np.sum(mask))]
+            kb_result = self.kb.query(predicate, context)
+            affordances.append(kb_result)
+        return affordances
