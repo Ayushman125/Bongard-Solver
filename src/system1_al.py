@@ -19,6 +19,22 @@ _LOG_PATH = Path("logs/s1_al.jsonl")
 _LOG_PATH.parent.mkdir(exist_ok=True, parents=True)
 
 class System1AbstractionLayer:
+    def process(self, masks: list, problem_id: str = "") -> dict:
+        """
+        Batch-process a list of binary masks and return a bundle of extracted features.
+        Each mask is treated as a separate image in the puzzle.
+        """
+        results = []
+        for idx, mask in enumerate(masks):
+            features = self.extract_features(mask)
+            results.append({
+                "image_id": f"{problem_id}_{idx}",
+                "features": features
+            })
+        return {
+            "problem_id": problem_id,
+            "images": results
+        }
     def extract_features(self, img: np.ndarray) -> dict:
         """
         Extract features as a dictionary for explainability and test compatibility.
