@@ -36,10 +36,10 @@ class EvoPerturber:
                 best_prog, best_score = cand, score
             if self.scorer.is_flip(cand):
                 return cand  # Early exit on label flip
-            # Strong early bailout: after 50 iters, if no improvement, break
-            if i == 49 and best_score <= 0:
+            # Early bailout if no improvement by iteration 50 (i==50 means 51st iteration)
+            if i == 50 and best_score <= 0:
                 import logging
-                logging.info("EvoPerturber.search: No flip and no improvement after 50 iters, bailing out of Tier-1.")
+                logging.info("EvoPerturber.search: No flip and no improvement after 51 iters, escalating to next tier.")
                 break
         # Always return the best candidate, even if it didn't flip
         # (Never return None)
