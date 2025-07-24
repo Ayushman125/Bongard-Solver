@@ -1,3 +1,4 @@
+from .registry import NoPredicateFound
 
 import itertools
 import operator as op
@@ -117,4 +118,4 @@ def induce(problem_id, positives, negatives):
         if all(pos_pred) and not any(neg_pred):
             return {"problem_id": problem_id, "signature": sig, "param": params, "features": [], "type": sig}
 
-    raise ValueError(f"No separating predicate for {problem_id}")
+    raise NoPredicateFound(f"No separating predicate for {problem_id}")

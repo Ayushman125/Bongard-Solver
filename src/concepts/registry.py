@@ -1,3 +1,5 @@
+class NoPredicateFound(Exception):
+    pass
 
 
 """
@@ -88,6 +90,10 @@ class ConceptRegistry:
         for pid, spec in self.specs.items():
             self.funcs[pid] = _spec_to_lambda(spec)
 
+    def _factory_program_membership(self, pid, positives):
+        pos_seqs = {tuple(p["action_program"]) for p in positives if "action_program" in p}
+        return lambda features, seqs=pos_seqs: tuple(features.get("action_program", [])) in seqs
+
     def _scan_and_update(self, derived_labels_path):
         pid_to_samples = _load_derived_labels(derived_labels_path)
         updated = False
@@ -103,6 +109,12 @@ class ConceptRegistry:
                 self.specs[pid] = spec
                 self.funcs[pid] = _spec_to_lambda(spec)
                 print(f"INFO  Auto-derived concept for {pid} → {spec['signature']}")
+            except NoPredicateFound:
+                print(f"WARN  No predicate found for {pid}, using program membership fallback.")
+                fn = self._factory_program_membership(pid, positives)
+                self.funcs[pid] = fn
+                self.specs[pid] = {'signature': 'program_membership', 'param': None, 'features': [], 'type': 'membership'}
+                updated = True
             except Exception as e:
                 # Fallback: use decision tree induction
                 print(f"WARN  Template induction failed for {pid} ({e}), using decision tree.")
@@ -110,13 +122,21 @@ class ConceptRegistry:
                 self.funcs[pid] = fn
                 self.specs[pid] = {'signature': 'decision_tree', 'param': None, 'features': [], 'type': 'tree'}
                 updated = True
+            # Final fallback: if still None, use program membership
+            if pid not in self.funcs or self.funcs[pid] is None:
+                print(f"WARN  All induction failed for {pid}, using program membership as last resort.")
+                fn = self._factory_program_membership(pid, positives)
+                self.funcs[pid] = fn
+                self.specs[pid] = {'signature': 'program_membership', 'param': None, 'features': [], 'type': 'membership'}
+                updated = True
         if updated:
             self.cache_path.write_text(yaml.safe_dump(self.specs))
 
     def get(self, pid):
-        if pid not in self.funcs:
-            raise KeyError(f"No concept function registered for problem ID: {pid}. This problem ID is not present in derived_labels.json or could not be induced.")
-        return self.funcs[pid]
+        fn = self.funcs.get(pid)
+        if fn is None:
+            raise RuntimeError(f"Concept function should never be None for {pid}")
+        return fn
 
 def get_concept_fn_for_problem(pid):
     """Factory function to get the concept function for a problem ID."""
