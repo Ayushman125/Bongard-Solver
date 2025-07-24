@@ -1,6 +1,3 @@
-
-
-
 import argparse
 import sys
 import os
@@ -77,29 +74,39 @@ def main():
                         if idx == 0:
                             print(f"Processing {problem_id} {label} -> {img_path}")
                             print(f"Action program type: {type(action_program)}, value: {action_program}")
-                        # Flatten action_program if it's a list of lists (common in JSON)
-                        if isinstance(action_program, list) and len(action_program) == 1 and isinstance(action_program[0], list):
-                            action_program = action_program[0]
+                        
+                        # Flatten action_program to a list of strings only
+                        def flatten_action_program(prog):
+                            flat = []
+                            if isinstance(prog, list):
+                                for item in prog:
+                                    if isinstance(item, list):
+                                        flat.extend(flatten_action_program(item))
+                                    elif isinstance(item, str):
+                                        flat.append(item)
+                            elif isinstance(prog, str):
+                                flat.append(prog)
+                            return flat
+
+                        flat_commands = [cmd for cmd in flatten_action_program(action_program) if isinstance(cmd, str)]
+
                         try:
-                            # If action_program is a list of subgroups, parse each subgroup in sequence, persisting turtle state
-                            vertices = []
-                            if isinstance(action_program, list) and all(isinstance(subgroup, list) for subgroup in action_program):
-                                for subgroup in action_program:
-                                    pts = logo_parser.parse_action_program(subgroup, scale=120)
-                                    vertices.extend(pts)
-                            else:
-                                vertices = logo_parser.parse_action_program(action_program, scale=120)
-                            print(f"Total vertices for {problem_id} {label}: {len(vertices)}")
-                            if len(vertices) < 4:
-                                flagged_cases.append({'problem_id': problem_id, 'image_path': img_path, 'error': 'too_few_vertices'})
+                            # Parse LOGO commands to get vertices using correct method and scale
+                            vertices = logo_parser.parse_action_program(flat_commands, scale=120)
+                            print(f"→ parsed {len(vertices)} vertices for {problem_id} {label}")
+
+                            if not vertices:
+                                flagged_cases.append({'problem_id': problem_id, 'image_path': img_path, 'error': 'No vertices generated from LOGO commands'})
                                 continue
+
                             poly = PhysicsInference.polygon_from_vertices(vertices)
                             if poly is None or not poly.is_valid:
                                 flagged_cases.append({'problem_id': problem_id, 'image_path': img_path, 'error': 'Invalid polygon'})
                                 continue
+
                             features = {
-                                'centroid': PhysicsInference.centroid(poly),
-                                'area': PhysicsInference.area(poly),
+                                'centroid': [poly.centroid.x, poly.centroid.y],
+                                'area': poly.area,
                                 'is_convex': PhysicsInference.is_convex(poly),
                                 'symmetry_score': PhysicsInference.symmetry_score(vertices),
                                 'moment_of_inertia': PhysicsInference.moment_of_inertia(vertices),
@@ -111,16 +118,16 @@ def main():
                                 'image_path': img_path,
                                 'features': features,
                                 'geometry': vertices,
-                                'action_program': action_program if isinstance(action_program, list) else [action_program],
+                                'action_program': flat_commands
                             }
                             all_results.append(result)
                         except Exception as e:
                             flagged_cases.append({'problem_id': problem_id, 'image_path': img_path, 'error': str(e)})
-    # Add helper to LogoParser for direct command list parsing
-
+                            
     with open(output_path, 'w') as out:
         json.dump(all_results, out, indent=2)
     print(f"INFO: Saved {len(all_results)} valid samples to {output_path} (skipped {len(flagged_cases)} of {len(all_results) + len(flagged_cases)})")
+    
     flagged_path = os.path.join(os.path.dirname(output_path), 'flagged_cases.txt')
     with open(flagged_path, 'w') as out:
         for case in flagged_cases:
