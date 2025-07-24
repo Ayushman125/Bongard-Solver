@@ -139,7 +139,14 @@ def main():
                 cmds1 = structural_perturb(flat_commands)
                 cmds2 = numeric_jitter(cmds1, ang_jit, len_jit)
                 try:
-                    verts = parser_obj.parse_action_program(cmds2, scale=120)
+                    try:
+                        verts = parser_obj.parse_action_program(cmds2, scale=120)
+                    except ValueError as e:
+                        if "math domain error" in str(e):
+                            print(f"    [SKIP] perturb parse math error: {e}")
+                            continue
+                        else:
+                            raise
                     poly = PhysicsInference.polygon_from_vertices(verts)
                     if poly is None or not poly.is_valid:
                         continue
@@ -148,12 +155,12 @@ def main():
                         'area': poly.area,
                         'centroid': [poly.centroid.x, poly.centroid.y],
                         'is_convex': PhysicsInference.is_convex(poly),
-                        'symmetry_score': PhysicsInference.symmetry_score(verts),
-                        'moment_of_inertia': PhysicsInference.moment_of_inertia(verts),
-                        'num_straight': PhysicsInference.count_straight_segments(verts),
-                        'num_arcs': PhysicsInference.count_arcs(verts),
-                        'has_quadrangle': Verification.has_quadrangle(poly),
-                        'has_obtuse_angle': Verification.has_obtuse_angle(poly),
+                        'symmetry_score': PhysicsInference.symmetry_score(poly),
+                        'moment_of_inertia': PhysicsInference.moment_of_inertia(poly),
+                        'num_straight': PhysicsInference.count_straight_segments(poly),
+                        'num_arcs': PhysicsInference.count_arcs(poly),
+                        'has_quadrangle': PhysicsInference.has_quadrangle(poly),
+                        'has_obtuse_angle': PhysicsInference.has_obtuse(poly),
                     }
                 except Exception as e:
                     print(f"    [ERROR] Failed to parse perturbed program: {e}")
