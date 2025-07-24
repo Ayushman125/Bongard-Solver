@@ -87,11 +87,18 @@ def main():
                 break
             total_samples += 1
             try:
-                # Use the true action program from the sample (list of LOGO command strings)
+                # Use the true action program from the sample (possibly nested list of LOGO command strings)
                 commands = sample.get('action_program')
                 if not commands or not isinstance(commands, list):
                     print(f"    [ERROR] No valid action_program for sample {sample_idx+1}")
                     continue
+                # Flatten nested lists of commands into a single list of strings
+                flat_commands = []
+                for subgroup in commands:
+                    if isinstance(subgroup, list):
+                        flat_commands.extend(subgroup)
+                    else:
+                        flat_commands.append(subgroup)
                 # Use precomputed features from sample['features']
                 if 'features' not in sample:
                     print(f"    [ERROR] No features field in sample {sample_idx+1}")
@@ -103,7 +110,7 @@ def main():
             found_hard_negative = False
             for _ in range(10):
                 # Perturb each command string (always operate on LOGO command strings)
-                perturbed_commands = [perturb_bongard_cmd(cmd, args.jitter_angle, args.jitter_length) for cmd in commands]
+                perturbed_commands = [perturb_bongard_cmd(cmd_str, args.jitter_angle, args.jitter_length) for cmd_str in flat_commands]
                 try:
                     # Parse perturbed commands into vertices, then polygon
                     pert_verts = parser_obj.parse_action_program(perturbed_commands)
