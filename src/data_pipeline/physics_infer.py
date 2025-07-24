@@ -5,6 +5,13 @@ import math
 
 class PhysicsInference:
     @staticmethod
+    def _clamped_arccos(dot, norm):
+        if norm == 0:
+            return 0.0
+        cosang = dot / norm
+        cosang = max(-1.0, min(1.0, cosang))
+        return math.acos(cosang)
+    @staticmethod
     def _ensure_polygon(poly_geom):
         from shapely.geometry import MultiPolygon, Polygon
         if isinstance(poly_geom, MultiPolygon):
@@ -99,6 +106,7 @@ class PhysicsInference:
         orig = np.array(vertices)
         refl = np.array(reflected)
         rmse = np.sqrt(np.mean((orig - refl) ** 2))
+        # If you later use arccos for symmetry, use _clamped_arccos
         return rmse
 
     @staticmethod
@@ -127,12 +135,7 @@ class PhysicsInference:
             cb = np.array([b[0]-c[0], b[1]-c[1]])
             dot = np.dot(ab, cb)
             norm = np.linalg.norm(ab) * np.linalg.norm(cb)
-            if norm == 0:
-                return 0.0
-            cosang = dot / norm
-            # clamp to [-1,1] to avoid math domain errors
-            cosang = max(-1.0, min(1.0, cosang))
-            return np.degrees(math.acos(cosang))
+            return np.degrees(PhysicsInference._clamped_arccos(dot, norm))
         for i in range(len(vertices)):
             a, b, c = vertices[i-1], vertices[i], vertices[(i+1)%len(vertices)]
             if angle(a, b, c) > 100:
