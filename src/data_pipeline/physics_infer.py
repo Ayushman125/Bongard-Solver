@@ -4,6 +4,13 @@ import numpy as np
 
 class PhysicsInference:
     @staticmethod
+    def _ensure_polygon(poly_geom):
+        from shapely.geometry import MultiPolygon, Polygon
+        if isinstance(poly_geom, MultiPolygon):
+            # pick the largest area polygon
+            return max(poly_geom.geoms, key=lambda p: p.area)
+        return poly_geom
+    @staticmethod
     def count_straight_segments(vertices):
         # Heuristic: count segments with nearly constant angle
         if not vertices or len(vertices) < 2:
@@ -34,8 +41,9 @@ class PhysicsInference:
         elif hasattr(obj, 'exterior'):
             return list(obj.exterior.coords)
         elif hasattr(obj, 'geoms'):
-            # MultiPolygon: use first geometry
-            return list(obj.geoms[0].exterior.coords)
+            # MultiPolygon: use largest geometry
+            largest = max(obj.geoms, key=lambda p: p.area)
+            return list(largest.exterior.coords)
         else:
             return []
 
@@ -55,23 +63,26 @@ class PhysicsInference:
                         x, y = hull.x, hull.y
                         hull = Polygon([(x, y), (x+1, y), (x+1, y+1), (x, y+1)])
                     poly = hull
+            poly = PhysicsInference._ensure_polygon(poly)
             return poly
         except Exception as e:
             print(f"Polygon creation failed: {e}")
             return None
 
     @staticmethod
-    def centroid(poly):
-        return (poly.centroid.x, poly.centroid.y)
+    def centroid(poly_geom):
+        poly = PhysicsInference._ensure_polygon(poly_geom)
+        c = poly.centroid
+        return [c.x, c.y]
 
     @staticmethod
-    def area(poly):
-        return poly.area
+    def area(poly_geom):
+        return PhysicsInference._ensure_polygon(poly_geom).area
 
     @staticmethod
-    def is_convex(poly):
-        # Compare polygon with convex hull
-        return poly.convex_hull.equals(poly)
+    def is_convex(poly_geom):
+        poly = PhysicsInference._ensure_polygon(poly_geom)
+        return poly.equals(poly.convex_hull)
 
     @staticmethod
     def symmetry_score(vertices_or_poly):

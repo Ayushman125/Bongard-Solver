@@ -2,9 +2,11 @@ import logging
 
 class Verification:
     @staticmethod
-    def has_quadrangle(poly):
+    def has_quadrangle(poly_geom):
         # True if convex hull has 4 sides
+        from src.data_pipeline.physics_infer import PhysicsInference
         try:
+            poly = PhysicsInference._ensure_polygon(poly_geom)
             hull = poly.convex_hull
             coords = list(hull.exterior.coords)
             return len(coords) - 1 == 4
@@ -12,9 +14,11 @@ class Verification:
             return False
 
     @staticmethod
-    def has_obtuse_angle(poly):
+    def has_obtuse_angle(poly_geom):
         # True if any interior angle > 90°
+        from src.data_pipeline.physics_infer import PhysicsInference
         import math
+        poly = PhysicsInference._ensure_polygon(poly_geom)
         coords = list(poly.exterior.coords)
         n = len(coords) - 1
         for i in range(n):
