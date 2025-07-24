@@ -39,7 +39,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from src.data_pipeline.logo_parser import BongardLogoParser
 from src.data_pipeline.physics_infer import PhysicsInference
 from src.data_pipeline.verification import has_min_vertices, l2_shape_distance
-from src.concepts import CONCEPTS
+from src.concepts.registry import get_concept_fn_for_problem
 from src.hard_negative.evo_search import EvoPerturber
 from src.data_pipeline.logo_mutator import mutate, RULE_SET
 
@@ -360,9 +360,12 @@ def main():
         positives = [e for e in entries if e.get('label') == 'category_1']
         logging.info(f"Processing problem {total_problems}: {pid} ({len(positives)} positives)")
 
-        concept_fn = CONCEPTS.get(pid, concept_test)
-        if concept_fn is concept_test:
-            logging.warning(f"Using default 'concept_test' for problem {pid}. Ensure this is intended.")
+
+        try:
+            concept_fn = get_concept_fn_for_problem(pid)
+        except Exception as e:
+            logging.error(f"No concept function registered for problem {pid}: {e}")
+            raise
 
         for sample_idx, sample in enumerate(positives):
             total_samples += 1

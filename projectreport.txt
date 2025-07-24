@@ -1,3 +1,20 @@
+## Concept Registry and Coverage Enforcement
+
+### Central Concept Registry
+A new central concept registry (`src/concepts/registry.py`) has been implemented. This registry auto-populates from all problem IDs in the dataset (freeform, basic, abstract) and enforces that every problem is mapped to a real, auditable concept-checking function. If a concept is missing, the system fails with a clear error, eliminating all fallback-to-default warnings.
+
+### Factory Functions
+Factory functions are provided for each problem type, allowing robust retrieval of the correct concept function for any problem ID. The registry parses problem IDs and guarantees that only registered, real concept functions are used.
+
+### Integration
+The hard negative mining pipeline (`scripts/generate_hard_negatives.py`) now uses the registry and factory logic. All fallback logic is removed. If a problem is not covered, the process fails fast, ensuring data integrity and full concept coverage.
+
+### Guarantees
+- Every problem in the dataset is mapped to a real concept function.
+- No bypasses or fallbacks are allowed.
+- Coverage is enforced at runtime, with hard failure on missing concepts.
+
+See `src/concepts/registry.py` for implementation details.
 # Phase-1 Dataset Preparation: Code Structure & Methods for Bongard-Solver
 
 This document outlines a robust, research-backed, and budget-friendly code structure to fully implement the dataset preparation phase in your Bongard-Solver GitHub repository[1]. The design focuses on maximizing label and attribute quality for later modules, with zero monetary outlay, leveraging open-source libraries and NVLabs Bongard-LOGO tools. The structure below can be adopted directly within the existing organization of your repo.
