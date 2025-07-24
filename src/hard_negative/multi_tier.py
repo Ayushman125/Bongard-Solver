@@ -85,7 +85,7 @@ def process_sample_with_guaranteed_success(sample, concept_fn, args):
     from scripts.generate_hard_negatives import parse_logo_commands_to_tuples
     flat_commands = parse_logo_commands_to_tuples(commands)
     original_features = sample.get('features')
-    from scripts.generate_hard_negatives import Scorer
+    from src.hard_negative.scorer import Scorer
     scorer = Scorer(concept_fn, original_features)
     tiers = [
         (tier1_evolutionary, 500),

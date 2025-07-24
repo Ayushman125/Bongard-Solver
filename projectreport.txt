@@ -1,7 +1,7 @@
 ## Concept Registry and Coverage Enforcement
 
 
-### Central Concept Registry: Self-Maintaining, Auto-Inducing, and Auditable
+A. Central Concept Registry: Self-Maintaining, Auto-Inducing, and Auditable
 A new self-maintaining concept registry (`src/concepts/registry.py`) is implemented. This registry automatically induces and caches a concept-checking predicate for every problem in the dataset, using only the features and labels in `derived_labels.json`. No manual wiring or fallback logic is required—coverage is guaranteed for all present and future problems.
 
 #### How It Works
@@ -22,6 +22,25 @@ A new self-maintaining concept registry (`src/concepts/registry.py`) is implemen
 #### Integration
 - The hard negative mining pipeline (`scripts/generate_hard_negatives.py`) uses the registry and factory logic. All fallback logic is removed. If a problem is not covered, the process fails fast, ensuring data integrity and full concept coverage.
 - The registry is fully compatible with future dataset expansions—new problems are handled automatically.
+
+B. **Hard Negative Mining Pipeline: Robustness, Refactoring, and Codebase Improvements**
+
+#### 1. Shared Scorer Class and Circular Import Fix
+- The `Scorer` class, which encapsulates feature extraction and label-flip logic for LOGO programs, is now defined in `src/hard_negative/scorer.py`.
+- This resolves previous circular import errors between `scripts/generate_hard_negatives.py` and `src/hard_negative/multi_tier.py`.
+- Both the main script and the multi-tier fallback logic now import `Scorer` from this shared location, ensuring maintainability and modularity.
+
+#### 2. Robust Positive Label Selection
+- The logic for selecting positive samples from `derived_labels.json` is now robust to all common label variants (e.g., `category_1`, `positive`, `1`, `true`, `yes`, case-insensitive).
+- This ensures that all intended positive samples are included, regardless of minor label formatting differences in the data.
+- The script logs all unique label values per problem for auditability and debugging.
+
+#### 3. Deterministic, Auditable, and Parallelized Mining
+- The pipeline enforces geometry validity, de-duplicates hard negatives, and supports parallel execution for scalability.
+- All random routines are seeded for reproducibility, and outputs are logged for traceability.
+
+#### 4. Error Handling and Logging
+- Improved error handling and logging throughout the pipeline, including clear reporting of missing files, JSON decode errors, and sample-level failures.
 
 #### Workflow
 1. (Re)compute features:
@@ -122,8 +141,12 @@ bongard-solver/
 
 ### 2.7 `scripts/generate_hard_negatives.py`
 
-
 - Enhanced hard-negative mining pipeline integrating:
+    - Multi-tier fallback logic (evolutionary, grammar-based, and guaranteed fallback)
+    - Shared `Scorer` class for feature extraction and label-flip detection
+    - Robust positive label selection (handles all common label variants)
+    - Parallel and deterministic execution
+    - Comprehensive logging and error handling
   - **Evolutionary search** (`src/hard_negative/evo_search.py`): Uses black-box evolutionary strategies to maximize label flips while preserving geometric validity.
   - **Shape-grammar mutation** (`src/data_pipeline/logo_mutator.py`): Modular rules for stroke-level edits, topology changes, and concept-altering mutations.
   - **Near-miss curriculum**: Optionally stores high-confidence non-flips for progressive classifier retraining.
@@ -154,17 +177,17 @@ bongard-solver/
 1. **Loading**: Start from native Bongard-LOGO structure; never manually relabel classes!
 2. **Parsing**: LOGO parser extracts all geometries deterministically.
 3. **Attribute & Physics Extraction**: Vectorized batch routines compute centroids, inertia, convexity, symmetry; failures routed for review.
-4. **Negative Mining**: For each positive, perturbed variants tested until a “label flip” is found or maximum attempts exhausted.
+4. **Negative Mining**: For each positive (robustly matched by label), perturbed variants are tested until a “label flip” is found or maximum attempts exhausted. Multi-tier fallback logic guarantees at least one hard negative per positive sample, even for resistant cases.
 5. **Lightweight Verification**: Problematic samples auto-flagged. Use MakeSense.ai (or Zooniverse if >20 files needed).
 6. **Json Output**: Data for each image includes all computed/derived labels in `data/derived_labels.json`. Hard negatives listed in `data/hard_negatives.txt`.
 
 ## 5. Code Best Practices for Data Quality
 
-- **Determinism**: Always seed pseudo-random routines used for negative generation for reproducibility.
+- **Determinism**: All random routines (including evolutionary search and hard negative mining) are seeded and logged for reproducibility.
 - **Batch Processing**: Use `map` or numpy vectorization for geometry/physics routines for speed and consistency.
 - **Configurable Thresholds**: For symmetry, convexity, and other features, expose thresholds via pipeline arguments/docs.
 - **Fallbacks**: If `.logo` file fails or is corrupted, switch to raster-mode using OpenCV Hu moments.
-- **Comprehensive Logging**: Log all flagged or failed geometric computations to a persistent file for later cleanup.
+- **Comprehensive Logging**: Log all flagged or failed geometric computations to a persistent file for later cleanup. All unique label values are logged for each problem to ensure label coverage and auditability.
 
 ## 6. Utilization of NVLabs Bongard-LOGO Tools
 
@@ -198,11 +221,10 @@ python scripts/verify_annotations.py --review-list data/flagged_cases.txt
 
 ## 9. Key Quality Guarantees
 
-
-- **Determinism:** All random routines (including evolutionary search) are seeded and logged for reproducibility.
+- **Determinism:** All random routines (including evolutionary search and hard negative mining) are seeded and logged for reproducibility.
 - **Geometry Validity:** All hard negatives pass geometry and self-intersection checks before saving.
 - **Diversity:** Embedding-based filtering ensures a diverse set of negatives, avoiding redundancy.
-- **Audit Trail:** Each hard negative logs its mutator chain and fitness score for traceability.
+- **Audit Trail:** Each hard negative logs its mutator chain and fitness score for traceability. All label values and sample selection steps are logged for auditability.
 - **Scalability:** Parallel mining and curriculum relaxation enable rapid coverage of 600+ hard negatives in under a week.
 
 ## 10. Integration with Later Modules
