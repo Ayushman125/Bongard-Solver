@@ -35,6 +35,7 @@ from collections import defaultdict
 # Ensure that the project root is in the sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+
 # Import project-specific modules
 from src.data_pipeline.logo_parser import BongardLogoParser
 from src.data_pipeline.physics_infer import PhysicsInference
@@ -42,6 +43,19 @@ from src.data_pipeline.verification import has_min_vertices, l2_shape_distance
 from src.concepts.registry import get_concept_fn_for_problem
 from src.hard_negative.evo_search import EvoPerturber
 from src.data_pipeline.logo_mutator import mutate, RULE_SET
+
+# --- Worker globals for multiprocessing ---
+_worker_parser = None
+_worker_concept_fn = None
+_worker_evo = None
+_worker_rules = None
+
+def _init_worker(concept_fn):
+    global _worker_parser, _worker_concept_fn, _worker_evo, _worker_rules
+    _worker_parser = BongardLogoParser()
+    _worker_concept_fn = concept_fn
+    _worker_evo = EvoPerturber(scorer=None, seed=42)  # scorer will be set per sample
+    _worker_rules = [mu for mu in RULE_SET]
 
 # --- Scorer wrapper for EvoPerturber ---
 class Scorer:
@@ -196,9 +210,10 @@ def concept_test(features):
 
 # Move process_sample to top-level for multiprocessing
 def process_sample(args_tuple):
-    pid, sample, concept_fn, args = args_tuple
+    pid, sample, _, args = args_tuple
     results = []
     near_miss_results = []
+    global _worker_parser, _worker_concept_fn, _worker_evo, _worker_rules
     try:
         commands = sample.get('action_program')
         if not commands:
@@ -213,8 +228,8 @@ def process_sample(args_tuple):
         logging.error(f"Error preparing sample for processing {pid}: {e!r}")
         return None, None
 
-    scorer = Scorer(concept_fn, original_features)
-    evo = EvoPerturber(scorer=scorer, seed=42)
+    scorer = Scorer(_worker_concept_fn, original_features)
+    _worker_evo.scorer = scorer
 
     def build_hard_negative_dict(base_sample, mutated_cmds, features, label_tag):
         d = dict(base_sample)
@@ -222,27 +237,34 @@ def process_sample(args_tuple):
         d['features'] = features
         d['action_program'] = mutated_cmds
         try:
-            parser = BongardLogoParser()
-            vertices = parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in mutated_cmds])
+            vertices = _worker_parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in mutated_cmds])
             d['geometry'] = vertices
         except Exception as e:
             d['geometry'] = []
             logging.warning(f"Failed to parse geometry for hard negative: {e!r}")
         return d
 
-    # Per-sample search loop: try up to max-per-sample flips
+    # Per-sample search loop: try up to max-per-sample flips, batching trials
     flips_for_this_sample = 0
     trials = 0
     max_trials = args.trials_per_sample
     max_per_sample = getattr(args, 'max_per_sample', 3)
     found_hard_negatives = []
+    batch_size = 10
     while flips_for_this_sample < max_per_sample and trials < max_trials:
-        trials += 1
-        mutated_evo = evo.search(flat_commands)
-        if mutated_evo and is_valid_geometry(mutated_evo):
-            features = scorer.extract_features(mutated_evo)
-            parser = BongardLogoParser()
-            vertices = parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in mutated_evo])
+        # Batch generate candidates
+        batch_mutated = []
+        for _ in range(min(batch_size, max_trials - trials)):
+            mutated_evo = _worker_evo.search(flat_commands)
+            if mutated_evo:
+                batch_mutated.append(mutated_evo)
+        trials += len(batch_mutated)
+        # Batch geometry/feature extraction
+        for mutated in batch_mutated:
+            if not is_valid_geometry(mutated):
+                continue
+            features = scorer.extract_features(mutated)
+            vertices = _worker_parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in mutated])
             if not has_min_vertices(vertices, min_v=4):
                 continue
             is_duplicate = False
@@ -252,21 +274,25 @@ def process_sample(args_tuple):
                     break
             if is_duplicate:
                 continue
-            if scorer.is_flip(mutated_evo):
-                hn = build_hard_negative_dict(sample, mutated_evo, features, 'hard_negative')
+            if scorer.is_flip(mutated):
+                hn = build_hard_negative_dict(sample, mutated, features, 'hard_negative')
                 found_hard_negatives.append(hn)
                 flips_for_this_sample += 1
+                if flips_for_this_sample >= max_per_sample:
+                    break
             elif args.near_miss:
-                conf = scorer.predict_concept_confidence(mutated_evo)
+                conf = scorer.predict_concept_confidence(mutated)
                 if is_near_flip(conf):
-                    nm = build_hard_negative_dict(sample, mutated_evo, features, 'near_miss_evo')
+                    nm = build_hard_negative_dict(sample, mutated, features, 'near_miss_evo')
                     near_miss_results.append(nm)
+        if flips_for_this_sample >= max_per_sample:
+            break
     # Fallback: shape-grammar mutation if not enough flips found
     if flips_for_this_sample < max_per_sample:
         import traceback
-        for rule_id in range(len(RULE_SET)):
+        for rule_id, rule_fn in enumerate(_worker_rules):
             try:
-                cand = mutate(flat_commands, rule_id)
+                cand = rule_fn(flat_commands)
                 def extract_commands_from_mutate_output(cand, rule_id, pid):
                     logging.debug(f"mutate output for rule {rule_id}, {pid}: type={type(cand)}, value={repr(cand)}")
                     if isinstance(cand, (tuple, list)):
@@ -283,8 +309,7 @@ def process_sample(args_tuple):
                 cand_tuples = parse_logo_commands_to_tuples(cand)
                 if is_valid_geometry(cand_tuples):
                     features = scorer.extract_features(cand_tuples)
-                    parser = BongardLogoParser()
-                    vertices = parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in cand_tuples])
+                    vertices = _worker_parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in cand_tuples])
                     if not has_min_vertices(vertices, min_v=4):
                         continue
                     is_duplicate = False
@@ -377,7 +402,9 @@ def main():
     if args.parallel > 1:
         logging.info(f"Using multiprocessing with {args.parallel} workers.")
         try:
-            with multiprocessing.Pool(args.parallel) as pool:
+            # Use the concept_fn for the first problem as the global for all workers (all problems use registry)
+            concept_fn = sample_args[0][2] if sample_args else None
+            with multiprocessing.Pool(args.parallel, initializer=_init_worker, initargs=(concept_fn,)) as pool:
                 results = pool.map(process_sample, sample_args)
         except Exception as e:
             logging.error(f"Exception during multiprocessing: {e}")
