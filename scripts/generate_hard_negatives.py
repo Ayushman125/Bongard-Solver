@@ -294,11 +294,17 @@ def process_sample(args_tuple):
 
     # EvoPerturber search loop with parallel batch
     while flips_for_this_sample < max_per_sample and trials < max_trials:
-        batch_count = min(batch_size, max_trials - trials)
+        # Batch generate candidates, always count trials even if no flip is found
+        batch_mutated = []
+        num_calls = min(batch_size, max_trials - trials)
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = [executor.submit(evo.search, flat_commands) for _ in range(batch_count)]
-            batch_mutated = [f.result() for f in futures if f.result() is not None]
-        trials += len(batch_mutated)
+            futures = [executor.submit(evo.search, flat_commands) for _ in range(num_calls)]
+            for f in futures:
+                result = f.result()
+                if result is not None:
+                    batch_mutated.append(result)
+        # Increment by total search calls, not just successful flips
+        trials += num_calls
         for mutated in batch_mutated:
             h = candidate_hash(mutated)
             if h in seen_candidates:
