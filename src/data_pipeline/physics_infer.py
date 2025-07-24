@@ -95,13 +95,22 @@ class PhysicsInference:
         import time
         MIN_AREA = 5.0
         MAX_ASPECT = 20.0
-        n_verts = len(vertices)
-        t0 = time.time()
-        try:
-            poly = Polygon(vertices)
-            t1 = time.time()
-            logging.info(f"polygon_from_vertices: created polygon with {n_verts} vertices in {t1-t0:.3f}s (valid={poly.is_valid})")
+        # Clean vertices and log
+        def _clean_vertices(verts):
+            # Placeholder for actual cleaning logic
+            return verts
+        cleaned_verts = _clean_vertices(vertices)
+        n_verts = len(cleaned_verts)
+        logging.info(f"polygon_from_vertices: cleaned to {n_verts} vertices")
 
+        # Time raw Polygon creation (no repair)
+        t0_poly = time.time()
+        poly = Polygon(cleaned_verts)
+        t1_poly = time.time()
+        logging.info(f"polygon_from_vertices: raw Polygon({n_verts}) creation took {t1_poly-t0_poly:.3f}s")
+
+        try:
+            t0 = time.time()
             # Repair self-intersections only for small polygons
             repaired = False
             if not poly.is_valid and n_verts < 500:
@@ -117,7 +126,7 @@ class PhysicsInference:
             if isinstance(poly, MultiPolygon):
                 poly = max(poly.geoms, key=lambda p: p.area)
 
-            # Simplify tiny oscillations only for small polygons
+            # Simplify once, only for small polygons
             if n_verts < 500:
                 t4 = time.time()
                 poly = poly.simplify(0.5, preserve_topology=True)
