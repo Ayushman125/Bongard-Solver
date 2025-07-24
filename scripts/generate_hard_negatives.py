@@ -206,15 +206,21 @@ def main():
             results.append((hn, nm))
             # Log geometry/feature info if available
             if hn:
-                verts = hn.get('geometry', [])
-                n_verts = len(verts)
-                logging.info(f"[{idx}/{len(sample_args)}] Sample {pid} post-processing: vertices={n_verts}, time={t1-t0:.2f}s")
+                if not isinstance(hn, dict):
+                    logging.error(f"Expected dict for hard negative, got {type(hn)}: {hn}")
+                else:
+                    verts = hn.get('geometry', [])
+                    n_verts = len(verts)
+                    logging.info(f"[{idx}/{len(sample_args)}] Sample {pid} post-processing: vertices={n_verts}, time={t1-t0:.2f}s")
             logging.info(f"[{idx}/{len(sample_args)}] DONE  sample {pid}")
 
     # Post-process outputs
     hard_negatives, near_misses = [], []
     for hn, nm in results:
         if hn:
+            if not isinstance(hn, dict):
+                logging.error(f"Expected dict for hard negative, got {type(hn)}: {hn}")
+                continue
             verts = hn.get('geometry', [])
             if has_min_vertices(verts, min_v=4):
                 # de-duplication
