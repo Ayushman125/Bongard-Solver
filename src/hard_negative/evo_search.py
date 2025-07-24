@@ -36,4 +36,5 @@ class EvoPerturber:
                 best_prog, best_score = cand, score
             if self.scorer.is_flip(cand):
                 return cand  # Early exit on label flip
-        return best_prog if best_score > 0 else None
+        # Always return the best candidate, even if it didn't flip
+        return best_prog

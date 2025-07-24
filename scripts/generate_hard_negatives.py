@@ -31,26 +31,9 @@ import re
 import logging
 import multiprocessing
 from collections import defaultdict
-import time
-import numpy as np
-from tqdm import tqdm
-import concurrent.futures
-import asyncio
-import functools
-try:
-    import cupy as cp
-    GPU_AVAILABLE = True
-except ImportError:
-    GPU_AVAILABLE = False
-try:
-    import numba
-    NUMBA_AVAILABLE = True
-except ImportError:
-    NUMBA_AVAILABLE = False
 
 # Ensure that the project root is in the sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 
 # Import project-specific modules
 from src.data_pipeline.logo_parser import BongardLogoParser
@@ -59,19 +42,6 @@ from src.data_pipeline.verification import has_min_vertices, l2_shape_distance
 from src.concepts.registry import get_concept_fn_for_problem
 from src.hard_negative.evo_search import EvoPerturber
 from src.data_pipeline.logo_mutator import mutate, RULE_SET
-
-# --- Worker globals for multiprocessing ---
-_worker_parser = None
-_worker_concept_fn = None
-_worker_evo = None
-_worker_rules = None
-
-def _init_worker(concept_fn):
-    global _worker_parser, _worker_concept_fn, _worker_evo, _worker_rules
-    _worker_parser = BongardLogoParser()
-    _worker_concept_fn = concept_fn
-    _worker_evo = EvoPerturber(scorer=None, seed=42)  # scorer will be set per sample
-    _worker_rules = [mu for mu in RULE_SET]
 
 # --- Scorer wrapper for EvoPerturber ---
 class Scorer:
@@ -214,234 +184,30 @@ def flatten_action_program(action_program):
             flat.append(item)
     return flat
 
-def flips_label(original_features, perturbed_features, concept_fn):
-    original_label = concept_fn(original_features)
-    perturbed_label = concept_fn(perturbed_features)
+def flips_label(original_features, perturbed_features, concept_test):
+    original_label = concept_test(original_features)
+    perturbed_label = concept_test(perturbed_features)
     return original_label != perturbed_label
 
+def concept_test(features):
+    # Placeholder: implement your concept test logic here
+    # For example, return True if area > threshold
+    return features.get('area', 0) > 0.5 # Use .get with a default for robustness
+
 # Move process_sample to top-level for multiprocessing
+from src.hard_negative.multi_tier import process_sample_with_guaranteed_success
+
 def process_sample(args_tuple):
-    # Unpack parser and concept_fn instead of discarding them
-    pid, sample, parser, concept_fn, args = args_tuple
-    logging.info(f"process_sample: pid={pid}, sample_keys={list(sample.keys())}, args={args}")
-    results = []
-    near_miss_results = []
-    global _worker_parser, _worker_concept_fn, _worker_evo, _worker_rules
-    # Ensure _worker_rules is always a valid list (for serial mode)
-    if _worker_rules is None:
-        from src.data_pipeline.logo_mutator import RULE_SET
-        _worker_rules = [mu for mu in RULE_SET]
-    import time
-    logging.debug(f"Sample {pid}: starting load_commands")
-    t0 = time.perf_counter()
+    pid, sample, concept_fn, args = args_tuple
+    # Use the multi-tier driver to guarantee at least one hard negative per sample
     try:
-        logging.info(f"Sample {pid}: ▶ starting load_commands")
-        commands = sample.get('action_program')
-        if not commands:
-            logging.warning(f"No action_program found for sample {pid}. Skipping.")
-            return None, None
-        flat_commands = parse_logo_commands_to_tuples(commands)
-        logging.info(f"Sample {pid}: flat_commands={flat_commands[:10]}... (total {len(flat_commands)})")
-        original_features = sample.get('features')
-        if not original_features:
-            logging.warning(f"No original features found for sample {pid}. Skipping.")
-            return None, None
-        logging.info(f"Sample {pid}: original_features={original_features}")
+        hard_negative, used_tier = process_sample_with_guaranteed_success(sample, concept_fn, args)
+        logging.info(f"Sample {pid}: Generated hard negative using {used_tier}")
+        return hard_negative, None  # No near-miss needed since we have guarantee
     except Exception as e:
-        logging.error(f"Error preparing sample for processing {pid}: {e!r}")
+        logging.error(f"Error in process_sample_with_guaranteed_success for {pid}: {e!r}")
         return None, None
-    dt = time.perf_counter() - t0
-    logging.info(f"Sample {pid}: ✔ finished load_commands in {dt:.2f}s")
-
-    # Stage: scorer setup
-    logging.info(f"Sample {pid}: ▶ starting scorer_setup")
-    t0 = time.perf_counter()
-    effective_concept_fn = _worker_concept_fn if _worker_concept_fn is not None else concept_fn
-    effective_parser = _worker_parser if _worker_parser is not None else parser
-    scorer = Scorer(effective_concept_fn, original_features)
-    if _worker_evo is not None:
-        _worker_evo.scorer = scorer
-        evo = _worker_evo
-    else:
-        evo = EvoPerturber(scorer=scorer, seed=42)
-    dt = time.perf_counter() - t0
-    logging.info(f"Sample {pid}: ✔ finished scorer_setup in {dt:.2f}s")
-    logging.info(f"Sample {pid}: EvoPerturber={evo}")
-    logging.info(f"Sample {pid}: entering main mutation loop")
-
-
-    # Use the worker-global concept_fn if set (parallel), else use the one passed in
-    effective_concept_fn = _worker_concept_fn if _worker_concept_fn is not None else concept_fn
-    effective_parser = _worker_parser if _worker_parser is not None else parser
-    scorer = Scorer(effective_concept_fn, original_features)
-    # Use global EvoPerturber if in worker, else create local instance
-    if _worker_evo is not None:
-        _worker_evo.scorer = scorer
-        evo = _worker_evo
-    else:
-        evo = EvoPerturber(scorer=scorer, seed=42)
-
-    def build_hard_negative_dict(base_sample, mutated_cmds, features, label_tag):
-        d = dict(base_sample)
-        d['label'] = label_tag
-        d['features'] = features
-        d['action_program'] = mutated_cmds
-        try:
-            vertices = effective_parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in mutated_cmds])
-            d['geometry'] = vertices
-        except Exception as e:
-            d['geometry'] = []
-            logging.warning(f"Failed to parse geometry for hard negative: {e!r}")
-        return d
-
-    import concurrent.futures
-    import hashlib
-    import traceback
-    flips_for_this_sample = 0
-    trials = 0
-    max_trials = args.trials_per_sample
-    max_per_sample = getattr(args, 'max_per_sample', 3)
-    found_hard_negatives = []
-    batch_size = 10
-    seen_candidates = set()
-
-    def candidate_hash(cmds):
-        # Hash tuple of commands for fast deduplication
-        return hashlib.sha1(str(cmds).encode()).hexdigest()
-
-    def fast_heuristic(cmds):
-        # Heuristic: at least 4 commands, not all identical
-        if not isinstance(cmds, list) or len(cmds) < 4:
-            return False
-        if all(cmds[0] == c for c in cmds):
-            return False
-        return True
-
-    # EvoPerturber search loop with parallel batch
-    while flips_for_this_sample < max_per_sample and trials < max_trials:
-        logging.info(f"Sample {pid}: mutation loop: flips={flips_for_this_sample}, trials={trials}")
-        # Batch generate candidates sequentially to avoid thread-pool overhead
-        batch_mutated = []
-        num_calls = min(batch_size, max_trials - trials)
-        for _ in range(num_calls):
-            result = evo.search(flat_commands)
-            if result is not None:
-                batch_mutated.append(result)
-        trials += num_calls
-        for mutated in batch_mutated:
-            logging.info(f"Sample {pid}: mutated candidate: {mutated}")
-            h = candidate_hash(mutated)
-            if h in seen_candidates:
-                continue
-            seen_candidates.add(h)
-            if not fast_heuristic(mutated):
-                continue
-            if not is_valid_geometry(mutated):
-                continue
-            features = scorer.extract_features(mutated)
-            vertices = effective_parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in mutated])
-            if not has_min_vertices(vertices, min_v=4):
-                continue
-            is_duplicate = False
-            for e in found_hard_negatives:
-                if l2_shape_distance(vertices, e.get('geometry', [])) < 1e-3:
-                    is_duplicate = True
-                    break
-            if is_duplicate:
-                continue
-            if scorer.is_flip(mutated):
-                hn = build_hard_negative_dict(sample, mutated, features, 'hard_negative')
-                found_hard_negatives.append(hn)
-                flips_for_this_sample += 1
-                if flips_for_this_sample >= max_per_sample:
-                    break
-            elif args.near_miss:
-                conf = scorer.predict_concept_confidence(mutated)
-                if is_near_flip(conf):
-                    nm = build_hard_negative_dict(sample, mutated, features, 'near_miss_evo')
-                    near_miss_results.append(nm)
-        if flips_for_this_sample >= max_per_sample:
-            break
-
-    # Batch fallback: apply only first 3 rules with timeout to avoid hangs
-    if flips_for_this_sample < max_per_sample:
-        logging.info(f"Sample {pid}: entering grammar fallback")
-        import threading
-        MAX_FALLBACK_RULES = 3
-        MAX_FALLBACK_TIME = 10  # seconds
-        def extract_commands_from_mutate_output(cand, rule_id, pid):
-            logging.debug(f"mutate output for rule {rule_id}, {pid}: type={type(cand)}, value={repr(cand)}")
-            if isinstance(cand, (tuple, list)):
-                if len(cand) > 0 and isinstance(cand[0], list) and all(isinstance(x, str) for x in cand[0]):
-                    return cand[0]
-                if all(isinstance(x, str) for x in cand):
-                    return list(cand)
-                if all(isinstance(x, tuple) for x in cand):
-                    return [item for tup in cand for item in tup if isinstance(item, str)]
-            if isinstance(cand, str):
-                return [cand]
-            return cand
-
-        for rule_id, rule_fn in enumerate(_worker_rules):
-            if rule_id >= MAX_FALLBACK_RULES:
-                break
-            cand = [None]
-            exc = [None]
-            def run_rule():
-                try:
-                    cand[0] = rule_fn(flat_commands)
-                except Exception as e:
-                    exc[0] = e
-            t = threading.Thread(target=run_rule)
-            t.start()
-            t.join(MAX_FALLBACK_TIME)
-            if t.is_alive():
-                logging.warning(f"Fallback timeout for {pid} on rule {rule_id}, breaking")
-                break
-            if exc[0] is not None:
-                logging.error(f"Error during grammar mutation rule {rule_id} for {pid}: {exc[0]!r}\n{traceback.format_exc()}")
-                continue
-            cand_val = cand[0]
-            cand_val = extract_commands_from_mutate_output(cand_val, rule_id, pid)
-            cand_tuples = parse_logo_commands_to_tuples(cand_val)
-            h = candidate_hash(cand_tuples)
-            if h in seen_candidates:
-                continue
-            seen_candidates.add(h)
-            if not fast_heuristic(cand_tuples):
-                continue
-            if not is_valid_geometry(cand_tuples):
-                continue
-            features = scorer.extract_features(cand_tuples)
-            vertices = effective_parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in cand_tuples])
-            if not has_min_vertices(vertices, min_v=4):
-                continue
-            is_duplicate = False
-            for e in found_hard_negatives:
-                if l2_shape_distance(vertices, e.get('geometry', [])) < 1e-3:
-                    is_duplicate = True
-                    break
-            if is_duplicate:
-                continue
-            if scorer.is_flip(cand_tuples):
-                hn = build_hard_negative_dict(sample, cand_tuples, features, 'hard_negative')
-                found_hard_negatives.append(hn)
-                flips_for_this_sample += 1
-                if flips_for_this_sample >= max_per_sample:
-                    break
-            elif args.near_miss:
-                conf = scorer.predict_concept_confidence(cand_tuples)
-                if is_near_flip(conf):
-                    nm = build_hard_negative_dict(sample, cand_tuples, features, 'near_miss_grammar')
-                    near_miss_results.append(nm)
-            if flips_for_this_sample >= max_per_sample:
-                break
-    return (found_hard_negatives[0] if found_hard_negatives else None, near_miss_results[0] if near_miss_results else None)
-    logging.info(f"Sample {pid}: output: hard_negative={found_hard_negatives[0] if found_hard_negatives else None}, near_miss={near_miss_results[0] if near_miss_results else None}")
 def main():
-    total_problems = 0
-    total_samples = 0
-    near_misses_output = []
     parser = argparse.ArgumentParser(description="Generate hard negatives using evolutionary and grammar-based mutation.")
     parser.add_argument('--input-dir', required=True, help='Input directory containing Bongard-LOGO problems')
     parser.add_argument('--output', required=True, help='Output file for hard negatives')
@@ -466,7 +232,9 @@ def main():
     derived_labels_path = os.path.join('data', 'derived_labels.json')
     if not os.path.exists(derived_labels_path):
         logging.error(f"Missing derived_labels.json at {derived_labels_path}")
-    problems = defaultdict(list)
+        return
+
+    all_entries = []
     try:
         with open(derived_labels_path, 'r') as f:
             all_entries = json.load(f)
@@ -474,54 +242,54 @@ def main():
         logging.error(f"Error decoding JSON from {derived_labels_path}: {e}")
         return
 
+    problems = defaultdict(list)
     for entry in all_entries:
         problems[entry['problem_id']].append(entry)
 
+    hard_negatives_output = []
+    near_misses_output = []
+    total_problems = 0
+    total_samples = 0
+
     sample_args = []
-    for pid, entries in tqdm(problems.items(), desc="Problems", leave=True):
+    for pid, entries in problems.items():
         total_problems += 1
-        positives = [e for e in entries if e.get('label') in ('category_1', 'positive')]
+        positives = [e for e in entries if e.get('label') == 'category_1']
         logging.info(f"Processing problem {total_problems}: {pid} ({len(positives)} positives)")
+
+
         try:
             concept_fn = get_concept_fn_for_problem(pid)
         except Exception as e:
             logging.error(f"No concept function registered for problem {pid}: {e}")
             raise
+
         for sample_idx, sample in enumerate(positives):
             total_samples += 1
-            from src.data_pipeline.logo_parser import BongardLogoParser
-            sample_args.append((pid, sample, BongardLogoParser(), concept_fn, args))
+            sample_args.append((pid, sample, concept_fn, args))
 
     logging.info(f"Prepared {len(sample_args)} sample arguments for processing.")
 
     results = []
-    start_all = time.time()
     if args.parallel > 1:
         logging.info(f"Using multiprocessing with {args.parallel} workers.")
         try:
-            concept_fn = sample_args[0][2] if sample_args else None
-            with multiprocessing.Pool(args.parallel, initializer=_init_worker, initargs=(concept_fn,)) as pool:
-                for res in tqdm(pool.imap(process_sample, sample_args), total=len(sample_args), desc="Samples", leave=True):
-                    results.append(res)
+            with multiprocessing.Pool(args.parallel) as pool:
+                results = pool.map(process_sample, sample_args)
         except Exception as e:
             logging.error(f"Exception during multiprocessing: {e}")
             import traceback
             logging.error(traceback.format_exc())
     else:
-        for idx, arg in enumerate(tqdm(sample_args, desc="Samples", leave=True)):
-            logging.info(f"▶ Starting sample {idx+1}/{len(sample_args)}: arg={arg}")
-            t0 = time.time()
+        for idx, arg in enumerate(sample_args):
+            logging.info(f"Processing sample {idx+1}/{len(sample_args)}: {arg[0]}")
             try:
                 res, near_res = process_sample(arg)
-                logging.info(f"Sample {idx+1}: process_sample output: res={res}, near_res={near_res}")
                 results.append((res, near_res))
             except Exception as e:
-                logging.error(f"Sample {idx+1} crashed: {e}", exc_info=True)
-                continue
-            t1 = time.time()
-            logging.info(f"✔ Finished sample {idx+1}/{len(sample_args)} in {t1-t0:.2f}s")
-    logging.info(f"All samples processed in {time.time()-start_all:.2f}s")
-    # ...existing code...
+                logging.error(f"Exception in process_sample for {arg[0]}: {e}")
+                import traceback
+                logging.error(traceback.format_exc())
 
     # Enforce diversity and non-degeneracy per positive sample
     unique_hard_negatives = []
