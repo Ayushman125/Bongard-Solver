@@ -7,11 +7,24 @@ import json
 import re
 from collections import defaultdict
 import logging
+import multiprocessing
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.data_pipeline.logo_parser import BongardLogoParser
 from src.data_pipeline.physics_infer import PhysicsInference
 from src.data_pipeline.verification import Verification
 from src.concepts import CONCEPTS
+from src.hard_negative.evo_search import EvoPerturber
+from src.data_pipeline.logo_mutator import mutate, RULE_SET
+def is_valid_geometry(program):
+    # Placeholder: checks for self-intersection, implausible polygons, etc.
+    return True
+
+def is_diverse(new, existing):
+    # Placeholder: compute vector or label difference
+    return True
+
+def is_near_flip(conf, threshold=0.05):
+    return abs(conf - 0.5) < threshold
 
 
 # Structural perturbation
@@ -110,6 +123,43 @@ def concept_test(features):
     # For example, return True if area > threshold
     return features['area'] > 0.5
 
+
+# Move process_sample to top-level
+def process_sample(args_tuple):
+    pid, sample, concept_fn, args = args_tuple
+    result = None
+    near_miss_result = None
+    try:
+        commands = sample.get('action_program')
+        if not commands or not isinstance(commands, list):
+            return None, None
+        flat_commands = commands
+        original_features = sample['features']
+    except Exception:
+        return None, None
+    evo = EvoPerturber(scorer=concept_fn, seed=42)
+    mutated = evo.search(flat_commands)
+    if mutated and is_valid_geometry(mutated):
+        # Assume concept_fn.is_flip and concept_fn.predict_concept_confidence exist
+        if concept_fn.is_flip(mutated):
+            result = f"{pid},{sample.get('image_path','')},evo:{mutated}"
+        elif args.near_miss:
+            conf = concept_fn.predict_concept_confidence(mutated)
+            if is_near_flip(conf):
+                near_miss_result = f"{pid},{sample.get('image_path','')},near_miss:{mutated}"
+    # Fallback: shape-grammar mutation
+    for rule_id in range(len(RULE_SET)):
+        cand = mutate(flat_commands, rule_id)
+        if is_valid_geometry(cand):
+            if concept_fn.is_flip(cand):
+                result = f"{pid},{sample.get('image_path','')},mutate:{cand}"
+                break
+            elif args.near_miss:
+                conf = concept_fn.predict_concept_confidence(cand)
+                if is_near_flip(conf):
+                    near_miss_result = f"{pid},{sample.get('image_path','')},near_miss:{cand}"
+    return result, near_miss_result
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--input-dir', required=True)
@@ -118,6 +168,8 @@ def main():
     parser.add_argument('--jitter-length', type=float, default=0.15, help='Base length jitter for area perturbation')
     parser.add_argument('--max-per-problem', type=int, default=14, help='Max hard negatives per problem')
     parser.add_argument('--trials-per-sample', type=int, default=500, help='Trials per positive sample')
+    parser.add_argument('--parallel', type=int, default=1, help='Number of parallel workers')
+    parser.add_argument('--near-miss', action='store_true', help='Store near-miss samples')
     args = parser.parse_args()
 
     derived_labels_path = os.path.join('data', 'derived_labels.json')
@@ -132,6 +184,7 @@ def main():
         problems[entry['problem_id']].append(entry)
 
     hard_negatives = []
+    near_misses = []
     total_problems = 0
     total_samples = 0
     total_hard_negatives = 0
@@ -139,120 +192,41 @@ def main():
     parser_obj = BongardLogoParser()
     physics_infer = PhysicsInference()
 
+    sample_args = []
     for pid, entries in problems.items():
         total_problems += 1
         labels = [e.get('label') for e in entries]
         print(f"Problem {total_problems}: {pid} labels: {labels}")
         positives = [e for e in entries if e.get('label') == 'category_1']
         print(f"Processing problem {total_problems}: {pid} ({len(positives)} positives)")
-        count = 0
         concept_fn = CONCEPTS.get(pid, concept_test)
         for sample_idx, sample in enumerate(positives):
-            if count >= args.max_per_problem:
-                break
-            total_samples += 1
-            try:
-                commands = sample.get('action_program')
-                if not commands or not isinstance(commands, list):
-                    print(f"    [ERROR] No valid action_program for sample {sample_idx+1}")
-                    continue
-                flat_commands = commands
-                original_features = sample['features']
-            except Exception as e:
-                print(f"    [ERROR] Failed to get features for sample: {e}")
-                continue
-            flips = 0
-            trials = 0
-            ang_jit, len_jit = args.jitter_angle, args.jitter_length
-            found_flip = False
-            # Adaptive jitter loop
-            for scale in [0.05, 0.1, 0.2, 0.4]:
-                cmds1 = structural_perturb(flat_commands)
-                cmds2 = numeric_jitter(cmds1, ang_jit, scale)
-                # attempt to parse the perturbed LOGO program...
-                try:
-                    verts = parser_obj.parse_action_program(cmds2, scale=120)
-                except ValueError as e:
-                    # skip any ValueError (math domain or otherwise), log for audit
-                    logging.warning(f"perturbed parse failed ({e!r}), skipping trial")
-                    continue
-                try:
-                    poly = PhysicsInference.polygon_from_vertices(verts)
-                    if poly is None or not poly.is_valid:
-                        continue
-                    feats2 = {
-                        **original_features,
-                        'area': poly.area,
-                        'centroid': [poly.centroid.x, poly.centroid.y],
-                        'is_convex': PhysicsInference.is_convex(poly),
-                        'symmetry_score': PhysicsInference.symmetry_score(poly),
-                        'moment_of_inertia': PhysicsInference.moment_of_inertia(poly),
-                        'num_straight': PhysicsInference.count_straight_segments(poly),
-                        'num_arcs': PhysicsInference.count_arcs(poly),
-                        'has_quadrangle': PhysicsInference.has_quadrangle(poly),
-                        'has_obtuse_angle': PhysicsInference.has_obtuse(poly),
-                    }
-                except Exception as e:
-                    print(f"    [ERROR] Failed to parse adaptive perturbed program: {e}")
-                    continue
-                if concept_fn(original_features) != concept_fn(feats2):
-                    entry = f"{pid},{sample.get('image_path','')},perturb:{cmds2}"
-                    hard_negatives.append(entry)
-                    flips += 1
-                    count += 1
-                    total_hard_negatives += 1
-                    found_flip = True
-                    print(f"    [FOUND] Adaptive hard negative for sample {sample_idx+1} (scale={scale})")
-                    break
-            # If adaptive search fails, fall back to random trials
-            if not found_flip:
-                while flips < 2 and trials < args.trials_per_sample:
-                    trials += 1
-                    cmds1 = structural_perturb(flat_commands)
-                    cmds2 = numeric_jitter(cmds1, ang_jit, len_jit)
-                    # attempt to parse the perturbed LOGO program...
-                    try:
-                        verts = parser_obj.parse_action_program(cmds2, scale=120)
-                    except ValueError as e:
-                        # skip any ValueError (math domain or otherwise), log for audit
-                        logging.warning(f"perturbed parse failed ({e!r}), skipping trial")
-                        continue
-                    try:
-                        poly = PhysicsInference.polygon_from_vertices(verts)
-                        if poly is None or not poly.is_valid:
-                            continue
-                        feats = {
-                            **original_features,
-                            'area': poly.area,
-                            'centroid': [poly.centroid.x, poly.centroid.y],
-                            'is_convex': PhysicsInference.is_convex(poly),
-                            'symmetry_score': PhysicsInference.symmetry_score(poly),
-                            'moment_of_inertia': PhysicsInference.moment_of_inertia(poly),
-                            'num_straight': PhysicsInference.count_straight_segments(poly),
-                            'num_arcs': PhysicsInference.count_arcs(poly),
-                            'has_quadrangle': PhysicsInference.has_quadrangle(poly),
-                            'has_obtuse_angle': PhysicsInference.has_obtuse(poly),
-                        }
-                    except Exception as e:
-                        print(f"    [ERROR] Failed to parse random perturbed program: {e}")
-                        continue
-                    if concept_fn(original_features) != concept_fn(feats):
-                        entry = f"{pid},{sample.get('image_path','')},perturb:{cmds2}"
-                        hard_negatives.append(entry)
-                        flips += 1
-                        count += 1
-                        total_hard_negatives += 1
-                        print(f"    [FOUND] Random hard negative for sample {sample_idx+1} (trial={trials})")
-            if flips == 0:
-                print(f"    [NO FLIP] No hard negative found for sample {sample_idx+1}")
+            sample_args.append((pid, sample, concept_fn, args))
+
+    if args.parallel > 1:
+        with multiprocessing.Pool(args.parallel) as pool:
+            results = pool.map(process_sample, sample_args)
+    else:
+        results = [process_sample(arg) for arg in sample_args]
+
+    for result, near_miss_result in results:
+        if result:
+            hard_negatives.append(result)
+        if near_miss_result:
+            near_misses.append(near_miss_result)
 
     with open(args.output, 'w') as f:
         for hn in hard_negatives:
             f.write(hn + '\n')
+    if args.near_miss:
+        with open(args.output.replace('.txt', '_nearmiss.txt'), 'w') as f:
+            for nm in near_misses:
+                f.write(nm + '\n')
     print(f"\nSummary:")
     print(f"  Problems processed: {total_problems}")
-    print(f"  Samples processed: {total_samples}")
-    print(f"  Hard negatives found: {total_hard_negatives}")
+    print(f"  Hard negatives found: {len(hard_negatives)}")
+    if args.near_miss:
+        print(f"  Near-miss samples found: {len(near_misses)}")
 
 if __name__ == "__main__":
     main()

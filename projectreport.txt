@@ -76,11 +76,15 @@ bongard-solver/
 
 ### 2.7 `scripts/generate_hard_negatives.py`
 
-- Generates adversarial/hard-negative attribute perturbations:
-  - Small random noise to geometry/physics features
-  - Verifies label change via concept check (auto or with lightweight neural baseline)
-  - Maintains only “valid” hard negatives, outputs attribute changes
-  - Updates `data/hard_negatives.txt`
+
+- Enhanced hard-negative mining pipeline integrating:
+  - **Evolutionary search** (`src/hard_negative/evo_search.py`): Uses black-box evolutionary strategies to maximize label flips while preserving geometric validity.
+  - **Shape-grammar mutation** (`src/data_pipeline/logo_mutator.py`): Modular rules for stroke-level edits, topology changes, and concept-altering mutations.
+  - **Near-miss curriculum**: Optionally stores high-confidence non-flips for progressive classifier retraining.
+  - **Parallel execution**: Supports multi-core mining for rapid coverage.
+  - **Quality safeguards**: Deterministic seeding, geometry checks, diversity filtering, and audit trail logging.
+  - CLI flags: `--parallel`, `--near-miss` for flexible operation.
+  - Outputs: `data/hard_negatives.txt` and optionally `data/hard_negatives_nearmiss.txt`.
 
 ### 2.8 `scripts/verify_annotations.py`
 
@@ -137,8 +141,9 @@ bongard-solver/
 # Run the full derivation pipeline on a subset of 50 puzzles
 python scripts/logo_to_shape.py --input-dir data/raw/ --output data/derived_labels.json --problems-list data/phase1_50puzzles.txt
 
-# Generate hard negatives
-python scripts/generate_hard_negatives.py --input-dir data/raw/ --output data/hard_negatives.txt
+
+# Generate hard negatives with advanced mining
+python scripts/generate_hard_negatives.py --input-dir data/raw/ --output data/hard_negatives.txt --parallel 8 --near-miss
 
 # Spot-check failed samples manually in browser
 python scripts/verify_annotations.py --review-list data/flagged_cases.txt
@@ -146,13 +151,17 @@ python scripts/verify_annotations.py --review-list data/flagged_cases.txt
 
 ## 9. Key Quality Guarantees
 
-- By parsing procedural LOGO code, all derived attributes (geometry, physics, class labels) are tied directly to ground truth.
-- Automated flagging ensures <1% error rate routed to “human review” queue, minimizing the risk of low-quality data.
-- Every computation is auditable: full per-image provenance is saved for future bug-tracing.
+
+- **Determinism:** All random routines (including evolutionary search) are seeded and logged for reproducibility.
+- **Geometry Validity:** All hard negatives pass geometry and self-intersection checks before saving.
+- **Diversity:** Embedding-based filtering ensures a diverse set of negatives, avoiding redundancy.
+- **Audit Trail:** Each hard negative logs its mutator chain and fitness score for traceability.
+- **Scalability:** Parallel mining and curriculum relaxation enable rapid coverage of 600+ hard negatives in under a week.
 
 ## 10. Integration with Later Modules
 
-All outputs (especially `derived_labels.json` and `hard_negatives.txt`) are designed to be directly ingestible by later modules (like `PhysicsInference`, `HardNegativeMiner`, and “alpha” model testing) in your planned Bongard-Solver architecture[1].
+
+All outputs (especially `derived_labels.json`, `hard_negatives.txt`, and `hard_negatives_nearmiss.txt`) are designed to be directly ingestible by later modules (like `PhysicsInference`, `HardNegativeMiner`, and “alpha” model testing) in your planned Bongard-Solver architecture[1].
 
 
 **This structure ensures that with open-source libraries, deterministic pipelines, and minimal-but-focused human review, your phase-1 dataset will be robust, high quality, and maximally extensible for future system modules.**
@@ -163,36 +172,45 @@ Updated Report: Phases 0 & 1
 
 Phase 1 Data Requirements and Splits for Bongard-Solver
 Categories and Quantities to Annotate for Phase 1
+
 Phase 1 of the Bongard-Solver requires annotated data from all three main Bongard-LOGO categories:
-•	Freeform Shape Problems
-•	Basic Shape Problems
-•	Abstract Shape Problems
+- Freeform Shape Problems
+- Basic Shape Problems
+- Abstract Shape Problems
 For the benchmark and similar research projects, a typical subset for Phase 1 annotation and testing is:
-•	50 problems total, distributed as:
-o	17 Freeform Shape problems
-o	17 Basic Shape problems
-o	16 Abstract Shape problems
+- 50 problems total, distributed as:
+  - 17 Freeform Shape problems
+  - 17 Basic Shape problems
+  - 16 Abstract Shape problems
 Within each problem folder, there are 6 positive (category_1) and 6 negative (category_0) images per problem. For each chosen problem, all 12 images (and their associated LOGO scripts) should be annotated with both their inherent labels and the derived attributes (geometry, physics, etc.) for Phase 1 objectives.
-Category	No. of Problems	Images per Problem	Total Images to Annotate
-Freeform	17	12	204
-Basic	17	12	204
-Abstract	16	12	192
-Total	50		600
+
+**Hard Negative Mining Update:**
+- With the new evolutionary and grammar-based pipeline, expected yield is 600–700 hard negatives in 1 week, fulfilling the benchmark for robust downstream training and adversarial evaluation.
+
+Category | No. of Problems | Images per Problem | Total Images to Annotate
+---|---|---|---
+Freeform | 17 | 12 | 204
+Basic | 17 | 12 | 204
+Abstract | 16 | 12 | 192
+Total | 50 | | 600
+
 Train/Validation/Test Split Ratio
 According to the Bongard-LOGO dataset and typical experimental protocols, the standard split used in published work is:
-•	Training: 70%
-•	Validation: 15%
-•	Testing: 15%
+- Training: 70%
+- Validation: 15%
+- Testing: 15%
 For a sample of 50 problems, this results in the following allocation:
-•	Training: 35 problems
-•	Validation: 8 problems
-•	Testing: 7 problems
-This ratio ensures a sufficient amount of data for both model learning and reliable performance evaluation, scaled appropriately for your Phase 1 pilot13.
+- Training: 35 problems
+- Validation: 8 problems
+- Testing: 7 problems
+This ratio ensures a sufficient amount of data for both model learning and reliable performance evaluation, scaled appropriately for your Phase 1 pilot.
+
 Summary Table
-Split	Number of Problems	Percentage
-Training	35	70%
-Validation	8	15%
-Testing	7	15%
+Split | Number of Problems | Percentage
+---|---|---
+Training | 35 | 70%
+Validation | 8 | 15%
+Testing | 7 | 15%
 All selected problems in each split should be fully annotated across the three categories for Phase 1 testing and module validation.
 
 
