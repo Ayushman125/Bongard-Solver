@@ -336,8 +336,11 @@ def process_sample(args_tuple):
         if flips_for_this_sample >= max_per_sample:
             break
 
-    # Batch fallback: apply all rules sequentially if needed
+    # Batch fallback: apply only first 3 rules with timeout to avoid hangs
     if flips_for_this_sample < max_per_sample:
+        import threading
+        MAX_FALLBACK_RULES = 3
+        MAX_FALLBACK_TIME = 10  # seconds
         def extract_commands_from_mutate_output(cand, rule_id, pid):
             logging.debug(f"mutate output for rule {rule_id}, {pid}: type={type(cand)}, value={repr(cand)}")
             if isinstance(cand, (tuple, list)):
@@ -352,42 +355,57 @@ def process_sample(args_tuple):
             return cand
 
         for rule_id, rule_fn in enumerate(_worker_rules):
-            try:
-                cand = rule_fn(flat_commands)
-                cand = extract_commands_from_mutate_output(cand, rule_id, pid)
-                cand_tuples = parse_logo_commands_to_tuples(cand)
-                h = candidate_hash(cand_tuples)
-                if h in seen_candidates:
-                    continue
-                seen_candidates.add(h)
-                if not fast_heuristic(cand_tuples):
-                    continue
-                if not is_valid_geometry(cand_tuples):
-                    continue
-                features = scorer.extract_features(cand_tuples)
-                vertices = effective_parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in cand_tuples])
-                if not has_min_vertices(vertices, min_v=4):
-                    continue
-                is_duplicate = False
-                for e in found_hard_negatives:
-                    if l2_shape_distance(vertices, e.get('geometry', [])) < 1e-3:
-                        is_duplicate = True
-                        break
-                if is_duplicate:
-                    continue
-                if scorer.is_flip(cand_tuples):
-                    hn = build_hard_negative_dict(sample, cand_tuples, features, 'hard_negative')
-                    found_hard_negatives.append(hn)
-                    flips_for_this_sample += 1
-                    if flips_for_this_sample >= max_per_sample:
-                        break
-                elif args.near_miss:
-                    conf = scorer.predict_concept_confidence(cand_tuples)
-                    if is_near_flip(conf):
-                        nm = build_hard_negative_dict(sample, cand_tuples, features, 'near_miss_grammar')
-                        near_miss_results.append(nm)
-            except Exception as e:
-                logging.error(f"Error during grammar mutation rule {rule_id} for {pid}: {e!r}\n{traceback.format_exc()}")
+            if rule_id >= MAX_FALLBACK_RULES:
+                break
+            cand = [None]
+            exc = [None]
+            def run_rule():
+                try:
+                    cand[0] = rule_fn(flat_commands)
+                except Exception as e:
+                    exc[0] = e
+            t = threading.Thread(target=run_rule)
+            t.start()
+            t.join(MAX_FALLBACK_TIME)
+            if t.is_alive():
+                logging.warning(f"Fallback timeout for {pid} on rule {rule_id}, breaking")
+                break
+            if exc[0] is not None:
+                logging.error(f"Error during grammar mutation rule {rule_id} for {pid}: {exc[0]!r}\n{traceback.format_exc()}")
+                continue
+            cand_val = cand[0]
+            cand_val = extract_commands_from_mutate_output(cand_val, rule_id, pid)
+            cand_tuples = parse_logo_commands_to_tuples(cand_val)
+            h = candidate_hash(cand_tuples)
+            if h in seen_candidates:
+                continue
+            seen_candidates.add(h)
+            if not fast_heuristic(cand_tuples):
+                continue
+            if not is_valid_geometry(cand_tuples):
+                continue
+            features = scorer.extract_features(cand_tuples)
+            vertices = effective_parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in cand_tuples])
+            if not has_min_vertices(vertices, min_v=4):
+                continue
+            is_duplicate = False
+            for e in found_hard_negatives:
+                if l2_shape_distance(vertices, e.get('geometry', [])) < 1e-3:
+                    is_duplicate = True
+                    break
+            if is_duplicate:
+                continue
+            if scorer.is_flip(cand_tuples):
+                hn = build_hard_negative_dict(sample, cand_tuples, features, 'hard_negative')
+                found_hard_negatives.append(hn)
+                flips_for_this_sample += 1
+                if flips_for_this_sample >= max_per_sample:
+                    break
+            elif args.near_miss:
+                conf = scorer.predict_concept_confidence(cand_tuples)
+                if is_near_flip(conf):
+                    nm = build_hard_negative_dict(sample, cand_tuples, features, 'near_miss_grammar')
+                    near_miss_results.append(nm)
             if flips_for_this_sample >= max_per_sample:
                 break
     return (found_hard_negatives[0] if found_hard_negatives else None, near_miss_results[0] if near_miss_results else None)

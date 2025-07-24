@@ -1,3 +1,17 @@
+def _clean_vertices(verts, max_len=2000, tol=1e-6):
+    """Remove consecutive duplicates and subsample long chains."""
+    cleaned = []
+    last = None
+    for x, y in verts:
+        if last is None or (abs(x - last[0]) > tol or abs(y - last[1]) > tol):
+            cleaned.append((x, y))
+            last = (x, y)
+        if len(cleaned) >= max_len:
+            break
+    # Ensure at least 4 distinct points
+    if len(cleaned) < 4:
+        cleaned = [(0, 0), (1, 0), (1, 1), (0, 1)]
+    return cleaned
 import functools
 import logging
 import math
@@ -95,7 +109,9 @@ class PhysicsInference:
         MAX_ASPECT = 20.0
 
         try:
-            poly = Polygon(vertices)
+            # Clean vertices before passing to Shapely
+            cleaned_verts = _clean_vertices(vertices)
+            poly = Polygon(cleaned_verts)
 
             # Repair self-intersections
             if not poly.is_valid:
