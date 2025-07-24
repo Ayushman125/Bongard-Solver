@@ -38,19 +38,34 @@ def _spec_to_lambda(spec):
     # Convert a spec dict to a Python lambda for runtime use
     sig = spec['signature']
     param = spec['param']
-    if sig.startswith('is_convex'):
-        return lambda f: f.get('is_convex', False)
-    if sig.startswith('num_straight=='):
-        n = param
-        return lambda f: f.get('num_straight', None) == n
-    if sig.startswith('has_quadrangle'):
-        return lambda f: f.get('has_quadrangle', False)
-    if sig.startswith('nact_range'):
+    typ = spec.get('type','')
+    feats = spec.get('features',[])
+    # Single-feature bool
+    if typ == 'bool':
+        feat = feats[0]
+        return lambda f: bool(f.get(feat, False)) == bool(param)
+    # Single-feature threshold
+    if typ == 'threshold':
+        feat = feats[0]
+        if '>' in sig:
+            return lambda f: f.get(feat, 0) > param
+        else:
+            return lambda f: f.get(feat, 0) < param
+    # Single-feature range
+    if typ == 'range':
+        feat = feats[0]
         lo, hi = param
-        return lambda f: lo <= f.get('num_strokes', 0) <= hi
-    if sig.startswith('symmetry_score<'):
-        t = param
-        return lambda f: f.get('symmetry_score', 1e9) < t
+        return lambda f: lo <= f.get(feat, 0) <= hi
+    # Two-feature AND (bool)
+    if typ == 'and_bool':
+        f1, f2 = feats
+        v1, v2 = param
+        return lambda f: (f.get(f1, False)==v1) and (f.get(f2, False)==v2)
+    # Two-feature AND (range)
+    if typ == 'and_range':
+        (min1,max1),(min2,max2) = param
+        f1, f2 = feats
+        return lambda f: min1 <= f.get(f1, 1e9) <= max1 and min2 <= f.get(f2, 1e9) <= max2
     # fallback: always False
     return lambda f: False
 
