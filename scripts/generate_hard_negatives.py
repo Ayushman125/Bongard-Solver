@@ -31,11 +31,11 @@ def structural_perturb(cmds):
 def numeric_jitter(cmds, ang_jit, len_jit):
     def jitter(c):
         if c.startswith('line_'):
-            m = re.match(r'line_\w+_([\d.]+)-([\d.]+)',c)
+            m = re.match(r'line_(\w+)_([\d.]+)-([\d.]+)', c)
             if m:
-                style,L,A = m.groups()
-                L = float(L)*(1+random.uniform(-len_jit,len_jit))
-                A = float(A)*(1+random.uniform(-ang_jit/360,ang_jit/360))
+                style, L, A = m.groups()
+                L = float(L) * (1 + random.uniform(-len_jit, len_jit))
+                A = float(A) * (1 + random.uniform(-ang_jit / 360, ang_jit / 360))
                 return f'line_{style}_{L:.3f}-{A:.3f}'
         if c.startswith('arc_'):
             parts = c.split('-')
