@@ -118,10 +118,9 @@ def process_sample(args_tuple):
         hard_negative, used_tier = process_sample_with_guaranteed_success(
             sample, concept_fn, args
         )
-        logging.info("Sample %s: generated via %s", pid, used_tier)
         return hard_negative, None
     except Exception as exc:  # noqa: BLE001
-        logging.error("process_sample failure for %s: %r", pid, exc, exc_info=True)
+        logging.error(f"process_sample failure for {pid}: {exc}", exc_info=True)
         return None, None
 
 
@@ -193,9 +192,12 @@ def main():
             ):
                 results.append(res)
     else:
-        for idx, tup in enumerate(tqdm(sample_args, desc="Samples")):
-            logging.info("Processing %d / %d", idx + 1, len(sample_args))
-            results.append(process_sample(tup))
+        for idx, arg in enumerate(tqdm(sample_args, desc="Samples"), start=1):
+            pid = arg[0]
+            logging.info(f"[{idx}/{len(sample_args)}] START sample {pid}")
+            hn, nm = process_sample(arg)
+            results.append((hn, nm))
+            logging.info(f"[{idx}/{len(sample_args)}] DONE  sample {pid}")
 
     # Post-process outputs
     hard_negatives, near_misses = [], []
