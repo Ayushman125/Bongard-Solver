@@ -1,6 +1,7 @@
 from shapely.geometry import Polygon
 import pymunk
 import numpy as np
+import math
 
 class PhysicsInference:
     @staticmethod
@@ -10,6 +11,7 @@ class PhysicsInference:
             # pick the largest area polygon
             return max(poly_geom.geoms, key=lambda p: p.area)
         return poly_geom
+
     @staticmethod
     def count_straight_segments(vertices):
         # Heuristic: count segments with nearly constant angle
@@ -32,6 +34,7 @@ class PhysicsInference:
         total = len(vertices) - 1
         straight = PhysicsInference.count_straight_segments(vertices)
         return max(0, total - straight)
+
     @staticmethod
     def safe_extract_vertices(obj):
         """Safely extract vertices from a list, Polygon, or MultiPolygon."""
@@ -61,7 +64,7 @@ class PhysicsInference:
                     hull = MultiPoint(vertices).convex_hull
                     if hull.geom_type == "Point":
                         x, y = hull.x, hull.y
-                        hull = Polygon([(x, y), (x+1, y), (x+1, y+1), (x, y+1)])
+                        hull = Polygon([(x, y), (x+1, y), (x+1, y+1), (x, y+1)]) # Create a tiny square around the point
                     poly = hull
             poly = PhysicsInference._ensure_polygon(poly)
             return poly
@@ -120,14 +123,16 @@ class PhysicsInference:
         if len(vertices) < 3:
             return False
         def angle(a, b, c):
-            import math
             ab = np.array([b[0]-a[0], b[1]-a[1]])
             cb = np.array([b[0]-c[0], b[1]-c[1]])
             dot = np.dot(ab, cb)
             norm = np.linalg.norm(ab) * np.linalg.norm(cb)
             if norm == 0:
-                return 0
-            return np.degrees(np.arccos(dot / norm))
+                return 0.0
+            cosang = dot / norm
+            # clamp to [-1,1] to avoid math domain errors
+            cosang = max(-1.0, min(1.0, cosang))
+            return np.degrees(math.acos(cosang))
         for i in range(len(vertices)):
             a, b, c = vertices[i-1], vertices[i], vertices[(i+1)%len(vertices)]
             if angle(a, b, c) > 100:
