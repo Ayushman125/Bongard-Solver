@@ -8,11 +8,14 @@ Auto-induces and caches concept predicates for every problem in derived_labels.j
 No manual wiring required; new problems are handled automatically.
 """
 
+
 import os
 import sys
 import json
+import time
 from pathlib import Path
 import yaml
+from concurrent.futures import ProcessPoolExecutor, TimeoutError as FutureTimeoutError
 from .auto_inducer import induce
 from .auto_tree import induce_tree
 
@@ -37,6 +40,15 @@ def _load_derived_labels(path=DERIVED_LABELS_PATH):
         features = entry.get('features', {})
         pid_to_samples.setdefault(pid, []).append((features, y))
     return pid_to_samples
+
+def run_with_timeout(fn, args=(), timeout=2):
+    with ProcessPoolExecutor(1) as exe:
+        fut = exe.submit(fn, *args)
+        try:
+            return fut.result(timeout=timeout)
+        except FutureTimeoutError:
+            fut.cancel()
+            raise TimeoutError(f"{fn.__name__} timed out after {timeout}s")
 
 def _spec_to_lambda(spec):
     # Convert a spec dict to a Python lambda for runtime use
@@ -74,12 +86,22 @@ def _spec_to_lambda(spec):
     return lambda f: False
 
 class ConceptRegistry:
+    _singleton = None
+
+    def __new__(cls, derived_labels_path=DERIVED_LABELS_PATH, cache_path=CACHE_PATH):
+        if cls._singleton is None:
+            cls._singleton = super().__new__(cls)
+        return cls._singleton
+
     def __init__(self, derived_labels_path=DERIVED_LABELS_PATH, cache_path=CACHE_PATH):
+        if hasattr(self, '_initialized') and self._initialized:
+            return
         self.cache_path = Path(cache_path)
         self.funcs = {}
         self.specs = {}
+        self.pid_to_samples = _load_derived_labels(derived_labels_path)
         self._load_cache()
-        self._scan_and_update(derived_labels_path)
+        self._initialized = True
 
     def _load_cache(self):
         if self.cache_path.exists():
@@ -94,51 +116,63 @@ class ConceptRegistry:
         pos_seqs = {tuple(p["action_program"]) for p in positives if "action_program" in p}
         return lambda features, seqs=pos_seqs: tuple(features.get("action_program", [])) in seqs
 
-    def _scan_and_update(self, derived_labels_path):
-        pid_to_samples = _load_derived_labels(derived_labels_path)
-        updated = False
-        for pid, samples in pid_to_samples.items():
-            if pid in self.funcs:
-                continue
-            positives = [f for f, y in samples if y == 1]
-            negatives = [f for f, y in samples if y == 0]
-            if not positives or not negatives:
-                continue  # skip degenerate
-            fn = None
+    def _induce_for(self, pid):
+        import logging
+        samples = self.pid_to_samples.get(pid, [])
+        positives = [f for f, y in samples if y == 1]
+        negatives = [f for f, y in samples if y == 0]
+        if not positives or not negatives:
+            logging.warning(f"ConceptRegistry: degenerate problem {pid}, using fallback.")
+            fn = self._factory_program_membership(pid, positives)
+            self.specs[pid] = {'signature': 'program_membership', 'param': None, 'features': [], 'type': 'membership'}
+            self.funcs[pid] = fn
+            return fn
+        fn = None
+        try:
+            logging.info(f"ConceptRegistry: inducing for problem '{pid}'")
+            start = time.perf_counter()
             try:
-                spec = induce(pid, positives, negatives)
+                spec = run_with_timeout(induce, (pid, positives, negatives), timeout=2)
                 self.specs[pid] = spec
                 fn = _spec_to_lambda(spec)
-                print(f"INFO  Auto-derived concept for {pid} → {spec['signature']}")
-            except NoPredicateFound:
-                print(f"WARN  No predicate found for {pid}, using program membership fallback.")
-                fn = self._factory_program_membership(pid, positives)
-                self.specs[pid] = {'signature': 'program_membership', 'param': None, 'features': [], 'type': 'membership'}
-            except Exception as e:
-                # Fallback: use decision tree induction
-                print(f"WARN  Template induction failed for {pid} ({e}), using decision tree.")
-                fn = induce_tree(pid)
+                logging.info(f"INFO  Auto-derived concept for {pid} → {spec['signature']}")
+            except TimeoutError:
+                logging.error(f"induce() timed out for {pid}, falling back")
+                raise NoPredicateFound()
+        except NoPredicateFound:
+            logging.warning(f"No predicate found for {pid}, using program membership fallback.")
+            fn = self._factory_program_membership(pid, positives)
+            self.specs[pid] = {'signature': 'program_membership', 'param': None, 'features': [], 'type': 'membership'}
+        except Exception as e:
+            logging.warning(f"Template induction failed for {pid} ({e}), using decision tree.")
+            try:
+                fn = run_with_timeout(induce_tree, (pid,), timeout=1)
                 self.specs[pid] = {'signature': 'decision_tree', 'param': None, 'features': [], 'type': 'tree'}
-            # Final fallback: if still None, use program membership
-            if fn is None:
-                print(f"WARN  All induction failed for {pid}, using program membership as last resort.")
+            except Exception as e2:
+                logging.error(f"induce_tree() failed for {pid}: {e2}")
                 fn = self._factory_program_membership(pid, positives)
                 self.specs[pid] = {'signature': 'program_membership', 'param': None, 'features': [], 'type': 'membership'}
-            self.funcs[pid] = fn
-            updated = True
-        if updated:
-            self.cache_path.write_text(yaml.safe_dump(self.specs))
+        if fn is None:
+            logging.warning(f"All induction failed for {pid}, using program membership as last resort.")
+            fn = self._factory_program_membership(pid, positives)
+            self.specs[pid] = {'signature': 'program_membership', 'param': None, 'features': [], 'type': 'membership'}
+        self.funcs[pid] = fn
+        self.cache_path.write_text(yaml.safe_dump(self.specs))
+        logging.info(f"ConceptRegistry: done '{pid}'")
+        return fn
 
     def get(self, pid):
         fn = self.funcs.get(pid)
         if fn is None:
-            raise RuntimeError(f"Concept function should never be None for {pid}")
+            # Lazy induction for new problems
+            fn = self._induce_for(pid)
         return fn
+
+_GLOBAL_REGISTRY = ConceptRegistry()
 
 def get_concept_fn_for_problem(pid):
     """Factory function to get the concept function for a problem ID."""
-    registry = ConceptRegistry()
-    fn = registry.get(pid)
+    fn = _GLOBAL_REGISTRY.get(pid)
     if fn is None:
-        raise KeyError(f"Concept missing for '{pid}' — registry keys: {list(registry.funcs.keys())}")
+        raise KeyError(f"Concept missing for '{pid}' — registry keys: {list(_GLOBAL_REGISTRY.funcs.keys())}")
     return fn

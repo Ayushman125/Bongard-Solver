@@ -223,6 +223,7 @@ def flips_label(original_features, perturbed_features, concept_fn):
 def process_sample(args_tuple):
     # Unpack parser and concept_fn instead of discarding them
     pid, sample, parser, concept_fn, args = args_tuple
+    logging.info(f"process_sample: pid={pid}, sample_keys={list(sample.keys())}, args={args}")
     results = []
     near_miss_results = []
     global _worker_parser, _worker_concept_fn, _worker_evo, _worker_rules
@@ -234,23 +235,26 @@ def process_sample(args_tuple):
     logging.debug(f"Sample {pid}: starting load_commands")
     t0 = time.perf_counter()
     try:
+        logging.info(f"Sample {pid}: ▶ starting load_commands")
         commands = sample.get('action_program')
         if not commands:
             logging.warning(f"No action_program found for sample {pid}. Skipping.")
             return None, None
         flat_commands = parse_logo_commands_to_tuples(commands)
+        logging.info(f"Sample {pid}: flat_commands={flat_commands[:10]}... (total {len(flat_commands)})")
         original_features = sample.get('features')
         if not original_features:
             logging.warning(f"No original features found for sample {pid}. Skipping.")
             return None, None
+        logging.info(f"Sample {pid}: original_features={original_features}")
     except Exception as e:
         logging.error(f"Error preparing sample for processing {pid}: {e!r}")
         return None, None
     dt = time.perf_counter() - t0
-    logging.debug(f"Sample {pid}: finished load_commands in {dt:.2f}s")
+    logging.info(f"Sample {pid}: ✔ finished load_commands in {dt:.2f}s")
 
     # Stage: scorer setup
-    logging.debug(f"Sample {pid}: starting scorer_setup")
+    logging.info(f"Sample {pid}: ▶ starting scorer_setup")
     t0 = time.perf_counter()
     effective_concept_fn = _worker_concept_fn if _worker_concept_fn is not None else concept_fn
     effective_parser = _worker_parser if _worker_parser is not None else parser
@@ -261,7 +265,9 @@ def process_sample(args_tuple):
     else:
         evo = EvoPerturber(scorer=scorer, seed=42)
     dt = time.perf_counter() - t0
-    logging.debug(f"Sample {pid}: finished scorer_setup in {dt:.2f}s")
+    logging.info(f"Sample {pid}: ✔ finished scorer_setup in {dt:.2f}s")
+    logging.info(f"Sample {pid}: EvoPerturber={evo}")
+    logging.info(f"Sample {pid}: entering main mutation loop")
 
 
     # Use the worker-global concept_fn if set (parallel), else use the one passed in
@@ -313,6 +319,7 @@ def process_sample(args_tuple):
 
     # EvoPerturber search loop with parallel batch
     while flips_for_this_sample < max_per_sample and trials < max_trials:
+        logging.info(f"Sample {pid}: mutation loop: flips={flips_for_this_sample}, trials={trials}")
         # Batch generate candidates sequentially to avoid thread-pool overhead
         batch_mutated = []
         num_calls = min(batch_size, max_trials - trials)
@@ -322,6 +329,7 @@ def process_sample(args_tuple):
                 batch_mutated.append(result)
         trials += num_calls
         for mutated in batch_mutated:
+            logging.info(f"Sample {pid}: mutated candidate: {mutated}")
             h = candidate_hash(mutated)
             if h in seen_candidates:
                 continue
@@ -357,6 +365,7 @@ def process_sample(args_tuple):
 
     # Batch fallback: apply only first 3 rules with timeout to avoid hangs
     if flips_for_this_sample < max_per_sample:
+        logging.info(f"Sample {pid}: entering grammar fallback")
         import threading
         MAX_FALLBACK_RULES = 3
         MAX_FALLBACK_TIME = 10  # seconds
@@ -428,6 +437,7 @@ def process_sample(args_tuple):
             if flips_for_this_sample >= max_per_sample:
                 break
     return (found_hard_negatives[0] if found_hard_negatives else None, near_miss_results[0] if near_miss_results else None)
+    logging.info(f"Sample {pid}: output: hard_negative={found_hard_negatives[0] if found_hard_negatives else None}, near_miss={near_miss_results[0] if near_miss_results else None}")
 def main():
     total_problems = 0
     total_samples = 0
@@ -499,10 +509,11 @@ def main():
             logging.error(traceback.format_exc())
     else:
         for idx, arg in enumerate(tqdm(sample_args, desc="Samples", leave=True)):
-            logging.info(f"▶ Starting sample {idx+1}/{len(sample_args)}")
+            logging.info(f"▶ Starting sample {idx+1}/{len(sample_args)}: arg={arg}")
             t0 = time.time()
             try:
                 res, near_res = process_sample(arg)
+                logging.info(f"Sample {idx+1}: process_sample output: res={res}, near_res={near_res}")
                 results.append((res, near_res))
             except Exception as e:
                 logging.error(f"Sample {idx+1} crashed: {e}", exc_info=True)
