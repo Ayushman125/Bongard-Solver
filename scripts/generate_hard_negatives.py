@@ -499,16 +499,16 @@ def main():
             logging.error(traceback.format_exc())
     else:
         for idx, arg in enumerate(tqdm(sample_args, desc="Samples", leave=True)):
+            logging.info(f"▶ Starting sample {idx+1}/{len(sample_args)}")
             t0 = time.time()
             try:
                 res, near_res = process_sample(arg)
                 results.append((res, near_res))
             except Exception as e:
-                logging.error(f"Exception in process_sample for {arg[0]}: {e}")
-                import traceback
-                logging.error(traceback.format_exc())
+                logging.error(f"Sample {idx+1} crashed: {e}", exc_info=True)
+                continue
             t1 = time.time()
-            logging.info(f"Sample {idx+1}/{len(sample_args)} processed in {t1-t0:.2f}s")
+            logging.info(f"✔ Finished sample {idx+1}/{len(sample_args)} in {t1-t0:.2f}s")
     logging.info(f"All samples processed in {time.time()-start_all:.2f}s")
     # ...existing code...
 
