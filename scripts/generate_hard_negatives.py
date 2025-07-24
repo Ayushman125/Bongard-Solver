@@ -6,6 +6,7 @@ import ijson
 import json
 import re
 from collections import defaultdict
+import logging
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.data_pipeline.logo_parser import BongardLogoParser
 from src.data_pipeline.physics_infer import PhysicsInference
@@ -168,15 +169,14 @@ def main():
             for scale in [0.05, 0.1, 0.2, 0.4]:
                 cmds1 = structural_perturb(flat_commands)
                 cmds2 = numeric_jitter(cmds1, ang_jit, scale)
+                # attempt to parse the perturbed LOGO program...
                 try:
-                    try:
-                        verts = parser_obj.parse_action_program(cmds2, scale=120)
-                    except ValueError as e:
-                        if "math domain error" in str(e):
-                            print(f"    [SKIP] adaptive perturb parse math error: {e}")
-                            continue
-                        else:
-                            raise
+                    verts = parser_obj.parse_action_program(cmds2, scale=120)
+                except ValueError as e:
+                    # skip any ValueError (math domain or otherwise), log for audit
+                    logging.warning(f"perturbed parse failed ({e!r}), skipping trial")
+                    continue
+                try:
                     poly = PhysicsInference.polygon_from_vertices(verts)
                     if poly is None or not poly.is_valid:
                         continue
@@ -210,15 +210,14 @@ def main():
                     trials += 1
                     cmds1 = structural_perturb(flat_commands)
                     cmds2 = numeric_jitter(cmds1, ang_jit, len_jit)
+                    # attempt to parse the perturbed LOGO program...
                     try:
-                        try:
-                            verts = parser_obj.parse_action_program(cmds2, scale=120)
-                        except ValueError as e:
-                            if "math domain error" in str(e):
-                                print(f"    [SKIP] random perturb parse math error: {e}")
-                                continue
-                        else:
-                            raise
+                        verts = parser_obj.parse_action_program(cmds2, scale=120)
+                    except ValueError as e:
+                        # skip any ValueError (math domain or otherwise), log for audit
+                        logging.warning(f"perturbed parse failed ({e!r}), skipping trial")
+                        continue
+                    try:
                         poly = PhysicsInference.polygon_from_vertices(verts)
                         if poly is None or not poly.is_valid:
                             continue
