@@ -230,6 +230,9 @@ def process_sample(args_tuple):
     if _worker_rules is None:
         from src.data_pipeline.logo_mutator import RULE_SET
         _worker_rules = [mu for mu in RULE_SET]
+    import time
+    logging.debug(f"Sample {pid}: starting load_commands")
+    t0 = time.perf_counter()
     try:
         commands = sample.get('action_program')
         if not commands:
@@ -243,6 +246,22 @@ def process_sample(args_tuple):
     except Exception as e:
         logging.error(f"Error preparing sample for processing {pid}: {e!r}")
         return None, None
+    dt = time.perf_counter() - t0
+    logging.debug(f"Sample {pid}: finished load_commands in {dt:.2f}s")
+
+    # Stage: scorer setup
+    logging.debug(f"Sample {pid}: starting scorer_setup")
+    t0 = time.perf_counter()
+    effective_concept_fn = _worker_concept_fn if _worker_concept_fn is not None else concept_fn
+    effective_parser = _worker_parser if _worker_parser is not None else parser
+    scorer = Scorer(effective_concept_fn, original_features)
+    if _worker_evo is not None:
+        _worker_evo.scorer = scorer
+        evo = _worker_evo
+    else:
+        evo = EvoPerturber(scorer=scorer, seed=42)
+    dt = time.perf_counter() - t0
+    logging.debug(f"Sample {pid}: finished scorer_setup in {dt:.2f}s")
 
 
     # Use the worker-global concept_fn if set (parallel), else use the one passed in

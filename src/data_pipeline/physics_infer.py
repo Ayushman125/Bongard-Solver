@@ -111,10 +111,11 @@ class PhysicsInference:
         try:
             # Clean vertices before passing to Shapely
             cleaned_verts = _clean_vertices(vertices)
+            n_verts = len(cleaned_verts)
             poly = Polygon(cleaned_verts)
 
-            # Repair self-intersections
-            if not poly.is_valid:
+            # Repair self-intersections only for small polygons
+            if not poly.is_valid and n_verts < 500:
                 poly = poly.buffer(0)
 
             # If MultiPolygon, pick largest piece
