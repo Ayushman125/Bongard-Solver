@@ -11,9 +11,7 @@ from src.data_pipeline.logo_parser import BongardLogoParser
 from src.data_pipeline.physics_infer import PhysicsInference
 from src.data_pipeline.verification import Verification
 from src.concepts import CONCEPTS
-from src.concepts import CONCEPTS
 
-def perturb_bongard_cmd(cmd_str, angle_jitter, length_jitter):
 
 # Structural perturbation
 def structural_perturb(cmds):
