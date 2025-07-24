@@ -1,23 +1,24 @@
-def safe_acos(value):
-    """Safely compute arccosine with domain clamping"""
-    clamped = max(-1.0, min(1.0, float(value)))
-    return math.acos(clamped)
 
-def safe_arccos(value):
-    """Safely compute arccosine for numpy arrays with domain clamping"""
-    return np.arccos(np.clip(value, -1.0, 1.0))
+import math
+import numpy as np
 from shapely.geometry import Polygon
 import pymunk
-import numpy as np
-import math
+
+def safe_acos(value):
+    """Clamp input to [–1,1] then return arccos."""
+    v = max(-1.0, min(1.0, float(value)))
+    return math.acos(v)
+
+def _safe_acos(x):
+    # clamp to [–1,1]
+    return math.acos(max(-1.0, min(1.0, float(x))))
 
 class PhysicsInference:
     @staticmethod
     def _clamped_arccos(dot, norm):
         if norm == 0:
             return 0.0
-        cosang = dot / norm
-        return safe_acos(cosang)
+        return safe_acos(dot / norm)
     @staticmethod
     def _ensure_polygon(poly_geom):
         from shapely.geometry import MultiPolygon, Polygon
@@ -142,6 +143,8 @@ class PhysicsInference:
             cb = np.array([b[0]-c[0], b[1]-c[1]])
             dot = np.dot(ab, cb)
             norm = np.linalg.norm(ab) * np.linalg.norm(cb)
+            if norm == 0:
+                return 0.0
             return math.degrees(safe_acos(dot / norm))
         for i in range(len(vertices)):
             a, b, c = vertices[i-1], vertices[i], vertices[(i+1)%len(vertices)]
