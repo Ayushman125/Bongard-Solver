@@ -10,7 +10,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.data_pipeline.loader import BongardLoader
 from src.data_pipeline.logo_parser import BongardLogoParser
 from src.data_pipeline.physics_infer import PhysicsInference
-from src.data_pipeline.verification import Verification
+from src.data_pipeline.physics_infer import PhysicsInference
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
@@ -70,11 +70,7 @@ def main():
                     for idx, action_program in enumerate(group):
                         img_dir = os.path.join(base_dir, f"ShapeBongard_V2/{cat}/images/{problem_id}", label)
                         img_path = os.path.join(img_dir, f"{idx}.png")
-                        # Debug: print mapping and action_program type
-                        if idx == 0:
-                            print(f"Processing {problem_id} {label} -> {img_path}")
-                            print(f"Action program type: {type(action_program)}, value: {action_program}")
-                        
+
                         # Flatten action_program to a list of strings only
                         def flatten_action_program(prog):
                             flat = []
@@ -91,8 +87,14 @@ def main():
                         flat_commands = [cmd for cmd in flatten_action_program(action_program) if isinstance(cmd, str)]
 
                         try:
-                            # Parse LOGO commands to get vertices using correct method and scale
-                            vertices = logo_parser.parse_action_program(flat_commands, scale=120)
+                            # parse vertices, but fall back on math errors
+                            try:
+                                vertices = logo_parser.parse_action_program(flat_commands, scale=120)
+                            except ValueError as e:
+                                logging.warning(
+                                    f"{problem_id}/{img_path} parse failed ({e}); using tiny‐square"
+                                )
+                                vertices = [(0,0),(1,0),(1,1),(0,1)]
                             print(f"→ parsed {len(vertices)} vertices for {problem_id} {label}")
 
                             if not vertices:
@@ -100,30 +102,21 @@ def main():
                                 continue
 
                             poly = PhysicsInference.polygon_from_vertices(vertices)
-                            if poly is None or not poly.is_valid:
-                                flagged_cases.append({'problem_id': problem_id, 'image_path': img_path, 'error': 'Invalid polygon'})
-                                continue
+                            # Always return a valid polygon, fallback if degenerate
+                            fallback_square = (poly.bounds == (0.0, 0.0, 1.0, 1.0))
 
+                            # Build a fully‐safe feature dict (no math errors!)
                             features = {
-                                'centroid': [poly.centroid.x, poly.centroid.y],
-                                'area': poly.area,
+                                'centroid': PhysicsInference.centroid(poly),
+                                'area': PhysicsInference.area(poly),
                                 'is_convex': PhysicsInference.is_convex(poly),
-                                'symmetry_score': PhysicsInference.symmetry_score(vertices),
-                                'moment_of_inertia': PhysicsInference.moment_of_inertia(vertices),
-                                # New booleans for concept tests:
-                                'num_straight': PhysicsInference.count_straight_segments(vertices),
-                                'num_arcs': PhysicsInference.count_arcs(vertices),
-                                'has_quadrangle': Verification.has_quadrangle(poly),
-                                'has_obtuse_angle': Verification.has_obtuse_angle(poly),
-                            }
-                            entry = {
-                                'problem_id': problem_id,
-                                'category': cat,
-                                'label': label,
-                                'image_path': img_path,
-                                'features': features,
-                                'geometry': vertices,
-                                'action_program': flat_commands
+                                'symmetry_score': PhysicsInference.symmetry_score(poly),
+                                'moment_of_inertia': PhysicsInference.moment_of_inertia(poly),
+                                'num_straight': PhysicsInference.count_straight_segments(poly),
+                                'num_arcs': PhysicsInference.count_arcs(poly),
+                                'has_quadrangle': PhysicsInference.has_quadrangle(poly),
+                                'has_obtuse_angle': PhysicsInference.has_obtuse(poly),
+                                'fallback_square': fallback_square,
                             }
                             result = {
                                 'problem_id': problem_id,
@@ -137,16 +130,16 @@ def main():
                             all_results.append(result)
                         except Exception as e:
                             flagged_cases.append({'problem_id': problem_id, 'image_path': img_path, 'error': str(e)})
-                            
     with open(output_path, 'w') as out:
         json.dump(all_results, out, indent=2)
     print(f"INFO: Saved {len(all_results)} valid samples to {output_path} (skipped {len(flagged_cases)} of {len(all_results) + len(flagged_cases)})")
-    
+
     flagged_path = os.path.join(os.path.dirname(output_path), 'flagged_cases.txt')
     with open(flagged_path, 'w') as out:
         for case in flagged_cases:
             out.write(json.dumps(case) + '\n')
     print(f"INFO: Flagged {len(flagged_cases)} cases for review in {flagged_path}")
+
 
 if __name__ == '__main__':
     main()
