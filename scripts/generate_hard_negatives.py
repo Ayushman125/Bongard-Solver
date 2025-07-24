@@ -357,7 +357,7 @@ def main():
     sample_args = []
     for pid, entries in problems.items():
         total_problems += 1
-        positives = [e for e in entries if e.get('label') == 'category_1']
+        positives = [e for e in entries if e.get('label') in ('category_1', 'positive')]
         logging.info(f"Processing problem {total_problems}: {pid} ({len(positives)} positives)")
 
 
