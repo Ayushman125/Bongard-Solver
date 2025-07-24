@@ -141,4 +141,9 @@ class ConceptRegistry:
 def get_concept_fn_for_problem(pid):
     """Factory function to get the concept function for a problem ID."""
     registry = ConceptRegistry()
-    return registry.get(pid)
+    print(f"Looking up concept for: '{pid}'")
+    print(f"Registry keys (sample): {list(registry.funcs.keys())[:5]}")
+    fn = registry.get(pid)
+    if fn is None:
+        raise KeyError(f"Concept registry missing problem_id: '{pid}'. Keys available: {list(registry.funcs.keys())}")
+    return fn
