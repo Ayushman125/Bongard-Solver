@@ -66,6 +66,42 @@ class PhysicsInference:
         return rmse
 
     @staticmethod
+    def num_straight(vertices_or_poly):
+        # Count number of straight line segments in the LOGO program
+        # This should be computed from the original command list, but as a fallback, estimate from vertices
+        # For best results, compute from LOGO commands in logo_to_shape.py
+        return len(vertices_or_poly) if isinstance(vertices_or_poly, list) else len(PhysicsInference.safe_extract_vertices(vertices_or_poly))
+
+    @staticmethod
+    def has_quadrangle(vertices_or_poly):
+        # Placeholder: true if there are 4+ vertices and the shape is convex
+        vertices = PhysicsInference.safe_extract_vertices(vertices_or_poly)
+        from shapely.geometry import Polygon
+        poly = Polygon(vertices)
+        return len(vertices) >= 4 and poly.is_valid and PhysicsInference.is_convex(poly)
+
+    @staticmethod
+    def has_obtuse(vertices_or_poly):
+        # Placeholder: true if any angle > 100 degrees
+        vertices = PhysicsInference.safe_extract_vertices(vertices_or_poly)
+        if len(vertices) < 3:
+            return False
+        def angle(a, b, c):
+            import math
+            ab = np.array([b[0]-a[0], b[1]-a[1]])
+            cb = np.array([b[0]-c[0], b[1]-c[1]])
+            dot = np.dot(ab, cb)
+            norm = np.linalg.norm(ab) * np.linalg.norm(cb)
+            if norm == 0:
+                return 0
+            return np.degrees(np.arccos(dot / norm))
+        for i in range(len(vertices)):
+            a, b, c = vertices[i-1], vertices[i], vertices[(i+1)%len(vertices)]
+            if angle(a, b, c) > 100:
+                return True
+        return False
+
+    @staticmethod
     def moment_of_inertia(vertices_or_poly):
         verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
         if len(verts) < 3:

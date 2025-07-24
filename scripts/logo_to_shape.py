@@ -110,6 +110,9 @@ def main():
                                 'is_convex': PhysicsInference.is_convex(poly),
                                 'symmetry_score': PhysicsInference.symmetry_score(vertices),
                                 'moment_of_inertia': PhysicsInference.moment_of_inertia(vertices),
+                                'num_straight': PhysicsInference.num_straight(flat_commands),
+                                'has_quadrangle': PhysicsInference.has_quadrangle(vertices),
+                                'has_obtuse': PhysicsInference.has_obtuse(vertices),
                             }
                             result = {
                                 'problem_id': problem_id,

@@ -9,6 +9,7 @@ from collections import defaultdict
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.data_pipeline.logo_parser import BongardLogoParser
 from src.data_pipeline.physics_infer import PhysicsInference
+from src.concepts import CONCEPTS
 
 def perturb_bongard_cmd(cmd_str, angle_jitter, length_jitter):
     if cmd_str.startswith('line_'):
@@ -26,6 +27,23 @@ def perturb_bongard_cmd(cmd_str, angle_jitter, length_jitter):
             S = float(S) * (1 + random.uniform(-angle_jitter/360, angle_jitter/360))
             return f'arc_{style}_{R:.3f}_{S:.3f}-{T}'
     return cmd_str
+
+# Structural perturbation
+def structural_perturb(cmds):
+    cmds = cmds.copy()
+    op = random.choice(["delete", "duplicate", "swap", "toggle_style"])
+    if op == "delete" and len(cmds) > 3:
+        cmds.pop(random.randrange(len(cmds)))
+    elif op == "duplicate":
+        cmds.insert(random.randrange(len(cmds)), random.choice(cmds))
+    elif op == "swap" and len(cmds) > 3:
+        i, j = random.sample(range(len(cmds)), 2)
+        cmds[i], cmds[j] = cmds[j], cmds[i]
+    elif op == "toggle_style":
+        k = random.randrange(len(cmds))
+        cmds[k] = cmds[k].replace("line_", "arc_", 1) if cmds[k].startswith("line_") \
+                 else cmds[k].replace("arc_", "line_", 1)
+    return cmds
 
 def flatten_action_program(action_program):
     # Flatten nested lists to a single list of strings
@@ -51,9 +69,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--input-dir', required=True)
     parser.add_argument('--output', required=True)
-    parser.add_argument('--jitter-angle', type=float, default=5, help='Angle jitter for centroid perturbation')
-    parser.add_argument('--jitter-length', type=float, default=0.05, help='Length jitter for area perturbation')
-    parser.add_argument('--max-per-problem', type=int, default=3, help='Max hard negatives per problem')
+    parser.add_argument('--jitter-angle', type=float, default=5, help='Base angle jitter for centroid perturbation')
+    parser.add_argument('--jitter-length', type=float, default=0.05, help='Base length jitter for area perturbation')
+    parser.add_argument('--max-per-problem', type=int, default=14, help='Max hard negatives per problem')
+    parser.add_argument('--trials-per-sample', type=int, default=80, help='Trials per positive sample')
     args = parser.parse_args()
 
     derived_labels_path = os.path.join('data', 'derived_labels.json')
@@ -111,27 +130,35 @@ def main():
                 print(f"    [ERROR] Failed to get features for sample: {e}")
                 continue
             found_hard_negative = False
-            for _ in range(10):
-                # Perturb each command string (always operate on LOGO command strings)
-                perturbed_commands = [perturb_bongard_cmd(cmd_str, args.jitter_angle, args.jitter_length) for cmd_str in flat_commands]
+            base_ang = args.jitter_angle
+            base_len = args.jitter_length
+            concept_fn = CONCEPTS.get(pid, concept_test)
+            for trial in range(args.trials_per_sample):
+                # Adaptive jitter
+                j_ang = base_ang * (1.5 ** (trial // 20))
+                j_len = base_len * (1.5 ** (trial // 20))
+                # Apply structural and numeric perturbations
+                cand = structural_perturb(flat_commands)
+                perturbed_commands = [perturb_bongard_cmd(c, j_ang, j_len) for c in cand]
                 try:
-                    # Parse perturbed commands into vertices, then polygon
                     pert_verts = parser_obj.parse_action_program(perturbed_commands)
                     pert_poly = PhysicsInference.polygon_from_vertices(pert_verts)
                     if pert_poly is None or not hasattr(pert_poly, 'is_valid') or not pert_poly.is_valid:
                         continue
-                    # Always build perturbed_features as a dict of scalars/lists
                     pert_features = {
                         'area': pert_poly.area,
                         'centroid': [pert_poly.centroid.x, pert_poly.centroid.y],
                         'is_convex': PhysicsInference.is_convex(pert_poly),
                         'symmetry_score': PhysicsInference.symmetry_score(pert_poly),
-                        'moment_of_inertia': PhysicsInference.moment_of_inertia(pert_poly)
+                        'moment_of_inertia': PhysicsInference.moment_of_inertia(pert_poly),
+                        'num_straight': PhysicsInference.num_straight(perturbed_commands),
+                        'has_quadrangle': PhysicsInference.has_quadrangle(pert_verts),
+                        'has_obtuse': PhysicsInference.has_obtuse(pert_verts),
                     }
                 except Exception as e:
                     print(f"    [ERROR] Failed to parse perturbed program: {e}")
                     continue
-                if flips_label(original_features, pert_features, concept_test):
+                if flips_label(original_features, pert_features, concept_fn):
                     entry = f"{pid},{sample.get('image_path','')},perturbed_cmds:{perturbed_commands}"
                     hard_negatives.append(entry)
                     count += 1
