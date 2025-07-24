@@ -1,8 +1,17 @@
 
+
 import math
 import numpy as np
 from shapely.geometry import Polygon
 import pymunk
+
+def safe_acos(value):
+    v = float(value)
+    if v < -1.0:
+        v = -1.0
+    elif v > 1.0:
+        v = 1.0
+    return math.acos(v)
 
 def safe_acos(value):
     """Clamp input to [–1,1] then return arccos."""
