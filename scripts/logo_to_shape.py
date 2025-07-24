@@ -122,8 +122,6 @@ def main():
                                 'fallback_square': fallback_square,
                                 'num_strokes': len(flat_commands),
                             }
-                            # Add action_count feature (true program length)
-                            features['action_count'] = len(flat_commands)
                             result = {
                                 'problem_id': problem_id,
                                 'category': cat,

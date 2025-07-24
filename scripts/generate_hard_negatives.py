@@ -169,15 +169,19 @@ def main():
     for entry in all_entries:
         problems[entry['problem_id']].append(entry)
 
-    # Build argument tuples
+    # Build argument tuples with deduplication by (problem_id, image_path)
     sample_args = []
+    seen = set()
     for pid, entries in problems.items():
-        positives = [e for e in entries if is_positive_label(e.get('label'))]
-        if not positives:
-            continue
         concept_fn = get_concept_fn_for_problem(pid)
-        for sample in positives:
-            sample_args.append((pid, sample, concept_fn, args))
+        for entry in entries:
+            if not is_positive_label(entry.get('label')):
+                continue
+            key = (pid, entry['image_path'])
+            if key in seen:
+                continue
+            seen.add(key)
+            sample_args.append((pid, entry, concept_fn, args))
 
     logging.info("Total positive samples: %d", len(sample_args))
 
@@ -194,9 +198,17 @@ def main():
     else:
         for idx, arg in enumerate(tqdm(sample_args, desc="Samples"), start=1):
             pid = arg[0]
+            import time
+            t0 = time.time()
             logging.info(f"[{idx}/{len(sample_args)}] START sample {pid}")
             hn, nm = process_sample(arg)
+            t1 = time.time()
             results.append((hn, nm))
+            # Log geometry/feature info if available
+            if hn:
+                verts = hn.get('geometry', [])
+                n_verts = len(verts)
+                logging.info(f"[{idx}/{len(sample_args)}] Sample {pid} post-processing: vertices={n_verts}, time={t1-t0:.2f}s")
             logging.info(f"[{idx}/{len(sample_args)}] DONE  sample {pid}")
 
     # Post-process outputs

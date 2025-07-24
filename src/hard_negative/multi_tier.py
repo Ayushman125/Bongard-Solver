@@ -7,8 +7,11 @@ from src.data_pipeline.verification import has_min_vertices, l2_shape_distance
 
 # --- Tier 1: Enhanced Evolutionary Mutations ---
 def tier1_evolutionary(sample, concept_fn, args, scorer, flat_commands, original_features, max_attempts=500):
+    import time
     evo = EvoPerturber(scorer=scorer, seed=42)
-    for _ in range(max_attempts):
+    flips_for_this_sample = 0
+    t0 = time.time()
+    for trial in range(max_attempts):
         mutated_evo = evo.search(flat_commands)
         if mutated_evo and is_valid_geometry(mutated_evo):
             features = scorer.extract_features(mutated_evo)
@@ -17,7 +20,14 @@ def tier1_evolutionary(sample, concept_fn, args, scorer, flat_commands, original
             if not has_min_vertices(vertices, min_v=4):
                 continue
             if scorer.is_flip(mutated_evo):
+                flips_for_this_sample += 1
+                logging.info(f"tier1_evolutionary: found flip at trial {trial}")
                 return mutated_evo
+        if trial > 100 and flips_for_this_sample == 0:
+            logging.info(f"tier1_evolutionary: no flips after 100 trials, breaking out of evolutionary tier")
+            break
+    t1 = time.time()
+    logging.info(f"tier1_evolutionary: completed in {t1-t0:.2f}s, flips={flips_for_this_sample}")
     return None
 
 # --- Tier 2: Direct Concept Inversion (stub) ---
@@ -93,8 +103,12 @@ def process_sample_with_guaranteed_success(sample, concept_fn, args):
         (tier3_synthetic, 100),
         (tier4_guaranteed, 1)
     ]
+    import time
     for tier_func, max_attempts in tiers:
+        t0 = time.time()
         result = tier_func(sample, concept_fn, args, scorer, flat_commands, original_features, max_attempts)
+        t1 = time.time()
+        logging.info(f"process_sample_with_guaranteed_success: {tier_func.__name__} took {t1-t0:.2f}s")
         if result is not None:
             return result, tier_func.__name__
     raise RuntimeError("Guaranteed generation failed - implementation error")

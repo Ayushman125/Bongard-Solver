@@ -1,17 +1,3 @@
-def _clean_vertices(verts, max_len=2000, tol=1e-6):
-    """Remove consecutive duplicates and subsample long chains."""
-    cleaned = []
-    last = None
-    for x, y in verts:
-        if last is None or (abs(x - last[0]) > tol or abs(y - last[1]) > tol):
-            cleaned.append((x, y))
-            last = (x, y)
-        if len(cleaned) >= max_len:
-            break
-    # Ensure at least 4 distinct points
-    if len(cleaned) < 4:
-        cleaned = [(0, 0), (1, 0), (1, 1), (0, 1)]
-    return cleaned
 import functools
 import logging
 import math
@@ -104,29 +90,45 @@ class PhysicsInference:
         """
         Build, repair, and validate a polygon from raw vertices.
         Always returns a valid Polygon (tiny‐square fallback if pathological).
+        Adds timing and vertex-count logs, and limits repair to <500 vertices.
         """
+        import time
         MIN_AREA = 5.0
         MAX_ASPECT = 20.0
-
+        n_verts = len(vertices)
+        t0 = time.time()
         try:
-            # Clean vertices before passing to Shapely
-            cleaned_verts = _clean_vertices(vertices)
-            n_verts = len(cleaned_verts)
-            poly = Polygon(cleaned_verts)
+            poly = Polygon(vertices)
+            t1 = time.time()
+            logging.info(f"polygon_from_vertices: created polygon with {n_verts} vertices in {t1-t0:.3f}s (valid={poly.is_valid})")
 
             # Repair self-intersections only for small polygons
+            repaired = False
             if not poly.is_valid and n_verts < 500:
+                t2 = time.time()
                 poly = poly.buffer(0)
+                repaired = True
+                t3 = time.time()
+                logging.info(f"polygon_from_vertices: buffer(0) repair on {n_verts} vertices took {t3-t2:.3f}s (valid={poly.is_valid})")
+            elif not poly.is_valid:
+                logging.warning(f"polygon_from_vertices: skipped buffer(0) repair for {n_verts} vertices (too large)")
 
             # If MultiPolygon, pick largest piece
             if isinstance(poly, MultiPolygon):
                 poly = max(poly.geoms, key=lambda p: p.area)
 
-            # Simplify tiny oscillations
-            poly = poly.simplify(0.5, preserve_topology=True)
+            # Simplify tiny oscillations only for small polygons
+            if n_verts < 500:
+                t4 = time.time()
+                poly = poly.simplify(0.5, preserve_topology=True)
+                t5 = time.time()
+                logging.info(f"polygon_from_vertices: simplify on {n_verts} vertices took {t5-t4:.3f}s")
+            else:
+                logging.info(f"polygon_from_vertices: skipped simplify for {n_verts} vertices (too large)")
 
             # Too small → tiny square fallback
             if poly.is_empty or poly.area < MIN_AREA:
+                logging.warning(f"polygon_from_vertices: fallback to tiny square (area={poly.area if hasattr(poly, 'area') else 'N/A'})")
                 return Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
 
             # Aspect‐ratio check → fallback if extreme sliver
@@ -134,9 +136,12 @@ class PhysicsInference:
             w, h = maxx - minx, maxy - miny
             aspect = max(w / (h + 1e-6), h / (w + 1e-6))
             if aspect > MAX_ASPECT:
+                logging.warning(f"polygon_from_vertices: fallback to tiny square (aspect={aspect:.2f})")
                 return Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
 
             # Good polygon
+            t6 = time.time()
+            logging.info(f"polygon_from_vertices: total time {t6-t0:.3f}s (repaired={repaired})")
             return PhysicsInference._ensure_polygon(poly)
 
         except Exception as e:
