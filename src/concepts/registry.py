@@ -104,31 +104,28 @@ class ConceptRegistry:
             negatives = [f for f, y in samples if y == 0]
             if not positives or not negatives:
                 continue  # skip degenerate
+            fn = None
             try:
                 spec = induce(pid, positives, negatives)
                 self.specs[pid] = spec
-                self.funcs[pid] = _spec_to_lambda(spec)
+                fn = _spec_to_lambda(spec)
                 print(f"INFO  Auto-derived concept for {pid} → {spec['signature']}")
             except NoPredicateFound:
                 print(f"WARN  No predicate found for {pid}, using program membership fallback.")
                 fn = self._factory_program_membership(pid, positives)
-                self.funcs[pid] = fn
                 self.specs[pid] = {'signature': 'program_membership', 'param': None, 'features': [], 'type': 'membership'}
-                updated = True
             except Exception as e:
                 # Fallback: use decision tree induction
                 print(f"WARN  Template induction failed for {pid} ({e}), using decision tree.")
                 fn = induce_tree(pid)
-                self.funcs[pid] = fn
                 self.specs[pid] = {'signature': 'decision_tree', 'param': None, 'features': [], 'type': 'tree'}
-                updated = True
             # Final fallback: if still None, use program membership
-            if pid not in self.funcs or self.funcs[pid] is None:
+            if fn is None:
                 print(f"WARN  All induction failed for {pid}, using program membership as last resort.")
                 fn = self._factory_program_membership(pid, positives)
-                self.funcs[pid] = fn
                 self.specs[pid] = {'signature': 'program_membership', 'param': None, 'features': [], 'type': 'membership'}
-                updated = True
+            self.funcs[pid] = fn
+            updated = True
         if updated:
             self.cache_path.write_text(yaml.safe_dump(self.specs))
 
@@ -141,9 +138,7 @@ class ConceptRegistry:
 def get_concept_fn_for_problem(pid):
     """Factory function to get the concept function for a problem ID."""
     registry = ConceptRegistry()
-    print(f"Looking up concept for: '{pid}'")
-    print(f"Registry keys (sample): {list(registry.funcs.keys())[:5]}")
     fn = registry.get(pid)
     if fn is None:
-        raise KeyError(f"Concept registry missing problem_id: '{pid}'. Keys available: {list(registry.funcs.keys())}")
+        raise KeyError(f"Concept missing for '{pid}' — registry keys: {list(registry.funcs.keys())}")
     return fn
