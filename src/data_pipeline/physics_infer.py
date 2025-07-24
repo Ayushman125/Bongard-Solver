@@ -4,8 +4,22 @@ import numpy as np
 
 class PhysicsInference:
     @staticmethod
+    def safe_extract_vertices(obj):
+        """Safely extract vertices from a list, Polygon, or MultiPolygon."""
+        from shapely.geometry import Polygon, MultiPolygon
+        if isinstance(obj, list):
+            return obj
+        elif hasattr(obj, 'exterior'):
+            return list(obj.exterior.coords)
+        elif hasattr(obj, 'geoms'):
+            # MultiPolygon: use first geometry
+            return list(obj.geoms[0].exterior.coords)
+        else:
+            return []
+
+    @staticmethod
     def polygon_from_vertices(vertices):
-        from shapely.geometry import Polygon
+        from shapely.geometry import Polygon, MultiPoint
         from shapely.ops import unary_union
         try:
             poly = Polygon(vertices)
@@ -14,7 +28,6 @@ class PhysicsInference:
                 poly = poly.buffer(0)
                 if not poly.is_valid or poly.is_empty or poly.area == 0:
                     # Fallback to convex hull
-                    from shapely.geometry import MultiPoint, Polygon
                     hull = MultiPoint(vertices).convex_hull
                     if hull.geom_type == "Point":
                         x, y = hull.x, hull.y
@@ -39,7 +52,11 @@ class PhysicsInference:
         return poly.convex_hull.equals(poly)
 
     @staticmethod
-    def symmetry_score(vertices):
+    def symmetry_score(vertices_or_poly):
+        vertices = PhysicsInference.safe_extract_vertices(vertices_or_poly)
+        if len(vertices) < 2:
+            return 0.0
+        from shapely.geometry import Polygon
         poly = Polygon(vertices)
         cx, cy = poly.centroid.x, poly.centroid.y
         reflected = [(2*cx - x, y) for (x, y) in vertices]
@@ -49,7 +66,9 @@ class PhysicsInference:
         return rmse
 
     @staticmethod
-    def moment_of_inertia(vertices):
-        verts = [(float(x), float(y)) for (x, y) in vertices]
-        moment = pymunk.moment_for_poly(1.0, verts)
+    def moment_of_inertia(vertices_or_poly):
+        verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
+        if len(verts) < 3:
+            return 0.0
+        moment = pymunk.moment_for_poly(1.0, [(float(x), float(y)) for (x, y) in verts])
         return moment
