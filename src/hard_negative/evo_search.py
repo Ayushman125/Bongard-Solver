@@ -29,13 +29,18 @@ class EvoPerturber:
     def search(self, logo_prog):
         best_prog = logo_prog
         best_score = -np.inf
-        for _ in range(self.max_iter):
+        for i in range(self.max_iter):
             cand = self.mutate_logo(logo_prog)
             score = self.fitness(logo_prog, cand)
             if score > best_score:
                 best_prog, best_score = cand, score
             if self.scorer.is_flip(cand):
                 return cand  # Early exit on label flip
+            # True early exit: after 50 iters, if no improvement, break
+            if i == 49 and best_score <= 0:
+                import logging
+                logging.info("EvoPerturber.search: No flip and no improvement after 50 iters, early exit.")
+                break
         # Always return the best candidate, even if it didn't flip
         # (Never return None)
         return best_prog
