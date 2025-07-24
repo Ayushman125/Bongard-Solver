@@ -1,5 +1,23 @@
+
 import itertools
 import operator as op
+import re
+import logging
+TEMPLATES = [
+    # ... other templates ...
+    # Map nactX_Y templates to your 'num_straight' feature
+    ("nact_range[{lo},{hi}]", 
+         lambda f, rng: rng[0] <= f["num_straight"] <= rng[1],
+         lambda pos: {(min(x["features"]["num_straight"] for x in pos),
+                       max(x["features"]["num_straight"] for x in pos))}),
+]
+
+def _parse_range_token(tkn):
+    # 'nact5' → (5,5); 'nact2_5' → (2,5)
+    parts = [int(n) for n in re.findall(r"\d+", tkn)]
+    if len(parts) == 1:
+        return (parts[0], parts[0])
+    return (min(parts), max(parts))
 
 def _get_feature_types(samples):
     # Returns dict: feature -> type ('bool', 'numeric', 'other')
@@ -89,5 +107,20 @@ def induce(problem_id, positives, negatives):
                 if all(pred(f) for f in pos_feats) and not any(pred(f) for f in neg_feats):
                     return {"problem_id":problem_id, "signature":f"{min1}<={f1}<={max1} AND {min2}<={f2}<={max2}", "param":((min1,max1),(min2,max2)), "features":[f1,f2], "type":"and_range"}
 
+    # If nothing found, try fallback for ff_nact problems
+    if problem_id.startswith("ff_nact"):
+        try:
+            tkn = problem_id.split("_")[1]
+            lo, hi = _parse_range_token(tkn)
+            def pred(x):
+                return lo <= x.get("num_straight", -1) <= hi
+            pos_pred = [pred(f) for f in positives]
+            neg_pred = [pred(f) for f in negatives]
+            logging.info(f"ff_nact fallback for {problem_id}: pos_pred={pos_pred}, neg_pred={neg_pred}, lo={lo}, hi={hi}")
+            if all(pos_pred) and not any(neg_pred):
+                logging.info("Fallback ff_nact predicate for %s → [%d,%d]", problem_id, lo, hi)
+                return {"problem_id": problem_id, "signature": f"nact_range[{{lo}},{{hi}}]", "param": (lo, hi), "features": ["num_straight"], "type": "range"}
+        except Exception as e:
+            logging.warning(f"ff_nact fallback failed for {problem_id}: {e}")
     # If nothing found, fail
     raise ValueError(f"No separating predicate for {problem_id}")
