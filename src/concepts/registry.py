@@ -5,12 +5,14 @@ Self-maintaining concept registry for Bongard-Solver.
 Auto-induces and caches concept predicates for every problem in derived_labels.json.
 No manual wiring required; new problems are handled automatically.
 """
+
 import os
 import sys
 import json
 from pathlib import Path
 import yaml
 from .auto_inducer import induce
+from .auto_tree import induce_tree
 
 DERIVED_LABELS_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../data/derived_labels.json'))
 CACHE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../data/concepts_auto.yaml'))
@@ -96,11 +98,18 @@ class ConceptRegistry:
             negatives = [f for f, y in samples if y == 0]
             if not positives or not negatives:
                 continue  # skip degenerate
-            spec = induce(pid, positives, negatives)
-            self.specs[pid] = spec
-            self.funcs[pid] = _spec_to_lambda(spec)
-            print(f"INFO  Auto-derived concept for {pid} → {spec['signature']}")
-            updated = True
+            try:
+                spec = induce(pid, positives, negatives)
+                self.specs[pid] = spec
+                self.funcs[pid] = _spec_to_lambda(spec)
+                print(f"INFO  Auto-derived concept for {pid} → {spec['signature']}")
+            except Exception as e:
+                # Fallback: use decision tree induction
+                print(f"WARN  Template induction failed for {pid} ({e}), using decision tree.")
+                fn = induce_tree(pid)
+                self.funcs[pid] = fn
+                self.specs[pid] = {'signature': 'decision_tree', 'param': None, 'features': [], 'type': 'tree'}
+                updated = True
         if updated:
             self.cache_path.write_text(yaml.safe_dump(self.specs))
 

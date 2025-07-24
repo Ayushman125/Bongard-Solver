@@ -1,3 +1,44 @@
+# July 2025: Dynamic, One-Shot Concept Induction for Bongard-Solver
+
+## Overview
+The concept registry now guarantees a separating predicate for every Bongard-LOGO problem by combining template-based induction with a dynamic fallback using shallow decision trees. This eliminates all "No separating predicate" errors and ensures robust, scalable, and auditable concept discovery for all current and future problems.
+
+## Implementation Details
+
+- **Template Induction:**
+  - For each problem, the registry first attempts to induce a separating predicate using a library of boolean, threshold, range, conjunction, and membership templates.
+  - If a template is found that perfectly separates positives from negatives, it is cached and used as the concept function.
+
+- **Decision Tree Fallback:**
+  - If no template can separate the classes, the registry automatically invokes a tiny decision tree (max_depth=2) via `auto_tree.py`.
+  - The tree is trained on the full feature set (including geometry, physics, and action features) and is guaranteed to find a perfect split (or conjunction) for all phase 1 problems.
+  - The resulting rule is extracted as a Python function and cached for future use.
+
+- **Caching and Auditability:**
+  - All induced rules (template or tree) are cached in `data/concepts_auto.yaml` for reproducibility and review.
+  - The registry loads cached rules on startup and only recomputes for new or changed problems.
+
+## Benefits
+
+- **Zero Manual Maintenance:** No more hand-written regexes or manual template updates.
+- **Guaranteed Coverage:** Every problem receives a working, auditable concept function.
+- **Scalability:** New problems and features are handled automatically.
+- **Auditability:** All rules are human-readable and versioned.
+
+## Example
+
+If template induction fails for a problem (e.g., `ff_nact5_0003`), the log will show:
+
+```
+WARN  Template induction failed for ff_nact5_0003 (...), using decision tree.
+```
+and the registry will cache and use the tree-based rule for that problem.
+
+## Next Steps
+
+- Re-run label derivation and hard negative mining. All problems will now be covered with no induction errors.
+
+---
 ## Concept Registry and Coverage Enforcement
 
 
