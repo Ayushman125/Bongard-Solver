@@ -16,16 +16,31 @@ from src.concepts import CONCEPTS
 # Structural perturbation
 def structural_perturb(cmds):
     cmds = cmds.copy()
-    op = random.choice(['delete','duplicate','swap','toggle'])
+    ops = ['delete', 'duplicate', 'swap', 'toggle', 'insert_arc', 'reverse', 'block_swap']
+    op = random.choice(ops)
     if op == 'delete' and len(cmds) > 3:
         cmds.pop(random.randrange(len(cmds)))
     elif op == 'duplicate':
         cmds.insert(random.randrange(len(cmds)), random.choice(cmds))
     elif op == 'swap' and len(cmds) > 1:
-        i,j = random.sample(range(len(cmds)),2); cmds[i],cmds[j]=cmds[j],cmds[i]
+        i, j = random.sample(range(len(cmds)), 2)
+        cmds[i], cmds[j] = cmds[j], cmds[i]
     elif op == 'toggle':
         k = random.randrange(len(cmds))
-        cmds[k] = cmds[k].replace('line_','arc_') if cmds[k].startswith('line_') else cmds[k].replace('arc_','line_')
+        cmds[k] = cmds[k].replace('line_', 'arc_') if cmds[k].startswith('line_') else cmds[k].replace('arc_', 'line_')
+    elif op == 'insert_arc':
+        idx = random.randrange(len(cmds)+1)
+        arc_cmd = f"arc_normal_{random.random():.3f}-{random.random():.3f}"
+        cmds.insert(idx, arc_cmd)
+    elif op == 'reverse' and len(cmds) > 2:
+        start = random.randrange(len(cmds)-1)
+        end = random.randrange(start+1, len(cmds))
+        cmds[start:end] = list(reversed(cmds[start:end]))
+    elif op == 'block_swap' and len(cmds) > 4:
+        block = random.sample(range(len(cmds)), 3)
+        block.sort()
+        if len(block) == 3:
+            cmds[block[0]:block[2]+1] = cmds[block[0]:block[2]+1][::-1]
     return cmds
 
 def numeric_jitter(cmds, ang_jit, len_jit):
@@ -46,18 +61,32 @@ def numeric_jitter(cmds, ang_jit, len_jit):
 # Structural perturbation
 def structural_perturb(cmds):
     cmds = cmds.copy()
-    op = random.choice(["delete", "duplicate", "swap", "toggle_style"])
-    if op == "delete" and len(cmds) > 3:
+    ops = ['delete', 'duplicate', 'swap', 'toggle', 'insert_arc', 'reverse', 'block_swap']
+    op = random.choice(ops)
+    if op == 'delete' and len(cmds) > 3:
         cmds.pop(random.randrange(len(cmds)))
-    elif op == "duplicate":
+    elif op == 'duplicate':
         cmds.insert(random.randrange(len(cmds)), random.choice(cmds))
-    elif op == "swap" and len(cmds) > 3:
+    elif op == 'swap' and len(cmds) > 1:
         i, j = random.sample(range(len(cmds)), 2)
         cmds[i], cmds[j] = cmds[j], cmds[i]
-    elif op == "toggle_style":
+    elif op == 'toggle':
         k = random.randrange(len(cmds))
-        cmds[k] = cmds[k].replace("line_", "arc_", 1) if cmds[k].startswith("line_") \
-                 else cmds[k].replace("arc_", "line_", 1)
+        cmds[k] = cmds[k].replace('line_', 'arc_', 1) if cmds[k].startswith('line_') \
+                 else cmds[k].replace('arc_', 'line_', 1)
+    elif op == 'insert_arc':
+        idx = random.randrange(len(cmds)+1)
+        arc_cmd = f"arc_normal_{random.random():.3f}-{random.random():.3f}"
+        cmds.insert(idx, arc_cmd)
+    elif op == 'reverse' and len(cmds) > 2:
+        start = random.randrange(len(cmds)-1)
+        end = random.randrange(start+1, len(cmds))
+        cmds[start:end] = list(reversed(cmds[start:end]))
+    elif op == 'block_swap' and len(cmds) > 4:
+        block = random.sample(range(len(cmds)), 3)
+        block.sort()
+        if len(block) == 3:
+            cmds[block[0]:block[2]+1] = cmds[block[0]:block[2]+1][::-1]
     return cmds
 
 def flatten_action_program(action_program):
@@ -84,10 +113,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--input-dir', required=True)
     parser.add_argument('--output', required=True)
-    parser.add_argument('--jitter-angle', type=float, default=5, help='Base angle jitter for centroid perturbation')
-    parser.add_argument('--jitter-length', type=float, default=0.05, help='Base length jitter for area perturbation')
+    parser.add_argument('--jitter-angle', type=float, default=15, help='Base angle jitter for centroid perturbation')
+    parser.add_argument('--jitter-length', type=float, default=0.15, help='Base length jitter for area perturbation')
     parser.add_argument('--max-per-problem', type=int, default=14, help='Max hard negatives per problem')
-    parser.add_argument('--trials-per-sample', type=int, default=80, help='Trials per positive sample')
+    parser.add_argument('--trials-per-sample', type=int, default=500, help='Trials per positive sample')
     args = parser.parse_args()
 
     derived_labels_path = os.path.join('data', 'derived_labels.json')
@@ -134,23 +163,24 @@ def main():
             flips = 0
             trials = 0
             ang_jit, len_jit = args.jitter_angle, args.jitter_length
-            while flips < 2 and trials < args.trials_per_sample:
-                trials += 1
+            found_flip = False
+            # Adaptive jitter loop
+            for scale in [0.05, 0.1, 0.2, 0.4]:
                 cmds1 = structural_perturb(flat_commands)
-                cmds2 = numeric_jitter(cmds1, ang_jit, len_jit)
+                cmds2 = numeric_jitter(cmds1, ang_jit, scale)
                 try:
                     try:
                         verts = parser_obj.parse_action_program(cmds2, scale=120)
                     except ValueError as e:
                         if "math domain error" in str(e):
-                            print(f"    [SKIP] perturb parse math error: {e}")
+                            print(f"    [SKIP] adaptive perturb parse math error: {e}")
                             continue
                         else:
                             raise
                     poly = PhysicsInference.polygon_from_vertices(verts)
                     if poly is None or not poly.is_valid:
                         continue
-                    feats = {
+                    feats2 = {
                         **original_features,
                         'area': poly.area,
                         'centroid': [poly.centroid.x, poly.centroid.y],
@@ -163,15 +193,57 @@ def main():
                         'has_obtuse_angle': PhysicsInference.has_obtuse(poly),
                     }
                 except Exception as e:
-                    print(f"    [ERROR] Failed to parse perturbed program: {e}")
+                    print(f"    [ERROR] Failed to parse adaptive perturbed program: {e}")
                     continue
-                if concept_fn(original_features) != concept_fn(feats):
+                if concept_fn(original_features) != concept_fn(feats2):
                     entry = f"{pid},{sample.get('image_path','')},perturb:{cmds2}"
                     hard_negatives.append(entry)
                     flips += 1
                     count += 1
                     total_hard_negatives += 1
-                    print(f"    [FOUND] Hard negative for sample {sample_idx+1}")
+                    found_flip = True
+                    print(f"    [FOUND] Adaptive hard negative for sample {sample_idx+1} (scale={scale})")
+                    break
+            # If adaptive search fails, fall back to random trials
+            if not found_flip:
+                while flips < 2 and trials < args.trials_per_sample:
+                    trials += 1
+                    cmds1 = structural_perturb(flat_commands)
+                    cmds2 = numeric_jitter(cmds1, ang_jit, len_jit)
+                    try:
+                        try:
+                            verts = parser_obj.parse_action_program(cmds2, scale=120)
+                        except ValueError as e:
+                            if "math domain error" in str(e):
+                                print(f"    [SKIP] random perturb parse math error: {e}")
+                                continue
+                        else:
+                            raise
+                        poly = PhysicsInference.polygon_from_vertices(verts)
+                        if poly is None or not poly.is_valid:
+                            continue
+                        feats = {
+                            **original_features,
+                            'area': poly.area,
+                            'centroid': [poly.centroid.x, poly.centroid.y],
+                            'is_convex': PhysicsInference.is_convex(poly),
+                            'symmetry_score': PhysicsInference.symmetry_score(poly),
+                            'moment_of_inertia': PhysicsInference.moment_of_inertia(poly),
+                            'num_straight': PhysicsInference.count_straight_segments(poly),
+                            'num_arcs': PhysicsInference.count_arcs(poly),
+                            'has_quadrangle': PhysicsInference.has_quadrangle(poly),
+                            'has_obtuse_angle': PhysicsInference.has_obtuse(poly),
+                        }
+                    except Exception as e:
+                        print(f"    [ERROR] Failed to parse random perturbed program: {e}")
+                        continue
+                    if concept_fn(original_features) != concept_fn(feats):
+                        entry = f"{pid},{sample.get('image_path','')},perturb:{cmds2}"
+                        hard_negatives.append(entry)
+                        flips += 1
+                        count += 1
+                        total_hard_negatives += 1
+                        print(f"    [FOUND] Random hard negative for sample {sample_idx+1} (trial={trials})")
             if flips == 0:
                 print(f"    [NO FLIP] No hard negative found for sample {sample_idx+1}")
 
