@@ -205,7 +205,8 @@ def flips_label(original_features, perturbed_features, concept_fn):
 
 # Move process_sample to top-level for multiprocessing
 def process_sample(args_tuple):
-    pid, sample, _, args = args_tuple
+    # Unpack parser and concept_fn instead of discarding them
+    pid, sample, parser, concept_fn, args = args_tuple
     results = []
     near_miss_results = []
     global _worker_parser, _worker_concept_fn, _worker_evo, _worker_rules
@@ -224,7 +225,10 @@ def process_sample(args_tuple):
         return None, None
 
 
-    scorer = Scorer(_worker_concept_fn, original_features)
+    # Use the worker-global concept_fn if set (parallel), else use the one passed in
+    effective_concept_fn = _worker_concept_fn if _worker_concept_fn is not None else concept_fn
+    effective_parser = _worker_parser if _worker_parser is not None else parser
+    scorer = Scorer(effective_concept_fn, original_features)
     # Use global EvoPerturber if in worker, else create local instance
     if _worker_evo is not None:
         _worker_evo.scorer = scorer
@@ -238,7 +242,7 @@ def process_sample(args_tuple):
         d['features'] = features
         d['action_program'] = mutated_cmds
         try:
-            vertices = _worker_parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in mutated_cmds])
+            vertices = effective_parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in mutated_cmds])
             d['geometry'] = vertices
         except Exception as e:
             d['geometry'] = []
@@ -265,7 +269,7 @@ def process_sample(args_tuple):
             if not is_valid_geometry(mutated):
                 continue
             features = scorer.extract_features(mutated)
-            vertices = _worker_parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in mutated])
+            vertices = effective_parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in mutated])
             if not has_min_vertices(vertices, min_v=4):
                 continue
             is_duplicate = False
@@ -310,7 +314,7 @@ def process_sample(args_tuple):
                 cand_tuples = parse_logo_commands_to_tuples(cand)
                 if is_valid_geometry(cand_tuples):
                     features = scorer.extract_features(cand_tuples)
-                    vertices = _worker_parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in cand_tuples])
+                    vertices = effective_parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in cand_tuples])
                     if not has_min_vertices(vertices, min_v=4):
                         continue
                     is_duplicate = False
