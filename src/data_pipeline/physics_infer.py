@@ -5,29 +5,16 @@ import numpy as np
 from shapely.geometry import Polygon
 import pymunk
 
-def safe_acos(value):
-    v = float(value)
-    if v < -1.0:
-        v = -1.0
-    elif v > 1.0:
-        v = 1.0
-    return math.acos(v)
-
-def safe_acos(value):
-    """Clamp input to [–1,1] then return arccos."""
-    v = max(-1.0, min(1.0, float(value)))
-    return math.acos(v)
-
-def _safe_acos(x):
-    # clamp to [–1,1]
-    return math.acos(max(-1.0, min(1.0, float(x))))
+def safe_acos(x):
+    """Clamp to [–1,1], return arccos for scalar or array."""
+    return np.arccos(np.clip(x, -1.0, 1.0))
 
 class PhysicsInference:
     @staticmethod
     def _clamped_arccos(dot, norm):
         if norm == 0:
             return 0.0
-        return safe_acos(dot / norm)
+        return np.degrees(safe_acos(dot / norm))
     @staticmethod
     def _ensure_polygon(poly_geom):
         from shapely.geometry import MultiPolygon, Polygon
@@ -77,24 +64,18 @@ class PhysicsInference:
     @staticmethod
     def polygon_from_vertices(vertices):
         from shapely.geometry import Polygon, MultiPoint
-        from shapely.ops import unary_union
         try:
             poly = Polygon(vertices)
-            if not poly or not poly.is_valid or poly.is_empty or poly.area == 0:
-                # Try buffer(0) to fix minor self-intersections
+            if not poly.is_valid or poly.area == 0:
                 poly = poly.buffer(0)
-                if not poly.is_valid or poly.is_empty or poly.area == 0:
-                    # Fallback to convex hull
-                    hull = MultiPoint(vertices).convex_hull
-                    if hull.geom_type == "Point":
-                        x, y = hull.x, hull.y
-                        hull = Polygon([(x, y), (x+1, y), (x+1, y+1), (x, y+1)]) # Create a tiny square around the point
-                    poly = hull
-            poly = PhysicsInference._ensure_polygon(poly)
-            return poly
-        except Exception as e:
-            print(f"Polygon creation failed: {e}")
-            return None
+            if not poly.is_valid or poly.area == 0:
+                hull = MultiPoint(vertices).convex_hull
+                if hull.geom_type != "Polygon":
+                    hull = Polygon([(0,0),(1,0),(1,1),(0,1)])
+                poly = hull
+            return PhysicsInference._ensure_polygon(poly)
+        except Exception:
+            return Polygon([(0,0),(1,0),(1,1),(0,1)])
 
     @staticmethod
     def centroid(poly_geom):
@@ -147,19 +128,26 @@ class PhysicsInference:
             cb = np.array([b[0]-c[0], b[1]-c[1]])
             dot = np.dot(ab, cb)
             norm = np.linalg.norm(ab) * np.linalg.norm(cb)
-            if norm == 0:
-                return 0.0
-            return math.degrees(safe_acos(dot / norm))
-        for i in range(len(vertices)):
-            a, b, c = vertices[i-1], vertices[i], vertices[(i+1)%len(vertices)]
-            if angle(a, b, c) > 100:
-                return True
-        return False
+            return 0.0 if norm == 0 else np.degrees(safe_acos(dot / norm))
+        # If any interior angle >100°, we have an obtuse polygon
+        return any(
+            angle(vertices[i-1], vertices[i], vertices[(i+1)%len(vertices)]) > 100
+            for i in range(len(vertices))
+        )
 
     @staticmethod
     def moment_of_inertia(vertices_or_poly):
         verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
         if len(verts) < 3:
             return 0.0
-        moment = pymunk.moment_for_poly(1.0, [(float(x), float(y)) for (x, y) in verts])
-        return moment
+        try:
+            coords = [(float(x), float(y)) for (x, y) in verts]
+            return pymunk.moment_for_poly(1.0, coords)
+        except ValueError:
+            from shapely.geometry import Polygon
+            poly = PhysicsInference.polygon_from_vertices(verts)
+            if poly and not poly.is_empty:
+                minx, miny, maxx, maxy = poly.bounds
+                dx, dy = maxx - minx, maxy - miny
+                return (dx*dx + dy*dy) / 12.0
+            return 0.0
