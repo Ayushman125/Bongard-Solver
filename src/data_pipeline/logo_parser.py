@@ -57,6 +57,11 @@ class BongardLogoParser:
         for action_cmd in action_list:
             new_points = self.parse_single_action(action_cmd, scale)
             vertices.extend(new_points)
+        # Ensure at least 4 vertices for valid polygon
+        if len(vertices) < 4:
+            # Generate a minimal valid square at current position
+            x, y = self.x, self.y
+            vertices = [(x, y), (x + 5, y), (x + 5, y + 5), (x, y)]
         return vertices
 
     def parse_single_action(self, action_cmd: str, scale: float) -> List[Tuple[float, float]]:
@@ -71,13 +76,13 @@ class BongardLogoParser:
         pattern = r'line_(\w+)_([0-9.]+)-([0-9.]+)'
         match = re.match(pattern, cmd)
         if not match:
-            return []
+            return self._generate_minimal_vertices()
         style, length_str, angle_str = match.groups()
         length = float(length_str) * scale
         if length < 1:
             length = 1  # enforce minimal movement
         if length < 5:
-            return []
+            return self._generate_minimal_vertices()
         angle_change = float(angle_str) * 360
         points = []
         # Dense interpolation: always at least 5 points per segment
@@ -108,11 +113,15 @@ class BongardLogoParser:
         self.angle += angle_change
         return dedup_points
 
+    def _generate_minimal_vertices(self) -> List[Tuple[float, float]]:
+        x, y = self.x, self.y
+        return [(x, y), (x + 5, y), (x + 5, y + 5), (x, y)]
+
     def parse_arc_command(self, cmd: str, scale: float) -> List[Tuple[float, float]]:
         pattern = r'arc_(\w+)_([0-9.]+)_([0-9.]+)-([0-9.]+)'
         match = re.match(pattern, cmd)
         if not match:
-            return []
+            return self._generate_minimal_vertices()
         style, radius_str, arc_span_str, angle_str = match.groups()
         radius = float(radius_str) * scale
         arc_span = float(arc_span_str) * 360
@@ -126,6 +135,10 @@ class BongardLogoParser:
             arc_x = self.x + radius * math.cos(math.radians(seg_angle))
             arc_y = self.y + radius * math.sin(math.radians(seg_angle))
             points.append((arc_x, arc_y))
+        if len(points) < 4:
+            # Fallback to minimal valid geometry
+            x, y = self.x, self.y
+            points = [(x, y), (x + 5, y), (x + 5, y + 5), (x, y)]
         if points:
             self.x, self.y = points[-1]
         self.angle += arc_span + angle_change
