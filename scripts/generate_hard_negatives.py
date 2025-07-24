@@ -31,6 +31,22 @@ import re
 import logging
 import multiprocessing
 from collections import defaultdict
+import time
+import numpy as np
+from tqdm import tqdm
+import concurrent.futures
+import asyncio
+import functools
+try:
+    import cupy as cp
+    GPU_AVAILABLE = True
+except ImportError:
+    GPU_AVAILABLE = False
+try:
+    import numba
+    NUMBA_AVAILABLE = True
+except ImportError:
+    NUMBA_AVAILABLE = False
 
 # Ensure that the project root is in the sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -210,6 +226,10 @@ def process_sample(args_tuple):
     results = []
     near_miss_results = []
     global _worker_parser, _worker_concept_fn, _worker_evo, _worker_rules
+    # Ensure _worker_rules is always a valid list (for serial mode)
+    if _worker_rules is None:
+        from src.data_pipeline.logo_mutator import RULE_SET
+        _worker_rules = [mu for mu in RULE_SET]
     try:
         commands = sample.get('action_program')
         if not commands:
@@ -249,23 +269,43 @@ def process_sample(args_tuple):
             logging.warning(f"Failed to parse geometry for hard negative: {e!r}")
         return d
 
-    # Per-sample search loop: try up to max-per-sample flips, batching trials
+    import concurrent.futures
+    import hashlib
+    import traceback
     flips_for_this_sample = 0
     trials = 0
     max_trials = args.trials_per_sample
     max_per_sample = getattr(args, 'max_per_sample', 3)
     found_hard_negatives = []
     batch_size = 10
+    seen_candidates = set()
+
+    def candidate_hash(cmds):
+        # Hash tuple of commands for fast deduplication
+        return hashlib.sha1(str(cmds).encode()).hexdigest()
+
+    def fast_heuristic(cmds):
+        # Heuristic: at least 4 commands, not all identical
+        if not isinstance(cmds, list) or len(cmds) < 4:
+            return False
+        if all(cmds[0] == c for c in cmds):
+            return False
+        return True
+
+    # EvoPerturber search loop with parallel batch
     while flips_for_this_sample < max_per_sample and trials < max_trials:
-        # Batch generate candidates
-        batch_mutated = []
-        for _ in range(min(batch_size, max_trials - trials)):
-            mutated_evo = evo.search(flat_commands)
-            if mutated_evo:
-                batch_mutated.append(mutated_evo)
+        batch_count = min(batch_size, max_trials - trials)
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [executor.submit(evo.search, flat_commands) for _ in range(batch_count)]
+            batch_mutated = [f.result() for f in futures if f.result() is not None]
         trials += len(batch_mutated)
-        # Batch geometry/feature extraction
         for mutated in batch_mutated:
+            h = candidate_hash(mutated)
+            if h in seen_candidates:
+                continue
+            seen_candidates.add(h)
+            if not fast_heuristic(mutated):
+                continue
             if not is_valid_geometry(mutated):
                 continue
             features = scorer.extract_features(mutated)
@@ -292,27 +332,39 @@ def process_sample(args_tuple):
                     near_miss_results.append(nm)
         if flips_for_this_sample >= max_per_sample:
             break
-    # Fallback: shape-grammar mutation if not enough flips found
+
+    # Batch fallback: apply all rules in parallel if needed
     if flips_for_this_sample < max_per_sample:
-        import traceback
-        for rule_id, rule_fn in enumerate(_worker_rules):
-            try:
-                cand = rule_fn(flat_commands)
-                def extract_commands_from_mutate_output(cand, rule_id, pid):
-                    logging.debug(f"mutate output for rule {rule_id}, {pid}: type={type(cand)}, value={repr(cand)}")
-                    if isinstance(cand, (tuple, list)):
-                        if len(cand) > 0 and isinstance(cand[0], list) and all(isinstance(x, str) for x in cand[0]):
-                            return cand[0]
-                        if all(isinstance(x, str) for x in cand):
-                            return list(cand)
-                        if all(isinstance(x, tuple) for x in cand):
-                            return [item for tup in cand for item in tup if isinstance(item, str)]
-                    if isinstance(cand, str):
-                        return [cand]
-                    return cand
-                cand = extract_commands_from_mutate_output(cand, rule_id, pid)
-                cand_tuples = parse_logo_commands_to_tuples(cand)
-                if is_valid_geometry(cand_tuples):
+        def extract_commands_from_mutate_output(cand, rule_id, pid):
+            logging.debug(f"mutate output for rule {rule_id}, {pid}: type={type(cand)}, value={repr(cand)}")
+            if isinstance(cand, (tuple, list)):
+                if len(cand) > 0 and isinstance(cand[0], list) and all(isinstance(x, str) for x in cand[0]):
+                    return cand[0]
+                if all(isinstance(x, str) for x in cand):
+                    return list(cand)
+                if all(isinstance(x, tuple) for x in cand):
+                    return [item for tup in cand for item in tup if isinstance(item, str)]
+            if isinstance(cand, str):
+                return [cand]
+            return cand
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            rule_futures = {executor.submit(rule_fn, flat_commands): rule_id for rule_id, rule_fn in enumerate(_worker_rules)}
+            rule_results = []
+            for future in concurrent.futures.as_completed(rule_futures):
+                rule_id = rule_futures[future]
+                try:
+                    cand = future.result()
+                    cand = extract_commands_from_mutate_output(cand, rule_id, pid)
+                    cand_tuples = parse_logo_commands_to_tuples(cand)
+                    h = candidate_hash(cand_tuples)
+                    if h in seen_candidates:
+                        continue
+                    seen_candidates.add(h)
+                    if not fast_heuristic(cand_tuples):
+                        continue
+                    if not is_valid_geometry(cand_tuples):
+                        continue
                     features = scorer.extract_features(cand_tuples)
                     vertices = effective_parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in cand_tuples])
                     if not has_min_vertices(vertices, min_v=4):
@@ -335,12 +387,15 @@ def process_sample(args_tuple):
                         if is_near_flip(conf):
                             nm = build_hard_negative_dict(sample, cand_tuples, features, 'near_miss_grammar')
                             near_miss_results.append(nm)
-            except Exception as e:
-                logging.error(f"Error during grammar mutation rule {rule_id} for {pid}: {e!r}\n{traceback.format_exc()}")
-            if flips_for_this_sample >= max_per_sample:
-                break
+                except Exception as e:
+                    logging.error(f"Error during grammar mutation rule {rule_id} for {pid}: {e!r}\n{traceback.format_exc()}")
+                if flips_for_this_sample >= max_per_sample:
+                    break
     return (found_hard_negatives[0] if found_hard_negatives else None, near_miss_results[0] if near_miss_results else None)
 def main():
+    total_problems = 0
+    total_samples = 0
+    near_misses_output = []
     parser = argparse.ArgumentParser(description="Generate hard negatives using evolutionary and grammar-based mutation.")
     parser.add_argument('--input-dir', required=True, help='Input directory containing Bongard-LOGO problems')
     parser.add_argument('--output', required=True, help='Output file for hard negatives')
@@ -365,9 +420,7 @@ def main():
     derived_labels_path = os.path.join('data', 'derived_labels.json')
     if not os.path.exists(derived_labels_path):
         logging.error(f"Missing derived_labels.json at {derived_labels_path}")
-        return
-
-    all_entries = []
+    problems = defaultdict(list)
     try:
         with open(derived_labels_path, 'r') as f:
             all_entries = json.load(f)
@@ -375,49 +428,42 @@ def main():
         logging.error(f"Error decoding JSON from {derived_labels_path}: {e}")
         return
 
-    problems = defaultdict(list)
     for entry in all_entries:
         problems[entry['problem_id']].append(entry)
 
-    hard_negatives_output = []
-    near_misses_output = []
-    total_problems = 0
-    total_samples = 0
-
     sample_args = []
-    for pid, entries in problems.items():
+    for pid, entries in tqdm(problems.items(), desc="Problems", leave=True):
         total_problems += 1
         positives = [e for e in entries if e.get('label') in ('category_1', 'positive')]
         logging.info(f"Processing problem {total_problems}: {pid} ({len(positives)} positives)")
-
-
         try:
             concept_fn = get_concept_fn_for_problem(pid)
         except Exception as e:
             logging.error(f"No concept function registered for problem {pid}: {e}")
             raise
-
         for sample_idx, sample in enumerate(positives):
             total_samples += 1
-            sample_args.append((pid, sample, concept_fn, args))
+            from src.data_pipeline.logo_parser import BongardLogoParser
+            sample_args.append((pid, sample, BongardLogoParser(), concept_fn, args))
 
     logging.info(f"Prepared {len(sample_args)} sample arguments for processing.")
 
     results = []
+    start_all = time.time()
     if args.parallel > 1:
         logging.info(f"Using multiprocessing with {args.parallel} workers.")
         try:
-            # Use the concept_fn for the first problem as the global for all workers (all problems use registry)
             concept_fn = sample_args[0][2] if sample_args else None
             with multiprocessing.Pool(args.parallel, initializer=_init_worker, initargs=(concept_fn,)) as pool:
-                results = pool.map(process_sample, sample_args)
+                for res in tqdm(pool.imap(process_sample, sample_args), total=len(sample_args), desc="Samples", leave=True):
+                    results.append(res)
         except Exception as e:
             logging.error(f"Exception during multiprocessing: {e}")
             import traceback
             logging.error(traceback.format_exc())
     else:
-        for idx, arg in enumerate(sample_args):
-            logging.info(f"Processing sample {idx+1}/{len(sample_args)}: {arg[0]}")
+        for idx, arg in enumerate(tqdm(sample_args, desc="Samples", leave=True)):
+            t0 = time.time()
             try:
                 res, near_res = process_sample(arg)
                 results.append((res, near_res))
@@ -425,6 +471,10 @@ def main():
                 logging.error(f"Exception in process_sample for {arg[0]}: {e}")
                 import traceback
                 logging.error(traceback.format_exc())
+            t1 = time.time()
+            logging.info(f"Sample {idx+1}/{len(sample_args)} processed in {t1-t0:.2f}s")
+    logging.info(f"All samples processed in {time.time()-start_all:.2f}s")
+    # ...existing code...
 
     # Enforce diversity and non-degeneracy per positive sample
     unique_hard_negatives = []
