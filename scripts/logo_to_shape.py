@@ -86,6 +86,7 @@ def main():
                                 flat.append(prog)
                             return flat
 
+
                         flat_commands = [cmd for cmd in flatten_action_program(action_program) if isinstance(cmd, str)]
 
                         try:
@@ -119,6 +120,7 @@ def main():
                                 'has_quadrangle': PhysicsInference.has_quadrangle(poly),
                                 'has_obtuse_angle': PhysicsInference.has_obtuse(poly),
                                 'fallback_square': fallback_square,
+                                'num_strokes': len(flat_commands),
                             }
                             result = {
                                 'problem_id': problem_id,
