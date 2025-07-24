@@ -67,6 +67,8 @@ def main():
                     continue
                 # Each problem: [positives, negatives]
                 for label, group in zip(['category_1', 'category_0'], pos_neg_lists):
+                    # Normalize label to 'positive'/'negative' for registry logic
+                    norm_label = 'positive' if label == 'category_1' else 'negative'
                     for idx, action_program in enumerate(group):
                         img_dir = os.path.join(base_dir, f"ShapeBongard_V2/{cat}/images/{problem_id}", label)
                         img_path = os.path.join(img_dir, f"{idx}.png")
@@ -121,7 +123,7 @@ def main():
                             result = {
                                 'problem_id': problem_id,
                                 'category': cat,
-                                'label': label,
+                                'label': norm_label,
                                 'image_path': img_path,
                                 'features': features,
                                 'geometry': vertices,
