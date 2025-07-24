@@ -87,18 +87,21 @@ def main():
                 break
             total_samples += 1
             try:
-                # Use the true action program from the sample (possibly nested list of LOGO command strings)
+                # Use the true action program from the sample (flat list of LOGO command strings)
                 commands = sample.get('action_program')
                 if not commands or not isinstance(commands, list):
                     print(f"    [ERROR] No valid action_program for sample {sample_idx+1}")
                     continue
-                # Flatten nested lists of commands into a single list of strings
-                flat_commands = []
-                for subgroup in commands:
-                    if isinstance(subgroup, list):
-                        flat_commands.extend(subgroup)
-                    else:
-                        flat_commands.append(subgroup)
+                # If commands is nested, flatten it
+                if any(isinstance(cmd, list) for cmd in commands):
+                    flat_commands = []
+                    for subgroup in commands:
+                        if isinstance(subgroup, list):
+                            flat_commands.extend(subgroup)
+                        else:
+                            flat_commands.append(subgroup)
+                else:
+                    flat_commands = commands
                 # Use precomputed features from sample['features']
                 if 'features' not in sample:
                     print(f"    [ERROR] No features field in sample {sample_idx+1}")
