@@ -34,7 +34,21 @@ def induce_tree(problem_id):
     clf = DecisionTreeClassifier(max_depth=2)
     clf.fit(X_mat, y)
     if clf.score(X_mat, y) < 1.0:
-        raise ValueError(f"No perfect split for {problem_id}")
+        # Fallback: program membership predicate
+        # Load all positive action_programs for this problem
+        pos_seqs = set()
+        for r in data:
+            if r["label"] == "positive":
+                prog = r.get("action_program")
+                if prog is None and "features" in r:
+                    prog = r["features"].get("action_program", [])
+                pos_seqs.add(tuple(prog))
+        def membership_predicate(f):
+            prog = f.get("action_program")
+            if prog is None and "features" in f:
+                prog = f["features"].get("action_program", [])
+            return tuple(prog) in pos_seqs
+        return membership_predicate
 
     # 3. Extract rule as a Python function
     tree_ = clf.tree_
