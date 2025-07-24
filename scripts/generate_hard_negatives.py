@@ -87,13 +87,11 @@ def main():
                 break
             total_samples += 1
             try:
-                # Use the true action program from the sample
-                action_program = sample.get('action_program')
-                if not action_program:
-                    print(f"    [ERROR] No action_program for sample {sample_idx+1}")
+                # Use the true action program from the sample (list of LOGO command strings)
+                commands = sample.get('action_program')
+                if not commands or not isinstance(commands, list):
+                    print(f"    [ERROR] No valid action_program for sample {sample_idx+1}")
                     continue
-                flat_action = flatten_action_program(action_program)
-                original_cmds = [str(cmd) for cmd in flat_action]
                 # Use precomputed features from sample['features']
                 if 'features' not in sample:
                     print(f"    [ERROR] No features field in sample {sample_idx+1}")
@@ -104,10 +102,11 @@ def main():
                 continue
             found_hard_negative = False
             for _ in range(10):
-                # Perturb each command string
-                perturbed_cmds = [perturb_bongard_cmd(cmd, args.jitter_angle, args.jitter_length) for cmd in original_cmds]
+                # Perturb each command string (always operate on LOGO command strings)
+                perturbed_commands = [perturb_bongard_cmd(cmd, args.jitter_angle, args.jitter_length) for cmd in commands]
                 try:
-                    pert_verts = parser_obj.parse_action_program(perturbed_cmds)
+                    # Parse perturbed commands into vertices, then polygon
+                    pert_verts = parser_obj.parse_action_program(perturbed_commands)
                     pert_poly = PhysicsInference.polygon_from_vertices(pert_verts)
                     if pert_poly is None or not hasattr(pert_poly, 'is_valid') or not pert_poly.is_valid:
                         continue
@@ -123,7 +122,7 @@ def main():
                     print(f"    [ERROR] Failed to parse perturbed program: {e}")
                     continue
                 if flips_label(original_features, pert_features, concept_test):
-                    entry = f"{pid},{sample.get('image_path','')},perturbed_cmds:{perturbed_cmds}"
+                    entry = f"{pid},{sample.get('image_path','')},perturbed_cmds:{perturbed_commands}"
                     hard_negatives.append(entry)
                     count += 1
                     total_hard_negatives += 1
