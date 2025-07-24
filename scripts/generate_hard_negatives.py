@@ -94,19 +94,11 @@ def main():
                     continue
                 flat_action = flatten_action_program(action_program)
                 original_cmds = [str(cmd) for cmd in flat_action]
-                # Parse original geometry
-                original_verts = parser_obj.parse_action_program(original_cmds)
-                poly = PhysicsInference.polygon_from_vertices(original_verts)
-                if poly is None or not hasattr(poly, 'is_valid') or not poly.is_valid:
-                    print(f"    [ERROR] Invalid polygon for sample {sample_idx+1}")
+                # Use precomputed features from sample['features']
+                if 'features' not in sample:
+                    print(f"    [ERROR] No features field in sample {sample_idx+1}")
                     continue
-                original_features = {
-                    'area': poly.area,
-                    'centroid': [poly.centroid.x, poly.centroid.y],
-                    'is_convex': PhysicsInference.is_convex(poly),
-                    'symmetry_score': PhysicsInference.symmetry_score(poly),
-                    'moment_of_inertia': PhysicsInference.moment_of_inertia(poly)
-                }
+                original_features = sample['features']
             except Exception as e:
                 print(f"    [ERROR] Failed to get features for sample: {e}")
                 continue
@@ -119,6 +111,7 @@ def main():
                     pert_poly = PhysicsInference.polygon_from_vertices(pert_verts)
                     if pert_poly is None or not hasattr(pert_poly, 'is_valid') or not pert_poly.is_valid:
                         continue
+                    # Always build perturbed_features as a dict of scalars/lists
                     pert_features = {
                         'area': pert_poly.area,
                         'centroid': [pert_poly.centroid.x, pert_poly.centroid.y],
