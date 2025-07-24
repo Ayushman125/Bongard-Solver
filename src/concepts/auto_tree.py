@@ -1,29 +1,39 @@
-import json
+
+import json, operator
 from pathlib import Path
 from sklearn.tree import DecisionTreeClassifier
+import numpy as np
 
 DERIVED = Path("data/derived_labels.json")
+
+def is_scalar(val):
+    return isinstance(val, (float, int, bool, np.floating, np.integer, np.bool_))
 
 def induce_tree(problem_id):
     # 1. Gather X, y
     data = [r for r in json.load(DERIVED.open()) if r["problem_id"] == problem_id]
-    if not data:
-        raise ValueError(f"No data for problem_id {problem_id}")
-    # Use all features, including action_count
     X = []
-    feature_names = list(data[0]["features"].keys())
     for r in data:
-        feats = dict(r["features"])
-        # Ensure action_count is present
-        if "action_count" not in feats:
-            feats["action_count"] = len(r.get("action_program", feats.get("action_program", [])))
-        X.append([feats[n] for n in feature_names])
+        feats = {}
+        for k, v in r["features"].items():
+            if is_scalar(v):
+                feats[k] = v
+        # Also add hand-picked scalar meta-features if needed
+        if "action_count" in r["features"] and is_scalar(r["features"]["action_count"]):
+            feats["action_count"] = r["features"]["action_count"]
+        X.append(feats)
+    # Consistent feature ordering
+    feature_names = sorted(set().union(*(x.keys() for x in X)))
+    X_mat = []
+    for fdict in X:
+        X_mat.append([fdict.get(k, 0.0) for k in feature_names])  # fill missing with 0.0
+
     y = [1 if r["label"] == "positive" else 0 for r in data]
 
     # 2. Train shallow tree
     clf = DecisionTreeClassifier(max_depth=2)
-    clf.fit(X, y)
-    if clf.score(X, y) < 1.0:
+    clf.fit(X_mat, y)
+    if clf.score(X_mat, y) < 1.0:
         raise ValueError(f"No perfect split for {problem_id}")
 
     # 3. Extract rule as a Python function
