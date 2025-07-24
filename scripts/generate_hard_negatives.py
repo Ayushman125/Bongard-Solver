@@ -38,7 +38,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 # Import project-specific modules
 from src.data_pipeline.logo_parser import BongardLogoParser
 from src.data_pipeline.physics_infer import PhysicsInference
-from src.data_pipeline.verification import Verification
+from src.data_pipeline.verification import has_min_vertices, l2_shape_distance
 from src.concepts import CONCEPTS
 from src.hard_negative.evo_search import EvoPerturber
 from src.data_pipeline.logo_mutator import mutate, RULE_SET
@@ -197,23 +197,18 @@ def concept_test(features):
 # Move process_sample to top-level for multiprocessing
 def process_sample(args_tuple):
     pid, sample, concept_fn, args = args_tuple
-    result = None
-    near_miss_result = None
-
+    results = []
+    near_miss_results = []
     try:
         commands = sample.get('action_program')
         if not commands:
             logging.warning(f"No action_program found for sample {pid}. Skipping.")
             return None, None
-
-        # Standardize all commands to (cmd, param) tuples for mutation logic
         flat_commands = parse_logo_commands_to_tuples(commands)
-
         original_features = sample.get('features')
         if not original_features:
             logging.warning(f"No original features found for sample {pid}. Skipping.")
             return None, None
-
     except Exception as e:
         logging.error(f"Error preparing sample for processing {pid}: {e!r}")
         return None, None
@@ -222,12 +217,10 @@ def process_sample(args_tuple):
     evo = EvoPerturber(scorer=scorer, seed=42)
 
     def build_hard_negative_dict(base_sample, mutated_cmds, features, label_tag):
-        # Use the same structure as derived_labels.json
-        d = dict(base_sample)  # shallow copy
+        d = dict(base_sample)
         d['label'] = label_tag
         d['features'] = features
         d['action_program'] = mutated_cmds
-        # Optionally, update geometry if available
         try:
             parser = BongardLogoParser()
             vertices = parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in mutated_cmds])
@@ -237,73 +230,94 @@ def process_sample(args_tuple):
             logging.warning(f"Failed to parse geometry for hard negative: {e!r}")
         return d
 
-    # Evolutionary search
-    try:
+    # Per-sample search loop: try up to max-per-sample flips
+    flips_for_this_sample = 0
+    trials = 0
+    max_trials = args.trials_per_sample
+    max_per_sample = getattr(args, 'max_per_sample', 3)
+    found_hard_negatives = []
+    while flips_for_this_sample < max_per_sample and trials < max_trials:
+        trials += 1
         mutated_evo = evo.search(flat_commands)
         if mutated_evo and is_valid_geometry(mutated_evo):
+            features = scorer.extract_features(mutated_evo)
+            parser = BongardLogoParser()
+            vertices = parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in mutated_evo])
+            if not has_min_vertices(vertices, min_v=4):
+                continue
+            is_duplicate = False
+            for e in found_hard_negatives:
+                if l2_shape_distance(vertices, e.get('geometry', [])) < 1e-3:
+                    is_duplicate = True
+                    break
+            if is_duplicate:
+                continue
             if scorer.is_flip(mutated_evo):
-                features = scorer.extract_features(mutated_evo)
-                result = build_hard_negative_dict(sample, mutated_evo, features, 'hard_negative')
+                hn = build_hard_negative_dict(sample, mutated_evo, features, 'hard_negative')
+                found_hard_negatives.append(hn)
+                flips_for_this_sample += 1
             elif args.near_miss:
                 conf = scorer.predict_concept_confidence(mutated_evo)
                 if is_near_flip(conf):
-                    features = scorer.extract_features(mutated_evo)
-                    near_miss_result = build_hard_negative_dict(sample, mutated_evo, features, 'near_miss_evo')
-    except Exception as e:
-        logging.error(f"Error during EvoPerturber search for {pid}: {e!r}")
-
-    # Helper to robustly extract command list from mutate() output
-    import traceback
-    def extract_commands_from_mutate_output(cand, rule_id, pid):
-        # Log structure for debugging for all rules
-        logging.debug(f"mutate output for rule {rule_id}, {pid}: type={type(cand)}, value={repr(cand)}")
-        # If cand is a tuple/list and first element is a list of strings, use it
-        if isinstance(cand, (tuple, list)):
-            # If first element is a list of strings, use it
-            if len(cand) > 0 and isinstance(cand[0], list) and all(isinstance(x, str) for x in cand[0]):
-                return cand[0]
-            # If first element is a string, and all elements are strings, treat as command list
-            if all(isinstance(x, str) for x in cand):
-                return list(cand)
-            # If cand itself is a list of tuples, flatten
-            if all(isinstance(x, tuple) for x in cand):
-                return [item for tup in cand for item in tup if isinstance(item, str)]
-        # If cand is just a string, wrap in list
-        if isinstance(cand, str):
-            return [cand]
-        # Fallback: return as is
-        return cand
-
-    # Fallback: shape-grammar mutation
-    if not result: # Only try grammar mutation if EvoPerturber didn't find a flip
+                    nm = build_hard_negative_dict(sample, mutated_evo, features, 'near_miss_evo')
+                    near_miss_results.append(nm)
+    # Fallback: shape-grammar mutation if not enough flips found
+    if flips_for_this_sample < max_per_sample:
+        import traceback
         for rule_id in range(len(RULE_SET)):
             try:
                 cand = mutate(flat_commands, rule_id)
+                def extract_commands_from_mutate_output(cand, rule_id, pid):
+                    logging.debug(f"mutate output for rule {rule_id}, {pid}: type={type(cand)}, value={repr(cand)}")
+                    if isinstance(cand, (tuple, list)):
+                        if len(cand) > 0 and isinstance(cand[0], list) and all(isinstance(x, str) for x in cand[0]):
+                            return cand[0]
+                        if all(isinstance(x, str) for x in cand):
+                            return list(cand)
+                        if all(isinstance(x, tuple) for x in cand):
+                            return [item for tup in cand for item in tup if isinstance(item, str)]
+                    if isinstance(cand, str):
+                        return [cand]
+                    return cand
                 cand = extract_commands_from_mutate_output(cand, rule_id, pid)
                 cand_tuples = parse_logo_commands_to_tuples(cand)
                 if is_valid_geometry(cand_tuples):
+                    features = scorer.extract_features(cand_tuples)
+                    parser = BongardLogoParser()
+                    vertices = parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in cand_tuples])
+                    if not has_min_vertices(vertices, min_v=4):
+                        continue
+                    is_duplicate = False
+                    for e in found_hard_negatives:
+                        if l2_shape_distance(vertices, e.get('geometry', [])) < 1e-3:
+                            is_duplicate = True
+                            break
+                    if is_duplicate:
+                        continue
                     if scorer.is_flip(cand_tuples):
-                        features = scorer.extract_features(cand_tuples)
-                        result = build_hard_negative_dict(sample, cand_tuples, features, 'hard_negative')
-                        break # Found a flip, no need to try more rules
+                        hn = build_hard_negative_dict(sample, cand_tuples, features, 'hard_negative')
+                        found_hard_negatives.append(hn)
+                        flips_for_this_sample += 1
+                        if flips_for_this_sample >= max_per_sample:
+                            break
                     elif args.near_miss:
                         conf = scorer.predict_concept_confidence(cand_tuples)
                         if is_near_flip(conf):
-                            if near_miss_result is None:
-                                features = scorer.extract_features(cand_tuples)
-                                near_miss_result = build_hard_negative_dict(sample, cand_tuples, features, 'near_miss_grammar')
+                            nm = build_hard_negative_dict(sample, cand_tuples, features, 'near_miss_grammar')
+                            near_miss_results.append(nm)
             except Exception as e:
                 logging.error(f"Error during grammar mutation rule {rule_id} for {pid}: {e!r}\n{traceback.format_exc()}")
-    return result, near_miss_result
-
-
+            if flips_for_this_sample >= max_per_sample:
+                break
+    return (found_hard_negatives[0] if found_hard_negatives else None, near_miss_results[0] if near_miss_results else None)
 def main():
     parser = argparse.ArgumentParser(description="Generate hard negatives using evolutionary and grammar-based mutation.")
     parser.add_argument('--input-dir', required=True, help='Input directory containing Bongard-LOGO problems')
     parser.add_argument('--output', required=True, help='Output file for hard negatives')
     parser.add_argument('--jitter-angle', type=float, default=15, help='Base angle jitter for centroid perturbation')
     parser.add_argument('--jitter-length', type=float, default=0.15, help='Base length jitter for area perturbation')
-    parser.add_argument('--max-per-problem', type=int, default=14, help='Max hard negatives per problem')
+    parser.add_argument('--max-per-problem', type=int, default=14, help='(DEPRECATED) Use --max-per-sample instead')
+    parser.add_argument('--max-per-sample', type=int, default=3, help='Max hard negatives per positive sample (default=3)')
     parser.add_argument('--trials-per-sample', type=int, default=500, help='Trials per positive sample')
     parser.add_argument('--parallel', type=int, default=1, help='Number of parallel workers')
     parser.add_argument('--near-miss', action='store_true', help='Store near-miss samples')
@@ -345,10 +359,8 @@ def main():
         total_problems += 1
         positives = [e for e in entries if e.get('label') == 'category_1']
         logging.info(f"Processing problem {total_problems}: {pid} ({len(positives)} positives)")
-        
-        # Determine the concept function for this problem ID
-        # If CONCEPTS doesn't have it, use the default concept_test
-        concept_fn = CONCEPTS.get(pid, concept_test) 
+
+        concept_fn = CONCEPTS.get(pid, concept_test)
         if concept_fn is concept_test:
             logging.warning(f"Using default 'concept_test' for problem {pid}. Ensure this is intended.")
 
@@ -379,11 +391,23 @@ def main():
                 import traceback
                 logging.error(traceback.format_exc())
 
+    # Enforce diversity and non-degeneracy per positive sample
+    unique_hard_negatives = []
     for hn_res, nm_res in results:
         if hn_res:
-            hard_negatives_output.append(hn_res)
+            vertices = hn_res.get('geometry', [])
+            if not has_min_vertices(vertices, min_v=4):
+                continue
+            is_duplicate = False
+            for e in unique_hard_negatives:
+                if l2_shape_distance(vertices, e.get('geometry', [])) < 1e-3:
+                    is_duplicate = True
+                    break
+            if not is_duplicate:
+                unique_hard_negatives.append(hn_res)
         if nm_res:
             near_misses_output.append(nm_res)
+    hard_negatives_output = unique_hard_negatives
 
     logging.info(f"Finished processing all samples. Writing output...")
     try:
