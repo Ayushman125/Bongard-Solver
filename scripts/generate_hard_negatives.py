@@ -294,16 +294,13 @@ def process_sample(args_tuple):
 
     # EvoPerturber search loop with parallel batch
     while flips_for_this_sample < max_per_sample and trials < max_trials:
-        # Batch generate candidates, always count trials even if no flip is found
+        # Batch generate candidates sequentially to avoid thread-pool overhead
         batch_mutated = []
         num_calls = min(batch_size, max_trials - trials)
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = [executor.submit(evo.search, flat_commands) for _ in range(num_calls)]
-            for f in futures:
-                result = f.result()
-                if result is not None:
-                    batch_mutated.append(result)
-        # Increment by total search calls, not just successful flips
+        for _ in range(num_calls):
+            result = evo.search(flat_commands)
+            if result is not None:
+                batch_mutated.append(result)
         trials += num_calls
         for mutated in batch_mutated:
             h = candidate_hash(mutated)
@@ -339,7 +336,7 @@ def process_sample(args_tuple):
         if flips_for_this_sample >= max_per_sample:
             break
 
-    # Batch fallback: apply all rules in parallel if needed
+    # Batch fallback: apply all rules sequentially if needed
     if flips_for_this_sample < max_per_sample:
         def extract_commands_from_mutate_output(cand, rule_id, pid):
             logging.debug(f"mutate output for rule {rule_id}, {pid}: type={type(cand)}, value={repr(cand)}")
@@ -354,49 +351,45 @@ def process_sample(args_tuple):
                 return [cand]
             return cand
 
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            rule_futures = {executor.submit(rule_fn, flat_commands): rule_id for rule_id, rule_fn in enumerate(_worker_rules)}
-            rule_results = []
-            for future in concurrent.futures.as_completed(rule_futures):
-                rule_id = rule_futures[future]
-                try:
-                    cand = future.result()
-                    cand = extract_commands_from_mutate_output(cand, rule_id, pid)
-                    cand_tuples = parse_logo_commands_to_tuples(cand)
-                    h = candidate_hash(cand_tuples)
-                    if h in seen_candidates:
-                        continue
-                    seen_candidates.add(h)
-                    if not fast_heuristic(cand_tuples):
-                        continue
-                    if not is_valid_geometry(cand_tuples):
-                        continue
-                    features = scorer.extract_features(cand_tuples)
-                    vertices = effective_parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in cand_tuples])
-                    if not has_min_vertices(vertices, min_v=4):
-                        continue
-                    is_duplicate = False
-                    for e in found_hard_negatives:
-                        if l2_shape_distance(vertices, e.get('geometry', [])) < 1e-3:
-                            is_duplicate = True
-                            break
-                    if is_duplicate:
-                        continue
-                    if scorer.is_flip(cand_tuples):
-                        hn = build_hard_negative_dict(sample, cand_tuples, features, 'hard_negative')
-                        found_hard_negatives.append(hn)
-                        flips_for_this_sample += 1
-                        if flips_for_this_sample >= max_per_sample:
-                            break
-                    elif args.near_miss:
-                        conf = scorer.predict_concept_confidence(cand_tuples)
-                        if is_near_flip(conf):
-                            nm = build_hard_negative_dict(sample, cand_tuples, features, 'near_miss_grammar')
-                            near_miss_results.append(nm)
-                except Exception as e:
-                    logging.error(f"Error during grammar mutation rule {rule_id} for {pid}: {e!r}\n{traceback.format_exc()}")
-                if flips_for_this_sample >= max_per_sample:
-                    break
+        for rule_id, rule_fn in enumerate(_worker_rules):
+            try:
+                cand = rule_fn(flat_commands)
+                cand = extract_commands_from_mutate_output(cand, rule_id, pid)
+                cand_tuples = parse_logo_commands_to_tuples(cand)
+                h = candidate_hash(cand_tuples)
+                if h in seen_candidates:
+                    continue
+                seen_candidates.add(h)
+                if not fast_heuristic(cand_tuples):
+                    continue
+                if not is_valid_geometry(cand_tuples):
+                    continue
+                features = scorer.extract_features(cand_tuples)
+                vertices = effective_parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in cand_tuples])
+                if not has_min_vertices(vertices, min_v=4):
+                    continue
+                is_duplicate = False
+                for e in found_hard_negatives:
+                    if l2_shape_distance(vertices, e.get('geometry', [])) < 1e-3:
+                        is_duplicate = True
+                        break
+                if is_duplicate:
+                    continue
+                if scorer.is_flip(cand_tuples):
+                    hn = build_hard_negative_dict(sample, cand_tuples, features, 'hard_negative')
+                    found_hard_negatives.append(hn)
+                    flips_for_this_sample += 1
+                    if flips_for_this_sample >= max_per_sample:
+                        break
+                elif args.near_miss:
+                    conf = scorer.predict_concept_confidence(cand_tuples)
+                    if is_near_flip(conf):
+                        nm = build_hard_negative_dict(sample, cand_tuples, features, 'near_miss_grammar')
+                        near_miss_results.append(nm)
+            except Exception as e:
+                logging.error(f"Error during grammar mutation rule {rule_id} for {pid}: {e!r}\n{traceback.format_exc()}")
+            if flips_for_this_sample >= max_per_sample:
+                break
     return (found_hard_negatives[0] if found_hard_negatives else None, near_miss_results[0] if near_miss_results else None)
 def main():
     total_problems = 0
