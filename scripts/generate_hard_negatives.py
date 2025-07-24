@@ -198,15 +198,10 @@ def flatten_action_program(action_program):
             flat.append(item)
     return flat
 
-def flips_label(original_features, perturbed_features, concept_test):
-    original_label = concept_test(original_features)
-    perturbed_label = concept_test(perturbed_features)
+def flips_label(original_features, perturbed_features, concept_fn):
+    original_label = concept_fn(original_features)
+    perturbed_label = concept_fn(perturbed_features)
     return original_label != perturbed_label
-
-def concept_test(features):
-    # Placeholder: implement your concept test logic here
-    # For example, return True if area > threshold
-    return features.get('area', 0) > 0.5 # Use .get with a default for robustness
 
 # Move process_sample to top-level for multiprocessing
 def process_sample(args_tuple):
@@ -228,8 +223,14 @@ def process_sample(args_tuple):
         logging.error(f"Error preparing sample for processing {pid}: {e!r}")
         return None, None
 
+
     scorer = Scorer(_worker_concept_fn, original_features)
-    _worker_evo.scorer = scorer
+    # Use global EvoPerturber if in worker, else create local instance
+    if _worker_evo is not None:
+        _worker_evo.scorer = scorer
+        evo = _worker_evo
+    else:
+        evo = EvoPerturber(scorer=scorer, seed=42)
 
     def build_hard_negative_dict(base_sample, mutated_cmds, features, label_tag):
         d = dict(base_sample)
@@ -255,7 +256,7 @@ def process_sample(args_tuple):
         # Batch generate candidates
         batch_mutated = []
         for _ in range(min(batch_size, max_trials - trials)):
-            mutated_evo = _worker_evo.search(flat_commands)
+            mutated_evo = evo.search(flat_commands)
             if mutated_evo:
                 batch_mutated.append(mutated_evo)
         trials += len(batch_mutated)
