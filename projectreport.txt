@@ -95,12 +95,13 @@ bongard-solver/
 - Prepares image batches for Zooniverse upload when human review is needed
 - Handles CSV merge-back after consensus
 
+
 ## 3. Testing & Assurance
 
 - `tests/test_logo_parser.py`: Verify LOGO parsing on canonical/edge-case scripts (unit and integration tests).
 - `tests/test_physics_inference.py`: Validate extracted centroid, area, convexity, and symmetry—compare output to known ground-truth for simple shapes.
 - `tests/test_pipeline.py`: End-to-end tests: From raw `.logo` to `derived_labels.json`.
-- Automate periodic spot-checks and output reports detailing files that require review.
+- Periodic spot-checks and output reports are automated to flag and detail files that require review, ensuring continuous data quality monitoring.
 
 ## 4. Dataflow & Quality Control
 

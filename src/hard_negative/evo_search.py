@@ -13,11 +13,12 @@ class EvoPerturber:
             np.random.seed(seed)
     
     def mutate_logo(self, logo_prog):
-        # Example: jitter numeric arguments in LOGO code
+        # Now expects logo_prog as a list of (cmd, param) tuples
         prog = copy.deepcopy(logo_prog)
-        for cmd in prog.commands:
-            if hasattr(cmd, 'param'):
-                cmd.param += np.random.uniform(-5, 5)
+        for i, cmd in enumerate(prog):
+            # If the command has a numeric parameter, jitter it
+            if isinstance(cmd, tuple) and len(cmd) == 2 and isinstance(cmd[1], (int, float)):
+                prog[i] = (cmd[0], cmd[1] + np.random.uniform(-5, 5))
         return prog
 
     def fitness(self, orig_prog, mutated_prog):
