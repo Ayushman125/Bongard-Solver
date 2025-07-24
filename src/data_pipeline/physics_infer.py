@@ -28,8 +28,8 @@ class PhysicsInference:
         return poly_geom
 
     @staticmethod
-    def count_straight_segments(vertices):
-        # Heuristic: count segments with nearly constant angle
+    def count_straight_segments(vertices_or_poly):
+        vertices = PhysicsInference.safe_extract_vertices(vertices_or_poly)
         if not vertices or len(vertices) < 2:
             return 0
         count = 0
@@ -42,8 +42,8 @@ class PhysicsInference:
         return count
 
     @staticmethod
-    def count_arcs(vertices):
-        # Heuristic: treat non-straight segments as arcs
+    def count_arcs(vertices_or_poly):
+        vertices = PhysicsInference.safe_extract_vertices(vertices_or_poly)
         if not vertices or len(vertices) < 2:
             return 0
         total = len(vertices) - 1
@@ -114,19 +114,15 @@ class PhysicsInference:
         orig = np.array(vertices)
         refl = np.array(reflected)
         rmse = np.sqrt(np.mean((orig - refl) ** 2))
-        # If you later use arccos for symmetry, use _clamped_arccos
         return rmse
 
     @staticmethod
     def num_straight(vertices_or_poly):
-        # Count number of straight line segments in the LOGO program
-        # This should be computed from the original command list, but as a fallback, estimate from vertices
-        # For best results, compute from LOGO commands in logo_to_shape.py
-        return len(vertices_or_poly) if isinstance(vertices_or_poly, list) else len(PhysicsInference.safe_extract_vertices(vertices_or_poly))
+        vertices = PhysicsInference.safe_extract_vertices(vertices_or_poly)
+        return len(vertices)
 
     @staticmethod
     def has_quadrangle(vertices_or_poly):
-        # Placeholder: true if there are 4+ vertices and the shape is convex
         vertices = PhysicsInference.safe_extract_vertices(vertices_or_poly)
         from shapely.geometry import Polygon
         poly = Polygon(vertices)
@@ -134,7 +130,6 @@ class PhysicsInference:
 
     @staticmethod
     def has_obtuse(vertices_or_poly):
-        # Placeholder: true if any angle > 100 degrees
         vertices = PhysicsInference.safe_extract_vertices(vertices_or_poly)
         if len(vertices) < 3:
             return False
