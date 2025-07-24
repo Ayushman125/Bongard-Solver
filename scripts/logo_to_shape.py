@@ -110,9 +110,20 @@ def main():
                                 'is_convex': PhysicsInference.is_convex(poly),
                                 'symmetry_score': PhysicsInference.symmetry_score(vertices),
                                 'moment_of_inertia': PhysicsInference.moment_of_inertia(vertices),
-                                'num_straight': PhysicsInference.num_straight(flat_commands),
-                                'has_quadrangle': PhysicsInference.has_quadrangle(vertices),
-                                'has_obtuse': PhysicsInference.has_obtuse(vertices),
+                                # New booleans for concept tests:
+                                'num_straight': PhysicsInference.count_straight_segments(vertices),
+                                'num_arcs': PhysicsInference.count_arcs(vertices),
+                                'has_quadrangle': Verification.has_quadrangle(poly),
+                                'has_obtuse_angle': Verification.has_obtuse_angle(poly),
+                            }
+                            entry = {
+                                'problem_id': problem_id,
+                                'category': cat,
+                                'label': label,
+                                'image_path': img_path,
+                                'features': features,
+                                'geometry': vertices,
+                                'action_program': flat_commands
                             }
                             result = {
                                 'problem_id': problem_id,

@@ -4,6 +4,28 @@ import numpy as np
 
 class PhysicsInference:
     @staticmethod
+    def count_straight_segments(vertices):
+        # Heuristic: count segments with nearly constant angle
+        if not vertices or len(vertices) < 2:
+            return 0
+        count = 0
+        for i in range(1, len(vertices)):
+            x0, y0 = vertices[i-1]
+            x1, y1 = vertices[i]
+            # If delta x or y is much larger than the other, treat as straight
+            if abs(x1-x0) > 0.01 or abs(y1-y0) > 0.01:
+                count += 1
+        return count
+
+    @staticmethod
+    def count_arcs(vertices):
+        # Heuristic: treat non-straight segments as arcs
+        if not vertices or len(vertices) < 2:
+            return 0
+        total = len(vertices) - 1
+        straight = PhysicsInference.count_straight_segments(vertices)
+        return max(0, total - straight)
+    @staticmethod
     def safe_extract_vertices(obj):
         """Safely extract vertices from a list, Polygon, or MultiPolygon."""
         from shapely.geometry import Polygon, MultiPolygon
