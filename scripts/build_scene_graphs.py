@@ -41,8 +41,72 @@ def physics_contact(poly_a, poly_b):
     """Robust check for physical contact between two polygons."""
     return poly_a.touches(poly_b)
 
-# Predicate functions expect node dictionaries as input
-PREDICATES = {
+
+# Loader for all predicates from schemas/edge_types.json
+def load_predicates():
+    predicate_file = os.path.join(os.path.dirname(__file__), '..', 'schemas', 'edge_types.json')
+    if not os.path.exists(predicate_file):
+        print("Warning: schemas/edge_types.json not found. Using built-in predicates.")
+        return None
+    with open(predicate_file, 'r', encoding='utf-8') as f:
+        predicate_defs = json.load(f)
+    # Map predicate names to logic
+    registry = {}
+    for entry in predicate_defs:
+        name = entry['predicate']
+        # Map each predicate to its logic (use built-in if available, else skip)
+        if name == 'left_of':
+            registry[name] = lambda a, b: a.get('cx', 0) + EPS < b.get('cx', 0)
+        elif name == 'right_of':
+            registry[name] = lambda a, b: a.get('cx', 0) > b.get('cx', 0) + EPS
+        elif name == 'above':
+            registry[name] = lambda a, b: a.get('cy', 0) + EPS < b.get('cy', 0)
+        elif name == 'below':
+            registry[name] = lambda a, b: a.get('cy', 0) > b.get('cy', 0) + EPS
+        elif name == 'contains':
+            registry[name] = lambda a, b: Polygon(a['vertices']).contains(Polygon(b['vertices']))
+        elif name == 'inside':
+            registry[name] = lambda a, b: Polygon(b['vertices']).contains(Polygon(a['vertices']))
+        elif name == 'supports':
+            registry[name] = lambda a, b: physics_contact(Polygon(a['vertices']), Polygon(b['vertices'])) and a.get('cy', 0) > b.get('cy', 0)
+        elif name == 'supported_by':
+            registry[name] = lambda a, b: physics_contact(Polygon(b['vertices']), Polygon(a['vertices'])) and b.get('cy', 0) > a.get('cy', 0)
+        elif name == 'touches':
+            registry[name] = lambda a, b: Polygon(a['vertices']).touches(Polygon(b['vertices']))
+        elif name == 'overlaps':
+            registry[name] = lambda a, b: Polygon(a['vertices']).overlaps(Polygon(b['vertices']))
+        elif name == 'parallel_to':
+            registry[name] = lambda a, b: parallel(a.get('orientation', 0), b.get('orientation', 0))
+        elif name == 'perpendicular_to':
+            registry[name] = lambda a, b: abs(abs(a.get('orientation', 0) - b.get('orientation', 0)) - 90) < 7
+        elif name == 'aligned_left':
+            registry[name] = lambda a, b: abs(a.get('bbox', [0,0,0,0])[0] - b.get('bbox', [0,0,0,0])[0]) < EPS
+        elif name == 'aligned_right':
+            registry[name] = lambda a, b: abs(a.get('bbox', [0,0,0,0])[2] - b.get('bbox', [0,0,0,0])[2]) < EPS
+        elif name == 'aligned_top':
+            registry[name] = lambda a, b: abs(a.get('bbox', [0,0,0,0])[1] - b.get('bbox', [0,0,0,0])[1]) < EPS
+        elif name == 'aligned_bottom':
+            registry[name] = lambda a, b: abs(a.get('bbox', [0,0,0,0])[3] - b.get('bbox', [0,0,0,0])[3]) < EPS
+        elif name == 'proximal_to':
+            registry[name] = lambda a, b: np.linalg.norm(np.array([a.get('cx',0), a.get('cy',0)]) - np.array([b.get('cx',0), b.get('cy',0)])) < 50
+        elif name == 'contains_text':
+            registry[name] = lambda a, b: False # KB-based, handled in add_commonsense_edges
+        elif name == 'is_arrow_for':
+            registry[name] = lambda a, b: False # KB-based, handled in add_commonsense_edges
+        elif name == 'has_sides':
+            registry[name] = lambda a, b: False # KB-based, handled in add_commonsense_edges
+        elif name == 'same_shape':
+            registry[name] = lambda a, b: a.get('shape_label') == b.get('shape_label')
+        elif name == 'symmetry_axis':
+            registry[name] = lambda a, b: abs(a.get('symmetry_axis',0) - b.get('orientation',0)) < 7
+        elif name == 'same_color':
+            registry[name] = lambda a, b: np.all(np.abs(np.array(a.get('color',[0,0,0])) - np.array(b.get('color',[0,0,0]))) < 10)
+        else:
+            registry[name] = lambda a, b: False
+    return registry
+
+# Use loader if file exists, else fallback to built-in
+PREDICATES = load_predicates() or {
     'left_of':     lambda a, b: a.get('cx', 0) + EPS < b.get('cx', 0),
     'right_of':    lambda a, b: a.get('cx', 0) > b.get('cx', 0) + EPS,
     'above':       lambda a, b: a.get('cy', 0) + EPS < b.get('cy', 0),

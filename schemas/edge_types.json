@@ -1,0 +1,112 @@
+[
+  {
+    "predicate": "left_of",
+    "description": "True if the centroid x-coordinate of subject is at least EPS less than that of object (a.cx + EPS  b.cx + EPS).",
+    "source": "spatial"
+  },
+  {
+    "predicate": "right_of",
+    "description": "True if the centroid x-coordinate of subject is EPS greater than that of object (a.cx > b.cx + EPS).",
+    "source": "spatial"
+  },
+  {
+    "predicate": "above",
+    "description": "True if the centroid y-coordinate of subject is at least EPS less than that of object (a.cy + EPS  b.cy + EPS).",
+    "source": "spatial"
+  },
+  {
+    "predicate": "touches",
+    "description": "True if bounding boxes intersect exactly at edges but neither box fully contains the other.",
+    "source": "spatial"
+  },
+  {
+    "predicate": "overlaps",
+    "description": "True if Intersection-over-Union of bounding boxes exceeds 0.15.",
+    "source": "spatial"
+  },
+  {
+    "predicate": "contains",
+    "description": "True if the subject’s mask fully contains the object’s mask (a.mask.contains(b.mask)).",
+    "source": "spatial"
+  },
+  {
+    "predicate": "inside",
+    "description": "Inverse of contains: True if the object’s mask is fully inside the subject’s mask.",
+    "source": "spatial"
+  },
+  {
+    "predicate": "parallel_to",
+    "description": "True if orientations of subject and object differ by ≤7°, indicating parallel alignment.",
+    "source": "spatial"
+  },
+  {
+    "predicate": "perpendicular_to",
+    "description": "True if orientations of subject and object differ by approximately 90° ± tol, indicating perpendicular alignment.",
+    "source": "spatial"
+  },
+  {
+    "predicate": "aligned_left",
+    "description": "True if left edges of subject and object bounding boxes are within EPS horizontally.",
+    "source": "spatial"
+  },
+  {
+    "predicate": "aligned_right",
+    "description": "True if right edges of subject and object bounding boxes are within EPS horizontally.",
+    "source": "spatial"
+  },
+  {
+    "predicate": "aligned_top",
+    "description": "True if top edges of subject and object bounding boxes are within EPS vertically.",
+    "source": "spatial"
+  },
+  {
+    "predicate": "aligned_bottom",
+    "description": "True if bottom edges of subject and object bounding boxes are within EPS vertically.",
+    "source": "spatial"
+  },
+  {
+    "predicate": "proximal_to",
+    "description": "True if Euclidean distance between centroids of subject and object is below a configurable threshold.",
+    "source": "spatial"
+  },
+  {
+    "predicate": "supports",
+    "description": "True if physics.contact(object, subject) returns true and object.cy > subject.cy, indicating stable support.",
+    "source": "physics"
+  },
+  {
+    "predicate": "supported_by",
+    "description": "Inverse of supports: True if subject is supported by object (supports(object, subject)).",
+    "source": "physics"
+  },
+  {
+    "predicate": "contains_text",
+    "description": "True if CommonsenseKB reports a “has_text” relation from subject’s shape label to a text literal.",
+    "source": "kb"
+  },
+  {
+    "predicate": "is_arrow_for",
+    "description": "True if CommonsenseKB reports an “is_arrow_for” semantic relation between subject and object labels.",
+    "source": "kb"
+  },
+  {
+    "predicate": "has_sides",
+    "description": "True if CommonsenseKB “has_side_count” relation matches the numeric side-count attribute of the node.",
+    "source": "kb"
+  },
+  {
+    "predicate": "same_shape",
+    "description": "True if the shape label (circle, triangle, rectangle, etc.) of subject and object are identical.",
+    "source": "geometry"
+  },
+  {
+    "predicate": "symmetry_axis",
+    "description": "True if the subject’s symmetry axis orientation aligns (within tol°) with the object’s orientation.",
+    "source": "geometry"
+  },
+  {
+    "predicate": "same_color",
+    "description": "True if average RGB colors of subject and object differ by less than Δ in each channel.",
+    "source": "appearance"
+  }
+]
