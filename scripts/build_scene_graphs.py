@@ -1,3 +1,4 @@
+
 import sys
 import os
 import argparse
@@ -9,11 +10,16 @@ from tqdm import tqdm
 from shapely.geometry import Polygon
 from collections import Counter
 import scipy.stats as stats
+import hashlib
+import concurrent.futures
+import threading
+import time
 
 # Ensure project root is in sys.path for imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.commonsense_kb import CommonsenseKB
+from integration.task_profiler import TaskProfiler
 
 try:
     from graphtype import graph_validate, NodeData, EdgeData
@@ -128,6 +134,7 @@ def add_predicate_edges(G):
                 continue
             for pred, fn in PREDICATES.items():
                 try:
+                    # Use binarized mask and object attributes only
                     if fn(data_u, data_v):
                         G.add_edge(u, v, predicate=pred, source='spatial')
                 except Exception:
@@ -249,23 +256,91 @@ def log_diversity_metrics(graphs, out_path='logs/graph_diversity.jsonl'):
     
     print(f"Diversity Metrics: Coverage={C:.3f}, Entropy={H:.3f} bits, PC-Error={pc_error:.3f}")
 
-def main():
+def compute_hash(input_paths, params_dict):
+    h = hashlib.sha256()
+    for path in input_paths:
+        with open(path, 'rb') as f:
+            h.update(f.read())
+    for k in sorted(params_dict.keys()):
+        h.update(str(k).encode())
+        h.update(str(params_dict[k]).encode())
+    return h.hexdigest()
+
+def cache_valid(cache_path, hash_path, current_hash):
+    if not os.path.exists(cache_path) or not os.path.exists(hash_path):
+        return False
+    with open(hash_path, 'r') as f:
+        cached_hash = f.read().strip()
+    return cached_hash == current_hash
+
+def save_hash(hash_path, hash_val):
+    with open(hash_path, 'w') as f:
+        f.write(hash_val)
+
+def profile_optimal_batch_size(records, build_func):
+    candidate_sizes = [8, 16, 32, 64, 128]
+    best_size = candidate_sizes[0]
+    best_throughput = 0
+    print("[INFO] Profiling batch sizes for optimal graph build throughput...")
+    for size in candidate_sizes:
+        start = time.time()
+        try:
+            batch = records[:size]
+            graphs = []
+            for record in batch:
+                G = build_func(record)
+                graphs.append(G)
+            elapsed = time.time() - start
+            throughput = size / elapsed if elapsed > 0 else 0
+            print(f"Batch size {size}: {throughput:.2f} graphs/sec")
+            if throughput > best_throughput:
+                best_throughput = throughput
+                best_size = size
+        except Exception as e:
+            print(f"Batch size {size} failed: {e}")
+    print(f"[INFO] Selected optimal batch size: {best_size}")
+    return best_size
+
     parser = argparse.ArgumentParser(description="Build scene graphs from augmented images and derived labels")
     parser.add_argument('--aug', type=str, required=True, help='Path to augmented.pkl containing object records')
     parser.add_argument('--labels', type=str, default='data/derived_labels.json', help='Path to derived_labels.json')
     parser.add_argument('--out', type=str, required=True, help='Output pickle file for scene graphs')
-    parser.add_argument('--parallel', type=int, default=1, help='Number of parallel workers (placeholder)')
+    parser.add_argument('--parallel', type=int, default=4, help='Number of parallel workers')
+    parser.add_argument('--batch-size', type=int, default=16, help='Batch size for graph building (0=auto)')
     args = parser.parse_args()
 
-    with open(args.aug, 'rb') as f:
-        augmented_data = pickle.load(f)
+    # Hash input and parameters for cache validation
+    params_dict = {
+        'aug': args.aug,
+        'labels': args.labels,
+        'parallel': args.parallel,
+        'batch_size': args.batch_size
+    }
+    current_hash = compute_hash([args.aug, args.labels], params_dict)
+    hash_path = args.out + '.hash'
 
-    try:
-        with open(args.labels, 'r', encoding='utf-8') as f:
-            derived_labels = json.load(f)
-    except FileNotFoundError:
-        print(f"Warning: Labels file not found at {args.labels}. Continuing without them.")
-        derived_labels = {}
+    # Check cache validity
+    if cache_valid(args.out, hash_path, current_hash):
+        print(f"[INFO] Cache valid for {args.out}. Skipping graph build.")
+        return
+
+    # Async I/O for loading large files
+    def async_load_pickle(path):
+        with open(path, 'rb') as f:
+            return pickle.load(f)
+    def async_load_json(path):
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future_aug = executor.submit(async_load_pickle, args.aug)
+        future_labels = executor.submit(async_load_json, args.labels)
+        augmented_data = future_aug.result()
+        try:
+            derived_labels = future_labels.result()
+        except Exception:
+            print(f"Warning: Labels file not found at {args.labels}. Continuing without them.")
+            derived_labels = {}
 
     build_func = build_graph_validated if GRAPHTYPE_AVAILABLE else build_graph_unvalidated
     if GRAPHTYPE_AVAILABLE:
@@ -273,47 +348,47 @@ def main():
     else:
         print("graphtype not found. Runtime schema validation is DISABLED.")
 
+    # Profile and tune batch size if requested
+    if args.batch_size == 0:
+        batch_size = profile_optimal_batch_size(augmented_data, build_func)
+    else:
+        batch_size = args.batch_size
+
     graphs = []
-    
-    all_records = []
-    if augmented_data and isinstance(augmented_data[0], dict) and 'original' in augmented_data[0]:
-        # This handles the list of batch results from the current image_augmentor.py
-        for batch_result in augmented_data:
-            # We need to associate original images with their augmented data if needed,
-            # but for now, let's just build graphs from the 'original' data structure.
-            # The prompt implies augmented.pkl contains object records.
-            # Let's assume the objects are in a key like 'objects' or similar.
-            # This part is tricky as the augmentor script doesn't seem to output this structure.
-            # Let's assume a structure that might be intended.
-            # A list of records, where each record is a dict with 'id' and 'objects'.
-            pass # This logic needs to be clarified based on actual `augmented.pkl` structure.
+    profiler = TaskProfiler()
 
-    # Based on the prompt, let's assume `augmented_data` is a list of records.
-    # If it's from the *previous* version of the pipeline, it might be structured differently.
-    # For now, we'll assume it's a list of records.
-    
-    # Let's create a dummy record structure if the loaded data is not in the expected format
-    # This part is speculative and should be adjusted based on the actual data format.
-    if not (augmented_data and isinstance(augmented_data[0], dict) and 'objects' in augmented_data[0]):
-         print("Warning: `augmented.pkl` does not seem to contain a list of object records. The script might fail.")
-         # The user needs to ensure the input `augmented.pkl` has the right format.
-         # For now, we proceed assuming it does.
+    def process_batch(batch):
+        batch_graphs = []
+        for record in batch:
+            if not isinstance(record, dict) or 'objects' not in record:
+                continue
+            img_id = record.get('id')
+            if img_id and img_id in derived_labels:
+                label_map = {obj_data['id']: obj_data for obj_data in derived_labels.get(img_id, [])}
+                for obj in record.get('objects', []):
+                    obj.update(label_map.get(obj['id'], {}))
+            G = build_func(record)
+            batch_graphs.append(G)
+        return batch_graphs
 
-    for record in tqdm(augmented_data, desc="Building graphs"):
-        if not isinstance(record, dict) or 'objects' not in record:
-            continue
-
-        img_id = record.get('id')
-        if img_id and img_id in derived_labels:
-            label_map = {obj_data['id']: obj_data for obj_data in derived_labels.get(img_id, [])}
-            for obj in record.get('objects', []):
-                obj.update(label_map.get(obj['id'], {}))
-        
-        G = build_func(record)
-        graphs.append(G)
+    # Batch processing with persistent workers
+    batches = [augmented_data[i:i+batch_size] for i in range(0, len(augmented_data), batch_size)]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.parallel) as executor:
+        for batch in tqdm(batches, desc="Building graphs", mininterval=0.5):
+            start = time.time()
+            future = executor.submit(process_batch, batch)
+            batch_graphs = future.result()
+            graphs.extend(batch_graphs)
+            latency = (time.time() - start) * 1000
+            profiler.log_latency('scene_graph_build', latency, {
+                'batch_size': len(batch),
+                'latency_ms': latency,
+                'throughput_graphs_per_sec': len(batch) / (latency / 1000)
+            })
 
     with open(args.out, 'wb') as f:
         pickle.dump(graphs, f)
+    save_hash(hash_path, current_hash)
     print(f"Saved {len(graphs)} scene graphs to {args.out}")
 
     log_diversity_metrics(graphs)
