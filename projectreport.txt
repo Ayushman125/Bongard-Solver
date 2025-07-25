@@ -1,5 +1,5 @@
 ## Concept Registry and Coverage Enforcement
-
+data generation for phase 1
 
 A. Central Concept Registry: Self-Maintaining, Auto-Inducing, and Auditable
 A new self-maintaining concept registry (`src/concepts/registry.py`) is implemented. This registry automatically induces and caches a concept-checking predicate for every problem in the dataset, using only the features and labels in `derived_labels.json`. No manual wiring or fallback logic is required—coverage is guaranteed for all present and future problems.
