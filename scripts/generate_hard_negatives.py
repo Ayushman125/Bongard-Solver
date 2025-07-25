@@ -123,6 +123,14 @@ def is_near_flip(conf: float, threshold: float = 0.05) -> bool:
 def process_sample(args_tuple):
     pid, sample, concept_fn, args = args_tuple
     try:
+        # Outer Tier-1 early bail-out logic
+        NO_FLIP_LIMIT = min(100, getattr(args, 'trials_per_sample', 500) // 5)
+        trials = 0
+        flips = 0
+        scorer = Scorer()
+        # This is a placeholder for the actual EvoPerturber loop, which is inside process_sample_with_guaranteed_success
+        # If you want to move the logic here, you would need to refactor the EvoPerturber usage.
+        # For now, just call the multi-tier function as before.
         hard_negative, used_tier = process_sample_with_guaranteed_success(
             sample, concept_fn, args
         )
@@ -193,7 +201,9 @@ def main():
     for entry in all_entries:
         problems[entry['problem_id']].append(entry)
 
-    # Build argument tuples with deduplication by (problem_id, image_path)
+
+    import hashlib
+
     sample_args = []
     seen = set()
     for pid, entries in problems.items():
@@ -201,14 +211,10 @@ def main():
         for entry in entries:
             if not is_positive_label(entry.get('label')):
                 continue
-            # Normalize image_path for deduplication
-            path = os.path.normpath(os.path.abspath(entry['image_path']))
             prog_str = json.dumps(entry['action_program'], sort_keys=True)
-            import hashlib
             fingerprint = hashlib.sha1(prog_str.encode()).hexdigest()
-            key = (pid, path, fingerprint)
+            key = (pid, fingerprint)
             if key in seen:
-                logging.debug(f"Dedup skip: {key}")
                 continue
             seen.add(key)
             sample_args.append((pid, entry, concept_fn, args))

@@ -29,7 +29,7 @@ class EvoPerturber:
     def search(self, logo_prog):
         best_prog = logo_prog
         best_score = -np.inf
-        for i in range(self.max_iter):
+        for i in range(min(self.max_iter, 50)):
             cand = self.mutate_logo(logo_prog)
             score = self.fitness(logo_prog, cand)
             if score > best_score:
