@@ -1,3 +1,20 @@
+import hashlib
+# ─────────── Deduplicate by full program fingerprint ───────────
+sample_args = []
+seen = set()
+for pid, entries in problems.items():
+    concept_fn = get_concept_fn_for_problem(pid)
+    for entry in entries:
+        if not is_positive_label(entry.get('label')):
+            continue
+        prog_str = json.dumps(entry['action_program'], sort_keys=True)
+        fingerprint = hashlib.sha1(prog_str.encode()).hexdigest()
+        key = (pid, fingerprint)
+        if key in seen:
+            continue
+        seen.add(key)
+        sample_args.append((pid, entry, concept_fn, args))
+# ──────────────────────────────────────────────────────────────────
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """

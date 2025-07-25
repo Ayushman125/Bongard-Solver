@@ -24,6 +24,7 @@ class EvoPerturber:
             np.random.seed(seed)
     
     def search(self, base_cmds):
+        import logging
         best_prog, best_score, stagnation = None, float('-inf'), 0
         for i in range(self.max_iter):
             cand = self.perturb(base_cmds)
@@ -33,21 +34,7 @@ class EvoPerturber:
             else:
                 stagnation += 1
             if self.scorer.is_flip(cand):
-                return cand
-            if stagnation >= 50:
-                import logging
-                logging.debug("EvoPerturber.search: stagnated at iter %d", i)
-                break
-        return best_prog
-        best_prog, best_score, stagnation = None, float('-inf'), 0
-        for i in range(self.max_iters):
-            cand = self.perturb(base_cmds)
-            score = self.score(cand)
-            if score > best_score:
-                best_prog, best_score, stagnation = cand, score, 0
-            else:
-                stagnation += 1
-            if self.scorer.is_flip(cand):
+                logging.debug("EvoPerturber.search: flip at iter %d", i)
                 return cand
             if stagnation >= 50:
                 logging.debug("EvoPerturber.search: stagnated at iter %d", i)
