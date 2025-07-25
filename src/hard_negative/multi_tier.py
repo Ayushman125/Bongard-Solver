@@ -14,6 +14,7 @@ def tier1_evolutionary(sample, concept_fn, args, scorer, flat_commands, original
     evo = EvoPerturber(scorer=scorer, seed=42)
     flips_for_this_sample = 0
     t0 = time.time()
+    NO_FLIP_LIMIT = min(100, max_attempts // 5)
     for trial in range(max_attempts):
         mutated_evo = evo.search(flat_commands)
         if mutated_evo and is_valid_geometry(mutated_evo):
@@ -26,8 +27,8 @@ def tier1_evolutionary(sample, concept_fn, args, scorer, flat_commands, original
                 flips_for_this_sample += 1
                 logging.info(f"tier1_evolutionary: found flip at trial {trial}")
                 return mutated_evo
-        if trial > 100 and flips_for_this_sample == 0:
-            logging.info(f"tier1_evolutionary: no flips after 100 trials, breaking out of evolutionary tier")
+        if trial >= NO_FLIP_LIMIT and flips_for_this_sample == 0:
+            logging.info(f"{sample.get('problem_id', 'unknown')}: no flips after {trial} trials—bailing Tier-1 to Tier-2")
             break
     t1 = time.time()
     logging.info(f"tier1_evolutionary: completed in {t1-t0:.2f}s, flips={flips_for_this_sample}")
