@@ -123,14 +123,7 @@ def is_near_flip(conf: float, threshold: float = 0.05) -> bool:
 def process_sample(args_tuple):
     pid, sample, concept_fn, args = args_tuple
     try:
-        # Outer Tier-1 early bail-out logic
-        NO_FLIP_LIMIT = min(100, getattr(args, 'trials_per_sample', 500) // 5)
-        trials = 0
-        flips = 0
-        scorer = Scorer()
-        # This is a placeholder for the actual EvoPerturber loop, which is inside process_sample_with_guaranteed_success
-        # If you want to move the logic here, you would need to refactor the EvoPerturber usage.
-        # For now, just call the multi-tier function as before.
+        # Call the multi-tier function as before (early bail-out logic is handled inside EvoPerturber/multi-tier)
         hard_negative, used_tier = process_sample_with_guaranteed_success(
             sample, concept_fn, args
         )
@@ -204,6 +197,7 @@ def main():
 
     import hashlib
 
+    # Build unique sample_args
     sample_args = []
     seen = set()
     for pid, entries in problems.items():

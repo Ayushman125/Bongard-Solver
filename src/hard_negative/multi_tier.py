@@ -7,6 +7,7 @@ from src.hard_negative.evo_search import EvoPerturber
 from src.data_pipeline.logo_mutator import mutate, RULE_SET
 from src.data_pipeline.logo_parser import BongardLogoParser
 from src.data_pipeline.verification import has_min_vertices, l2_shape_distance
+from src.hard_negative.scorer import flips_label
 
 # --- Tier 1: Enhanced Evolutionary Mutations ---
 def tier1_evolutionary(sample, concept_fn, args, scorer, flat_commands, original_features, max_attempts=500):
@@ -15,21 +16,27 @@ def tier1_evolutionary(sample, concept_fn, args, scorer, flat_commands, original
     flips_for_this_sample = 0
     t0 = time.time()
     NO_FLIP_LIMIT = min(100, max_attempts // 5)
+    # Hoist geometry/feature extraction for the original sample
+    parser = BongardLogoParser()
+    orig_vertices = parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in flat_commands])
+    orig_features = scorer.extract_features(flat_commands)
     for trial in range(max_attempts):
         mutated_evo = evo.search(flat_commands)
         if mutated_evo and is_valid_geometry(mutated_evo):
-            parser = BongardLogoParser()
+            # Use proxy: only extract features/geometry once per candidate
             vertices = parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in mutated_evo])
             if not has_min_vertices(vertices, min_v=4):
                 continue
-            if scorer.is_flip(mutated_evo):
+            mutated_features = scorer.extract_features(mutated_evo)
+            # Use proxy features for flip detection
+            if flips_label(orig_features, mutated_features, concept_fn):
                 flips_for_this_sample += 1
                 logging.info(f"tier1_evolutionary: found flip at trial {trial}")
                 return {
                     **sample,
                     'label': 'hard_negative',
                     'action_program': mutated_evo,
-                    'features': scorer.extract_features(mutated_evo),
+                    'features': mutated_features,
                     'geometry': vertices
                 }
         if trial >= NO_FLIP_LIMIT and flips_for_this_sample == 0:
@@ -41,7 +48,33 @@ def tier1_evolutionary(sample, concept_fn, args, scorer, flat_commands, original
 
 # --- Tier 2: Direct Concept Inversion (stub) ---
 def tier2_concept_inversion(sample, concept_fn, args, scorer, flat_commands, original_features, max_attempts=200):
-    # Universal concept inversion operators
+    # Try concept-aware deterministic inversion strategies first
+    from src.hard_negative.concept_inversions import CONCEPT_INVERSION_STRATEGIES
+    import logging
+    problem_id = sample.get('problem_id')
+    tried = set()
+    if problem_id in CONCEPT_INVERSION_STRATEGIES:
+        for inv_fn in CONCEPT_INVERSION_STRATEGIES[problem_id]:
+            cand = inv_fn(flat_commands)
+            if not cand or tuple(cand) in tried:
+                continue
+            tried.add(tuple(cand))
+            if is_valid_geometry(cand):
+                parser = BongardLogoParser()
+                vertices = parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in cand])
+                if not has_min_vertices(vertices, min_v=4):
+                    continue
+                mutated_features = scorer.extract_features(cand)
+                if flips_label(original_features, mutated_features, concept_fn):
+                    logging.info(f"tier2_concept_inversion: found deterministic inversion for {problem_id}")
+                    return {
+                        **sample,
+                        'label': 'hard_negative',
+                        'action_program': cand,
+                        'features': mutated_features,
+                        'geometry': vertices
+                    }
+    # Fallback: universal concept inversion operators
     def break_symmetry(cmds):
         return cmds + [("rotate", random.uniform(11, 45))]
     def perturb_stroke_order(cmds):
@@ -56,22 +89,24 @@ def tier2_concept_inversion(sample, concept_fn, args, scorer, flat_commands, ori
     TIER2_OPERATORS = [break_symmetry, perturb_stroke_order, geometry_scale]
     for op in TIER2_OPERATORS:
         cand = op(flat_commands)
+        if not cand or tuple(cand) in tried:
+            continue
+        tried.add(tuple(cand))
         if is_valid_geometry(cand):
             parser = BongardLogoParser()
             vertices = parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in cand])
             if not has_min_vertices(vertices, min_v=4):
                 continue
-            if scorer.is_flip(cand):
+            mutated_features = scorer.extract_features(cand)
+            if flips_label(original_features, mutated_features, concept_fn):
                 logging.info(f"tier2_concept_inversion: found flip with {op.__name__}")
                 return {
                     **sample,
                     'label': 'hard_negative',
                     'action_program': cand,
-                    'features': scorer.extract_features(cand),
+                    'features': mutated_features,
                     'geometry': vertices
                 }
-    return None
-    # Placeholder: implement concept inversion logic here
     return None
 
 # --- Tier 3: Template-Based Synthetic Generation (stub) ---

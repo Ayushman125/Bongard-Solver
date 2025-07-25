@@ -3,6 +3,17 @@ import copy
 import numpy as np
 
 class EvoPerturber:
+
+    def perturb(self, base_cmds):
+        # Randomly mutate the program using one of the grammar rules
+        from src.data_pipeline.logo_mutator import mutate
+        return mutate(base_cmds)
+
+    def score(self, prog):
+        # Use the scorer's concept confidence as the score
+        if hasattr(self.scorer, 'predict_concept_confidence'):
+            return self.scorer.predict_concept_confidence(prog)
+        return 0.0
     def __init__(self, scorer, max_iter=200, seed=None, alpha=1.0, beta=0.2):
         self.scorer = scorer
         self.max_iter = max_iter
@@ -12,35 +23,33 @@ class EvoPerturber:
             random.seed(seed)
             np.random.seed(seed)
     
-    def mutate_logo(self, logo_prog):
-        # Now expects logo_prog as a list of (cmd, param) tuples
-        prog = copy.deepcopy(logo_prog)
-        for i, cmd in enumerate(prog):
-            # If the command has a numeric parameter, jitter it
-            if isinstance(cmd, tuple) and len(cmd) == 2 and isinstance(cmd[1], (int, float)):
-                prog[i] = (cmd[0], cmd[1] + np.random.uniform(-5, 5))
-        return prog
-
-    def fitness(self, orig_prog, mutated_prog):
-        flip = self.scorer.is_flip(mutated_prog)
-        geom_diff = self.scorer.geom_distance(orig_prog, mutated_prog)
-        return self.alpha * flip - self.beta * geom_diff
-    
-    def search(self, logo_prog):
-        best_prog = logo_prog
-        best_score = -np.inf
-        for i in range(min(self.max_iter, 50)):
-            cand = self.mutate_logo(logo_prog)
-            score = self.fitness(logo_prog, cand)
+    def search(self, base_cmds):
+        best_prog, best_score, stagnation = None, float('-inf'), 0
+        for i in range(self.max_iter):
+            cand = self.perturb(base_cmds)
+            score = self.score(cand)
             if score > best_score:
-                best_prog, best_score = cand, score
+                best_prog, best_score, stagnation = cand, score, 0
+            else:
+                stagnation += 1
             if self.scorer.is_flip(cand):
-                return cand  # Early exit on label flip
-            # Early bailout if no improvement by iteration 50 (i==50 means 51st iteration)
-            if i == 50 and best_score <= 0:
+                return cand
+            if stagnation >= 50:
                 import logging
-                logging.info("EvoPerturber.search: No flip and no improvement after 51 iters, escalating to next tier.")
+                logging.debug("EvoPerturber.search: stagnated at iter %d", i)
                 break
-        # Always return the best candidate, even if it didn't flip
-        # (Never return None)
+        return best_prog
+        best_prog, best_score, stagnation = None, float('-inf'), 0
+        for i in range(self.max_iters):
+            cand = self.perturb(base_cmds)
+            score = self.score(cand)
+            if score > best_score:
+                best_prog, best_score, stagnation = cand, score, 0
+            else:
+                stagnation += 1
+            if self.scorer.is_flip(cand):
+                return cand
+            if stagnation >= 50:
+                logging.debug("EvoPerturber.search: stagnated at iter %d", i)
+                break
         return best_prog
