@@ -1,5 +1,5 @@
 ## Concept Registry and Coverage Enforcement
-data generation for phase 1
+data generation 
 
 A. Central Concept Registry: Self-Maintaining, Auto-Inducing, and Auditable
 A new self-maintaining concept registry (`src/concepts/registry.py`) is implemented. This registry automatically induces and caches a concept-checking predicate for every problem in the dataset, using only the features and labels in `derived_labels.json`. No manual wiring or fallback logic is required—coverage is guaranteed for all present and future problems.
@@ -93,7 +93,7 @@ python scripts/generate_hard_negatives.py --input-dir data/raw/ --output data/ha
 - **Audit Trail:** All steps, labels, and mutator chains are logged for review.
 - **Scalability:** Easily scales to 600+ hard negatives per phase in minutes.
 
-# Phase-1 Dataset Preparation: Code Structure & Methods for Bongard-Solver
+# Dataset Preparation: Code Structure & Methods for Bongard-Solver
 
 This document outlines a robust, research-backed, and budget-friendly code structure to fully implement the dataset preparation phase in your Bongard-Solver GitHub repository[1]. The design focuses on maximizing label and attribute quality for later modules, with zero monetary outlay, leveraging open-source libraries and NVLabs Bongard-LOGO tools. The structure below can be adopted directly within the existing organization of your repo.
 
@@ -616,6 +616,7 @@ Testing & CI
 •	tests/test_hic.py – event routing and load-shedding
 •	tests/test_data_validator.py – schema conformance
 •	tests/test_debug_dashboard.py – metric correlation integrity
+
 ________________________________________
 Phase 1: Enhanced Perception & Neural-Symbolic Grounding
 Objective & Scope
@@ -728,6 +729,196 @@ Testing & CI
 •	tests/test_debug_dashboard.py – new dashboard panel integrity
 ________________________________________
 This fully updated Phase 1 document captures the enhanced perception and neural-symbolic grounding integrations, extended CI contracts, and the milestones needed to complete MVI-1 on the 50-puzzle subset. Let me know if you’d like deeper detail on any module or help drafting the Phase 1 smoke test harness!
+
+
+
+# Phase 1 Roadmap: From Passing Tests to Full Enhanced Perception & Neural-Symbolic Grounding
+
+Bongard-Solver’s Phase 1 objective is to perception, physics proxies, commonsense knowledge, a dynamic mini-grammar, hard-negative mining, and profiling instrumentation so that the system can **solve 50 puzzles end-to-end under the MVI-1 slice**. Although your unit tests green-lit the codebase, the functional pipeline will not run until you (A) generate all Phase 1 artifacts, (B) execute the orchestration scripts in the correct order, (C) confirm schema compliance, and (D) monitor the KPI dashboard for coverage and latency targets. This guide provides a comprehensive, CLI-level walkthrough.
+
+## Overview
+
+Phase 1 transforms the static outputs of Phase 0 (raw images, LOGO scripts, basic physics proxies) into rich **scene graphs plus neural-symbolic feature bundles** ready for grounding. It touches eleven updated/new modules and emits four persistent artifacts:
+
+1. `data/derived_labels.json` – per-image geometry & physics attributes.  
+2. `data/augmented.pkl` – GPU-batch augmented images & masks.  
+3. `data/scene_graphs.pkl` – fully fused scene graphs with physics proxies.  
+4. `data/hard_negatives.txt` – adversarial negatives for curriculum mining.
+
+Skipping any artifact stalls downstream solvers.[1][2]
+
+## Directory Pre-Flight Checklist
+
+Verify the repo tree (top-level extract) shows all required Phase 1 scripts:
+
+| Path | Required? | Purpose |
+|---|---|---|
+| `scripts/logo_to_shape.py` | YES | Geometry → JSON extraction |
+| `scripts/image_augmentor.py` | YES | GPU batched augments |
+| `scripts/build_scene_graphs.py` | YES | Constructs scene graphs |
+| `scripts/physics_inference.py` | YES | COM, stability, affordances |
+| `scripts/generate_hard_negatives.py` | YES | Physics-informed adversarial miner |
+| `scripts/export_conceptnet.py` | YES | Dumps ConceptNet-lite JSON |
+| `integration/data_validator.py` | YES | Schema enforcement |
+
+If any file is missing, pull from `origin/main` or cherry-pick from prior commits.[3]
+
+## Step-By-Step CLI Execution Flow
+
+### 1. Activate Virtual Environment
+```bash
+cd Bongard-Solver
+.\venv\Scripts\activate            # Windows PowerShell
+# OR
+source venv/bin/activate           # Unix shells
+```
+All subsequent paths assume an active venv.
+
+### 2. Install Phase 1 Dependencies
+```bash
+pip install shapely pymunk cupy-cuda12x cugraph-cuda12x conceptnet-lite==0.3.2 tqdm
+```
+GPU variants of CuGraph & CuPy accelerate batched physics proxies.[4][5]
+
+### 3. Build ConceptNet-lite Snapshot
+
+ConceptNet edges are mandatory for commonsense fusion.  [1]
+```bash
+python scripts/export_conceptnet.py \
+       --out data/conceptnet_lite.json \
+       --languages en,es,de,fr
+```
+The export consumes ~6 GB disk and ~30 min on SSD.[2]
+
+### 4. Generate Geometry & Physics Attributes
+```bash
+python scripts/logo_to_shape.py \
+       --input-dir data/raw/ \
+       --output data/derived_labels.json \
+       --parallel 8
+```
+Expected runtime ≈90 s for 600 images. The script logs per-shape centroid, area, convexity, moment of inertia.[1]
+
+### 5. GPU-Batched Image Augmentation
+```bash
+python scripts/image_augmentor.py \
+       --input data/derived_labels.json \
+       --out data/augmented.pkl \
+       --parallel 8 \
+       --rotate 10 --scale 1.2 --shear 12
+```
+Operations rely on Augmentor-style transforms. Watch GPU memory (RTX 3050 Ti = 4 GB); default batch size is 64.[4][5]
+
+### 6. Build Scene Graphs
+```bash
+python scripts/build_scene_graphs.py \
+       --aug data/augmented.pkl \
+       --out data/scene_graphs.pkl
+```
+Nodes inherit geometry; edges encode spatial relations (left-of, contains, parallel).[1]
+
+### 7. Inject Physics + Commonsense Proxies
+```bash
+python scripts/physics_inference.py \
+       --scene-graphs data/scene_graphs.pkl \
+       --kb data/conceptnet_lite.json \
+       --out data/scene_graphs_physics.pkl \
+       --gpu
+```
+Adds COM, stability margins, affordances, and ConceptNet predicates “supports”, “blocks”, “surrounds”.[2]
+
+### 8. Mine Hard Negatives
+```bash
+python scripts/generate_hard_negatives.py \
+       --input-dir data/raw/ \
+       --output data/hard_negatives.txt \
+       --parallel 8 \
+       --near-miss
+```
+Each positive spawns 12-15 adversarial variants via deterministic transformations.[4]
+
+### 9. Validate Artifacts
+```bash
+pytest tests/test_data_validator.py::test_phase1_schema -q
+```
+All JSON/Pickle files must satisfy schema; failures show field-level diffs.
+
+### 10. Run End-to-End MVI-1 Slice
+```bash
+pytest tests/test_anytime_inference.py::test_mvi1_slice -q
+```
+This smoke—50 puzzles, full budget—should complete in <6 min on Ryzen 7.[1]
+
+## Profiling & Observability
+
+1. **TaskProfiler**:  
+   ```bash
+   python -m integration.task_profiler --last-run
+   ```
+   Inspect P50/P95 latencies; image_augmentor ≤25 ms/it is acceptable.[3]
+
+2. **Debug Dashboard**:  
+   Start the panel server:  
+   ```bash
+   python -m integration.debug_dashboard
+   ```
+   Watch “Physics Proxy Coverage” (≥95%) and “Input Drift” (≤2 σ).
+
+3. **CUDA Stream Overlap**:  
+   Ensure `integration/cuda_stream_manager.py` logged “double-buff OK”.
+
+## Frequently Asked “Why Isn’t It Working?” Checkpoints
+
+| Symptom | Root Cause | Fix |
+|---|---|---|
+| `CommonsenseKB: file not found` | Missing `conceptnet_lite.json` | Run **Step 3** export again[2] |
+| `CUDA_ERROR_OUT_OF_MEMORY` | Batch too large | Set `--batch 32` on augmentor[4] |
+| `Schema mismatch: field 'convexity' absent` | Old cache of `derived_labels.json` | Delete file, re-run **Step 4** |
+| `Augmentor KeyError: shear` | CuPy build missing SciPy ops | `pip install cupyx-scikit-image`[5] |
+
+## Automation Script
+
+Add `scripts/run_phase1.ps1`:
+```powershell
+.\venv\Scripts\activate
+python scripts/export_conceptnet.py --out data/conceptnet_lite.json
+python scripts/logo_to_shape.py --input-dir data/raw/ --output data/derived_labels.json --parallel 8
+python scripts/image_augmentor.py --input data/derived_labels.json --out data/augmented.pkl --parallel 8
+python scripts/build_scene_graphs.py --aug data/augmented.pkl --out data/scene_graphs.pkl
+python scripts/physics_inference.py --scene-graphs data/scene_graphs.pkl --kb data/conceptnet_lite.json --out data/scene_graphs_physics.pkl --gpu
+python scripts/generate_hard_negatives.py --input-dir data/raw/ --output data/hard_negatives.txt --parallel 8 --near-miss
+pytest tests/test_anytime_inference.py::test_mvi1_slice -q
+```
+Make executable and version-control for reproducibility.
+
+## What NOT to Re-Run
+
+- **ConceptNet Export**: Only repeat if you delete the JSON or upgrade to a newer ConceptNet snapshot.  [2]
+- **Hard-Negative Mining**: Skip until you add fresh raw puzzles or tweak physics thresholds; the file is deterministic.  
+- **Image Augmentation**: Re-run only if you change rotation/shear parameters; checksum caching avoids redundant work.
+
+## KPIs to Declare Phase 1 “Done”
+
+| KPI | Target | Where to View |
+|---|---|---|
+| Puzzle coverage (50/50) | 100% | Dashboard “Coverage” |
+| Augment throughput | ≥150 img/s | TaskProfiler |
+| Drift alert count | 0 | Dashboard “S1 Drift” |
+| Avg grounding latency | ≤200 ms | Smoke test log |
+| Schema violations | 0 | DataValidator |
+
+Meeting these thresholds means Phase 1’s Enhanced Perception & Neural-Symbolic Grounding layer is production-ready and you can branch into Phase 2 development.
+
+### Key Takeaways
+
+- **Sequence matters**: derived → augment → graph → physics → negative.  
+- **ConceptNet is non-optional**: no KB, no commonsense fusion.  [1][2]
+- **CI is your gatekeeper**: rely on `tests/test_data_validator.py` and `test_mvi1_slice` before merging to `main`.
+
+Proceed with confidence—your foundation for later causal reasoning and codelet swarms now stands on solid, reproducible Phase 1 artifacts.
+
+
+
 
 
 Phase 2: Enhanced Perception & Neural-Symbolic Grounding – Updated Integrations
