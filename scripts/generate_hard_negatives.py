@@ -126,6 +126,9 @@ def process_sample(args_tuple):
         hard_negative, used_tier = process_sample_with_guaranteed_success(
             sample, concept_fn, args
         )
+        if isinstance(hard_negative, list):
+            logging.error("Tier returned list instead of dict: %r", hard_negative)
+            return None, None
         return hard_negative, None
     except Exception as exc:  # noqa: BLE001
         logging.error(f"process_sample failure for {pid}: {exc}", exc_info=True)
@@ -136,9 +139,9 @@ def process_sample(args_tuple):
 # CLI entry
 # --------------------------------------------------------------------------- #
 def main():
+
     parser = argparse.ArgumentParser(
-        description="Generate hard negatives using evolutionary and grammar-based "
-        "mutation."
+        description="Generate hard negatives using evolutionary and grammar-based mutation."
     )
     parser.add_argument('--input-dir', required=True, help='Input Bongard-LOGO root')
     parser.add_argument('--output', required=True, help='JSON file for hard negatives')
@@ -149,7 +152,20 @@ def main():
     parser.add_argument('--trials-per-sample', type=int, default=500)
     parser.add_argument('--parallel', type=int, default=1)
     parser.add_argument('--near-miss', action='store_true')
+    parser.add_argument('--seed', type=int, default=None, help='Random seed for reproducibility')
     args = parser.parse_args()
+
+    # Set random seeds for reproducibility
+    if args.seed is not None:
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+        try:
+            import torch
+            torch.manual_seed(args.seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(args.seed)
+        except ImportError:
+            pass
 
     logging.basicConfig(
         level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s'

@@ -18,7 +18,6 @@ def tier1_evolutionary(sample, concept_fn, args, scorer, flat_commands, original
     for trial in range(max_attempts):
         mutated_evo = evo.search(flat_commands)
         if mutated_evo and is_valid_geometry(mutated_evo):
-            features = scorer.extract_features(mutated_evo)
             parser = BongardLogoParser()
             vertices = parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in mutated_evo])
             if not has_min_vertices(vertices, min_v=4):
@@ -26,7 +25,13 @@ def tier1_evolutionary(sample, concept_fn, args, scorer, flat_commands, original
             if scorer.is_flip(mutated_evo):
                 flips_for_this_sample += 1
                 logging.info(f"tier1_evolutionary: found flip at trial {trial}")
-                return mutated_evo
+                return {
+                    **sample,
+                    'label': 'hard_negative',
+                    'action_program': mutated_evo,
+                    'features': scorer.extract_features(mutated_evo),
+                    'geometry': vertices
+                }
         if trial >= NO_FLIP_LIMIT and flips_for_this_sample == 0:
             logging.info(f"{sample.get('problem_id', 'unknown')}: no flips after {trial} trials—bailing Tier-1 to Tier-2")
             break
@@ -58,7 +63,13 @@ def tier2_concept_inversion(sample, concept_fn, args, scorer, flat_commands, ori
                 continue
             if scorer.is_flip(cand):
                 logging.info(f"tier2_concept_inversion: found flip with {op.__name__}")
-                return cand
+                return {
+                    **sample,
+                    'label': 'hard_negative',
+                    'action_program': cand,
+                    'features': scorer.extract_features(cand),
+                    'geometry': vertices
+                }
     return None
     # Placeholder: implement concept inversion logic here
     return None
@@ -72,7 +83,13 @@ def tier3_synthetic(sample, concept_fn, args, scorer, flat_commands, original_fe
         vertices = parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in cand])
         if has_min_vertices(vertices, min_v=4) and scorer.is_flip(cand):
             logging.info("tier3_synthetic: found flip with fallback rotation")
-            return cand
+            return {
+                **sample,
+                'label': 'hard_negative',
+                'action_program': cand,
+                'features': scorer.extract_features(cand),
+                'geometry': vertices
+            }
     return None
     # Placeholder: implement synthetic generation logic here
     return None
@@ -95,17 +112,30 @@ def tier4_guaranteed(sample, concept_fn, args, scorer, flat_commands, original_f
             from scripts.generate_hard_negatives import parse_logo_commands_to_tuples
             cand_tuples = parse_logo_commands_to_tuples(cand)
             if is_valid_geometry(cand_tuples):
-                features = scorer.extract_features(cand_tuples)
                 parser = BongardLogoParser()
                 vertices = parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in cand_tuples])
                 if not has_min_vertices(vertices, min_v=4):
                     continue
                 if scorer.is_flip(cand_tuples):
-                    return cand_tuples
+                    return {
+                        **sample,
+                        'label': 'hard_negative',
+                        'action_program': cand_tuples,
+                        'features': scorer.extract_features(cand_tuples),
+                        'geometry': vertices
+                    }
         except Exception as e:
             logging.error(f"Error during guaranteed fallback mutation rule {rule_id}: {e!r}")
     # If all else fails, just return the original (should not happen)
-    return flat_commands
+    parser = BongardLogoParser()
+    vertices = parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in flat_commands])
+    return {
+        **sample,
+        'label': 'hard_negative',
+        'action_program': flat_commands,
+        'features': scorer.extract_features(flat_commands),
+        'geometry': vertices
+    }
 
 # --- Utility: Geometry check (copied from main script) ---
 def is_valid_geometry(program):
