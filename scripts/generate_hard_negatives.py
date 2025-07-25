@@ -19,7 +19,12 @@ def process_sample_with_guaranteed_success(sample, concept_fn, args):
     def record_negative(cand, feats):
         from src.data_pipeline.logo_parser import BongardLogoParser
         parser = BongardLogoParser()
-        vertices = parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in cand])
+        vertices = parser.parse_action_program([
+            f"{cmd} {param}" if param is not None else str(cmd)
+            for item in cand
+            if isinstance(item, tuple) and len(item) == 2
+            for cmd, param in [item]
+        ] + [str(item) for item in cand if not (isinstance(item, tuple) and len(item) == 2)])
         found.append({
             **sample,
             'label': 'hard_negative',
@@ -34,7 +39,11 @@ def process_sample_with_guaranteed_success(sample, concept_fn, args):
         feats = scorer.extract_features(cand)
         if concept_fn(feats) != original_label:
             record_negative(cand, feats)
-            if len(found) >= args.max_per_sample: return found
+            if len(found) >= args.max_per_sample:
+                if found:
+                    return found[0], 'inversion'
+                else:
+                    return None, 'inversion'
 
     # 2. Metamorphic Affine Tests (MAIT)
     for name, transform in affine_transforms.items():
@@ -42,7 +51,11 @@ def process_sample_with_guaranteed_success(sample, concept_fn, args):
         feats = scorer.extract_features(cand)
         if abs(concept_fn(feats) - original_label) > 0.10:
             record_negative(cand, feats)
-            if len(found) >= args.max_per_sample: return found
+            if len(found) >= args.max_per_sample:
+                if found:
+                    return found[0], 'affine'
+                else:
+                    return None, 'affine'
 
     # 3. Procedural Shape Perturbation Ensemble (PSPE)
     routines = [perlin_jitter, subdiv_jitter, wave_distort, radial_perturb, noise_scale]
@@ -51,7 +64,11 @@ def process_sample_with_guaranteed_success(sample, concept_fn, args):
         feats = scorer.extract_features(cand)
         if concept_fn(feats) != original_label:
             record_negative(cand, feats)
-            if len(found) >= args.max_per_sample: return found
+            if len(found) >= args.max_per_sample:
+                if found:
+                    return found[0], 'procedural'
+                else:
+                    return None, 'procedural'
 
     # 4. GAGAN-HNM Sampling
     gagan = GAGANGenerator.load(pid)
@@ -61,23 +78,40 @@ def process_sample_with_guaranteed_success(sample, concept_fn, args):
         feats = scorer.extract_features(cand)
         if concept_fn(feats) != original_label:
             record_negative(cand, feats)
-            if len(found) >= args.max_per_sample: break
+            if len(found) >= args.max_per_sample:
+                if found:
+                    return found[0], 'gagan'
+                else:
+                    return None, 'gagan'
 
     # 5. Hyperbolic Hard-Negative Mixup (HHNM)
     eucl_emb = euclidean_embed(sample['features'])
     hyp_emb = hyperbolic_embed(sample['features'])
     eneg = mine_hard(eucl_emb, topk=args.max_per_sample)
     hneg = mine_hard(hyp_emb, topk=args.max_per_sample)
+    # Defensive: ensure eneg and hneg are arrays, not tuples
+    if isinstance(eneg, tuple):
+        eneg = eneg[0]
+    if isinstance(hneg, tuple):
+        hneg = hneg[0]
     for u, v in itertools.product(eneg, hneg):
-        mixed = poincare_mixup(u, v)
+        mixed, mixup_tier = poincare_mixup(u, v)
         # decode_program is a placeholder for your reverse embedding
         cand = base_cmds  # TODO: implement decode_program(mixed)
         feats = scorer.extract_features(cand)
         if concept_fn(feats) != original_label:
             record_negative(cand, feats)
-            if len(found) >= args.max_per_sample: break
+            if len(found) >= args.max_per_sample:
+                if found:
+                    return found[0], 'mixup'
+                else:
+                    return None, 'mixup'
 
-    return found
+    # Always return a tuple of two values
+    if found:
+        return found[0], 'fallback'
+    else:
+        return None, 'no_result'
     # ...existing code...
 
     import hashlib
@@ -223,13 +257,16 @@ def process_sample(args_tuple):
     pid, sample, concept_fn, args = args_tuple
     try:
         # Call the multi-tier function as before (early bail-out logic is handled inside EvoPerturber/multi-tier)
-        hard_negative, used_tier = process_sample_with_guaranteed_success(
-            sample, concept_fn, args
-        )
+        result = process_sample_with_guaranteed_success(sample, concept_fn, args)
+        # Defensive: always unpack two values
+        if not isinstance(result, tuple) or len(result) != 2:
+            logging.error(f"process_sample_with_guaranteed_success did not return a tuple of length 2: {result}")
+            return None, None
+        hard_negative, used_tier = result
         if isinstance(hard_negative, list):
             logging.error("Tier returned list instead of dict: %r", hard_negative)
             return None, None
-        return hard_negative, None
+        return hard_negative, used_tier
     except Exception as exc:  # noqa: BLE001
         logging.error(f"process_sample failure for {pid}: {exc}", exc_info=True)
         return None, None
