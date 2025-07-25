@@ -42,6 +42,75 @@ def safe_acos(x):
     return np.arccos(np.clip(x, -1.0, 1.0))
 
 class PhysicsInference:
+
+    @staticmethod
+    def count_arcs(vertices_or_poly, angle_thresh=30):
+        """
+        Estimate the number of arcs in a polyline or polygon.
+        An arc is defined as a contiguous segment where the angle between consecutive segments deviates from 180° by more than angle_thresh degrees.
+        Args:
+            vertices_or_poly: list of (x, y) tuples or Polygon
+            angle_thresh: minimum deviation from 180° to count as an arc (degrees)
+        Returns:
+            int: estimated number of arcs
+        """
+        verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
+        if not verts or len(verts) < 3:
+            return 0
+        def angle_between(v1, v2):
+            v1 = np.array(v1)
+            v2 = np.array(v2)
+            cos_theta = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-8)
+            cos_theta = np.clip(cos_theta, -1.0, 1.0)
+            return np.degrees(np.arccos(cos_theta))
+
+        n = len(verts)
+        arc_count = 0
+        for i in range(n):
+            p0 = verts[i - 1]
+            p1 = verts[i]
+            p2 = verts[(i + 1) % n]
+            v1 = (p1[0] - p0[0], p1[1] - p0[1])
+            v2 = (p2[0] - p1[0], p2[1] - p1[1])
+            ang = angle_between(v1, v2)
+            if abs(ang - 180) > angle_thresh:
+                arc_count += 1
+        return arc_count
+
+    @staticmethod
+    def count_straight_segments(vertices_or_poly, angle_tol=5):
+        """
+        Counts the number of straight segments in a polyline.
+        Accepts either a list of (x, y) tuples or a Polygon/MultiPolygon.
+        A segment is considered straight if the angle between consecutive segments is within angle_tol degrees of 180.
+        Args:
+            vertices_or_poly: list of (x, y) tuples or Polygon
+            angle_tol: tolerance in degrees
+        Returns:
+            int: number of straight segments
+        """
+        verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
+        if not verts or len(verts) < 3:
+            return 0
+        def angle_between(v1, v2):
+            v1 = np.array(v1)
+            v2 = np.array(v2)
+            cos_theta = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-8)
+            cos_theta = np.clip(cos_theta, -1.0, 1.0)
+            return np.degrees(np.arccos(cos_theta))
+
+        count = 0
+        n = len(verts)
+        for i in range(n):
+            p0 = verts[i - 1]
+            p1 = verts[i]
+            p2 = verts[(i + 1) % n]
+            v1 = (p1[0] - p0[0], p1[1] - p0[1])
+            v2 = (p2[0] - p1[0], p2[1] - p1[1])
+            ang = angle_between(v1, v2)
+            if abs(ang - 180) <= angle_tol:
+                count += 1
+        return count
     """
     Geometry + physics feature extractor for Bongard-LOGO shapes.
     All methods are safe: they never bubble exceptions.

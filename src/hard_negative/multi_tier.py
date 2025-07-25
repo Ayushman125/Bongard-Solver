@@ -1,227 +1,124 @@
-import random
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Multi-tier hard-negative generation for Bongard-Solver.
+Integrates deterministic concept inversions, grammar fallback, and guaranteed fallback.
+"""
 import os
-import numpy as np
-# Multi-tier hard negative generation for Bongard-Solver
+import random
 import logging
+from typing import List, Tuple, Any, Dict
+
+import numpy as np
+
 from src.data_pipeline.logo_mutator import mutate, RULE_SET
 from src.data_pipeline.logo_parser import BongardLogoParser
 from src.data_pipeline.verification import has_min_vertices, l2_shape_distance
 from src.hard_negative.concept_inversions import CONCEPT_INVERSION_STRATEGIES
-    orig_vertices = parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in flat_commands])
-    orig_features = scorer.extract_features(flat_commands)
-    for trial in range(max_attempts):
-        mutated_evo = evo.search(flat_commands)
-        if mutated_evo and is_valid_geometry(mutated_evo):
-            # Use proxy: only extract features/geometry once per candidate
-            vertices = parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in mutated_evo])
-            if not has_min_vertices(vertices, min_v=4):
-                continue
-            mutated_features = scorer.extract_features(mutated_evo)
-            # Use proxy features for flip detection
-            if flips_label(orig_features, mutated_features, concept_fn):
-                flips_for_this_sample += 1
-                logging.info(f"tier1_evolutionary: found flip at trial {trial}")
-                return {
-                    **sample,
-                    'label': 'hard_negative',
-                    'action_program': mutated_evo,
-                    'features': mutated_features,
-                    'geometry': vertices
-                }
-        if trial >= NO_FLIP_LIMIT and flips_for_this_sample == 0:
-            logging.info(f"{sample.get('problem_id', 'unknown')}: no flips after {trial} trials—bailing Tier-1 to Tier-2")
-            break
-    t1 = time.time()
-    logging.info(f"tier1_evolutionary: completed in {t1-t0:.2f}s, flips={flips_for_this_sample}")
-    return None
+from src.hard_negative.scorer import Scorer
 
-# --- Tier 2: Direct Concept Inversion (stub) ---
-def tier2_concept_inversion(sample, concept_fn, args, scorer, flat_commands, original_features, max_attempts=200):
-    # Try concept-aware deterministic inversion strategies first
-    from src.hard_negative.concept_inversions import CONCEPT_INVERSION_STRATEGIES
-    import logging
-    problem_id = sample.get('problem_id')
-    tried = set()
-    if problem_id in CONCEPT_INVERSION_STRATEGIES:
-        for inv_fn in CONCEPT_INVERSION_STRATEGIES[problem_id]:
-            cand = inv_fn(flat_commands)
-            if not cand or tuple(cand) in tried:
-                continue
-            tried.add(tuple(cand))
-            if is_valid_geometry(cand):
-                parser = BongardLogoParser()
-                vertices = parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in cand])
-                if not has_min_vertices(vertices, min_v=4):
-                    continue
-                mutated_features = scorer.extract_features(cand)
-                if flips_label(original_features, mutated_features, concept_fn):
-                    logging.info(f"tier2_concept_inversion: found deterministic inversion for {problem_id}")
-                    return {
-                        **sample,
-                        'label': 'hard_negative',
-                        'action_program': cand,
-                        'features': mutated_features,
-                        'geometry': vertices
-                    }
-    # Fallback: universal concept inversion operators
-    def break_symmetry(cmds):
-        return cmds + [("rotate", random.uniform(11, 45))]
-    def perturb_stroke_order(cmds):
-        if len(cmds) < 2:
-            return cmds
-        i, j = random.sample(range(len(cmds)), 2)
-        cmds = list(cmds)
-        cmds[i], cmds[j] = cmds[j], cmds[i]
-        return cmds
-    def geometry_scale(cmds, fx=1.3, fy=0.8):
-        return [("scale", (fx, fy))] + cmds
-    TIER2_OPERATORS = [break_symmetry, perturb_stroke_order, geometry_scale]
-    for op in TIER2_OPERATORS:
-        cand = op(flat_commands)
-        if not cand or tuple(cand) in tried:
-            continue
-        tried.add(tuple(cand))
-        if is_valid_geometry(cand):
-            parser = BongardLogoParser()
-            vertices = parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in cand])
-            if not has_min_vertices(vertices, min_v=4):
-                continue
-            mutated_features = scorer.extract_features(cand)
-            if flips_label(original_features, mutated_features, concept_fn):
-                logging.info(f"tier2_concept_inversion: found flip with {op.__name__}")
-                return {
-                    **sample,
-                    'label': 'hard_negative',
-                    'action_program': cand,
-                    'features': mutated_features,
-                    'geometry': vertices
-                }
-    return None
 
-# --- Tier 3: Template-Based Synthetic Generation (stub) ---
-def tier3_synthetic(sample, concept_fn, args, scorer, flat_commands, original_features, max_attempts=100):
-    # Fallback: try a simple hand-written negative (e.g., add a big rotation)
-    cand = flat_commands + [("rotate", 90)]
-    if is_valid_geometry(cand):
-        parser = BongardLogoParser()
-        vertices = parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in cand])
-        if has_min_vertices(vertices, min_v=4) and scorer.is_flip(cand):
-            logging.info("tier3_synthetic: found flip with fallback rotation")
-            return {
-                **sample,
-                'label': 'hard_negative',
-                'action_program': cand,
-                'features': scorer.extract_features(cand),
-                'geometry': vertices
-            }
-    return None
-    # Placeholder: implement synthetic generation logic here
-    return None
-
-# --- Tier 4: Guaranteed Fallback Generation ---
-def tier4_guaranteed(sample, concept_fn, args, scorer, flat_commands, original_features, max_attempts=1):
-    # As a last resort, mutate with all grammar rules until something valid is found
-    for rule_id in range(len(RULE_SET)):
-        try:
-            cand = mutate(flat_commands, rule_id)
-            if isinstance(cand, (tuple, list)):
-                if len(cand) > 0 and isinstance(cand[0], list) and all(isinstance(x, str) for x in cand[0]):
-                    cand = cand[0]
-                elif all(isinstance(x, str) for x in cand):
-                    cand = list(cand)
-                elif all(isinstance(x, tuple) for x in cand):
-                    cand = [item for tup in cand for item in tup if isinstance(item, str)]
-            if isinstance(cand, str):
-                cand = [cand]
-            from scripts.generate_hard_negatives import parse_logo_commands_to_tuples
-            cand_tuples = parse_logo_commands_to_tuples(cand)
-            if is_valid_geometry(cand_tuples):
-                parser = BongardLogoParser()
-                vertices = parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in cand_tuples])
-                if not has_min_vertices(vertices, min_v=4):
-                    continue
-                if scorer.is_flip(cand_tuples):
-                    return {
-                        **sample,
-                        'label': 'hard_negative',
-                        'action_program': cand_tuples,
-                        'features': scorer.extract_features(cand_tuples),
-                        'geometry': vertices
-                    }
-        except Exception as e:
-            logging.error(f"Error during guaranteed fallback mutation rule {rule_id}: {e!r}")
-    # If all else fails, just return the original (should not happen)
-    parser = BongardLogoParser()
-    vertices = parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in flat_commands])
-    return {
-        **sample,
-        'label': 'hard_negative',
-        'action_program': flat_commands,
-        'features': scorer.extract_features(flat_commands),
-        'geometry': vertices
-    }
-
-# --- Utility: Geometry check (copied from main script) ---
-def is_valid_geometry(program):
-    try:
-        if isinstance(program, list) and all(isinstance(x, tuple) and len(x) == 2 for x in program):
-            action_cmds = [f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in program]
-        elif isinstance(program, list) and all(isinstance(x, str) for x in program):
-            action_cmds = program
+def parse_logo_commands_to_tuples(commands: List[Any]) -> List[Tuple[str, Any]]:
+    # existing parsing helper
+    parsed = []
+    for item in commands:
+        if isinstance(item, tuple) and len(item) == 2:
+            parsed.append(item)
+        elif isinstance(item, str) and "_" in item:
+            cmd, param = item.rsplit("_", 1)
+            parsed.append((cmd, param))
+        elif isinstance(item, str):
+            parsed.append((item, None))
         else:
-            action_cmds = [str(x) for x in program]
+            logging.warning("Skipping malformed item: %r", item)
+    return parsed
+
+
+def is_valid_geometry(program: List[Tuple[str, Any]]) -> bool:
+    try:
+        action_cmds = [
+            f"{cmd} {param}" if param is not None else cmd
+            for cmd, param in program
+        ]
         parser = BongardLogoParser()
-        vertices = parser.parse_action_program(action_cmds)
-        if not isinstance(vertices, list):
-            return False
-        if len(vertices) < 4:
-            return False
-        return True
+        verts = parser.parse_action_program(action_cmds)
+        return isinstance(verts, list) and len(verts) >= 4
     except Exception:
         return False
 
-# --- Main multi-tier driver ---
-    commands = sample.get('action_program')
-    from scripts.generate_hard_negatives import parse_logo_commands_to_tuples
-    flat_commands = parse_logo_commands_to_tuples(commands)
-    original_features = sample.get('features')
-    from src.hard_negative.scorer import Scorer
+
+def generate_hard_negative_for_sample(
+    sample: Dict[str, Any],
+    concept_fn,
+    args
+) -> Tuple[Dict[str, Any], str]:
+    """
+    Returns: (hard_negative_sample_dict, used_tier_name)
+    """
+    pid = sample["problem_id"]
+    base_cmds = parse_logo_commands_to_tuples(sample["action_program"])
+    original_features = sample["features"]
     scorer = Scorer(concept_fn, original_features)
-    pid = sample.get('problem_id')
-    max_per_sample = getattr(args, 'max_per_sample', 3)
-    found = []
-    def record_negative(mutated):
-        features = scorer.extract_features(mutated)
+    original_label = concept_fn(original_features)
+    found: List[Dict[str, Any]] = []
+
+    def record_negative(cmds: List[Tuple[str, Any]]):
+        feats = scorer.extract_features(cmds)
         parser = BongardLogoParser()
-        vertices = parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in mutated])
+        verts = parser.parse_action_program(
+            [f"{c} {p}" if p is not None else c for c, p in cmds]
+        )
         found.append({
             **sample,
-            'label': 'hard_negative',
-            'action_program': mutated,
-            'features': features,
-            'geometry': vertices
+            "label": "hard_negative",
+            "action_program": cmds,
+            "features": feats,
+            "geometry": verts
         })
 
-    # 1. Deterministic concept-driven inversions
-    original_label = concept_fn(original_features)
-    for invert in CONCEPT_INVERSION_STRATEGIES.get(pid, []):
-        mutated = invert(flat_commands)
-        feats = scorer.extract_features(mutated)
+    # Tier 2: Deterministic Concept Inversions
+    for inv_fn in CONCEPT_INVERSION_STRATEGIES.get(pid, []):
+        cand = inv_fn(base_cmds)
+        if not cand or not is_valid_geometry(cand):
+            continue
+        feats = scorer.extract_features(cand)
         if concept_fn(feats) != original_label:
-            record_negative(mutated)
-            if len(found) >= max_per_sample:
-                return found[0], 'concept_inversion'
+            logging.info("tier2_concept_inversion: found flip for %s", pid)
+            record_negative(cand)
+            return found[0], "tier2_concept_inversion"
 
-    # 2. Grammar-based fallback (try each rule once)
-    for rule_id, op in enumerate(RULE_SET):
-        mutated = mutate(flat_commands, rule_id=rule_id)
-        feats = scorer.extract_features(mutated)
+    # Tier 3: Grammar-based Fallback
+    for rule_id in range(len(RULE_SET)):
+        cand = mutate(base_cmds, rule_id=rule_id)
+        if not cand or not is_valid_geometry(cand):
+            continue
+        feats = scorer.extract_features(cand)
         if concept_fn(feats) != original_label:
-            record_negative(mutated)
-            if len(found) >= max_per_sample:
-                return found[0], 'grammar_fallback'
+            logging.info("grammar_fallback: flip at rule %d for %s", rule_id, pid)
+            record_negative(cand)
+            return found[0], "grammar_fallback"
 
-    # 3. Guaranteed template-based fallback
-    # (Here, just return the original with a label flip for safety)
-    record_negative(flat_commands)
-    return found[0], 'guaranteed_fallback'
+    # Tier 4: Guaranteed Fallback
+    # As last resort, return the original program as a dummy negative
+    logging.info("guaranteed_fallback: returning original for %s", pid)
+    record_negative(base_cmds)
+    return found[0], "guaranteed_fallback"
+
+
+def main():
+    # parse args (omitted for brevity)
+    # load derived_labels.json into `all_entries` (omitted)
+    # build sample_args list as in your code, then:
+
+    results = []
+    for idx, (pid, entry, concept_fn, args) in enumerate(sample_args, 1):
+        logging.info("[%d/%d] START sample %s", idx, len(sample_args), pid)
+        hard_neg, tier = generate_hard_negative_for_sample(entry, concept_fn, args)
+        results.append(hard_neg)
+        logging.info("[%d/%d] DONE sample %s via %s", idx, len(sample_args), pid, tier)
+
+    # write results to args.output as JSONL
+    import json
+    with open(args.output, 'w', encoding='utf-8') as f:
+        for item in results:
+            f.write(json.dumps(item, ensure_ascii=False) + '\n')

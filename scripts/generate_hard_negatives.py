@@ -1,3 +1,6 @@
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import itertools
 from typing import List, Any
 # Advanced libraries (ensure installed)
@@ -75,23 +78,25 @@ def process_sample_with_guaranteed_success(sample, concept_fn, args):
             if len(found) >= args.max_per_sample: break
 
     return found
-import hashlib
-# ─────────── Deduplicate by full program fingerprint ───────────
-sample_args = []
-seen = set()
-for pid, entries in problems.items():
-    concept_fn = get_concept_fn_for_problem(pid)
-    for entry in entries:
-        if not is_positive_label(entry.get('label')):
-            continue
-        prog_str = json.dumps(entry['action_program'], sort_keys=True)
-        fingerprint = hashlib.sha1(prog_str.encode()).hexdigest()
-        key = (pid, fingerprint)
-        if key in seen:
-            continue
-        seen.add(key)
-        sample_args.append((pid, entry, concept_fn, args))
-# ──────────────────────────────────────────────────────────────────
+    # ...existing code...
+
+    import hashlib
+    # ─────────── Deduplicate by full program fingerprint ───────────
+    sample_args = []
+    seen = set()
+    for pid, entries in problems.items():
+        concept_fn = get_concept_fn_for_problem(pid)
+        for entry in entries:
+            if not is_positive_label(entry.get('label')):
+                continue
+            prog_str = json.dumps(entry['action_program'], sort_keys=True)
+            fingerprint = hashlib.sha1(prog_str.encode()).hexdigest()
+            key = (pid, fingerprint)
+            if key in seen:
+                continue
+            seen.add(key)
+            sample_args.append((pid, entry, concept_fn, args))
+    # ──────────────────────────────────────────────────────────────────
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -122,7 +127,7 @@ from src.concepts.registry import get_concept_fn_for_problem
 from src.data_pipeline.logo_parser import BongardLogoParser
 from src.data_pipeline.physics_infer import PhysicsInference
 from src.data_pipeline.verification import has_min_vertices, l2_shape_distance
-from src.hard_negative.multi_tier import process_sample_with_guaranteed_success
+from src.hard_negative.multi_tier import generate_hard_negative_for_sample
 from src.hard_negative.evo_search import EvoPerturber
 from src.data_pipeline.logo_mutator import RULE_SET
 from src.hard_negative.scorer import Scorer

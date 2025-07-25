@@ -18,6 +18,39 @@ import os
 import logging
 
 class PhysicsInference:
+    @staticmethod
+    def count_straight_segments(vertices, angle_tol=5):
+        """
+        Counts the number of straight segments in a polyline.
+        A segment is considered straight if the angle between consecutive segments is within angle_tol degrees of 180.
+        Args:
+            vertices: list of (x, y) tuples
+            angle_tol: tolerance in degrees
+        Returns:
+            int: number of straight segments
+        """
+        if not vertices or len(vertices) < 3:
+            return 0
+        def angle_between(v1, v2):
+            # Returns angle in degrees between vectors v1 and v2
+            v1 = np.array(v1)
+            v2 = np.array(v2)
+            cos_theta = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-8)
+            cos_theta = np.clip(cos_theta, -1.0, 1.0)
+            return np.degrees(np.arccos(cos_theta))
+
+        count = 0
+        n = len(vertices)
+        for i in range(n):
+            p0 = vertices[i - 1]
+            p1 = vertices[i]
+            p2 = vertices[(i + 1) % n]
+            v1 = (p1[0] - p0[0], p1[1] - p0[1])
+            v2 = (p2[0] - p1[0], p2[1] - p1[1])
+            ang = angle_between(v1, v2)
+            if abs(ang - 180) <= angle_tol:
+                count += 1
+        return count
     """Batched physics-proxy calculations with GPU acceleration where possible"""
     def __init__(self, kb_path: str = 'data/conceptnet_lite.json'):
         self.kb = CommonsenseKB(kb_path)

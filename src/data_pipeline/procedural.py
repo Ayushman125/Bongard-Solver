@@ -1,4 +1,4 @@
-from noise import pnoise2
+from perlin_noise import PerlinNoise
 import random
 
 def perlin_jitter(cmds):
@@ -17,6 +17,7 @@ def wave_distort(cmds):
 def radial_perturb(cmds):
     return [(cmd, (param[0]*1.1, param[1]*0.9)) if isinstance(param, tuple) and len(param)==2 else (cmd,param) for cmd,param in cmds]
 
+_noise = PerlinNoise()
 def noise_scale(cmds):
-    factor = 1 + pnoise2(random.random(), random.random()) * 0.1
+    factor = 1 + _noise([random.random(), random.random()]) * 0.1
     return [("scale", factor)] + cmds
