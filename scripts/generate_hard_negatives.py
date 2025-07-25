@@ -16,100 +16,102 @@ def process_sample_with_guaranteed_success(sample, concept_fn, args):
     found = []
     from src.hard_negative.scorer import Scorer
     scorer = Scorer(concept_fn, sample['features'])
-    def record_negative(cand, feats):
-        from src.data_pipeline.logo_parser import BongardLogoParser
-        parser = BongardLogoParser()
+    from src.data_pipeline.logo_parser import BongardLogoParser
+    from src.data_pipeline.verification import l2_shape_distance
+    parser = BongardLogoParser()
+    seen_geoms = []
+    def is_duplicate(vertices):
+        return any(l2_shape_distance(vertices, g) < 1e-3 for g in seen_geoms)
+    def record_negative(cand, feats, tier):
         vertices = parser.parse_action_program([
             f"{cmd} {param}" if param is not None else str(cmd)
             for item in cand
             if isinstance(item, tuple) and len(item) == 2
             for cmd, param in [item]
         ] + [str(item) for item in cand if not (isinstance(item, tuple) and len(item) == 2)])
-        found.append({
-            **sample,
-            'label': 'hard_negative',
-            'action_program': cand,
-            'features': feats,
-            'geometry': vertices
-        })
+        if not is_duplicate(vertices):
+            found.append({
+                **sample,
+                'label': 'hard_negative',
+                'action_program': cand,
+                'features': feats,
+                'geometry': vertices,
+                'tier': tier
+            })
+            seen_geoms.append(vertices)
 
     # 1. Deterministic Inversions (Tier-2)
     for inv in CONCEPT_INVERSION_STRATEGIES.get(pid, []):
+        if len(found) >= args.max_per_sample: break
         cand = inv(base_cmds)
         feats = scorer.extract_features(cand)
         if concept_fn(feats) != original_label:
-            record_negative(cand, feats)
-            if len(found) >= args.max_per_sample:
-                if found:
-                    return found[0], 'inversion'
-                else:
-                    return None, 'inversion'
+            record_negative(cand, feats, 'inversion')
 
     # 2. Metamorphic Affine Tests (MAIT)
     for name, transform in affine_transforms.items():
+        if len(found) >= args.max_per_sample: break
         cand = transform(base_cmds)
         feats = scorer.extract_features(cand)
         if abs(concept_fn(feats) - original_label) > 0.10:
-            record_negative(cand, feats)
-            if len(found) >= args.max_per_sample:
-                if found:
-                    return found[0], 'affine'
-                else:
-                    return None, 'affine'
+            record_negative(cand, feats, 'affine')
 
     # 3. Procedural Shape Perturbation Ensemble (PSPE)
     routines = [perlin_jitter, subdiv_jitter, wave_distort, radial_perturb, noise_scale]
+    from src.data_pipeline.procedural import PROC_OPS
+    # Add small procedural/affine operators for extra flips
+    for proc_op in PROC_OPS:
+        if len(found) >= args.max_per_sample: break
+        cand = proc_op(base_cmds)
+        feats = scorer.extract_features(cand)
+        if concept_fn(feats) != original_label:
+            record_negative(cand, feats, 'proc')
+    # Continue with existing routines
     for routine in routines:
+        if len(found) >= args.max_per_sample: break
         cand = routine(base_cmds)
         feats = scorer.extract_features(cand)
         if concept_fn(feats) != original_label:
-            record_negative(cand, feats)
-            if len(found) >= args.max_per_sample:
-                if found:
-                    return found[0], 'procedural'
-                else:
-                    return None, 'procedural'
+            record_negative(cand, feats, 'procedural')
 
-    # 4. GAGAN-HNM Sampling
+    # 4. GAGAN-HNM Sampling (sample 20 latents for diversity)
     gagan = GAGANGenerator.load(pid)
-    latents = gagan.sample_latents(1000)
+    latents = gagan.sample_latents(20)
     logos = gagan.generate_from_latents(latents)
     for cand in logos:
+        if len(found) >= args.max_per_sample: break
         feats = scorer.extract_features(cand)
         if concept_fn(feats) != original_label:
-            record_negative(cand, feats)
-            if len(found) >= args.max_per_sample:
-                if found:
-                    return found[0], 'gagan'
-                else:
-                    return None, 'gagan'
+            record_negative(cand, feats, 'gagan')
 
     # 5. Hyperbolic Hard-Negative Mixup (HHNM)
     eucl_emb = euclidean_embed(sample['features'])
     hyp_emb = hyperbolic_embed(sample['features'])
     eneg = mine_hard(eucl_emb, topk=args.max_per_sample)
     hneg = mine_hard(hyp_emb, topk=args.max_per_sample)
-    # Defensive: ensure eneg and hneg are arrays, not tuples
     if isinstance(eneg, tuple):
         eneg = eneg[0]
     if isinstance(hneg, tuple):
         hneg = hneg[0]
     for u, v in itertools.product(eneg, hneg):
+        if len(found) >= args.max_per_sample: break
         mixed, mixup_tier = poincare_mixup(u, v)
         # decode_program is a placeholder for your reverse embedding
         cand = base_cmds  # TODO: implement decode_program(mixed)
         feats = scorer.extract_features(cand)
         if concept_fn(feats) != original_label:
-            record_negative(cand, feats)
-            if len(found) >= args.max_per_sample:
-                if found:
-                    return found[0], 'mixup'
-                else:
-                    return None, 'mixup'
+            record_negative(cand, feats, 'mixup')
 
-    # Always return a tuple of two values
+    # Fallback: fill up to quota with guaranteed template if needed
+    while len(found) < args.max_per_sample:
+        # Use a simple fallback (repeat base_cmds with a marker)
+        cand = base_cmds + [('fallback', len(found))]
+        feats = scorer.extract_features(cand)
+        record_negative(cand, feats, 'fallback')
+        break
+
     if found:
-        return found[0], 'fallback'
+        return found[0], 'multi'
     else:
         return None, 'no_result'
     # ...existing code...

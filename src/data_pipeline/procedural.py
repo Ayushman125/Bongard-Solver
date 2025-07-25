@@ -1,3 +1,14 @@
+# Small procedural/affine operators for hard negative mining
+def rotate_15(cmds):
+    return [("rotate", 15)] + cmds
+
+def scale_90(cmds):
+    return [("scale", (0.9, 1.1))] + cmds
+
+def shear_0_2(cmds):
+    return [("shear", 0.2)] + cmds
+
+PROC_OPS = [rotate_15, scale_90, shear_0_2]
 from perlin_noise import PerlinNoise
 import random
 
