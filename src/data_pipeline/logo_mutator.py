@@ -10,18 +10,38 @@ def add_stroke(program):
 
 
 def reflect_shape(program):
-    # Reflect sequence of turtle commands (mirroring effect) on a list of (cmd, param) tuples
+    # Reflect sequence of turtle commands (mirroring effect) on a list of (cmd, param) tuples or LOGO strings
     import logging
-    reflected = program.copy()
-    for i, item in enumerate(reflected):
-        if not (isinstance(item, tuple) and len(item) == 2):
+    import re
+    reflected = []
+    for i, item in enumerate(program):
+        # Accept both tuple and string formats
+        if isinstance(item, tuple) and len(item) == 2:
+            cmd, param = item
+        elif isinstance(item, str):
+            # Try to parse LOGO string command
+            m = re.match(r'(fd|bk|rt|lt)\s*(-?\d+(?:\.\d+)?)', item.strip())
+            if m:
+                cmd, param = m.group(1), float(m.group(2))
+            else:
+                # Try to parse Bongard-LOGO format (e.g. line_normal_0.354-0.500)
+                parts = item.split('_')
+                if len(parts) >= 2 and parts[0] in {'line', 'arc'}:
+                    cmd = parts[0]
+                    param = '_'.join(parts[1:])
+                else:
+                    logging.warning(f"reflect_shape: Skipping malformed item at index {i}: {item!r}")
+                    continue
+        else:
             logging.warning(f"reflect_shape: Skipping malformed item at index {i}: {item!r}")
             continue
-        cmd, param = item
+        # Mirror right/left turns, otherwise keep as is
         if cmd == 'rt':
-            reflected[i] = ('lt', param)
+            reflected.append(('lt', param))
         elif cmd == 'lt':
-            reflected[i] = ('rt', param)
+            reflected.append(('rt', param))
+        else:
+            reflected.append((cmd, param))
     return reflected
 
 
