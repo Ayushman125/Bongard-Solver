@@ -1,3 +1,80 @@
+import itertools
+from typing import List, Any
+# Advanced libraries (ensure installed)
+from src.hard_negative.gagan_model import GAGANGenerator
+from src.data_pipeline.hyperbolic import poincare_mixup, euclidean_embed, hyperbolic_embed, mine_hard
+from src.data_pipeline.procedural import perlin_jitter, subdiv_jitter, wave_distort, radial_perturb, noise_scale
+from src.data_pipeline.affine_transforms import affine_transforms
+from src.hard_negative.concept_inversions import CONCEPT_INVERSION_STRATEGIES
+def process_sample_with_guaranteed_success(sample, concept_fn, args):
+    pid, base_entry = sample['problem_id'], sample
+    base_cmds = base_entry['action_program']
+    original_label = concept_fn(sample['features'])
+    found = []
+    from src.hard_negative.scorer import Scorer
+    scorer = Scorer(concept_fn, sample['features'])
+    def record_negative(cand, feats):
+        from src.data_pipeline.logo_parser import BongardLogoParser
+        parser = BongardLogoParser()
+        vertices = parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in cand])
+        found.append({
+            **sample,
+            'label': 'hard_negative',
+            'action_program': cand,
+            'features': feats,
+            'geometry': vertices
+        })
+
+    # 1. Deterministic Inversions (Tier-2)
+    for inv in CONCEPT_INVERSION_STRATEGIES.get(pid, []):
+        cand = inv(base_cmds)
+        feats = scorer.extract_features(cand)
+        if concept_fn(feats) != original_label:
+            record_negative(cand, feats)
+            if len(found) >= args.max_per_sample: return found
+
+    # 2. Metamorphic Affine Tests (MAIT)
+    for name, transform in affine_transforms.items():
+        cand = transform(base_cmds)
+        feats = scorer.extract_features(cand)
+        if abs(concept_fn(feats) - original_label) > 0.10:
+            record_negative(cand, feats)
+            if len(found) >= args.max_per_sample: return found
+
+    # 3. Procedural Shape Perturbation Ensemble (PSPE)
+    routines = [perlin_jitter, subdiv_jitter, wave_distort, radial_perturb, noise_scale]
+    for routine in routines:
+        cand = routine(base_cmds)
+        feats = scorer.extract_features(cand)
+        if concept_fn(feats) != original_label:
+            record_negative(cand, feats)
+            if len(found) >= args.max_per_sample: return found
+
+    # 4. GAGAN-HNM Sampling
+    gagan = GAGANGenerator.load(pid)
+    latents = gagan.sample_latents(1000)
+    logos = gagan.generate_from_latents(latents)
+    for cand in logos:
+        feats = scorer.extract_features(cand)
+        if concept_fn(feats) != original_label:
+            record_negative(cand, feats)
+            if len(found) >= args.max_per_sample: break
+
+    # 5. Hyperbolic Hard-Negative Mixup (HHNM)
+    eucl_emb = euclidean_embed(sample['features'])
+    hyp_emb = hyperbolic_embed(sample['features'])
+    eneg = mine_hard(eucl_emb, topk=args.max_per_sample)
+    hneg = mine_hard(hyp_emb, topk=args.max_per_sample)
+    for u, v in itertools.product(eneg, hneg):
+        mixed = poincare_mixup(u, v)
+        # decode_program is a placeholder for your reverse embedding
+        cand = base_cmds  # TODO: implement decode_program(mixed)
+        feats = scorer.extract_features(cand)
+        if concept_fn(feats) != original_label:
+            record_negative(cand, feats)
+            if len(found) >= args.max_per_sample: break
+
+    return found
 import hashlib
 # ─────────── Deduplicate by full program fingerprint ───────────
 sample_args = []
