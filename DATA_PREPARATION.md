@@ -276,3 +276,131 @@ python scripts/generate_hard_negatives.py --input-dir data/raw/ --output data/ha
 # 3. (Optional) Verify the generated data and flag cases for review
 python scripts/verify_annotations.py --input data/derived_labels.json --output data/flagged_cases.txt
 ```
+
+---
+
+## 8. Acquiring the Commonsense Knowledge Base (`conceptnet_lite.json`)
+
+A critical component for the reasoning modules (`src/commonsense_kb.py`, `src/cross_domain_reasoner.py`) is a large-scale commonsense knowledge base. The project uses **ConceptNet**, and requires a specific JSON-formatted dump of its data located at `data/conceptnet_lite.json`.
+
+This file is **not** generated from the Bongard data itself but is a separate, large-scale dataset that must be acquired. The following steps outline the official, reproducible pipeline to generate this file.
+
+### Step 8.1: Create a Build Directory
+
+All intermediate files for the ConceptNet build process are stored in a dedicated directory to keep the `data/` folder clean.
+
+**Command:**
+
+```bash
+mkdir -p data/conceptnet_build
+```
+
+### Step 8.2: Install Required Python Packages
+
+The acquisition process depends on the `conceptnet-lite` library.
+
+**Command:**
+
+```bash
+pip install conceptnet-lite tqdm
+```
+
+### Step 8.3: Download the ConceptNet SQLite Database
+
+The `conceptnet-lite` library provides a convenient way to download a pre-built SQLite version of the ConceptNet database (~1.9 GB compressed, ~9 GB uncompressed).
+
+Create a script `scripts/download_conceptnet.py`:
+
+```python
+# scripts/download_conceptnet.py
+import conceptnet_lite
+import os
+
+db_path = "data/conceptnet_build/conceptnet.db"
+
+if os.path.exists(db_path):
+    print(f"ConceptNet database already exists at {db_path}. Skipping download.")
+else:
+    print("Downloading ConceptNet database...")
+    # This will download and unpack the database into the specified path.
+    conceptnet_lite.connect(db_path)
+    print("Download complete.")
+```
+
+**Run the script:**
+
+```bash
+python scripts/download_conceptnet.py
+```
+This command will download and set up the database. This may take several minutes depending on your internet connection.
+
+### Step 8.4: Export the Database to JSON
+
+The final step is to convert the SQLite database into the required `conceptnet_lite.json` format. This format is a JSON Lines file, where each line is a JSON object representing a single edge from ConceptNet.
+
+Create a script `scripts/export_conceptnet.py`:
+
+```python
+# scripts/export_conceptnet.py
+import json
+import sqlite3
+import tqdm
+import os
+
+SRC = "data/conceptnet_build/conceptnet.db"
+DST = "data/conceptnet_lite.json"
+
+con = sqlite3.connect(SRC)
+cur = con.cursor()
+
+# This query joins multiple tables to reconstruct the URI format and extract the weight.
+qry = """
+SELECT  '/c/' || start_lang.name || '/' || start_label.text,
+        rel.name,
+        '/c/' || end_lang.name || '/' || end_label.text,
+        json_extract(edge.etc, '$.weight')
+FROM edge
+JOIN relation   AS rel           ON edge.relation_id = rel.id
+JOIN concept    AS start_concept ON edge.start_id    = start_concept.id
+JOIN label      AS start_label   ON start_concept.label_id = start_label.id
+JOIN language   AS start_lang    ON start_label.language_id = start_lang.id
+JOIN concept    AS end_concept   ON edge.end_id      = end_concept.id
+JOIN label      AS end_label     ON end_concept.label_id = end_label.id
+JOIN language   AS end_lang      ON end_label.language_id = end_lang.id;
+"""
+
+# Get the total number of edges for the progress bar
+num_edges = cur.execute("SELECT COUNT(*) FROM edge;").fetchone()[0]
+
+with open(DST, "w", encoding="utf-8") as f:
+    keys = ("head", "predicate", "tail", "weight")
+    for row in tqdm.tqdm(cur.execute(qry), total=num_edges, desc=f"Exporting to {DST}"):
+        rec = dict(zip(keys, row))
+        json.dump(rec, f, ensure_ascii=False)
+        f.write("\n")
+
+con.close()
+
+print(f"Successfully exported {num_edges} edges to {DST}")
+```
+
+**Run the export script:**
+
+```bash
+python scripts/export_conceptnet.py
+```
+**Note:** This is a long-running process and may take 20-30 minutes to complete as it processes over 34 million records.
+
+### Step 8.5: Validation
+
+After the export is complete, you can run the project's internal validators and tests to ensure the file is correct.
+
+```bash
+# Run the data validator
+python integration/data_validator.py --file data/conceptnet_lite.json
+
+# Run the relevant unit tests
+pytest tests/test_commonsense_kb.py
+```
+
+Passing these checks confirms that the `conceptnet_lite.json` file is ready for use in the Bongard-Solver pipeline.

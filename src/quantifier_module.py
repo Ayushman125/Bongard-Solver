@@ -45,7 +45,7 @@ class QuantifierModule:
                     supporting_evidence=relations
                 ))
             # Existential quantifier: predicate holds for at least one
-            elif len(relations) > 0:
+            if len(relations) > 0:
                 patterns.append(QuantifierPattern(
                     quantifier_type=QuantifierType.EXISTENTIAL,
                     variable="object",

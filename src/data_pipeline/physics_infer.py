@@ -172,7 +172,7 @@ class PhysicsInference:
     def centroid(poly_geom):
         poly = PhysicsInference._ensure_polygon(poly_geom)
         c = poly.centroid
-        return [c.x, c.y]
+        return (c.x, c.y)
 
     @staticmethod
     @safe_feature(default=0.0)

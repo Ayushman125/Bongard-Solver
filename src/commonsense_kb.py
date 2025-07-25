@@ -41,8 +41,12 @@ class CommonsenseKB:
         except Exception as e:
             raise KBLoadError(f"Failed to initialize KB: {e}")
     def _load_kb(self, path):
-        with open(path, 'r') as f:
-            self.kb_data = json.load(f)
+        # The file is a JSONL (JSON Lines), not a single JSON object.
+        # We need to read it line by line.
+        self.kb_data = []
+        with open(path, 'r', encoding='utf-8') as f:
+            for line in f:
+                self.kb_data.append(json.loads(line))
     def _setup_database(self):
         self.conn = sqlite3.connect(self.db_path)
         cursor = self.conn.cursor()

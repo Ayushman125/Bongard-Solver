@@ -418,6 +418,155 @@ Following these steps, your data preparation phase is auditable, systematic, and
 
 
 
+
+# Integrating ConceptNet Lite into Bongard-Solver Phase 1Before diving into implementation, note the single most important takeaway:
+
+**You cannot run Phase 1 without a local, audited of ConceptNet.**  
+That snapshot is the file your code expects at `data/conceptnet_lite.json`, containing every edge you will query. The steps below walk you from zero to a professionally validated JSON dump that satisfies repository contracts, CI schema checks, and licensing obligations.
+
+## 1 Clarifying Project Requirements### 1.1 Why is `conceptnet_lite.json` mandatory?  
+`src/commonsense_kb.py` instantiates `CommonsenseKB(path='data/conceptnet_lite.json')`; it immediately loads the file, then bulk-inserts its edges into an SQLite cache. Any absent or malformed file crashes the Phase 1 perception + reasoning pipeline.
+
+### 1.2 Expected schema  
+Each entry must be a flat JSON object with four fields:
+
+```json
+{
+ ```ead": "/c/en/dog",
+ ```redicate": "```dFor",
+  "```l": "/c/en/pet",
+ ```eight": 1.0
+}
+```
+
+A professional build therefore needs to:
+
+1. Contain **all 34 M edges** from ConceptNet 5.7 (or a documented, reproducible subset).  
+2. Preserve Unicode URIs and relation labels exactly as in the source dump.  
+3. Pass your JSON-schema validator in `integration/data_validator.py`.
+
+## 2 Overview of the Acquisition PipelineWe rely on the maintained **conceptnet-lite** library, which can (a) download a pre-built SQLite DB or (b) build one from the 21-GB assertions CSV. We choose (a) for speed and then export to JSON.## 3 Step-by-Step Procedure### 3.1 Create a dedicated data folder```bash
+mkdir -p```ta/conceptnet_build
+```
+
+### 3.2 Install build-time dependencies```bash
+# Python```de
+pip install```nceptnet-lite tqdm``` System side```nly if you```an to build```om CSV later```udo apt-get install```zip sqlite`````
+
+Conceptnet-lite is licensed Apache 2.0 and bundles all ORM models you need.[1][2][3]
+
+### 3.3 Download the official ConceptNet 5.7 SQLite database```python
+import concept```_lite
+conceptnet_lite.connect```   "data/conceptnet_build```nceptnet.db"
+)           ```downloads ~```B and unpacks automatically````
+
+The call checks for an existing DB, fetches the compressed file from the DigitalOcean CDN, verifies the checksum, unzips, and populates indexes.[2]
+
+*Time cost*: ~10 min on a 200 Mb/s link; disk usage ≈ 9 GB.
+
+> **Alternative (slower)**: pass `db_download_url=None` to trigger a full build from the `conceptnet-assertions-5.7.0.csv.gz` dump provided by the ConceptNet team.[4]
+
+### 3.4 Verify database integrity```bash
+sqlite```ata/conceptnet_build/con```tnet.db 'SELECT COUNT``` FROM edges```# Expected```4 074 917
+```
+
+If the count differs, re-download—corruption will later surface as missing relations.
+
+### 3.5 Export to the JSON schema required by Bongard-SolverCreate `scripts/export_conceptnet.py`:
+
+```python```port json, sqlite```tqdm, os, sys```RC = "data/conceptnet_build```nceptnet.db"
+DST =```ata/conceptnet_lite.json```con = sqlite```onnect(SRC)
+cur =```n.cursor()
+qry =```"
+SELECT  start```rm   AS head```       rel```bel    AS predicate```       end```rm     AS tail```       edges```ight AS weight```OM edges
+JOIN relations```S rel  ON edges```lation_id =```l.id
+JOIN concepts```AS start ON```ges.start_id =```art.id
+JOIN concepts```AS end   ON```ges.end_id  ```end.id;
+"""
+
+with open```T, "w", encoding```tf-8") as f```   for row``` tqdm.tqdm(cur.execute```y)):
+       ```c = dict(zip(("head", "```dicate", "```l", "weight"), row```        json```mp(rec, f, ensure```cii=False)
+       ```write("\n")
+
+con.close``````
+
+Run it:
+
+```bash
+python scripts```port_conceptnet.py
+```
+
+*Time cost*: 25–30 min on a modern SSD.
+
+### 3.6 Run repository validators```bash
+python integration```ta_validator.py --file```ta/conceptnet_lite.json```test tests```st_commonsense_kb.py
+```
+
+Both should pass without warnings. The validator checks UTF-8 encoding, required keys, and floating-point weights; the test spins up `CommonsenseKB` and executes sample queries.
+
+### 3.7 Commit and document1. **Do not** add the 6 GB JSON directly to Git history.  
+   Instead, create a **GitHub release asset** called `conceptnet_lite.json.zst` (Zstandard compresses to ~1.9 GB).
+
+2. Point the loader to the release URL in `README.md`:
+
+```markdown
+wget -q https```github.com//Bong```-Solver/releases/download```.1.0/conceptnet_lite.json```t
+unzstd concept```_lite.json.zst -o data```nceptnet_lite.json
+```
+
+3. Update CI (`.github/workflows/ci.yml`) to cache the decompressed file.
+
+### 3.8 Licensing and attributionInclude in `NOTICE`:
+
+```
+This```oject distributes```derivative```onceptnet_lite.json"
+built```om Concept``` 5.7 (CC-BY-SA ```).
+
+Original authors```obyn Speer, Joshua```in, Catherine```vasi.
+See http```conceptnet.io and```tps://github.com/commons```e/conceptnet5.
+
+Redistribution```mplies with```ction 4 of```-BY-SA 4.0:
+ - Name```e authors
+ - Link``` license
+ - Ind```te modifications```QLite→JSON, pruning``` assertions`````
+
+## 4 Quality-Control Checklist| Check | Command | Acceptable Range |
+|-------|---------|------------------|
+| Edge count | `wc -l data/conceptnet_lite.json` | ≥ 34 M |
+| UTF-8 validity | `iconv -f utf-8 -t utf-8` | zero errors |
+| Average weight | `awk '{sum+=$4} END{print sum/NR}'` | ~ 1.0 ± 0.05 |
+| Sample query | `grep '/c/en/dog' | head` | returns `IsA` & `CapableOf` edges |
+
+## 5 Integration with Phase 1 Pipeline1. **First run**: `CommonsenseKB` converts the 6 GB JSON into `data/kb_cache.db` (~1.5 GB, indexed) and stores a pickle of hot queries for fast reload.
+2. Subsequent runs detect the cache and skip the initial import, cutting Phase 1 start-up from 3 min to < 10 s.
+3. When deploying on CI, invoke:
+
+```bash
+python -m src```mmonsense_kb --precache```ta/conceptnet_lite.json````
+
+to bake the SQLite cache into your Docker layer.
+
+
+
+## 6 Common Pitfalls & Remedies| Symptom | Likely Cause | Fix |
+|---------|--------------|-----|
+| `sqlite3.DatabaseError: file is encrypted` | Interrupted download | Delete DB and re-run step 3.3 |
+| `json.decoder.JSONDecodeError` during Phase 1 | Newlines stripped by Windows | Ensure you used binary mode when copying; verify with `file -b` |
+| CI job exceeds 14 GB RAM on export | Using pandas | Stick to raw SQLite cursor iteration as in 3.5 |
+| Edges missing French/Spanish terms | You filtered non-English rows | The Bongard project is language-agnostic; keep multilingual edges |
+
+## 7 Road-Mapped Enhancements1. **Pruned mini-dump**: For low-RAM environments, auto-extract the ~5 M edges whose heads appear in your shape grammar.  
+2. **Up-rev to ConceptNet 5.8**: The `conceptnet_lite` maintainer has not yet published a pre-built DB; build from CSV with `db_download_url=None` when 5.8 stabilizes.  
+3. **Edge-embedding cache**: If you later move to vector queries, serialize a NumPy memmap of Numberbatch embeddings alongside the JSON.
+
+## 8 ConclusionFollowing the pipeline above yields a **deterministic, auditable, license-compliant `conceptnet_lite.json`** that plugs directly into Bongard-Solver Phase 1. The same procedure underpins professional research codebases and scales to future ConceptNet releases with only minimal tweaks.
+
+Happy reasoning!
+
+**Cited sources**: conceptnet-lite installation and usage, official SQLite dump link, ConceptNet 5.5 paper for attribution.[1][2][4][3][5]
+
+
+
 ________________________________________
 Phase 0: Foundation & System-1 Abstraction Layer (S1-AL)
 Objective & Scope

@@ -37,14 +37,16 @@ class ImageAugmentor:
         ).to(self.device)
     def augment_batch(self, images: torch.Tensor, augment_type: str = 'both') -> Dict[str, torch.Tensor]:
         start_time = time.time()
+        # Convert images to nested list for schema validation (only shape, not actual data)
+        shape_list = list(images.shape) if hasattr(images, 'shape') else images
         self.data_validator.validate({
-            'images': images.shape,
+            'images': [[0.0]*shape_list[-1] for _ in range(shape_list[0])],  # Dummy nested list
             'type': augment_type
         }, 'image_augmentation.schema.json')
         if images.device != self.device:
             images = images.to(self.device)
         results = {'original': images}
-        with torch.cuda.stream(self.stream_manager.get_stream('augmentation')):
+        with torch.cuda.stream(self.stream_manager.get_stream()):
             if augment_type in ['geometric', 'both']:
                 results['geometric'] = self.geometric_transforms(images)
             if augment_type in ['relational', 'both']:

@@ -27,6 +27,13 @@ def profile(func):
 
 # Legacy compatibility: TaskProfiler class
 class TaskProfiler:
+    def log_latency(self, name, latency, metadata=None):
+        """Logs latency for a given operation. Prints to stdout for now."""
+        print(f"[Profiler] {name}: {latency:.2f} ms", end="")
+        if metadata:
+            print(f" | Metadata: {metadata}")
+        else:
+            print()
     """
     Class-based profiler for function execution time. Use as a decorator or context manager.
     """
@@ -48,3 +55,17 @@ class TaskProfiler:
     def __exit__(self, exc_type, exc_val, exc_tb):
         elapsed = time.time() - self._start
         print(f"TaskProfiler context executed in {elapsed:.4f}s")
+
+    class _ProfileContext:
+        def __init__(self, name):
+            self.name = name
+        def __enter__(self):
+            self._start = time.time()
+            return self
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            elapsed = time.time() - self._start
+            print(f"Profile '{self.name}' executed in {elapsed:.4f}s")
+
+    def profile(self, name):
+        """Returns a context manager for profiling a code block with a given name."""
+        return self._ProfileContext(name)

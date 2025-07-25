@@ -1,3 +1,5 @@
+from src.grammar_extender import GrammarExtender
+
 def test_operator_proposal():
     extender = GrammarExtender()
     out = extender.propose(['mirror'], {'context': 'symmetry'}, topk=1)
