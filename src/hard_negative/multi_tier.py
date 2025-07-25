@@ -1,3 +1,6 @@
+import random
+import os
+import numpy as np
 # Multi-tier hard negative generation for Bongard-Solver
 import logging
 from src.hard_negative.evo_search import EvoPerturber
@@ -32,11 +35,44 @@ def tier1_evolutionary(sample, concept_fn, args, scorer, flat_commands, original
 
 # --- Tier 2: Direct Concept Inversion (stub) ---
 def tier2_concept_inversion(sample, concept_fn, args, scorer, flat_commands, original_features, max_attempts=200):
+    # Universal concept inversion operators
+    def break_symmetry(cmds):
+        return cmds + [("rotate", random.uniform(11, 45))]
+    def perturb_stroke_order(cmds):
+        if len(cmds) < 2:
+            return cmds
+        i, j = random.sample(range(len(cmds)), 2)
+        cmds = list(cmds)
+        cmds[i], cmds[j] = cmds[j], cmds[i]
+        return cmds
+    def geometry_scale(cmds, fx=1.3, fy=0.8):
+        return [("scale", (fx, fy))] + cmds
+    TIER2_OPERATORS = [break_symmetry, perturb_stroke_order, geometry_scale]
+    for op in TIER2_OPERATORS:
+        cand = op(flat_commands)
+        if is_valid_geometry(cand):
+            parser = BongardLogoParser()
+            vertices = parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in cand])
+            if not has_min_vertices(vertices, min_v=4):
+                continue
+            if scorer.is_flip(cand):
+                logging.info(f"tier2_concept_inversion: found flip with {op.__name__}")
+                return cand
+    return None
     # Placeholder: implement concept inversion logic here
     return None
 
 # --- Tier 3: Template-Based Synthetic Generation (stub) ---
 def tier3_synthetic(sample, concept_fn, args, scorer, flat_commands, original_features, max_attempts=100):
+    # Fallback: try a simple hand-written negative (e.g., add a big rotation)
+    cand = flat_commands + [("rotate", 90)]
+    if is_valid_geometry(cand):
+        parser = BongardLogoParser()
+        vertices = parser.parse_action_program([f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in cand])
+        if has_min_vertices(vertices, min_v=4) and scorer.is_flip(cand):
+            logging.info("tier3_synthetic: found flip with fallback rotation")
+            return cand
+    return None
     # Placeholder: implement synthetic generation logic here
     return None
 

@@ -1,3 +1,5 @@
+# Global cache for polygons
+_POLY_CACHE = {}
 import functools
 import logging
 import math
@@ -87,6 +89,10 @@ class PhysicsInference:
 
     @staticmethod
     def polygon_from_vertices(vertices):
+        # Use a hashable key for the cache
+        key = f"{len(vertices)}-{hash(tuple(vertices))}"
+        if key in _POLY_CACHE:
+            return _POLY_CACHE[key]
         """
         Build, repair, and validate a polygon from raw vertices.
         Always returns a valid Polygon (tiny‐square fallback if pathological).
@@ -101,13 +107,14 @@ class PhysicsInference:
             return verts
         cleaned_verts = _clean_vertices(vertices)
         n_verts = len(cleaned_verts)
-        logging.info(f"polygon_from_vertices: cleaned to {n_verts} vertices")
+        # Only log at DEBUG to avoid spam
+        logging.debug(f"polygon_from_vertices: cleaned to {n_verts} vertices")
 
         # Time raw Polygon creation (no repair)
         t0_poly = time.time()
         poly = Polygon(cleaned_verts)
         t1_poly = time.time()
-        logging.info(f"polygon_from_vertices: raw Polygon({n_verts}) creation took {t1_poly-t0_poly:.3f}s")
+        logging.debug(f"polygon_from_vertices: raw Polygon({n_verts}) creation took {t1_poly-t0_poly:.3f}s")
 
         try:
             t0 = time.time()
@@ -118,9 +125,9 @@ class PhysicsInference:
                 poly = poly.buffer(0)
                 repaired = True
                 t3 = time.time()
-                logging.info(f"polygon_from_vertices: buffer(0) repair on {n_verts} vertices took {t3-t2:.3f}s (valid={poly.is_valid})")
+                logging.debug(f"polygon_from_vertices: buffer(0) repair on {n_verts} vertices took {t3-t2:.3f}s (valid={poly.is_valid})")
             elif not poly.is_valid:
-                logging.warning(f"polygon_from_vertices: skipped buffer(0) repair for {n_verts} vertices (too large)")
+                logging.debug(f"polygon_from_vertices: skipped buffer(0) repair for {n_verts} vertices (too large)")
 
             # If MultiPolygon, pick largest piece
             if isinstance(poly, MultiPolygon):
@@ -131,13 +138,13 @@ class PhysicsInference:
                 t4 = time.time()
                 poly = poly.simplify(0.5, preserve_topology=True)
                 t5 = time.time()
-                logging.info(f"polygon_from_vertices: simplify on {n_verts} vertices took {t5-t4:.3f}s")
+                logging.debug(f"polygon_from_vertices: simplify on {n_verts} vertices took {t5-t4:.3f}s")
             else:
-                logging.info(f"polygon_from_vertices: skipped simplify for {n_verts} vertices (too large)")
+                logging.debug(f"polygon_from_vertices: skipped simplify for {n_verts} vertices (too large)")
 
             # Too small → tiny square fallback
             if poly.is_empty or poly.area < MIN_AREA:
-                logging.warning(f"polygon_from_vertices: fallback to tiny square (area={poly.area if hasattr(poly, 'area') else 'N/A'})")
+                logging.debug(f"polygon_from_vertices: fallback to tiny square (area={poly.area if hasattr(poly, 'area') else 'N/A'})")
                 return Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
 
             # Aspect‐ratio check → fallback if extreme sliver
@@ -145,16 +152,17 @@ class PhysicsInference:
             w, h = maxx - minx, maxy - miny
             aspect = max(w / (h + 1e-6), h / (w + 1e-6))
             if aspect > MAX_ASPECT:
-                logging.warning(f"polygon_from_vertices: fallback to tiny square (aspect={aspect:.2f})")
+                logging.debug(f"polygon_from_vertices: fallback to tiny square (aspect={aspect:.2f})")
                 return Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
 
             # Good polygon
             t6 = time.time()
-            logging.info(f"polygon_from_vertices: total time {t6-t0:.3f}s (repaired={repaired})")
-            return PhysicsInference._ensure_polygon(poly)
+            logging.debug(f"polygon_from_vertices: total time {t6-t0:.3f}s (repaired={repaired})")
+            _POLY_CACHE[key] = PhysicsInference._ensure_polygon(poly)
+            return _POLY_CACHE[key]
 
         except Exception as e:
-            logging.warning(
+            logging.debug(
                 f"polygon_from_vertices crashed ({e!r}); returning tiny‐square fallback"
             )
             return Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])

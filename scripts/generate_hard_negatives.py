@@ -102,6 +102,14 @@ def is_valid_geometry(program: List[Any]) -> bool:
 # Placeholder helpers retained as-is
 # --------------------------------------------------------------------------- #
 def is_diverse(new, existing) -> bool:  # noqa: ANN001
+    # Batch-level diversity: ensure new is not too close to any in existing (L2 shape distance > threshold)
+    if not existing:
+        return True
+    verts_new = new.get('geometry', [])
+    for e in existing:
+        verts_e = e.get('geometry', [])
+        if l2_shape_distance(verts_new, verts_e) < 0.05:  # Stricter than dedup
+            return False
     return True
 
 
@@ -177,8 +185,14 @@ def main():
         for entry in entries:
             if not is_positive_label(entry.get('label')):
                 continue
-            key = (pid, entry['image_path'])
+            # Normalize image_path for deduplication
+            path = os.path.normpath(os.path.abspath(entry['image_path']))
+            prog_str = json.dumps(entry['action_program'], sort_keys=True)
+            import hashlib
+            fingerprint = hashlib.sha1(prog_str.encode()).hexdigest()
+            key = (pid, path, fingerprint)
             if key in seen:
+                logging.debug(f"Dedup skip: {key}")
                 continue
             seen.add(key)
             sample_args.append((pid, entry, concept_fn, args))
@@ -214,7 +228,8 @@ def main():
                     logging.info(f"[{idx}/{len(sample_args)}] Sample {pid} post-processing: vertices={n_verts}, time={t1-t0:.2f}s")
             logging.info(f"[{idx}/{len(sample_args)}] DONE  sample {pid}")
 
-    # Post-process outputs
+
+    # Post-process outputs with batch-level diversity and hardness scoring
     hard_negatives, near_misses = [], []
     for hn, nm in results:
         if hn:
@@ -223,14 +238,30 @@ def main():
                 continue
             verts = hn.get('geometry', [])
             if has_min_vertices(verts, min_v=4):
-                # de-duplication
-                if not any(
-                    l2_shape_distance(verts, e.get('geometry', [])) < 1e-3
-                    for e in hard_negatives
-                ):
-                    hard_negatives.append(hn)
+                # de-duplication (L2 < 1e-3) and batch-level diversity (L2 > 0.05)
+                if not any(l2_shape_distance(verts, e.get('geometry', [])) < 1e-3 for e in hard_negatives):
+                    if is_diverse(hn, hard_negatives):
+                        # Compute hardness: min L2 distance to any positive sample in the same problem
+                        pid = hn.get('problem_id') or hn.get('pid')
+                        # Find all positive samples for this problem
+                        pos_verts = [entry.get('geometry', []) for entry in problems.get(pid, []) if is_positive_label(entry.get('label'))]
+                        if pos_verts:
+                            hardness = min(l2_shape_distance(verts, v) for v in pos_verts)
+                        else:
+                            hardness = 0.0
+                        hn['hardness'] = float(hardness)
+                        hard_negatives.append(hn)
         if nm:
             near_misses.append(nm)
+
+    # Sort hard negatives by hardness descending (optional, for batch mixing)
+    hard_negatives.sort(key=lambda x: -x.get('hardness', 0.0))
+
+    # (Optional) Log batch-level diversity statistics
+    if len(hard_negatives) > 1:
+        l2s = [l2_shape_distance(hard_negatives[i]['geometry'], hard_negatives[j]['geometry'])
+               for i in range(len(hard_negatives)) for j in range(i+1, len(hard_negatives))]
+        logging.info(f"Batch-level diversity: mean L2={np.mean(l2s):.4f}, min L2={np.min(l2s):.4f}, max L2={np.max(l2s):.4f}")
 
     # Write files
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
