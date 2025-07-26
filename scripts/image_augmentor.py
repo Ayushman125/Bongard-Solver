@@ -87,6 +87,10 @@ def diagnose_tensor_corruption(tensor, name="tensor", path=None):
         print(f" ❌ OpenCV error: {e}")
         is_corrupted = True
 
+    if hasattr(arr, 'device'):
+        device = str(arr.device)
+    else:
+        device = 'cpu'
     result = {
         "shape": arr.shape,
         "dtype": str(arr.dtype),
@@ -95,7 +99,12 @@ def diagnose_tensor_corruption(tensor, name="tensor", path=None):
         "opencv_ok": opencv_ok,
         "corrupted": is_corrupted,
         "channels": arr.shape[-1] if arr.ndim == 3 else 1,
+        "device": device,
+        "issues": [],
     }
+    # Optionally, append issue strings if you detect problems
+    if is_corrupted:
+        result['issues'].append('Tensor corruption detected')
     return result
 
 def sanitize_for_opencv(tensor):
@@ -642,6 +651,27 @@ class ImagePathDataset(data.Dataset):
 
 
 class ImageAugmentor:
+    def safe_mask_conversion(self, mask):
+        """
+        Safely convert mask between torch tensor and numpy array for OpenCV.
+        Handles device, dtype, and value range.
+        """
+        import numpy as np
+        try:
+            import torch
+        except ImportError:
+            torch = None
+
+        # If mask is a torch tensor, move to cpu and convert to numpy
+        if torch is not None and isinstance(mask, torch.Tensor):
+            mask = mask.detach().cpu().numpy()
+        # Ensure mask is uint8 and in [0,255] range
+        if mask.dtype != np.uint8:
+            if mask.max() <= 1.0:
+                mask = (mask * 255).astype(np.uint8)
+            else:
+                mask = mask.astype(np.uint8)
+        return mask
     # Bongard-specific QA thresholds for mask types
     # Emergency QA thresholds for CV_8UC512 corruption cleanup
     BONGARD_QA_THRESHOLDS = {
