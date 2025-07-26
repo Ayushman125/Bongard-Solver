@@ -662,6 +662,22 @@ class ImageAugmentor:
     def diagnose_tensor_corruption(self, tensor, name="tensor", path=None):
         """Class method alias for module-level diagnostic function"""
         return diagnose_tensor_corruption(tensor, name=name, path=path)
+        
+    def safe_device_transfer(self, tensor, device):
+        """
+        Safely move a PyTorch tensor to the specified device, handling all edge cases.
+        """
+        import torch
+        # Ensure tensor is contiguous before transfer
+        tensor = tensor.contiguous()
+        if tensor.device == device:
+            return tensor
+        # Transfer via CPU if direct GPU-GPU fails (common with A5000/4090)
+        if device.type == 'cuda' and tensor.device.type == 'cuda':
+            tensor = tensor.cpu().to(device)
+        else:
+            tensor = tensor.to(device)
+        return tensor
     
     def repair_mask(self, mask_tensor):
         """Apply morphological closing to repair thin masks."""
@@ -1796,9 +1812,13 @@ class ImageAugmentor:
         """
         if not self.hybrid_enabled:
             # Fallback to simple thresholding
+            print("[HYBRID] Hybrid mode disabled, using fallback thresholding")
             if original_mask is not None:
-                return original_mask
+                print(f"[HYBRID] Using provided original mask: shape={original_mask.shape}")
+                # Apply binarization to original mask with logging
+                return self.proper_binarize(original_mask, threshold=0.001)
             else:
+                print("[HYBRID] No original mask provided, creating from image using OTSU thresholding")
                 # Convert to numpy for processing
                 img_np = image_tensor.cpu().numpy()
                 if img_np.ndim == 3:
@@ -1812,9 +1832,15 @@ class ImageAugmentor:
                 else:
                     gray = img_np
                 
+                print(f"[HYBRID] Applying OTSU thresholding on grayscale image: shape={gray.shape}, range=[{gray.min()}, {gray.max()}]")
                 _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                print(f"[HYBRID] OTSU thresholding result: nonzero pixels={np.sum(thresh > 0)}")
+                
                 mask_tensor = torch.from_numpy(thresh / 255.0).unsqueeze(0).float()
-                return self.safe_device_transfer(mask_tensor, self.device)
+                mask_tensor = self.safe_device_transfer(mask_tensor, self.device)
+                
+                # Apply proper binarization for consistency
+                return self.proper_binarize(mask_tensor, threshold=0.001)
         
         try:
             print(f"[HYBRID] Generating mask with SAM. Image tensor shape: {image_tensor.shape}")
@@ -1849,18 +1875,67 @@ class ImageAugmentor:
             sam_mask = self.sam_autocoder.get_best_mask(img_np)
             print(f"[HYBRID] SAM mask generated: shape={sam_mask.shape}, dtype={sam_mask.dtype}, min={sam_mask.min()}, max={sam_mask.max()}")
             
+            # Log detailed diagnostics for SAM mask
+            sam_tensor = torch.from_numpy(sam_mask / 255.0).unsqueeze(0).float()
+            self.log_detailed_mask_diagnostics(sam_tensor, name="SAM")
+            
+            # Calculate mask statistics
+            nonzero_count = np.count_nonzero(sam_mask)
+            total_pixels = sam_mask.size
+            coverage_percent = (nonzero_count / total_pixels) * 100
+            
+            print(f"[HYBRID] SAM mask statistics: nonzero={nonzero_count}, total={total_pixels}, coverage={coverage_percent:.2f}%")
+            
+            # Handle problematic masks (very thin or warped with low values)
+            if sam_mask.max() > 0 and sam_mask.max() <= 10:  # Extremely low values (0-10 instead of 0-255)
+                print(f"[HYBRID WARNING] SAM returned very low-value mask: max={sam_mask.max()}")
+                # Scale up values to proper range to help with skeleton processing
+                sam_mask = sam_mask * (255.0 / sam_mask.max())
+                print(f"[HYBRID] Rescaled mask to proper range: max={sam_mask.max()}")
+            
             # Apply skeleton-aware post-processing
             if sam_mask.max() > 0:
                 print("[HYBRID] Applying skeleton-aware post-processing")
                 refined_mask = self.skeleton_processor.sap_refine(sam_mask)
                 print(f"[HYBRID] Refined mask: shape={refined_mask.shape}, min={refined_mask.min()}, max={refined_mask.max()}")
+                
+                # Handle common failure case of skeleton processor
+                if refined_mask.max() <= 0:
+                    print("[HYBRID WARNING] Skeleton processor returned empty mask, falling back to original SAM mask")
+                    refined_mask = sam_mask
             else:
                 print("[HYBRID] SAM returned empty mask, skipping skeleton-aware post-processing")
                 refined_mask = sam_mask
             
             # Convert back to tensor
             mask_tensor = torch.from_numpy(refined_mask / 255.0).unsqueeze(0).float()
-            return self.safe_device_transfer(mask_tensor, self.device)
+            mask_tensor = self.safe_device_transfer(mask_tensor, self.device)
+            
+            # Log refined mask diagnostics
+            self.log_detailed_mask_diagnostics(mask_tensor, name="pre-binarized")
+            
+            # Apply proper binarization with enhanced logging
+            print("[HYBRID] Applying proper mask binarization")
+            binary_mask = self.proper_binarize(mask_tensor, threshold=0.001)
+            
+            # Final mask QA check
+            if not self._is_mask_valid(binary_mask):
+                print("[HYBRID WARNING] Binarized mask still invalid - may be empty or near-empty")
+                # Try more aggressive settings
+                print("[HYBRID RESCUE] Attempting mask rescue with ultra-low threshold")
+                binary_mask = self.proper_binarize(mask_tensor, threshold=0.0005)
+                
+                # Final rescue attempt with morphological operations
+                if not self._is_mask_valid(binary_mask):
+                    print("[HYBRID EMERGENCY] Final rescue attempt with morphological closing")
+                    # Try to convert original mask with aggressive closing
+                    closed_mask = self.apply_morphology(mask_tensor, operation='close', kernel_size=5)
+                    binary_mask = self.proper_binarize(closed_mask, threshold=0.0001)
+            
+            # Final diagnostic log
+            self.log_detailed_mask_diagnostics(binary_mask, name="final")
+            
+            return binary_mask
             
         except Exception as e:
             print(f"[HYBRID ERROR] Mask generation failed: {e}")
@@ -1876,10 +1951,25 @@ class ImageAugmentor:
             # Fallback to original mask or simple threshold
             if original_mask is not None:
                 print("[HYBRID FALLBACK] Using original mask as fallback")
-                return original_mask
+                return self.proper_binarize(original_mask, threshold=0.001)
             else:
-                print("[HYBRID FALLBACK] Creating empty mask as fallback")
-                return self.safe_device_transfer(torch.zeros(1, image_tensor.shape[1], image_tensor.shape[2]), self.device)
+                print("[HYBRID FALLBACK] Using emergency OTSU thresholding as fallback")
+                try:
+                    # Try OTSU thresholding as emergency fallback
+                    img_np = self.sanitize_for_opencv(image_tensor.cpu())
+                    if len(img_np.shape) == 3:
+                        gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+                    else:
+                        gray = img_np
+                    
+                    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                    mask_tensor = torch.from_numpy(thresh / 255.0).unsqueeze(0).float()
+                    mask_tensor = self.safe_device_transfer(mask_tensor, self.device)
+                    return self.proper_binarize(mask_tensor, threshold=0.001)
+                except Exception as e2:
+                    print(f"[HYBRID EMERGENCY] OTSU fallback also failed: {e2}")
+                    print("[HYBRID EMERGENCY] Creating empty mask as last resort fallback")
+                    return self.safe_device_transfer(torch.zeros(1, image_tensor.shape[1], image_tensor.shape[2]), self.device)
 
     def generate_diverse_sam_masks(self, image_tensor: torch.Tensor, top_k: int = 3) -> List[torch.Tensor]:
         """
@@ -2063,10 +2153,177 @@ class ImageAugmentor:
         except Exception as e:
             print(f"[VIZ] Failed to save comparison: {e}")
 
+    def apply_morphology(self, mask, operation='open', kernel_size=3):
+        """
+        Apply morphological operations to clean up mask.
+        
+        Args:
+            mask: Input mask tensor [1,H,W]
+            operation: 'open' (removes small noise), 'close' (fills small holes), 
+                       'dilate' (expands mask), 'erode' (shrinks mask)
+            kernel_size: Size of the kernel for the operation
+            
+        Returns:
+            Processed mask tensor [1,H,W]
+        """
+        import cv2
+        import numpy as np
+        
+        # Convert to numpy for OpenCV processing
+        mask_np = mask.cpu().squeeze(0).numpy()
+        
+        # Create kernel
+        kernel = np.ones((kernel_size, kernel_size), np.uint8)
+        
+        # Convert to uint8 for OpenCV
+        if mask_np.max() <= 1.0:
+            mask_np = (mask_np * 255).astype(np.uint8)
+            
+        # Apply morphological operation
+        if operation == 'open':
+            result = cv2.morphologyEx(mask_np, cv2.MORPH_OPEN, kernel)
+        elif operation == 'close':
+            result = cv2.morphologyEx(mask_np, cv2.MORPH_CLOSE, kernel)
+        elif operation == 'dilate':
+            result = cv2.dilate(mask_np, kernel, iterations=1)
+        elif operation == 'erode':
+            result = cv2.erode(mask_np, kernel, iterations=1)
+        else:
+            return mask  # No change
+        
+        # Convert back to tensor
+        result_tensor = torch.from_numpy(result.astype(np.float32) / 255.0).unsqueeze(0)
+        return self.safe_device_transfer(result_tensor, self.device)
+
+    def proper_binarize(self, mask, threshold=0.001):
+        """
+        Properly binarize a mask with adaptive thresholding.
+        
+        Args:
+            mask: Input mask tensor
+            threshold: Binarization threshold (lower for thin/warped masks)
+            
+        Returns:
+            Binary mask tensor (0.0 or 1.0)
+        """
+        # Get mask statistics for logging
+        mask_min = mask.min().item()
+        mask_max = mask.max().item()
+        mask_mean = mask.mean().item()
+        
+        # Log mask statistics for debugging
+        print(f"[MASK BINARIZE] Mask stats before binarization: min={mask_min:.6f}, max={mask_max:.6f}, mean={mask_mean:.6f}")
+        
+        # Adaptive threshold based on mask properties
+        if mask_max <= 0.01:  # Very low values, lower the threshold
+            final_threshold = min(0.001, mask_max / 2)
+            print(f"[MASK BINARIZE] Using ultra-low threshold: {final_threshold:.6f} for low-value mask")
+        else:
+            final_threshold = threshold
+        
+        # Apply binary threshold
+        binary_mask = (mask > final_threshold).float()
+        
+        # Get post-binarization statistics
+        nonzero_count = binary_mask.sum().item()
+        print(f"[MASK BINARIZE] After binarization: nonzero_count={nonzero_count}, threshold={final_threshold:.6f}")
+        
+        # Apply morphological operations if needed to clean noise
+        if nonzero_count > 0 and nonzero_count < 100:
+            print("[MASK BINARIZE] Applying morphological closing to fill small holes")
+            binary_mask = self.apply_morphology(binary_mask, operation='close', kernel_size=3)
+            new_nonzero = binary_mask.sum().item()
+            print(f"[MASK BINARIZE] After morphological operation: nonzero_count={new_nonzero}")
+        
+        return binary_mask
+    
+    def log_detailed_mask_diagnostics(self, mask, name="unknown"):
+        """
+        Log detailed diagnostics for problematic masks.
+        
+        Args:
+            mask: The mask tensor to analyze
+            name: Identifier for the mask (e.g., "SAM", "hybrid", "refined")
+        """
+        if mask is None:
+            print(f"[MASK DIAGNOSTIC] {name} mask is None!")
+            return
+        
+        try:
+            # Get basic statistics
+            mask_min = mask.min().item() if hasattr(mask, 'min') else float('nan')
+            mask_max = mask.max().item() if hasattr(mask, 'max') else float('nan')
+            mask_mean = mask.mean().item() if hasattr(mask, 'mean') else float('nan')
+            mask_std = mask.std().item() if hasattr(mask, 'std') else float('nan')
+            
+            # Value distribution analysis
+            if hasattr(mask, 'cpu') and hasattr(mask, 'flatten'):
+                mask_np = mask.cpu().flatten().numpy()
+                percentiles = {
+                    "1%": float(np.percentile(mask_np, 1)),
+                    "5%": float(np.percentile(mask_np, 5)),
+                    "10%": float(np.percentile(mask_np, 10)),
+                    "50%": float(np.percentile(mask_np, 50)),
+                    "90%": float(np.percentile(mask_np, 90)),
+                    "95%": float(np.percentile(mask_np, 95)),
+                    "99%": float(np.percentile(mask_np, 99))
+                }
+                
+                # Thresholding analysis at different levels
+                thresholds = [0.0001, 0.001, 0.01, 0.1, 0.25, 0.5]
+                threshold_counts = {}
+                for t in thresholds:
+                    count = (mask_np > t).sum()
+                    threshold_counts[f">={t}"] = int(count)
+                
+                # Print comprehensive diagnostic report
+                print(f"[MASK DIAGNOSTIC] {name} mask analysis:")
+                print(f"  Basic stats: min={mask_min:.6f}, max={mask_max:.6f}, mean={mask_mean:.6f}, std={mask_std:.6f}")
+                print(f"  Shape: {mask.shape}")
+                print(f"  Device: {mask.device if hasattr(mask, 'device') else 'unknown'}")
+                print(f"  Dtype: {mask.dtype if hasattr(mask, 'dtype') else 'unknown'}")
+                print(f"  Percentiles: {', '.join([f'{k}={v:.6f}' for k, v in percentiles.items()])}")
+                print(f"  Threshold counts: {', '.join([f'{k}={v}' for k, v in threshold_counts.items()])}")
+                
+                # Check for common problems
+                issues = []
+                if mask_max <= 0.01:
+                    issues.append("VERY_LOW_VALUES")
+                if mask_std <= 0.001:
+                    issues.append("LOW_VARIANCE")
+                if threshold_counts.get(">=0.001", 0) <= 10:
+                    issues.append("FEW_NONZERO")
+                
+                if issues:
+                    print(f"  🚨 Detected issues: {', '.join(issues)}")
+                    print(f"  💡 Recommended action: Use lower threshold (0.0005) for binarization")
+            else:
+                print(f"[MASK DIAGNOSTIC] Unable to perform detailed analysis on {name} mask")
+                
+        except Exception as e:
+            print(f"[MASK DIAGNOSTIC] Error during analysis: {e}")
+    
     def _is_mask_valid(self, mask):
         """Early gate: check if mask has meaningful content."""
-        mask_nonzero = (mask > 0.25).float().sum().item()
-        return mask_nonzero >= 5  # At least 5 pixels
+        # Get detailed mask statistics
+        mask_min = mask.min().item()
+        mask_max = mask.max().item()
+        mask_mean = mask.mean().item()
+        
+        # Print mask statistics for debugging
+        print(f"[MASK VALIDATE] Mask stats: min={mask_min:.6f}, max={mask_max:.6f}, mean={mask_mean:.6f}")
+        
+        # More permissive threshold for thin/warped masks (0.001 instead of 0.25)
+        mask_nonzero = (mask > 0.001).float().sum().item()
+        is_valid = mask_nonzero >= 5  # At least 5 pixels
+        
+        print(f"[MASK VALIDATE] Mask nonzero pixels: {mask_nonzero}, valid: {is_valid}")
+        
+        # Log detailed diagnostics for problematic masks
+        if not is_valid:
+            self.log_detailed_mask_diagnostics(mask, name="invalid")
+            
+        return is_valid
 
     # ───────────────────────────────────────────────────────────────
     # Section: Adaptive Edge Overlap Thresholds
