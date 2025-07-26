@@ -50,50 +50,39 @@ from scipy.stats import iqr
 # CRITICAL TENSOR CORRUPTION FIXES FOR CV_8UC512 ERROR
 # ==================================================================
 
-def diagnose_tensor_corruption(tensor, name="tensor"):
-    """Comprehensive diagnostic for tensor shape corruption"""
-    print(f"\n=== TENSOR DIAGNOSTIC: {name} ===")
-    
+def diagnose_tensor_corruption(tensor, name="tensor", path=None):
+    """
+    Print shape, dtype, device and OpenCV compatibility of a tensor or numpy array.
+    """
+    print(f"\n🛠️ Diagnosing {name}{': '+path if path else ''}")
     if isinstance(tensor, torch.Tensor):
-        print(f"PyTorch Tensor:")
-        print(f"  Shape: {tensor.shape}")
-        print(f"  Dtype: {tensor.dtype}")
-        print(f"  Device: {tensor.device}")
-        print(f"  Is contiguous: {tensor.is_contiguous()}")
-        print(f"  Min/Max: {tensor.min().item():.6f} / {tensor.max().item():.6f}")
-        
-        # Convert to numpy for OpenCV compatibility check
-        if tensor.device.type == 'cuda':
-            np_array = tensor.cpu().numpy()
-        else:
-            np_array = tensor.detach().numpy()
+        t = tensor
+        print(f" PyTorch: shape={tuple(t.shape)}, dtype={t.dtype}, device={t.device}, "
+              f"contiguous={t.is_contiguous()}")
+        np_arr = t.detach().cpu().numpy()
     else:
-        np_array = tensor
-        print(f"NumPy Array:")
-    
-    print(f"  NumPy Shape: {np_array.shape}")
-    print(f"  NumPy Dtype: {np_array.dtype}")
-    print(f"  NumPy Min/Max: {np_array.min():.6f} / {np_array.max():.6f}")
-    
-    # OpenCV compatibility test
-    try:
-        if len(np_array.shape) == 2:
-            test_array = np_array.astype(np.uint8)
-        elif len(np_array.shape) == 3 and np_array.shape[2] == 1:
-            test_array = np_array.squeeze().astype(np.uint8)
+        np_arr = tensor
+        print(f" NumPy: shape={np_arr.shape}, dtype={np_arr.dtype}")
+
+    # Squeeze singleton dims and take first channel if >2D
+    arr = np_arr
+    while arr.ndim > 2:
+        if arr.shape[-1] == 1:
+            arr = arr.squeeze(-1)
+        elif arr.shape[0] == 1:
+            arr = arr.squeeze(0)
         else:
-            print(f"  ❌ Cannot convert to OpenCV format")
-            return False
-            
-        # Test OpenCV operations with safe conversion
-        test_array = self.sanitize_for_opencv(tensor)
-        cv2.connectedComponents(test_array)
-        print(f"  ✅ OpenCV compatible")
-        return True
-        
+            arr = arr[..., 0]
+    print(f" → After squeeze: shape={arr.shape}, dtype={arr.dtype}, min={arr.min()}, max={arr.max()}")
+
+    # Test OpenCV connectedComponents
+    try:
+        cv2_arr = arr.astype(np.uint8)
+        n_labels, _ = cv2.connectedComponents(cv2_arr)
+        print(f" ✅ OpenCV connectedComponents succeeded: labels={n_labels}")
     except Exception as e:
-        print(f"  ❌ OpenCV error: {e}")
-        return False
+        print(f" ❌ OpenCV error: {e}")
+    return arr
 
 def sanitize_for_opencv(tensor):
     """Fix common tensor corruption patterns"""
@@ -2025,6 +2014,10 @@ class ImageAugmentor:
         }
         complexity_factor = min(1.5, 1.0 + edge_complexity * 0.1)
         return base_thresholds.get(mask_type, 0.0) * complexity_factor
+
+    # Add method alias for tensor corruption diagnostics
+    def diagnose_tensor_corruption(self, tensor, name="tensor", path=None):
+        return diagnose_tensor_corruption(tensor, name, path)
 
 def main():
     import argparse, os, pickle, time
