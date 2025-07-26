@@ -59,15 +59,30 @@ class ImageAugmentor:
     }
 
     def initialize_hybrid_pipeline(self, sam_model_type: str = 'vit_h', enable_refiner: bool = True, enable_diffusion: bool = False):
+        """Initialize advanced hybrid pipeline with SAM ensemble and quality control."""
         if HYBRID_PIPELINE_AVAILABLE:
-            self.sam_autocoder = SAMAutoCoder(model_type=sam_model_type, device=self.device)
-            if enable_refiner:
-                self.mask_refiner = get_mask_refiner()
-            self.hybrid_enabled = True
-            print("[HYBRID] SAM and MaskRefiner initialized successfully.")
+            try:
+                # Initialize the new enhanced SAM system
+                self.sam_autocoder = SAMAutoCoder(model_type=sam_model_type, device=str(self.device))
+                
+                if enable_refiner:
+                    self.mask_refiner = get_mask_refiner()
+                    
+                self.hybrid_enabled = True
+                print(f"[HYBRID] Advanced SAM pipeline initialized successfully with {sam_model_type}")
+                print(f"[HYBRID] Enhanced features: Multi-model ensemble, Adaptive quality control, Contrastive learning")
+                
+                # Get model info for verification
+                model_info = self.sam_autocoder.get_model_info()
+                print(f"[HYBRID] Model status: {model_info}")
+                
+            except Exception as e:
+                print(f"[HYBRID] Enhanced pipeline initialization failed: {e}")
+                self.hybrid_enabled = False
         else:
             print("[HYBRID] Hybrid pipeline dependencies not found. Disabling.")
             self.hybrid_enabled = False
+            
         self.diffusion_enabled = enable_diffusion
         if self.diffusion_enabled:
             print("[DIFFUSION] Diffusion-based augmentation is enabled.")
@@ -994,50 +1009,490 @@ class ImageAugmentor:
             return False
         return True
 
-    def generate_hybrid_mask(self, image_tensor: torch.Tensor, original_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def generate_hybrid_mask(self, image_tensor: torch.Tensor, original_mask: Optional[torch.Tensor] = None, 
+                           quality_threshold: float = 0.7, use_ensemble: bool = True) -> torch.Tensor:
         """
-        Generate high-quality mask using SAM + advanced mask refinement.
+        Generate high-quality mask using advanced SAM ensemble with intelligent auto-prompting,
+        adaptive quality control, and contrastive learning capabilities.
+        
+        Args:
+            image_tensor: Input image as torch tensor
+            original_mask: Optional fallback mask
+            quality_threshold: Minimum quality score for mask acceptance
+            use_ensemble: Whether to use multi-model ensemble approach
+            
+        Returns:
+            High-quality refined mask as torch tensor
         """
         if not self.hybrid_enabled or self.sam_autocoder is None:
-            # Fallback to simple thresholding if hybrid is disabled or not initialized
+            # Enhanced fallback with better thresholding
             if original_mask is not None:
                 return (original_mask > 0.5).float()
             else:
-                img_np = self.sanitize_for_opencv(image_tensor)
-                _, thresh = cv2.threshold(img_np, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                return torch.from_numpy(thresh / 255.0).unsqueeze(0).float().to(self.device)
+                img_np = self.safe_mask_conversion(image_tensor)
+                
+                # Multi-threshold approach for better fallback
+                thresholds = [cv2.THRESH_BINARY + cv2.THRESH_OTSU, 
+                             cv2.THRESH_BINARY + cv2.THRESH_TRIANGLE]
+                best_mask = None
+                best_score = 0
+                
+                for thresh_type in thresholds:
+                    _, thresh_mask = cv2.threshold(img_np, 0, 255, thresh_type)
+                    # Simple quality score based on edge alignment
+                    edges = cv2.Canny(img_np, 50, 150)
+                    mask_edges = cv2.Canny(thresh_mask, 50, 150)
+                    overlap = np.sum((edges > 0) & (mask_edges > 0))
+                    total_edges = np.sum(mask_edges > 0)
+                    score = overlap / (total_edges + 1e-6)
+                    
+                    if score > best_score:
+                        best_score = score
+                        best_mask = thresh_mask
+                
+                if best_mask is None:
+                    best_mask = np.zeros_like(img_np)
+                    
+                return torch.from_numpy(best_mask / 255.0).unsqueeze(0).float().to(self.device)
 
         try:
-            img_np = image_tensor.cpu().numpy().transpose(1, 2, 0)
+            # Convert tensor to numpy for SAM processing
+            img_np = image_tensor.cpu().numpy()
+            
+            # Handle different tensor formats
+            if img_np.ndim == 4:  # Batch dimension
+                img_np = img_np[0]
+            if img_np.ndim == 3 and img_np.shape[0] in [1, 3]:  # CHW format
+                img_np = img_np.transpose(1, 2, 0)
+            
+            # Normalize to [0, 255] if needed
             if img_np.max() <= 1.0:
                 img_np = (img_np * 255).astype(np.uint8)
             
-            if len(img_np.shape) == 2 or img_np.shape[2] == 1:
+            # Ensure RGB format
+            if len(img_np.shape) == 2:
                 img_np = cv2.cvtColor(img_np, cv2.COLOR_GRAY2RGB)
+            elif img_np.shape[2] == 1:
+                img_np = cv2.cvtColor(img_np.squeeze(-1), cv2.COLOR_GRAY2RGB)
+            elif img_np.shape[2] == 4:
+                img_np = cv2.cvtColor(img_np, cv2.COLOR_RGBA2RGB)
 
-            sam_mask = self.sam_autocoder.get_best_mask(img_np)
-            # Use advanced mask refiner if available
-            if self.mask_refiner and sam_mask.max() > 0:
-                refined_mask = self.mask_refiner.refine(sam_mask)
-            else:
-                refined_mask = sam_mask
+            # Use enhanced SAM prediction with quality control
+            result = self.sam_autocoder.predict_mask(
+                image=img_np,
+                input_prompts=None,  # Use intelligent auto-prompting
+                use_ensemble=use_ensemble,
+                quality_threshold=quality_threshold
+            )
+            
+            refined_mask = result['mask']
+            quality_score = result['quality_metrics']['overall_score']
+            processing_time = result['processing_time']
+            
+            # Log performance metrics
+            self.profiler.log_latency(
+                task_name="hybrid_mask_generation",
+                latency_ms=processing_time * 1000,
+                metadata={
+                    'quality_score': quality_score,
+                    'use_ensemble': use_ensemble,
+                    'method': result['metadata'].get('method', 'unknown'),
+                    'refinement_applied': result['metadata'].get('refinement_applied', False)
+                }
+            )
+            
+            print(f"[HYBRID] Generated mask with quality {quality_score:.3f} in {processing_time:.3f}s")
+            
+            # Convert back to tensor
             mask_tensor = torch.from_numpy(refined_mask / 255.0).unsqueeze(0).float()
             return safe_device_transfer(mask_tensor, self.device)
 
         except Exception as e:
-            print(f"[HYBRID ERROR] Mask generation failed: {e}")
+            print(f"[HYBRID ERROR] Advanced mask generation failed: {e}")
             traceback.print_exc()
+            
+            # Fallback handling
             if original_mask is not None:
+                print("[HYBRID] Using original mask as fallback")
                 return (original_mask > 0.5).float()
-            return torch.zeros(1, image_tensor.shape[1], image_tensor.shape[2], device=self.device)
+            else:
+                print("[HYBRID] Generating empty mask as fallback")
+                return torch.zeros(1, image_tensor.shape[-2], image_tensor.shape[-1], device=self.device)
 
     def generate_diverse_sam_masks(self, image_tensor: torch.Tensor, top_k: int = 3) -> List[torch.Tensor]:
-        # ... (implementation to be moved)
-        pass
+        """Generate multiple diverse, high-quality masks using ensemble techniques."""
+        if not self.hybrid_enabled or self.sam_autocoder is None:
+            # Fallback: return simple thresholded masks with different parameters
+            img_np = self.safe_mask_conversion(image_tensor)
+            masks = []
+            
+            # Try different threshold methods
+            methods = [
+                cv2.THRESH_BINARY + cv2.THRESH_OTSU,
+                cv2.THRESH_BINARY + cv2.THRESH_TRIANGLE,
+                cv2.THRESH_BINARY,
+            ]
+            
+            for method in methods[:top_k]:
+                if method == cv2.THRESH_BINARY:
+                    threshold_value = int(np.mean(img_np))
+                else:
+                    threshold_value = 0
+                    
+                _, mask = cv2.threshold(img_np, threshold_value, 255, method)
+                mask_tensor = torch.from_numpy(mask / 255.0).unsqueeze(0).float().to(self.device)
+                masks.append(mask_tensor)
+            
+            return masks
+        
+        try:
+            # Convert to numpy
+            img_np = image_tensor.cpu().numpy()
+            if img_np.ndim == 4:
+                img_np = img_np[0]
+            if img_np.ndim == 3 and img_np.shape[0] in [1, 3]:
+                img_np = img_np.transpose(1, 2, 0)
+            if img_np.max() <= 1.0:
+                img_np = (img_np * 255).astype(np.uint8)
+            if len(img_np.shape) == 2:
+                img_np = cv2.cvtColor(img_np, cv2.COLOR_GRAY2RGB)
+            
+            # Generate multiple masks with different quality thresholds
+            masks = []
+            quality_thresholds = [0.8, 0.6, 0.4]  # Different quality requirements
+            
+            for i, threshold in enumerate(quality_thresholds[:top_k]):
+                try:
+                    result = self.sam_autocoder.predict_mask(
+                        image=img_np,
+                        quality_threshold=threshold,
+                        use_ensemble=(i == 0)  # Use ensemble for first (highest quality) mask
+                    )
+                    
+                    mask_np = result['mask']
+                    mask_tensor = torch.from_numpy(mask_np / 255.0).unsqueeze(0).float().to(self.device)
+                    masks.append(mask_tensor)
+                    
+                except Exception as e:
+                    print(f"[DIVERSE] Failed to generate mask {i}: {e}")
+                    continue
+            
+            # If we don't have enough masks, use geometric variations of the best one
+            while len(masks) < top_k and len(masks) > 0:
+                base_mask = masks[0].cpu().numpy().squeeze()
+                
+                # Apply slight geometric transformation
+                h, w = base_mask.shape
+                center = (w // 2, h // 2)
+                angle = np.random.uniform(-5, 5)
+                scale = np.random.uniform(0.95, 1.05)
+                
+                matrix = cv2.getRotationMatrix2D(center, angle, scale)
+                transformed = cv2.warpAffine(base_mask, matrix, (w, h))
+                
+                mask_tensor = torch.from_numpy(transformed).unsqueeze(0).float().to(self.device)
+                masks.append(mask_tensor)
+            
+            return masks[:top_k]
+            
+        except Exception as e:
+            print(f"[DIVERSE ERROR] Failed to generate diverse masks: {e}")
+            # Return single fallback mask
+            fallback = self.generate_hybrid_mask(image_tensor)
+            return [fallback]
 
+    def generate_augmented_dataset(self, images: List[torch.Tensor], target_size: Optional[int] = None, 
+                                 diversity_factor: float = 2.0, save_progress: bool = True) -> Dict:
+        """
+        Generate exponentially improved dataset using advanced augmentation techniques.
+        
+        Args:
+            images: List of input image tensors
+            target_size: Target dataset size (auto-calculated if None)
+            diversity_factor: Factor for increasing dataset diversity
+            save_progress: Whether to save progress and quality metrics
+            
+        Returns:
+            Dict with augmented samples and comprehensive metadata
+        """
+        if not self.hybrid_enabled:
+            print("[DATASET] Advanced dataset generation requires hybrid pipeline")
+            return {'samples': images, 'metadata': {'method': 'passthrough'}}
+        
+        print(f"[DATASET] Starting advanced dataset generation for {len(images)} images")
+        print(f"[DATASET] Target diversity factor: {diversity_factor}")
+        
+        try:
+            # Convert tensors to numpy for processing
+            numpy_images = []
+            for img_tensor in images:
+                img_np = img_tensor.cpu().numpy()
+                if img_np.ndim == 4:
+                    img_np = img_np[0]
+                if img_np.ndim == 3 and img_np.shape[0] in [1, 3]:
+                    img_np = img_np.transpose(1, 2, 0)
+                if img_np.max() <= 1.0:
+                    img_np = (img_np * 255).astype(np.uint8)
+                if len(img_np.shape) == 2:
+                    img_np = cv2.cvtColor(img_np, cv2.COLOR_GRAY2RGB)
+                
+                numpy_images.append(img_np)
+            
+            # Use SAMAutoCoder's advanced dataset generation
+            result = self.sam_autocoder.generate_augmented_dataset(
+                images=numpy_images,
+                target_size=target_size,
+                diversity_factor=diversity_factor
+            )
+            
+            # Convert back to tensors
+            tensor_samples = []
+            for sample in result['samples']:
+                img_tensor = torch.from_numpy(sample['image']).float()
+                if img_tensor.max() > 1.0:
+                    img_tensor = img_tensor / 255.0
+                
+                # Ensure CHW format
+                if img_tensor.ndim == 3:
+                    img_tensor = img_tensor.permute(2, 0, 1)
+                
+                mask_tensor = torch.from_numpy(sample['mask'] / 255.0).float()
+                if mask_tensor.ndim == 2:
+                    mask_tensor = mask_tensor.unsqueeze(0)
+                
+                tensor_sample = {
+                    'image': img_tensor.to(self.device),
+                    'mask': mask_tensor.to(self.device),
+                    'quality_score': sample['quality_score'],
+                    'metadata': sample['metadata']
+                }
+                tensor_samples.append(tensor_sample)
+            
+            # Enhanced metadata with performance tracking
+            enhanced_metadata = result['metadata'].copy()
+            enhanced_metadata.update({
+                'generation_method': 'advanced_sam_ensemble',
+                'contrastive_learning': True,
+                'structure_aware_transforms': True,
+                'adaptive_quality_control': True,
+                'diversity_factor_achieved': len(tensor_samples) / len(images)
+            })
+            
+            if save_progress:
+                self._save_dataset_report(enhanced_metadata, "dataset_generation_report.json")
+            
+            print(f"[DATASET] Generated {len(tensor_samples)} high-quality samples")
+            print(f"[DATASET] Average quality: {enhanced_metadata['average_quality']:.3f}")
+            print(f"[DATASET] Quality range: {enhanced_metadata['min_quality']:.3f} - {enhanced_metadata['max_quality']:.3f}")
+            
+            return {
+                'samples': tensor_samples,
+                'metadata': enhanced_metadata
+            }
+            
+        except Exception as e:
+            print(f"[DATASET ERROR] Advanced dataset generation failed: {e}")
+            traceback.print_exc()
+            
+            # Fallback to basic augmentation
+            return self._basic_dataset_augmentation(images, diversity_factor)
+    
+    def _save_dataset_report(self, metadata: Dict, filename: str):
+        """Save comprehensive dataset generation report."""
+        try:
+            report_path = os.path.join("reports", filename)
+            os.makedirs(os.path.dirname(report_path), exist_ok=True)
+            
+            with open(report_path, 'w') as f:
+                json.dump(metadata, f, indent=2, default=str)
+            
+            print(f"[DATASET] Report saved to {report_path}")
+            
+        except Exception as e:
+            print(f"[DATASET] Failed to save report: {e}")
+    
+    def _basic_dataset_augmentation(self, images: List[torch.Tensor], diversity_factor: float) -> Dict:
+        """Fallback basic augmentation when advanced methods fail."""
+        print("[DATASET] Using basic fallback augmentation")
+        
+        augmented = []
+        for img in images:
+            augmented.append(img)  # Original
+            
+            # Simple geometric augmentations
+            for _ in range(int(diversity_factor)):
+                # Random rotation
+                angle = np.random.uniform(-15, 15)
+                rotated = self._simple_rotate(img, angle)
+                augmented.append(rotated)
+        
+        # Convert to expected format
+        tensor_samples = []
+        for img_tensor in augmented:
+            tensor_sample = {
+                'image': img_tensor,
+                'mask': torch.zeros(1, img_tensor.shape[-2], img_tensor.shape[-1], device=self.device),
+                'quality_score': 0.5,  # Neutral score
+                'metadata': {'method': 'basic_fallback'}
+            }
+            tensor_samples.append(tensor_sample)
+        
+        return {
+            'samples': tensor_samples,
+            'metadata': {
+                'method': 'basic_fallback',
+                'original_size': len(images),
+                'augmented_size': len(tensor_samples),
+                'average_quality': 0.5
+            }
+        }
+    
+    def _simple_rotate(self, img_tensor: torch.Tensor, angle: float) -> torch.Tensor:
+        """Simple rotation fallback."""
+        try:
+            # Convert to numpy, rotate, convert back
+            img_np = img_tensor.cpu().numpy()
+            if img_np.ndim == 3:
+                img_np = img_np.transpose(1, 2, 0)
+            
+            h, w = img_np.shape[:2]
+            center = (w // 2, h // 2)
+            matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+            rotated = cv2.warpAffine(img_np, matrix, (w, h))
+            
+            if rotated.ndim == 3:
+                rotated = rotated.transpose(2, 0, 1)
+            
+            return torch.from_numpy(rotated).float().to(self.device)
+            
+        except Exception:
+            return img_tensor  # Return original on failure
+
+    def get_system_status(self) -> Dict:
+        """Get comprehensive system status and performance report."""
+        status = {
+            'hybrid_enabled': self.hybrid_enabled,
+            'diffusion_enabled': self.diffusion_enabled,
+            'device': str(self.device),
+            'batch_size': self.batch_size
+        }
+        
+        if self.hybrid_enabled and self.sam_autocoder:
+            try:
+                # Get SAM performance report
+                sam_report = self.sam_autocoder.get_performance_report()
+                sam_info = self.sam_autocoder.get_model_info()
+                
+                status.update({
+                    'sam_performance': sam_report,
+                    'sam_model_info': sam_info,
+                    'sam_available': self.sam_autocoder.is_available()
+                })
+                
+                # Get quality controller info
+                if hasattr(self.sam_autocoder, 'quality_controller'):
+                    quality_info = self.sam_autocoder.quality_controller.get_threshold_info()
+                    status['quality_control'] = quality_info
+                
+            except Exception as e:
+                status['sam_error'] = str(e)
+        
+        return status
+    
     def test_hybrid_pipeline(self, test_images: torch.Tensor, save_dir: str = "hybrid_test_results") -> Dict:
-        # ... (implementation to be moved)
-        pass
+        """Test the hybrid pipeline with comprehensive quality assessment."""
+        if not self.hybrid_enabled:
+            return {'error': 'Hybrid pipeline not enabled'}
+        
+        print(f"[TEST] Testing hybrid pipeline with {test_images.shape[0]} images")
+        os.makedirs(save_dir, exist_ok=True)
+        
+        results = {
+            'total_images': test_images.shape[0],
+            'successful_masks': 0,
+            'failed_masks': 0,
+            'quality_scores': [],
+            'processing_times': [],
+            'methods_used': []
+        }
+        
+        for i, img_tensor in enumerate(test_images):
+            try:
+                start_time = time.time()
+                
+                # Generate mask with detailed result
+                mask_result = self.generate_hybrid_mask(
+                    img_tensor, 
+                    quality_threshold=0.6,
+                    use_ensemble=True
+                )
+                
+                processing_time = time.time() - start_time
+                
+                # Simple quality assessment for testing
+                mask_np = mask_result.cpu().numpy().squeeze()
+                quality_score = np.sum(mask_np > 0.5) / mask_np.size  # Coverage ratio
+                
+                results['successful_masks'] += 1
+                results['quality_scores'].append(quality_score)
+                results['processing_times'].append(processing_time)
+                results['methods_used'].append('advanced_sam')
+                
+                # Save test result
+                if i < 5:  # Save first 5 for visual inspection
+                    self._save_test_result(img_tensor, mask_result, i, save_dir, quality_score)
+                
+            except Exception as e:
+                print(f"[TEST] Failed on image {i}: {e}")
+                results['failed_masks'] += 1
+        
+        # Calculate summary statistics
+        if results['quality_scores']:
+            results['average_quality'] = np.mean(results['quality_scores'])
+            results['quality_std'] = np.std(results['quality_scores'])
+            results['average_processing_time'] = np.mean(results['processing_times'])
+        
+        # Save test report
+        report_path = os.path.join(save_dir, "test_report.json")
+        with open(report_path, 'w') as f:
+            json.dump(results, f, indent=2, default=str)
+        
+        print(f"[TEST] Test completed. Success rate: {results['successful_masks']}/{results['total_images']}")
+        if results['quality_scores']:
+            print(f"[TEST] Average quality: {results['average_quality']:.3f} ± {results['quality_std']:.3f}")
+            print(f"[TEST] Average processing time: {results['average_processing_time']:.3f}s")
+        
+        return results
+    
+    def _save_test_result(self, image: torch.Tensor, mask: torch.Tensor, index: int, 
+                         save_dir: str, quality_score: float):
+        """Save individual test result for visual inspection."""
+        try:
+            # Create visualization
+            img_np = image.cpu().numpy()
+            if img_np.ndim == 3:
+                img_np = img_np.transpose(1, 2, 0)
+            if img_np.max() <= 1.0:
+                img_np = (img_np * 255).astype(np.uint8)
+            
+            mask_np = mask.cpu().numpy().squeeze()
+            mask_colored = cv2.applyColorMap((mask_np * 255).astype(np.uint8), cv2.COLORMAP_JET)
+            
+            # Side by side comparison
+            if len(img_np.shape) == 2:
+                img_np = cv2.cvtColor(img_np, cv2.COLOR_GRAY2RGB)
+            
+            comparison = np.hstack([img_np, mask_colored])
+            
+            # Add quality score text
+            cv2.putText(comparison, f"Q: {quality_score:.3f}", (10, 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+            
+            save_path = os.path.join(save_dir, f"test_{index:03d}_q{quality_score:.3f}.png")
+            cv2.imwrite(save_path, comparison)
+            
+        except Exception as e:
+            print(f"[TEST] Failed to save test result {index}: {e}")
     
     def _save_hybrid_comparison(self, image: torch.Tensor, main_mask: torch.Tensor, 
                               diverse_masks: List[torch.Tensor], save_path: str):

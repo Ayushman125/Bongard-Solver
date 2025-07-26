@@ -11,4 +11,9 @@ segment-anything
 requests
 diffusers
 transformers
+potrace
+sknw
+pydensecrf
+opencv-contrib-python
+segmentation-models-pytorch
 
