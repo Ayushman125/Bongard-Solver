@@ -37,3 +37,16 @@ data/raw/ShapeBongard_V2/hd/__pycache__/
 data/raw/ShapeBongard_V2/bd/*.zip
 data/raw/ShapeBongard_V2/ff/*.zip
 data/raw/ShapeBongard_V2/hd/*.zip
+
+# QA checking and review folders
+qa_grids/
+qa_adversarial/
+qa_human_review/
+qa_outliers/
+
+
+
+# Ignore Jupyter and test outputs
+test_hybrid_pipeline.py
+*.ipynb
+hybrid_test_output/
