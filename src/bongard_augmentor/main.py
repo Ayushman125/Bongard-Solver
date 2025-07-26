@@ -34,7 +34,7 @@ from .utils import (
     topology_aware_morphological_repair
 )
 if HYBRID_PIPELINE_AVAILABLE:
-    from .hybrid import SAMAutoCoder, SkeletonAwareProcessor
+    from .hybrid import SAMAutoCoder, get_mask_refiner
 
 class ImageAugmentor:
     """GPU-batched geometric augmentations with profiling, adaptive QA, and failover logic."""
@@ -43,11 +43,12 @@ class ImageAugmentor:
         self.batch_size = batch_size
         self.geometric_transforms = geometric_transforms
         self.profiler = TaskProfiler()
+        self.metrics = TaskProfiler()  # Fix for AttributeError
         self.adaptive_log = deque(maxlen=20)
         self.qa_thresholds = self.BONGARD_QA_THRESHOLDS.copy()
         self.hybrid_enabled = False
         self.sam_autocoder = None
-        self.skeleton_processor = None
+        self.mask_refiner = None
         self.diffusion_enabled = False
 
     BONGARD_QA_THRESHOLDS = {
@@ -57,22 +58,21 @@ class ImageAugmentor:
         MaskType.DENSE:  {'pixvar_min':0.0005,'edge_overlap_min':0.01,'area_ratio_min':0.15,'area_ratio_max':10.0},
     }
 
-    def initialize_hybrid_pipeline(self, sam_model_type: str = 'vit_h', enable_sap: bool = True, enable_diffusion: bool = False):
+    def initialize_hybrid_pipeline(self, sam_model_type: str = 'vit_h', enable_refiner: bool = True, enable_diffusion: bool = False):
         if HYBRID_PIPELINE_AVAILABLE:
             self.sam_autocoder = SAMAutoCoder(model_type=sam_model_type, device=self.device)
-            if enable_sap:
-                self.skeleton_processor = SkeletonAwareProcessor()
+            if enable_refiner:
+                self.mask_refiner = get_mask_refiner()
             self.hybrid_enabled = True
-            print("[HYBRID] SAM and SAP initialized successfully.")
+            print("[HYBRID] SAM and MaskRefiner initialized successfully.")
         else:
             print("[HYBRID] Hybrid pipeline dependencies not found. Disabling.")
             self.hybrid_enabled = False
-        
         self.diffusion_enabled = enable_diffusion
         if self.diffusion_enabled:
             print("[DIFFUSION] Diffusion-based augmentation is enabled.")
 
-    def safe_mask_conversion(self, mask):
+    def safe_mask_conversion(self, mask, refine: bool = False):
         """
         Safely convert mask between torch tensor and numpy array for OpenCV.
         Handles device, dtype, and value range. Enhanced to recover faint masks.
@@ -108,6 +108,9 @@ class ImageAugmentor:
                 # Already in [0,255] range or higher
                 mask = (mask > 127).astype(np.uint8) * 255
         
+        # Optionally refine mask using MaskRefiner
+        if refine and self.mask_refiner is not None:
+            mask = self.mask_refiner.refine(mask)
         return mask
 
     def visualize_mask(self, mask_tensor, out_path):
@@ -134,12 +137,14 @@ class ImageAugmentor:
 
         long_fail = float(np.mean(self.adaptive_log))
         if long_fail > target:
-            self.qa_thresholds['edge_overlap_min'] *= k_relax
-            self.qa_thresholds['pixvar_min']       *= k_relax
+            for mtype in self.qa_thresholds:
+                self.qa_thresholds[mtype]['edge_overlap_min'] *= k_relax
+                self.qa_thresholds[mtype]['pixvar_min'] *= k_relax
             print(f"[ADAPTIVE QA] Relaxed thresholds after {long_fail:.2%} failure rate")
         elif long_fail < target * 0.5:
-            self.qa_thresholds['edge_overlap_min'] *= k_tighten
-            self.qa_thresholds['pixvar_min']       *= k_tighten
+            for mtype in self.qa_thresholds:
+                self.qa_thresholds[mtype]['edge_overlap_min'] *= k_tighten
+                self.qa_thresholds[mtype]['pixvar_min'] *= k_tighten
             print(f"[ADAPTIVE QA] Tightened thresholds after {long_fail:.2%} failure rate")
 
     def retry_augmentation(self, image, geometry, max_retries=3):
@@ -212,44 +217,30 @@ class ImageAugmentor:
         # or other conditioning to respect the positive/negative concept.
         return positive_img.clone(), negative_img.clone()
 
-    def x_paste_batch(self, batch_tensor, batch_mask, batch_idx):
+    def x_paste_batch(self, images, masks, batch_idx):
         """
         Advanced paste that preserves the mask's relative scale and position.
         """
-        B, C, H, W = batch_tensor.shape
-        output_images = torch.zeros_like(batch_tensor)
-        output_masks = torch.zeros_like(batch_mask)
+        B, C, H, W = images.shape
+        output_images = torch.zeros_like(images)
+        output_masks = torch.zeros_like(masks)
 
         for i in range(B):
-            img = batch_tensor[i]
-            mask = batch_mask[i]
+            # Use the current image and mask as the object to paste
+            obj = images[i]
+            obj_mask = masks[i]
+            obj_h, obj_w = obj.shape[-2:]
 
-            # Find bounding box of the mask
-            rows = torch.any(mask, axis=2)
-            cols = torch.any(mask, axis=1)
-            if not (torch.any(rows) and torch.any(cols)):
-                # Empty mask, just copy the image
-                output_images[i] = img
-                output_masks[i] = mask
-                continue
+            # Create a new blank image and mask
+            new_img = torch.zeros_like(obj)
+            new_mask = torch.zeros_like(obj_mask)
 
-            rmin, rmax = torch.where(rows)[1][[0, -1]]
-            cmin, cmax = torch.where(cols)[1][[0, -1]]
-
-            # Crop the object and its mask
-            obj = img[:, rmin:rmax+1, cmin:cmax+1]
-            obj_mask = mask[:, rmin:rmax+1, cmin:cmax+1]
-            obj_h, obj_w = obj.shape[1:]
-
-            # Create a new blank canvas
-            new_img = torch.zeros_like(img)
-            new_mask = torch.zeros_like(mask)
-
-            # Randomly select a new top-left position
+            # Determine a random position to paste the object
             if H > obj_h:
                 new_y = random.randint(0, H - obj_h)
             else:
                 new_y = 0
+            
             if W > obj_w:
                 new_x = random.randint(0, W - obj_w)
             else:
@@ -314,71 +305,73 @@ class ImageAugmentor:
             return images, masks
 
     def get_augmentation_pipeline(self, mask_type):
-        """Return mask-type-specific augmentation pipeline (Kornia for sparse, Albumentations for dense)."""
-        try:
-            import kornia.augmentation as K
-        except ImportError:
-            K = None
+        """Return mask-type-specific augmentation pipeline."""
+        # Always use Albumentations for now since we have issues with Kornia
         if mask_type == MaskType.EMPTY:
             # No augmentation for empty masks
             return None
         elif mask_type == MaskType.THIN:
-            if K:
-                return K.AugmentationSequential(
-                    K.RandomHorizontalFlip(p=0.1),
-                    K.RandomRotation(degrees=5, p=0.1),
-                    data_keys=["input", "mask"]
-                )
-            else:
-                return A.Compose([
-                    A.HorizontalFlip(p=0.1),
-                    A.RandomRotate90(p=0.05)
-                ], additional_targets={'mask': 'mask'})
+            return A.Compose([
+                A.HorizontalFlip(p=0.1),
+                A.RandomRotate90(p=0.05),
+                A.Rotate(limit=5, p=0.1)
+            ], additional_targets={'mask': 'mask'})
         elif mask_type == MaskType.SPARSE:
-            if K:
-                return K.AugmentationSequential(
-                    K.RandomHorizontalFlip(p=0.2),
-                    K.RandomVerticalFlip(p=0.1),
-                    K.RandomRotation(degrees=10, p=0.1),
-                    data_keys=["input", "mask"]
-                )
-            else:
-                return A.Compose([
-                    A.HorizontalFlip(p=0.2),
-                    A.VerticalFlip(p=0.1),
-                    A.RandomRotate90(p=0.1),
-                    A.Rotate(limit=10, p=0.1)
-                ], additional_targets={'mask': 'mask'})
+            return A.Compose([
+                A.HorizontalFlip(p=0.2),
+                A.VerticalFlip(p=0.1),
+                A.RandomRotate90(p=0.1),
+                A.Rotate(limit=10, p=0.1)
+            ], additional_targets={'mask': 'mask'})
         else:  # DENSE
             return A.Compose([
                 A.RandomRotate90(p=0.2),
                 A.HorizontalFlip(p=0.2),
                 A.VerticalFlip(p=0.1),
+                A.Rotate(limit=15, p=0.1)
             ], additional_targets={'mask': 'mask'})
 
     def geometry_to_binary_mask(self, geometry, H, W):
-        # Rasterize geometry (list of [x, y] vertices) into a binary mask
+        # Defensive: flatten, parse, and validate geometry
         from PIL import ImageDraw
         mask_img = Image.new('L', (W, H), 0)
-        # Convert tensor to list and filter out zero-padding
+        # Debug print removed to prevent terminal flooding
+        # Parse string geometry if needed
+        if isinstance(geometry, str):
+            try:
+                geometry = json.loads(geometry)
+            except Exception:
+                print(f"[QA WARN] Could not parse geometry string: {geometry}")
+                geometry = []
         if isinstance(geometry, torch.Tensor):
             geometry = geometry.cpu().numpy().tolist()
-        # Defensive: flatten if geometry is a single list of numbers
+        # Flatten if single list
         if geometry and all(isinstance(v, (int, float)) for v in geometry):
-            # If geometry is [x, y] or [x, y, ...], group into pairs
             geometry = [geometry[i:i+2] for i in range(0, len(geometry), 2) if i+1 < len(geometry)]
-        # Filter out invalid points (must be pairs of numbers)
+        # Remove zero points and non-numeric
         poly_points = []
         for pt in geometry:
             if (isinstance(pt, (list, tuple)) and len(pt) == 2 and
                 all(isinstance(coord, (int, float)) for coord in pt) and not (pt[0] == 0 and pt[1] == 0)):
                 poly_points.append((float(pt[0]), float(pt[1])))
-        if not poly_points:
-            print(f"[QA WARN] Received empty or invalid geometry for mask generation: {geometry}")
-        if len(poly_points) > 1:
-            # Scale points to image dimensions. Assuming original canvas is 256x256.
-            scaled_points = [(x * (W/256), y * (H/256)) for x, y in poly_points]
-            ImageDraw.Draw(mask_img).line(scaled_points, fill=1, width=2)
+        # If still invalid, fallback to hybrid mask
+        if not poly_points or len(poly_points) < 2:
+            print(f"[QA WARN] Invalid geometry, using hybrid mask fallback: {geometry}")
+            if getattr(self, 'hybrid_enabled', False) and hasattr(self, 'generate_hybrid_mask'):
+                # Use SAM/SAP hybrid mask
+                return self.generate_hybrid_mask(torch.zeros((1, H, W)))
+            else:
+                return torch.zeros((1, H, W))
+        # Normalize geometry coordinates to image size
+        max_x = max(x for x, y in poly_points)
+        max_y = max(y for x, y in poly_points)
+        # Always scale geometry to image dimensions to fit the canvas.
+        # This handles cases where geometry is normalized (e.g., to [0,1]) 
+        # or in a different coordinate space than the image.
+        scale_x = (W / max_x) if max_x > 0 else 1.0
+        scale_y = (H / max_y) if max_y > 0 else 1.0
+        norm_points = [(x * scale_x, y * scale_y) for x, y in poly_points]
+        ImageDraw.Draw(mask_img).line(norm_points, fill=1, width=2)
         mask = np.array(mask_img, dtype=np.float32)
         return torch.from_numpy(mask).unsqueeze(0)  # [1, H, W]
 
@@ -622,9 +615,11 @@ class ImageAugmentor:
         fail_rate = fail_count / aug_images.size(0)
         self.adapt_qa_thresholds(fail_rate)
         
-        # Log metrics
-        self.metrics.log('qa_fail_rate', fail_rate)
-        self.metrics.log('edge_overlap', np.mean(edge_overlaps))
+        # Log metrics (safe no-op)
+        # If TaskProfiler does not have log, skip or print
+        if hasattr(self.metrics, 'log') and callable(self.metrics.log):
+            self.metrics.log('qa_fail_rate', fail_rate)
+            self.metrics.log('edge_overlap', np.mean(edge_overlaps))
         
         return fail_count
 
@@ -646,9 +641,10 @@ class ImageAugmentor:
             path = paths[i] if paths else None
             
             # Check for derived labels from dataset
-            label_entry = self.dataset.labels_map.get(os.path.normpath(path)) if hasattr(self, 'dataset') else None
-            if label_entry:
-                batch_labels.append(label_entry)
+            if hasattr(self, 'dataset') and self.dataset and hasattr(self.dataset, 'labels_map') and self.dataset.labels_map:
+                label_entry = self.dataset.labels_map.get(os.path.normpath(path))
+                if label_entry:
+                    batch_labels.append(label_entry)
 
             # Use hybrid pipeline if enabled and geometry is missing
             if self.hybrid_enabled and (not geom or all(p == [0,0] for p in geom)):
@@ -800,64 +796,46 @@ class ImageAugmentor:
         msk_t = torch.from_numpy(mask_np[np.newaxis,:,:]/255.0).unsqueeze(0)
         return img_t.float(), msk_t.float()
 
-    def x_paste_batch(self, target_img, target_mask, instance_images, instance_masks, k=5):
+    def x_paste_batch(self, target_img_np, target_mask_np, instance_images, instance_masks, k=5):
         """Scalable Copy-Paste: paste k instances, preserve mask shapes."""
-        import random, cv2
-        H, W, _ = target_img.shape
-        out_img, out_msk = target_img.copy(), target_mask.copy()
+        H, W, _ = target_img_np.shape
+        out_img, out_msk = target_img_np.copy(), target_mask_np.copy()
+        
         for _ in range(k):
-            inst_img = random.choice(instance_images)
-            inst_msk = random.choice(instance_masks)
+            # Randomly select an instance to paste
+            idx = random.randint(0, len(instance_images) - 1)
+            inst_img_tensor = instance_images[idx]
+            inst_msk_tensor = instance_masks[idx]
+
+            # Convert tensors to numpy for processing
+            inst_img = inst_img_tensor.squeeze(0).cpu().numpy()
+            inst_msk = inst_msk_tensor.squeeze(0).cpu().numpy()
+
+            # Randomly scale the instance
             scale = random.uniform(0.5, 1.2)
-            h, w = int(inst_img.shape[0]*scale), int(inst_img.shape[1]*scale)
-            inst_img_s = cv2.resize(inst_img, (w,h), interpolation=cv2.INTER_LINEAR)
-            inst_msk_s = cv2.resize(inst_msk, (w,h), interpolation=cv2.INTER_NEAREST)
-            x, y = random.randint(0, W-w), random.randint(0, H-h)
-            mask_bool = inst_msk_s>127
-            out_img[y:y+h, x:x+w][mask_bool] = inst_img_s[mask_bool]
-            out_msk[y:y+h, x:x+w][mask_bool] = 1
-        return out_img, out_msk
+            h, w = int(inst_img.shape[0] * scale), int(inst_img.shape[1] * scale)
+            
+            if h == 0 or w == 0: continue # Skip if scaled to nothing
 
-    def keepmask_augment(self, image, mask):
-        """Perturb background, preserve foreground object."""
-        import numpy as np
-        aug = image.copy()
-        noise = np.random.normal(0, 0.1, size=image.shape)
-        aug[mask==0] = np.clip(aug[mask==0] + 255*noise[mask==0], 0, 255)
-        factor = np.random.uniform(0.8, 1.2, size=(1,1,3))
-        aug[mask==0] = np.clip(aug[mask==0] * factor, 0, 255)
-        return aug.astype(np.uint8), mask
+            resized_img = cv2.resize(inst_img, (w, h), interpolation=cv2.INTER_AREA)
+            resized_msk = cv2.resize(inst_msk, (w, h), interpolation=cv2.INTER_NEAREST)
 
-    def advanced_augment_batch(self, images, masks, instance_images=None, instance_masks=None, device="cuda"):
-        """Hybrid augmentation: geometric + advanced generative/compositional methods."""
-        import random
-        batch_size = images.shape[0]
-        aug_images, aug_masks = [], []
-        for i in range(batch_size):
-            img = images[i].cpu().numpy().transpose(1,2,0) * 255.0
-            img = img.astype(np.uint8)
-            msk = masks[i].cpu().numpy().squeeze(0)
-            # 1. Geometric warp (already applied)
-            # 2. Advanced methods
-            r = random.random()
-            if r < 0.33:
-                # Mask-guided diffusion synthesis
-                aug_img_t, aug_msk_t = self.synthesize_pair_diffusion(img, msk*255, prompt="vibrant", device=device)
-            elif r < 0.66 and instance_images is not None and instance_masks is not None:
-                # X-Paste
-                aug_img_np, aug_msk_np = self.x_paste_batch(img, msk, instance_images, instance_masks, k=3)
-                aug_img_t = torch.from_numpy(aug_img_np.transpose(2,0,1)/255.0).unsqueeze(0).float()
-                aug_msk_t = torch.from_numpy(aug_msk_np[np.newaxis,:,:]).float()
+            # Randomly choose a paste location
+            if H > h:
+                y_start = random.randint(0, H - h)
             else:
-                # KeepMask background jitter
-                aug_img_np, aug_msk_np = self.keepmask_augment(img, msk)
-                aug_img_t = torch.from_numpy(aug_img_np.transpose(2,0,1)/255.0).unsqueeze(0).float()
-                aug_msk_t = torch.from_numpy(aug_msk_np[np.newaxis,:,:]).float()
-            aug_images.append(aug_img_t)
-            aug_masks.append(aug_msk_t)
-        aug_images = torch.cat(aug_images, dim=0)
-        aug_masks = torch.cat(aug_masks, dim=0)
-        return aug_images, aug_masks
+                y_start = 0
+            
+            if W > w:
+                x_start = random.randint(0, W - w)
+            else:
+                x_start = 0
+
+            # Paste the instance
+            out_img[y_start:y_start+h, x_start:x_start+w] = resized_img
+            out_msk[y_start:y_start+h, x_start:x_start+w] = resized_msk
+
+        return out_img, out_msk
 
     def pad_and_center_mask_image(self, mask, img, pad=32, desired_size=512):
         # Defensive: ensure always (C, H, W)
@@ -983,12 +961,23 @@ class ImageAugmentor:
         return tensor[:, y_start:y_start+size, x_start:x_start+size]
 
     def compute_edge_overlap(self, mask1, mask2):
-        """Compute normalized edge overlap between two binary masks. Ensures both masks are on the same device."""
+        """Compute normalized edge overlap between two binary masks. Ensures both masks are on the same device and size."""
         # Move mask2 to mask1's device if needed
         if mask2.device != mask1.device:
             mask2 = mask2.to(mask1.device)
-        mask1_bin = (mask1 > 0.5)
-        mask2_bin = (mask2 > 0.5)
+        # Ensure both masks are the same size
+        H1, W1 = mask1.shape[-2:]
+        H2, W2 = mask2.shape[-2:]
+        target_size = min(H1, H2, W1, W2, 512)  # Use 512 or smallest
+        def center_crop(tensor, size):
+            C, H, W = tensor.shape
+            y_start = (H - size) // 2
+            x_start = (W - size) // 2
+            return tensor[:, y_start:y_start+size, x_start:x_start+size]
+        mask1_cropped = center_crop(mask1, target_size)
+        mask2_cropped = center_crop(mask2, target_size)
+        mask1_bin = (mask1_cropped > 0.5)
+        mask2_bin = (mask2_cropped > 0.5)
         overlap = (mask1_bin & mask2_bin).float().sum().item()
         area1 = mask1_bin.float().sum().item()
         area2 = mask2_bin.float().sum().item()
@@ -1007,7 +996,7 @@ class ImageAugmentor:
 
     def generate_hybrid_mask(self, image_tensor: torch.Tensor, original_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
-        Generate high-quality mask using SAM + skeleton-aware post-processing.
+        Generate high-quality mask using SAM + advanced mask refinement.
         """
         if not self.hybrid_enabled or self.sam_autocoder is None:
             # Fallback to simple thresholding if hybrid is disabled or not initialized
@@ -1027,12 +1016,11 @@ class ImageAugmentor:
                 img_np = cv2.cvtColor(img_np, cv2.COLOR_GRAY2RGB)
 
             sam_mask = self.sam_autocoder.get_best_mask(img_np)
-            
-            if self.skeleton_processor and sam_mask.max() > 0:
-                refined_mask = self.skeleton_processor.sap_refine(sam_mask)
+            # Use advanced mask refiner if available
+            if self.mask_refiner and sam_mask.max() > 0:
+                refined_mask = self.mask_refiner.refine(sam_mask)
             else:
                 refined_mask = sam_mask
-            
             mask_tensor = torch.from_numpy(refined_mask / 255.0).unsqueeze(0).float()
             return safe_device_transfer(mask_tensor, self.device)
 

@@ -47,7 +47,9 @@ class ImagePathDataset(data.Dataset):
             
             # Get geometry for the current image path
             geometry = self.path_to_geometry.get(img_path, [])
-            
+            # Defensive: fallback to empty geometry if invalid
+            if not (isinstance(geometry, list) and all(isinstance(pt, (list, tuple)) and len(pt) == 2 and all(isinstance(coord, (int, float)) for coord in pt) for pt in geometry)):
+                geometry = []
             return tensor, img_path, geometry
             
         except FileNotFoundError:

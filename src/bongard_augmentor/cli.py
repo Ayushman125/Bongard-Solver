@@ -72,8 +72,8 @@ def main():
 
         results = augmentor.augment_batch(
             images,
-            geometries,
             paths,
+            geometries,
             augment_type=args.type,
             batch_idx=idx // args.batch_size
         )

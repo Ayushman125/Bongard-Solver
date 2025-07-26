@@ -13,6 +13,71 @@ from pathlib import Path
 from scipy.ndimage import distance_transform_edt
 from skimage.morphology import skeletonize, remove_small_objects
 
+# ==================================================================
+# Section: Advanced Mask Refinement
+# ==================================================================
+
+class MaskRefiner:
+    """
+    An advanced, professional-grade mask refinement pipeline.
+    Uses a two-stage process: contour-based simplification and morphological cleaning.
+    This approach is more robust than skeletonization for preserving object shape.
+    """
+    def __init__(self, 
+                 contour_approx_factor: float = 0.005,
+                 min_component_size: int = 50,
+                 closing_kernel_size: int = 5,
+                 opening_kernel_size: int = 3):
+        self.contour_approx_factor = contour_approx_factor
+        self.min_component_size = min_component_size
+        self.closing_kernel_size = closing_kernel_size
+        self.opening_kernel_size = opening_kernel_size
+
+    def refine(self, mask_bin: np.ndarray) -> np.ndarray:
+        if not isinstance(mask_bin, np.ndarray) or mask_bin.max() == 0:
+            return np.zeros_like(mask_bin, dtype=np.uint8)
+        try:
+            # Ensure mask is in the correct format (binary 0 or 255)
+            if mask_bin.max() <= 1:
+                mask_bin = (mask_bin * 255).astype(np.uint8)
+            else:
+                mask_bin = (mask_bin > 127).astype(np.uint8) * 255
+
+            # Stage 1: Contour-based Refinement
+            refined_mask = self._contour_refinement(mask_bin)
+            if refined_mask.max() == 0:
+                return refined_mask
+
+            # Stage 2: Morphological Cleaning
+            cleaned_mask = self._morphological_cleaning(refined_mask)
+            return cleaned_mask.astype(np.uint8)
+        except Exception as e:
+            logging.error(f"Mask refinement pipeline failed: {e}", exc_info=True)
+            return (mask_bin > 127).astype(np.uint8) * 255
+
+    def _contour_refinement(self, mask: np.ndarray) -> np.ndarray:
+        contours, hierarchy = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return np.zeros_like(mask, dtype=np.uint8)
+        largest_contour = max(contours, key=cv2.contourArea)
+        if cv2.contourArea(largest_contour) < self.min_component_size:
+            return np.zeros_like(mask, dtype=np.uint8)
+        perimeter = cv2.arcLength(largest_contour, True)
+        epsilon = perimeter * self.contour_approx_factor
+        approx_contour = cv2.approxPolyDP(largest_contour, epsilon, True)
+        refined_mask = np.zeros_like(mask, dtype=np.uint8)
+        cv2.drawContours(refined_mask, [approx_contour], -1, (255), thickness=cv2.FILLED)
+        return refined_mask
+
+    def _morphological_cleaning(self, mask: np.ndarray) -> np.ndarray:
+        closing_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, 
+                                                   (self.closing_kernel_size, self.closing_kernel_size))
+        closed_mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, closing_kernel)
+        opening_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, 
+                                                   (self.opening_kernel_size, self.opening_kernel_size))
+        opened_mask = cv2.morphologyEx(closed_mask, cv2.MORPH_OPEN, opening_kernel)
+        return opened_mask
+
 try:
     from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
     SAM_AVAILABLE = True
@@ -178,142 +243,17 @@ class SAMAutoCoder:
 # Section: Skeleton-Aware Post-processing (SAP)
 # ==================================================================
 
-class SkeletonAwareProcessor:
-    """
-    Professional skeleton-aware post-processing for mask refinement.
-    """
-    
-    def __init__(self, 
-                 min_branch_len: int = 5,
-                 gap_fill_radius: int = 3,
-                 min_component_size: int = 50):
-        self.min_branch_len = min_branch_len
-        self.gap_fill_radius = gap_fill_radius  
-        self.min_component_size = min_component_size
-        
-        self.has_ximgproc = hasattr(cv2, 'ximgproc')
-        if not self.has_ximgproc:
-            logging.warning("cv2.ximgproc not available - using skimage thinning fallback")
-    
-    def sap_refine(self, mask_bin: np.ndarray) -> np.ndarray:
-        """Complete skeleton-aware post-processing pipeline."""
-        if mask_bin.max() == 0:
-            return np.zeros_like(mask_bin, dtype=np.uint8)
-        
-        try:
-            mask_clean = self._clean_input_mask(mask_bin)
-            if mask_clean.max() == 0: return mask_clean
 
-            skeleton = self._extract_skeleton(mask_clean)
-            if skeleton.max() == 0: return mask_clean
-
-            skeleton_repaired = self._repair_skeleton_gaps(skeleton)
-            if skeleton_repaired.max() == 0: return skeleton
-
-            mask_restored = self._restore_mask_width(skeleton_repaired, mask_clean)
-            if mask_restored.max() == 0: return mask_clean
-            
-            return mask_restored.astype(np.uint8)
-            
-        except Exception as e:
-            logging.error(f"SAP refinement failed: {e}", exc_info=True)
-            fallback_mask = mask_bin.copy()
-            if fallback_mask.max() <= 1:
-                fallback_mask = (fallback_mask * 255)
-            return fallback_mask.astype(np.uint8)
-    
-    def _clean_input_mask(self, mask: np.ndarray) -> np.ndarray:
-        """Clean and normalize input mask."""
-        if mask.max() <= 1:
-            mask_bin = (mask * 255).astype(np.uint8)
-        else:
-            mask_bin = (mask > 127).astype(np.uint8) * 255
-        
-        if mask_bin.max() == 0: return mask_bin
-            
-        nonzero_count = np.count_nonzero(mask_bin)
-        if nonzero_count < 10: return mask_bin
-        
-        try:
-            mask_bin = remove_small_objects(
-                mask_bin > 0, min_size=min(self.min_component_size, nonzero_count // 4)
-            ).astype(np.uint8) * 255
-        except Exception as e:
-            print(f"[SAP] Small object removal failed: {e}, skipping")
-        
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        mask_bin = cv2.morphologyEx(mask_bin, cv2.MORPH_CLOSE, kernel)
-        
-        return mask_bin
-    
-    def _extract_skeleton(self, mask: np.ndarray) -> np.ndarray:
-        """Extract 1-pixel skeleton."""
-        mask_bool = mask > 127
-        
-        if self.has_ximgproc:
-            try:
-                return cv2.ximgproc.thinning(mask.astype(np.uint8), thinningType=cv2.ximgproc.THINNING_ZHANGSUEN)
-            except Exception as e:
-                logging.warning(f"OpenCV thinning failed: {e}, using skimage")
-        
-        return (skeletonize(mask_bool) * 255).astype(np.uint8)
-    
-    def _repair_skeleton_gaps(self, skeleton: np.ndarray) -> np.ndarray:
-        """Connects nearby endpoints within gap_fill_radius."""
-        skeleton_repaired = skeleton.copy()
-        kernel = np.ones((3, 3), np.uint8)
-        neighbor_count = cv2.filter2D(skeleton, -1, kernel) - skeleton
-        endpoints = ((neighbor_count == 255) & (skeleton == 255))
-        
-        if not np.any(endpoints): return skeleton_repaired
-        
-        endpoint_coords = np.column_stack(np.where(endpoints))
-        
-        for i, (y1, x1) in enumerate(endpoint_coords):
-            for j, (y2, x2) in enumerate(endpoint_coords[i+1:], i+1):
-                distance = np.sqrt((y2-y1)**2 + (x2-x1)**2)
-                if distance <= self.gap_fill_radius:
-                    cv2.line(skeleton_repaired, (x1, y1), (x2, y2), 255, 1)
-        
-        return skeleton_repaired
-    
-    def _restore_mask_width(self, skeleton: np.ndarray, original_mask: np.ndarray) -> np.ndarray:
-        """Restore mask width using distance transform."""
-        if skeleton.max() == 0: return original_mask
-        
-        original_bool = original_mask > 127
-        if not np.any(original_bool): return skeleton
-        
-        try:
-            distance_map = distance_transform_edt(original_bool)
-        except Exception as e:
-            return skeleton
-        
-        skeleton_points = skeleton > 127
-        if not np.any(skeleton_points): return original_mask
-        
-        skeleton_distances = distance_map[skeleton_points]
-        if len(skeleton_distances) == 0: return original_mask
-        
-        median_radius = np.median(skeleton_distances)
-        final_radius = min(max(1, int(median_radius)), 7)
-        
-        kernel_size = final_radius * 2 + 1
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-        
-        try:
-            restored_mask = cv2.dilate(skeleton, kernel, iterations=1)
-        except Exception as e:
-            return skeleton
-        
-        return cv2.bitwise_and(restored_mask, original_mask)
+# ==================================================================
+# Section: Global Getters
+# ==================================================================
 
 # ==================================================================
 # Section: Global Getters
 # ==================================================================
 
 _sam_instance = None
-_sap_instance = None
+_refiner_instance = None
 
 def get_sam_autocoder(**kwargs) -> SAMAutoCoder:
     """Get global SAM instance with lazy initialization."""
@@ -322,9 +262,9 @@ def get_sam_autocoder(**kwargs) -> SAMAutoCoder:
         _sam_instance = SAMAutoCoder(**kwargs)
     return _sam_instance
 
-def get_skeleton_processor(**kwargs) -> SkeletonAwareProcessor:
-    """Get global skeleton processor with lazy initialization."""
-    global _sap_instance
-    if _sap_instance is None:
-        _sap_instance = SkeletonAwareProcessor(**kwargs)
-    return _sap_instance
+def get_mask_refiner(**kwargs) -> MaskRefiner:
+    """Get global mask refiner instance with lazy initialization."""
+    global _refiner_instance
+    if _refiner_instance is None:
+        _refiner_instance = MaskRefiner(**kwargs)
+    return _refiner_instance
