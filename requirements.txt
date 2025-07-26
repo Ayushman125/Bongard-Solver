@@ -4,3 +4,11 @@ Pillow
 matplotlib
 pyyaml
 scikit-learn
+scikit-image
+torch
+torchvision
+segment-anything
+requests
+diffusers
+transformers
+
