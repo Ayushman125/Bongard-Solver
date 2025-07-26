@@ -1,0 +1,633 @@
+batch_idx,sample_idx,flag_type,reason,pixvar,orig_area,aug_area,area_ratio,edge_overlap,mask_type
+0,0,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+0,1,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+0,2,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08396442234516144,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+0,3,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+0,4,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+0,5,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+0,6,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9850196463654224,SPARSE
+0,7,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+0,8,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+0,9,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9850196463654224,SPARSE
+0,10,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+0,11,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+0,12,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+0,13,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+0,14,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.10754429548978806,11488.0,10664.0,0.9282729805013927,0.21213440111420612,SPARSE
+0,15,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.11085161566734314,11488.0,11855.0,1.0319463788300836,0.9690425980598903,SPARSE
+0,16,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.11171851307153702,11488.0,11855.0,1.0319463788300836,0.9690425980598903,SPARSE
+0,17,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.11407057195901871,11488.0,11855.0,1.0319463788300836,0.9690425980598903,SPARSE
+0,18,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.1129533126950264,11488.0,11855.0,1.0319463788300836,0.9690425980598903,SPARSE
+0,19,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.11052684485912323,11488.0,11855.0,1.0319463788300836,0.9690425980598903,SPARSE
+0,20,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.11246085911989212,11488.0,11855.0,1.0319463788300836,0.8129902994517081,SPARSE
+0,21,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08389738947153091,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+0,22,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9850196463654224,SPARSE
+0,23,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.026278715580701828,918.0,918.0,1.0,1.0,THIN
+0,24,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.1117921695113182,11488.0,11855.0,1.0319463788300836,0.9690425980598903,SPARSE
+0,25,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.11160927265882492,11488.0,11855.0,1.0319463788300836,0.9690425980598903,SPARSE
+0,26,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+0,27,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.1517791599035263,8339.0,12684.0,1.5210456889315265,0.6574424471775465,SPARSE
+0,28,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+0,29,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+0,30,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08211037516593933,4035.0,4056.0,1.0052044609665427,0.9092702169625246,SPARSE
+0,31,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+0,14,WARN,Edge overlap below 20th percentile: 0.21 < 0.97,0.10754429548978806,11488.0,10664.0,0.928272980420589,0.21213440111420612,SPARSE
+0,20,WARN,Edge overlap below 20th percentile: 0.81 < 0.97,0.11246085911989212,11488.0,11855.0,1.0319463787402554,0.8129902994517081,SPARSE
+0,27,WARN,Edge overlap below 20th percentile: 0.66 < 0.97,0.1517791599035263,8339.0,12684.0,1.521045688749125,0.6574424471775465,SPARSE
+0,30,WARN,Edge overlap below 20th percentile: 0.91 < 0.97,0.08211037516593933,4035.0,4056.0,1.0052044607174215,0.9092702169625246,SPARSE
+0,14,WARN,Unknown,0.12409187853336334,0.3279394805431366,10664.0,SPARSE
+0,15,WARN,Unknown,0.1272585242986679,0.332943856716156,11855.0,SPARSE
+0,16,WARN,Unknown,0.12834903597831726,0.33424320816993713,11855.0,SPARSE
+0,17,WARN,Unknown,0.13131332397460938,0.33774334192276,11855.0,SPARSE
+0,18,WARN,Unknown,0.1298978328704834,0.3360852897167206,11855.0,SPARSE
+0,19,WARN,Unknown,0.12684893608093262,0.3324557840824127,11855.0,SPARSE
+0,20,WARN,Unknown,0.1292775571346283,0.3353518545627594,11855.0,SPARSE
+0,23,WARN,Unknown,0.027008056640625,0.16210711002349854,918.0,THIN
+0,24,WARN,Unknown,0.1284428834915161,0.33435335755348206,11855.0,SPARSE
+0,25,WARN,Unknown,0.12821923196315765,0.3340797424316406,11855.0,SPARSE
+0,27,WARN,mask_sum robust_z=5808714752.00 > warn_cutoff=5249561600.00,0.18731297552585602,0.38958847522735596,12684.0,SPARSE
+0,30,WARN,Unknown,0.09110021591186523,0.28654909133911133,4056.0,SPARSE
+1,0,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+1,1,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+1,2,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+1,3,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+1,4,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08301649242639542,4035.0,4070.0,1.0086741016109046,0.9113022113022113,SPARSE
+1,5,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.0824836939573288,4035.0,4072.0,1.0091697645600992,0.9850196463654224,SPARSE
+1,6,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+1,7,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+1,8,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+1,9,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+1,10,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.11133687943220139,11488.0,11855.0,1.0319463788300836,0.9690425980598903,SPARSE
+1,11,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.1118868738412857,11488.0,11855.0,1.0319463788300836,0.9690425980598903,SPARSE
+1,12,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.10624710470438004,11488.0,10938.0,0.9521239554317549,0.2670612813370474,SPARSE
+1,13,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.11096947640180588,11488.0,11855.0,1.0319463788300836,0.9690425980598903,SPARSE
+1,14,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.10961395502090454,11488.0,11855.0,1.0319463788300836,0.9690425980598903,SPARSE
+1,15,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.1080646887421608,11488.0,11855.0,1.0319463788300836,0.9690425980598903,SPARSE
+1,16,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.11150037497282028,11488.0,11855.0,1.0319463788300836,0.9690425980598903,SPARSE
+1,17,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.11407057195901871,11488.0,11855.0,1.0319463788300836,0.9690425980598903,SPARSE
+1,18,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08484327793121338,4035.0,4072.0,1.0091697645600992,0.9850196463654224,SPARSE
+1,19,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+1,20,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.026278715580701828,918.0,918.0,1.0,1.0,THIN
+1,21,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.11308571696281433,11488.0,11855.0,1.0319463788300836,0.9690425980598903,SPARSE
+1,22,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.10679706186056137,11488.0,11855.0,1.0319463788300836,0.9690425980598903,SPARSE
+1,23,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.10987851768732071,11488.0,11855.0,1.0319463788300836,0.9690425980598903,SPARSE
+1,24,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+1,25,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+1,26,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+1,27,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+1,28,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08361169695854187,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+1,29,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+1,30,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+1,31,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08492404967546463,4084.0,4084.0,1.0,1.0,SPARSE
+1,4,WARN,Edge overlap below 20th percentile: 0.91 < 0.97,0.08301649242639542,4035.0,4070.0,1.0086741013609235,0.9113022113022113,SPARSE
+1,12,WARN,Edge overlap below 20th percentile: 0.27 < 0.97,0.10624710470438004,11488.0,10938.0,0.952123955348875,0.2670612813370474,SPARSE
+1,4,WARN,Unknown,0.09201057255268097,0.28812581300735474,4070.0,SPARSE
+1,10,WARN,Unknown,0.12795762717723846,0.33367180824279785,11855.0,SPARSE
+1,11,WARN,Unknown,0.12854233384132385,0.3344949781894684,11855.0,SPARSE
+1,12,WARN,Unknown,0.12309424579143524,0.32595568895339966,10938.0,SPARSE
+1,13,WARN,Unknown,0.127558633685112,0.33312082290649414,11855.0,SPARSE
+1,14,WARN,Unknown,0.12572970986366272,0.33107998967170715,11855.0,SPARSE
+1,15,WARN,Unknown,0.12403692305088043,0.3287319540977478,11855.0,SPARSE
+1,16,WARN,Unknown,0.12811413407325745,0.3339167535305023,11855.0,SPARSE
+1,17,WARN,Unknown,0.13131332397460938,0.33774334192276,11855.0,SPARSE
+1,20,WARN,Unknown,0.027008056640625,0.16210711002349854,918.0,THIN
+1,21,WARN,Unknown,0.1300700455904007,0.33628222346305847,11855.0,SPARSE
+1,22,WARN,Unknown,0.12219465523958206,0.3267982006072998,11855.0,SPARSE
+1,23,WARN,Unknown,0.12619110941886902,0.3314793109893799,11855.0,SPARSE
+1,31,WARN,Unknown,0.0937042236328125,0.29141730070114136,4084.0,SPARSE
+2,0,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.07576149702072144,4084.0,4320.0,1.0577864838393731,0.5875,SPARSE
+2,1,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08469826728105545,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+2,2,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.0738745927810669,4035.0,4883.0,1.2101610904584883,0.4699979520786402,SPARSE
+2,3,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.07978558540344238,4035.0,4012.0,0.9942998760842627,0.7050805452292441,SPARSE
+2,4,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+2,5,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+2,6,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+2,7,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+2,8,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+2,9,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+2,10,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+2,11,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+2,12,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+2,13,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.07936485856771469,4035.0,4037.0,1.0004956629491946,0.6851622491949467,SPARSE
+2,14,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+2,15,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+2,16,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+2,17,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.07383839786052704,4035.0,4889.0,1.2116480793060718,0.46921660871343834,SPARSE
+2,18,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08487708121538162,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+2,19,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+2,20,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9850196463654224,SPARSE
+2,21,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9850196463654224,SPARSE
+2,22,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+2,23,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+2,24,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+2,25,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08478391170501709,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+2,26,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+2,27,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+2,28,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.07576371729373932,4035.0,4521.0,1.120446096654275,0.5445697854456979,SPARSE
+2,29,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08448712527751923,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+2,30,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+2,31,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+2,0,WARN,Edge overlap below 20th percentile: 0.59 < 0.99,0.07576149702072144,4084.0,4320.0,1.0577864835803656,0.5875,SPARSE
+2,2,WARN,Edge overlap below 20th percentile: 0.47 < 0.99,0.0738745927810669,4035.0,4883.0,1.2101610901585722,0.4699979520786402,SPARSE
+2,3,WARN,Edge overlap below 20th percentile: 0.71 < 0.99,0.07978558540344238,4035.0,4012.0,0.994299875837844,0.7050805452292441,SPARSE
+2,13,WARN,Edge overlap below 20th percentile: 0.69 < 0.99,0.07936485856771469,4035.0,4037.0,1.0004956627012402,0.6851622491949467,SPARSE
+2,17,WARN,Edge overlap below 20th percentile: 0.47 < 0.99,0.07383839786052704,4035.0,4889.0,1.2116480790057873,0.46921660871343834,SPARSE
+2,28,WARN,Edge overlap below 20th percentile: 0.54 < 0.99,0.07576371729373932,4035.0,4521.0,1.1204460963765934,0.5445697854456979,SPARSE
+2,0,WARN,Unknown,0.08330300450325012,0.27524808049201965,4320.0,SPARSE
+2,2,WARN,mask_sum robust_z=547012032.00 > warn_cutoff=187609824.00,0.08090738952159882,0.2717988193035126,4883.0,SPARSE
+2,3,WARN,Unknown,0.08805247396230698,0.282463401556015,4012.0,SPARSE
+2,13,WARN,Unknown,0.08753812313079834,0.2817177176475525,4037.0,SPARSE
+2,17,WARN,mask_sum robust_z=551058944.00 > warn_cutoff=187609824.00,0.08086557686328888,0.27173224091529846,4889.0,SPARSE
+2,28,WARN,mask_sum robust_z=302846368.00 > warn_cutoff=187609824.00,0.08317587524652481,0.275252103805542,4521.0,SPARSE
+3,0,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.07897412776947021,4035.0,4068.0,1.00817843866171,0.6642084562438545,SPARSE
+3,1,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+3,2,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06068109720945358,2026.0,2039.0,1.0064165844027642,0.9936243256498284,SPARSE
+3,3,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06068109720945358,2026.0,2039.0,1.0064165844027642,0.9936243256498284,SPARSE
+3,4,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.05504133924841881,2026.0,2101.0,1.0370187561697928,0.38838648262732034,SPARSE
+3,5,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06068109720945358,2026.0,2039.0,1.0064165844027642,0.9936243256498284,SPARSE
+3,6,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06068109720945358,2026.0,2039.0,1.0064165844027642,0.9936243256498284,SPARSE
+3,7,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06068109720945358,2026.0,2039.0,1.0064165844027642,0.9936243256498284,SPARSE
+3,8,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.05914538726210594,2026.0,2039.0,1.0064165844027642,0.9936243256498284,SPARSE
+3,9,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06068109720945358,2026.0,2039.0,1.0064165844027642,0.9936243256498284,SPARSE
+3,10,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06068109720945358,2026.0,2039.0,1.0064165844027642,0.9936243256498284,SPARSE
+3,11,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.055736739188432693,2042.0,2069.0,1.0132223310479922,0.986950217496375,SPARSE
+3,12,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06068109720945358,2026.0,2039.0,1.0064165844027642,0.9936243256498284,SPARSE
+3,13,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.12152640521526337,6042.0,7301.0,1.2083747103608076,0.827557868785098,SPARSE
+3,14,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06068109720945358,2026.0,2039.0,1.0064165844027642,0.9936243256498284,SPARSE
+3,15,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.057711418718099594,2026.0,2039.0,1.0064165844027642,0.9936243256498284,SPARSE
+3,16,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08354292809963226,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+3,17,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.0848773866891861,4035.0,4072.0,1.0091697645600992,0.9850196463654224,SPARSE
+3,18,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+3,19,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08180300146341324,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+3,20,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08483488857746124,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+3,21,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+3,22,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+3,23,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+3,24,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08331189304590225,4035.0,4072.0,1.0091697645600992,0.9850196463654224,SPARSE
+3,25,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+3,26,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+3,27,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+3,28,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+3,29,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+3,30,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+3,31,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+3,0,WARN,Edge overlap below 20th percentile: 0.66 < 0.99,0.07897412776947021,4035.0,4068.0,1.0081784384118517,0.6642084562438545,SPARSE
+3,4,WARN,Edge overlap below 20th percentile: 0.39 < 0.99,0.05504133924841881,2026.0,2101.0,1.0370187556579373,0.38838648262732034,SPARSE
+3,11,WARN,Edge overlap below 20th percentile: 0.99 < 0.99,0.055736739188432693,2042.0,2069.0,1.0132223305518009,0.986950217496375,SPARSE
+3,13,WARN,Edge overlap below 20th percentile: 0.83 < 0.99,0.12152640521526337,6042.0,7301.0,1.2083747101608118,0.827557868785098,SPARSE
+3,17,WARN,Edge overlap below 20th percentile: 0.99 < 0.99,0.0848773866891861,4035.0,4072.0,1.009169764309995,0.9850196463654224,SPARSE
+3,24,WARN,Edge overlap below 20th percentile: 0.99 < 0.99,0.08331189304590225,4035.0,4072.0,1.009169764309995,0.9850196463654224,SPARSE
+3,0,WARN,Unknown,0.08705148100852966,0.2810233533382416,4068.0,SPARSE
+3,2,WARN,Unknown,0.06489181518554688,0.24633535742759705,2039.0,SPARSE
+3,3,WARN,Unknown,0.06489181518554688,0.24633535742759705,2039.0,SPARSE
+3,4,WARN,Unknown,0.05944178253412247,0.23460890352725983,2101.0,SPARSE
+3,5,WARN,Unknown,0.06489181518554688,0.24633535742759705,2039.0,SPARSE
+3,6,WARN,Unknown,0.06489181518554688,0.24633535742759705,2039.0,SPARSE
+3,7,WARN,Unknown,0.06489181518554688,0.24633535742759705,2039.0,SPARSE
+3,8,WARN,Unknown,0.0632401704788208,0.2431982457637787,2039.0,SPARSE
+3,9,WARN,Unknown,0.06489181518554688,0.24633535742759705,2039.0,SPARSE
+3,10,WARN,Unknown,0.06489181518554688,0.24633535742759705,2039.0,SPARSE
+3,11,WARN,Unknown,0.05963785573840141,0.23608629405498505,2069.0,SPARSE
+3,12,WARN,Unknown,0.06489181518554688,0.24633535742759705,2039.0,SPARSE
+3,13,WARN,mask_sum robust_z=2177930752.00 > warn_cutoff=1371239808.00,0.14156723022460938,0.3486063778400421,7301.0,SPARSE
+3,14,WARN,Unknown,0.06489181518554688,0.24633535742759705,2039.0,SPARSE
+3,15,WARN,Unknown,0.06187370419502258,0.24023200571537018,2039.0,SPARSE
+4,0,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+4,1,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08417048305273056,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+4,2,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+4,3,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+4,4,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9850196463654224,SPARSE
+4,5,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+4,6,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+4,7,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+4,8,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+4,9,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+4,10,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9850196463654224,SPARSE
+4,11,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+4,12,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+4,13,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+4,14,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08404827117919922,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+4,15,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+4,16,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9850196463654224,SPARSE
+4,17,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+4,18,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+4,19,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+4,20,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9850196463654224,SPARSE
+4,21,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9850196463654224,SPARSE
+4,22,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+4,23,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+4,24,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+4,25,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08481335639953613,4035.0,4072.0,1.0091697645600992,0.9850196463654224,SPARSE
+4,26,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08430782705545425,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+4,27,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+4,28,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08419869095087051,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+4,29,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+4,30,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+4,31,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+4,4,WARN,Edge overlap below 20th percentile: 0.99 < 0.99,0.08488684892654419,4035.0,4072.0,1.009169764309995,0.9850196463654224,SPARSE
+4,10,WARN,Edge overlap below 20th percentile: 0.99 < 0.99,0.08488684892654419,4035.0,4072.0,1.009169764309995,0.9850196463654224,SPARSE
+4,16,WARN,Edge overlap below 20th percentile: 0.99 < 0.99,0.08488684892654419,4035.0,4072.0,1.009169764309995,0.9850196463654224,SPARSE
+4,20,WARN,Edge overlap below 20th percentile: 0.99 < 0.99,0.08488684892654419,4035.0,4072.0,1.009169764309995,0.9850196463654224,SPARSE
+4,21,WARN,Edge overlap below 20th percentile: 0.99 < 0.99,0.08488684892654419,4035.0,4072.0,1.009169764309995,0.9850196463654224,SPARSE
+4,25,WARN,Edge overlap below 20th percentile: 0.99 < 0.99,0.08481335639953613,4035.0,4072.0,1.009169764309995,0.9850196463654224,SPARSE
+4,1,WARN,img_std robust_z=830.95 > warn_cutoff=690.40,0.0928192287683487,0.29012149572372437,4072.0,SPARSE
+4,14,WARN,img_std robust_z=973.07 > warn_cutoff=690.40,0.09268331527709961,0.28991079330444336,4072.0,SPARSE
+4,28,WARN,img_std robust_z=798.17 > warn_cutoff=690.40,0.09290295839309692,0.2901701033115387,4072.0,SPARSE
+5,0,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+5,1,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+5,2,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+5,3,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+5,4,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+5,5,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+5,6,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+5,7,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+5,8,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+5,9,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.07765231281518936,4035.0,4090.0,1.01363073110285,0.6691931540342299,SPARSE
+5,10,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+5,11,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+5,12,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.0823216438293457,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+5,13,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488655835390091,4035.0,4072.0,1.0091697645600992,0.9850196463654224,SPARSE
+5,14,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+5,15,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+5,16,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+5,17,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08259499073028564,4035.0,4069.0,1.0084262701363074,0.8832637011550749,SPARSE
+5,18,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+5,19,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+5,20,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+5,21,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+5,22,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08370031416416168,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+5,23,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08316824585199356,4035.0,4072.0,1.0091697645600992,0.9850196463654224,SPARSE
+5,24,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+5,25,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9850196463654224,SPARSE
+5,26,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+5,27,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.07342484593391418,4035.0,4971.0,1.2319702602230482,0.45765439549386444,SPARSE
+5,28,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+5,29,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+5,30,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9850196463654224,SPARSE
+5,31,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08256341516971588,4035.0,4072.0,1.0091697645600992,0.9850196463654224,SPARSE
+5,9,WARN,Edge overlap below 20th percentile: 0.67 < 0.99,0.07765231281518936,4035.0,4090.0,1.0136307308516406,0.6691931540342299,SPARSE
+5,17,WARN,Edge overlap below 20th percentile: 0.88 < 0.99,0.08259499073028564,4035.0,4069.0,1.0084262698863875,0.8832637011550749,SPARSE
+5,27,WARN,Edge overlap below 20th percentile: 0.46 < 0.99,0.07342484593391418,4035.0,4971.0,1.2319702599177274,0.45765439549386444,SPARSE
+5,9,WARN,mask_sum robust_z=12140834.00 > warn_cutoff=315210.00,0.08565913140773773,0.27866166830062866,4090.0,SPARSE
+5,17,WARN,mask_sum robust_z=2023472.38 > warn_cutoff=315210.00,0.09146338701248169,0.2873934209346771,4069.0,SPARSE
+5,27,WARN,mask_sum robust_z=606367232.00 > warn_cutoff=315210.00,0.08036845922470093,0.2709701955318451,4971.0,SPARSE
+6,0,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+6,1,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+6,2,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+6,3,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+6,4,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+6,5,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+6,6,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+6,7,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08379644900560379,4035.0,4072.0,1.0091697645600992,0.9850196463654224,SPARSE
+6,8,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+6,9,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+6,10,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+6,11,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+6,12,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+6,13,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+6,14,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+6,15,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+6,16,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+6,17,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+6,18,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06233186647295952,2069.0,1883.0,0.9101014983083615,0.5311744804253262,SPARSE
+6,19,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.062043197453022,2069.0,2089.0,1.0096665055582408,0.990426041168023,SPARSE
+6,20,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06647856533527374,2069.0,2089.0,1.0096665055582408,0.990426041168023,SPARSE
+6,21,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06647856533527374,2069.0,2089.0,1.0096665055582408,0.990426041168023,SPARSE
+6,22,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06647856533527374,2069.0,2089.0,1.0096665055582408,0.990426041168023,SPARSE
+6,23,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06647856533527374,2069.0,2089.0,1.0096665055582408,0.990426041168023,SPARSE
+6,24,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06647856533527374,2069.0,2089.0,1.0096665055582408,0.990426041168023,SPARSE
+6,25,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.10603667795658112,11488.0,10538.0,0.9173050139275766,0.20917479108635098,SPARSE
+6,26,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06647856533527374,2069.0,2089.0,1.0096665055582408,0.990426041168023,SPARSE
+6,27,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06068442016839981,2029.0,2044.0,1.0073928043371119,0.9926614481409002,SPARSE
+6,28,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06068442016839981,2029.0,2044.0,1.0073928043371119,0.9926614481409002,SPARSE
+6,29,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06060142070055008,2023.0,2043.0,1.0098863074641622,0.9902104747919726,SPARSE
+6,30,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.15878114104270935,8682.0,13383.0,1.5414651002073254,0.6487334678323246,SPARSE
+6,31,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06647856533527374,2069.0,2089.0,1.0096665055582408,0.990426041168023,SPARSE
+6,7,WARN,Edge overlap below 20th percentile: 0.99 < 0.99,0.08379644900560379,4035.0,4072.0,1.009169764309995,0.9850196463654224,SPARSE
+6,18,WARN,Edge overlap below 20th percentile: 0.53 < 0.99,0.06233186647295952,2069.0,1883.0,0.9101014978684865,0.5311744804253262,SPARSE
+6,25,WARN,Edge overlap below 20th percentile: 0.21 < 0.99,0.10603667795658112,11488.0,10538.0,0.9173050138477276,0.20917479108635098,SPARSE
+6,29,WARN,Edge overlap below 20th percentile: 0.99 < 0.99,0.06060142070055008,2023.0,2043.0,1.0098863069649597,0.9902104747919726,SPARSE
+6,30,WARN,Edge overlap below 20th percentile: 0.65 < 0.99,0.15878114104270935,8682.0,13383.0,1.541465100029778,0.6487334678323246,SPARSE
+6,18,WARN,mask_sum robust_z=1476460288.00 > warn_cutoff=1384729728.00,0.06723687052726746,0.24966350197792053,1883.0,SPARSE
+6,19,WARN,Unknown,0.06671810895204544,0.2490847408771515,2089.0,SPARSE
+6,20,WARN,Unknown,0.07160568237304688,0.25783437490463257,2089.0,SPARSE
+6,21,WARN,Unknown,0.07160568237304688,0.25783437490463257,2089.0,SPARSE
+6,22,WARN,Unknown,0.07160568237304688,0.25783437490463257,2089.0,SPARSE
+6,23,WARN,Unknown,0.07160568237304688,0.25783437490463257,2089.0,SPARSE
+6,24,WARN,Unknown,0.07160568237304688,0.25783437490463257,2089.0,SPARSE
+6,25,WARN,mask_sum robust_z=4361257472.00 > warn_cutoff=1384729728.00,0.12203440070152283,0.3256327211856842,10538.0,SPARSE
+6,26,WARN,Unknown,0.07160568237304688,0.25783437490463257,2089.0,SPARSE
+6,27,WARN,Unknown,0.0648956298828125,0.24634207785129547,2044.0,SPARSE
+6,28,WARN,Unknown,0.0648956298828125,0.24634207785129547,2044.0,SPARSE
+6,29,WARN,Unknown,0.06480026245117188,0.24617356061935425,2043.0,SPARSE
+6,30,WARN,mask_sum robust_z=6280183808.00 > warn_cutoff=1384729728.00,0.19893625378608704,0.39847350120544434,13383.0,DENSE
+6,31,WARN,Unknown,0.07160568237304688,0.25783437490463257,2089.0,SPARSE
+7,0,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08217499405145645,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+7,1,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+7,2,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.07499861717224121,4035.0,4659.0,1.154646840148699,0.5183515775917579,SPARSE
+7,3,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+7,4,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+7,5,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+7,6,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08459804207086563,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+7,7,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.07925743609666824,4035.0,4046.0,1.00272614622057,0.6791893227879388,SPARSE
+7,8,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+7,9,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9850196463654224,SPARSE
+7,10,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+7,11,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08437305688858032,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+7,12,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.07558080554008484,4035.0,4554.0,1.1286245353159852,0.5377689942907334,SPARSE
+7,13,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+7,14,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06068442016839981,2029.0,2044.0,1.0073928043371119,0.9926614481409002,SPARSE
+7,15,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06068442016839981,2029.0,2044.0,1.0073928043371119,0.9926614481409002,SPARSE
+7,16,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06068442016839981,2029.0,2044.0,1.0073928043371119,0.9926614481409002,SPARSE
+7,17,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06068442016839981,2029.0,2044.0,1.0073928043371119,0.9926614481409002,SPARSE
+7,18,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06068442016839981,2029.0,2044.0,1.0073928043371119,0.9926614481409002,SPARSE
+7,19,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06068442016839981,2029.0,2044.0,1.0073928043371119,0.9926614481409002,SPARSE
+7,20,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06068442016839981,2029.0,2044.0,1.0073928043371119,0.9926614481409002,SPARSE
+7,21,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06068442016839981,2029.0,2044.0,1.0073928043371119,0.9926614481409002,SPARSE
+7,22,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06068442016839981,2029.0,2044.0,1.0073928043371119,0.9926614481409002,SPARSE
+7,23,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+7,24,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06068442016839981,2029.0,2044.0,1.0073928043371119,0.9926614481409002,SPARSE
+7,25,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06068442016839981,2029.0,2044.0,1.0073928043371119,0.9926614481409002,SPARSE
+7,26,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.11389128863811493,11488.0,11855.0,1.0319463788300836,0.9690425980598903,SPARSE
+7,27,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.06068442016839981,2029.0,2044.0,1.0073928043371119,0.9926614481409002,SPARSE
+7,28,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9850196463654224,SPARSE
+7,29,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+7,30,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+7,31,FAIL,"Topology: Validation error: OpenCV(4.12.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
+",0.08488684892654419,4035.0,4072.0,1.0091697645600992,0.9909135559921415,SPARSE
+7,2,WARN,Edge overlap below 20th percentile: 0.52 < 0.99,0.07499861717224121,4035.0,4659.0,1.1546468398625411,0.5183515775917579,SPARSE
+7,7,WARN,Edge overlap below 20th percentile: 0.68 < 0.99,0.07925743609666824,4035.0,4046.0,1.0027261459720629,0.6791893227879388,SPARSE
+7,9,WARN,Edge overlap below 20th percentile: 0.99 < 0.99,0.08488684892654419,4035.0,4072.0,1.009169764309995,0.9850196463654224,SPARSE
+7,12,WARN,Edge overlap below 20th percentile: 0.54 < 0.99,0.07558080554008484,4035.0,4554.0,1.1286245350362765,0.5377689942907334,SPARSE
+7,26,WARN,Edge overlap below 20th percentile: 0.97 < 0.99,0.11389128863811493,11488.0,11855.0,1.0319463787402554,0.9690425980598903,SPARSE
+7,28,WARN,Edge overlap below 20th percentile: 0.99 < 0.99,0.08488684892654419,4035.0,4072.0,1.009169764309995,0.9850196463654224,SPARSE
+7,2,WARN,Unknown,0.0822565034031868,0.2738587558269501,4659.0,SPARSE
+7,12,WARN,Unknown,0.08295897394418716,0.27491965889930725,4554.0,SPARSE
+7,14,WARN,Unknown,0.0648956298828125,0.24634207785129547,2044.0,SPARSE
+7,15,WARN,Unknown,0.0648956298828125,0.24634207785129547,2044.0,SPARSE
+7,16,WARN,Unknown,0.0648956298828125,0.24634207785129547,2044.0,SPARSE
+7,17,WARN,Unknown,0.0648956298828125,0.24634207785129547,2044.0,SPARSE
+7,18,WARN,Unknown,0.0648956298828125,0.24634207785129547,2044.0,SPARSE
+7,19,WARN,Unknown,0.0648956298828125,0.24634207785129547,2044.0,SPARSE
+7,20,WARN,Unknown,0.0648956298828125,0.24634207785129547,2044.0,SPARSE
+7,21,WARN,Unknown,0.0648956298828125,0.24634207785129547,2044.0,SPARSE
+7,22,WARN,Unknown,0.0648956298828125,0.24634207785129547,2044.0,SPARSE
+7,24,WARN,Unknown,0.0648956298828125,0.24634207785129547,2044.0,SPARSE
+7,25,WARN,Unknown,0.0648956298828125,0.24634207785129547,2044.0,SPARSE
+7,26,WARN,mask_sum robust_z=5249561600.00 > warn_cutoff=1367867264.00,0.1311143934726715,0.33747783303260803,11855.0,SPARSE
+7,27,WARN,Unknown,0.0648956298828125,0.24634207785129547,2044.0,SPARSE

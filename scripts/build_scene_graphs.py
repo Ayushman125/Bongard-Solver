@@ -14,6 +14,15 @@ import hashlib
 import concurrent.futures
 import threading
 import time
+# Modern image loading and GPU augmentation
+try:
+    import torch
+    import kornia
+    import torchvision
+    from PIL import Image
+    TORCH_KORNIA_AVAILABLE = True
+except ImportError:
+    TORCH_KORNIA_AVAILABLE = False
 
 # Ensure project root is in sys.path for imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -301,6 +310,7 @@ def profile_optimal_batch_size(records, build_func):
     print(f"[INFO] Selected optimal batch size: {best_size}")
     return best_size
 
+def main():
     parser = argparse.ArgumentParser(description="Build scene graphs from augmented images and derived labels")
     parser.add_argument('--aug', type=str, required=True, help='Path to augmented.pkl containing object records')
     parser.add_argument('--labels', type=str, default='data/derived_labels.json', help='Path to derived_labels.json')
@@ -324,18 +334,27 @@ def profile_optimal_batch_size(records, build_func):
         print(f"[INFO] Cache valid for {args.out}. Skipping graph build.")
         return
 
-    # Async I/O for loading large files
+    # Async I/O for loading large files, with logging
     def async_load_pickle(path):
+        print(f"[LOG] Loading pickle file: {path}")
         with open(path, 'rb') as f:
-            return pickle.load(f)
+            data = pickle.load(f)
+        print(f"[LOG] Loaded pickle file: {path}, records: {len(data) if hasattr(data, '__len__') else 'unknown'}")
+        return data
     def async_load_json(path):
+        print(f"[LOG] Loading JSON file: {path}")
         with open(path, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            data = json.load(f)
+        print(f"[LOG] Loaded JSON file: {path}, records: {len(data) if hasattr(data, '__len__') else 'unknown'}")
+        return data
 
     with concurrent.futures.ThreadPoolExecutor() as executor:
         future_aug = executor.submit(async_load_pickle, args.aug)
         future_labels = executor.submit(async_load_json, args.labels)
         augmented_data = future_aug.result()
+        print(f"[INFO] Loaded {len(augmented_data)} records from {args.aug}")
+        if len(augmented_data) > 0:
+            print(f"[LOG] Sample augmented record keys: {list(augmented_data[0].keys()) if isinstance(augmented_data[0], dict) else type(augmented_data[0])}")
         try:
             derived_labels = future_labels.result()
         except Exception:
@@ -357,25 +376,78 @@ def profile_optimal_batch_size(records, build_func):
     graphs = []
     profiler = TaskProfiler()
 
+    # Image feature cache (hash-based)
+    image_feature_cache = {}
+
+    def get_image_features(img_path, params=None):
+        """Load image, preprocess with Kornia if available, and cache features."""
+        cache_key = hashlib.sha256((img_path + str(params)).encode()).hexdigest()
+        if cache_key in image_feature_cache:
+            print(f"[LOG] Using cached image features for {img_path}")
+            return image_feature_cache[cache_key]
+        if not os.path.exists(img_path):
+            print(f"[ERROR] Image file not found: {img_path}")
+            return None
+        print(f"[LOG] Loading image: {img_path}")
+        try:
+            if TORCH_KORNIA_AVAILABLE:
+                img = Image.open(img_path).convert('RGB')
+                tensor = torchvision.transforms.ToTensor()(img).unsqueeze(0).cuda()
+                aug = kornia.augmentation.RandomAffine(degrees=10)
+                tensor_aug = aug(tensor)
+                image_feature_cache[cache_key] = tensor_aug.cpu()
+                print(f"[LOG] Augmented image loaded and processed (Kornia) for {img_path}")
+                return tensor_aug.cpu()
+            else:
+                img = Image.open(img_path).convert('RGB')
+                arr = np.array(img)
+                image_feature_cache[cache_key] = arr
+                print(f"[LOG] Image loaded (PIL/numpy) for {img_path}")
+                return arr
+        except Exception as e:
+            print(f"[ERROR] Failed to load/process image {img_path}: {e}")
+            return None
+
     def process_batch(batch):
         batch_graphs = []
-        for record in batch:
+        skipped = 0
+        sample_skipped = None
+        for idx, record in enumerate(batch):
             if not isinstance(record, dict) or 'objects' not in record:
+                skipped += 1
+                if sample_skipped is None:
+                    sample_skipped = record
+                print(f"[WARN] Skipping record at batch index {idx}: not a dict or missing 'objects'.")
                 continue
-            img_id = record.get('id')
-            if img_id and img_id in derived_labels:
-                label_map = {obj_data['id']: obj_data for obj_data in derived_labels.get(img_id, [])}
-                for obj in record.get('objects', []):
-                    obj.update(label_map.get(obj['id'], {}))
+            img_id = record.get('id') or record.get('problem_id')
+            img_path = record.get('spath') or record.get('image_path')
+            # Normalize image path for folder names
+            if img_path:
+                img_path = img_path.replace('category_1', '1').replace('category_0', '0')
+            print(f"[LOG] Processing record idx={idx}, id={img_id}, img_path={img_path}")
+            image_features = None
+            if img_path:
+                image_features = get_image_features(img_path, params={'id': img_id})
+                record['image_features'] = image_features
+            else:
+                print(f"[WARN] No image path found for record id={img_id}")
+            # objects is now a list of dicts, each representing an object (or the image itself)
+            # No need to update from derived_labels, as objects are already correct
             G = build_func(record)
             batch_graphs.append(G)
+        if skipped > 0:
+            print(f"[WARN] Skipped {skipped} records in batch due to missing or invalid format.")
+            if sample_skipped is not None:
+                print(f"[DEBUG] Sample skipped record: {sample_skipped}")
         return batch_graphs
 
     # Batch processing with persistent workers
     batches = [augmented_data[i:i+batch_size] for i in range(0, len(augmented_data), batch_size)]
+    print(f"[LOG] Starting batch processing: {len(batches)} batches, batch_size={batch_size}, parallel={args.parallel}")
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.parallel) as executor:
-        for batch in tqdm(batches, desc="Building graphs", mininterval=0.5):
+        for batch_idx, batch in enumerate(tqdm(batches, desc="Building graphs", mininterval=0.5)):
             start = time.time()
+            print(f"[LOG] Submitting batch {batch_idx+1}/{len(batches)} (records {batch_idx*batch_size} to {(batch_idx+1)*batch_size-1})")
             future = executor.submit(process_batch, batch)
             batch_graphs = future.result()
             graphs.extend(batch_graphs)
@@ -386,6 +458,15 @@ def profile_optimal_batch_size(records, build_func):
                 'throughput_graphs_per_sec': len(batch) / (latency / 1000)
             })
 
+    if len(graphs) == 0:
+        print(f"[ERROR] No scene graphs were produced. Check input data and filtering logic.")
+        # Print a sample input record for debugging
+        if len(augmented_data) > 0:
+            print(f"[DEBUG] Sample input record: {augmented_data[0]}")
+            if isinstance(augmented_data[0], dict):
+                print(f"[DEBUG] Sample input record keys: {list(augmented_data[0].keys())}")
+    else:
+        print(f"[LOG] Successfully built {len(graphs)} scene graphs.")
     with open(args.out, 'wb') as f:
         pickle.dump(graphs, f)
     save_hash(hash_path, current_hash)
