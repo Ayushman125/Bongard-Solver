@@ -649,6 +649,20 @@ class ImageAugmentor:
         MaskType.SPARSE: {'pixvar_min':0.0001,'edge_overlap_min':0.005,'area_ratio_min':0.1,'area_ratio_max':12.0},
         MaskType.DENSE:  {'pixvar_min':0.0005,'edge_overlap_min':0.01,'area_ratio_min':0.15,'area_ratio_max':10.0},
     }
+    
+    # Method alias for the module-level functions (provides class interface for global functions)
+    def sanitize_for_opencv(self, tensor):
+        """Convert tensor to OpenCV-compatible format (class method alias for module function)"""
+        import cv2
+        import numpy as np
+        import torch
+        # Call the module-level function
+        return sanitize_for_opencv(tensor)
+    
+    def diagnose_tensor_corruption(self, tensor, name="tensor", path=None):
+        """Class method alias for module-level diagnostic function"""
+        return diagnose_tensor_corruption(tensor, name=name, path=path)
+    
     def repair_mask(self, mask_tensor):
         """Apply morphological closing to repair thin masks."""
         import cv2
@@ -714,11 +728,13 @@ class ImageAugmentor:
         # Initialize hybrid SAM+SAP pipeline
         if HYBRID_PIPELINE_AVAILABLE:
             try:
+                print("[HYBRID] Initializing SAM autocoder...")
                 self.sam_autocoder = get_sam_autocoder(
                     model_type="vit_b",  # Start with smallest model
                     device=str(self.device),
                     points_per_side=32
                 )
+                print("[HYBRID] Initializing skeleton processor...")
                 self.skeleton_processor = get_skeleton_processor(
                     min_branch_len=5,
                     gap_fill_radius=3,
@@ -726,6 +742,8 @@ class ImageAugmentor:
                 )
                 self.hybrid_enabled = self.sam_autocoder.is_available()
                 print(f"[HYBRID] SAM+SAP pipeline initialized: {self.hybrid_enabled}")
+                if self.hybrid_enabled:
+                    print(f"[HYBRID] SAM model info: {self.sam_autocoder.get_model_info() if hasattr(self.sam_autocoder, 'get_model_info') else 'No model info available'}")
                 
                 # Tracking counters
                 self._sam_mask_count = 0
@@ -733,6 +751,8 @@ class ImageAugmentor:
                 
             except Exception as e:
                 print(f"[WARNING] Failed to initialize hybrid pipeline: {e}")
+                import traceback
+                traceback.print_exc()
                 self.hybrid_enabled = False
                 self.sam_autocoder = None
                 self.skeleton_processor = None
@@ -1328,16 +1348,34 @@ class ImageAugmentor:
                 # If mask is empty or very thin, try hybrid SAM generation
                 if mask_type == MaskType.EMPTY and self.hybrid_enabled:
                     print(f"[HYBRID] Empty geometry mask detected, using SAM for sample {idx}")
+                    print(f"[HYBRID] Pipeline state: hybrid_enabled={self.hybrid_enabled}, "
+                          f"sam_autocoder={self.sam_autocoder is not None}, "
+                          f"skeleton_processor={self.skeleton_processor is not None}")
+                    
+                    # Verify image format before processing
+                    img = images[idx]
+                    print(f"[HYBRID] Input image: shape={img.shape}, dtype={img.dtype}, "
+                          f"device={img.device}, min={img.min().item():.4f}, max={img.max().item():.4f}")
+                    
                     try:
                         # Generate SAM mask for this image
+                        print(f"[HYBRID] Calling generate_hybrid_mask for sample {idx}")
                         hybrid_mask = self.generate_hybrid_mask(images[idx])
+                        print(f"[HYBRID] Generate hybrid mask returned. Shape={hybrid_mask.shape}, "
+                              f"sum={hybrid_mask.sum().item():.1f}")
+                              
                         if hybrid_mask.sum() > 10:  # Valid mask generated
+                            print(f"[HYBRID] Valid mask generated (sum > 10)")
                             mask = hybrid_mask.squeeze(0)  # Remove channel dim
                             mask_type = classify_mask(mask)
                             self._sam_mask_count += 1  # Track SAM usage
                             print(f"[HYBRID] SAM generated {mask_type.name} mask with area {mask.sum().item():.1f}")
+                        else:
+                            print(f"[HYBRID] Empty mask returned (sum <= 10): {hybrid_mask.sum().item()}")
                     except Exception as e:
                         print(f"[HYBRID] SAM mask generation failed for sample {idx}: {e}")
+                        import traceback
+                        traceback.print_exc()
                 
                 mask_types.append(mask_type)
                 # Conservative pre-warp fattening for mask (area-adaptive)
@@ -1779,26 +1817,45 @@ class ImageAugmentor:
                 return self.safe_device_transfer(mask_tensor, self.device)
         
         try:
+            print(f"[HYBRID] Generating mask with SAM. Image tensor shape: {image_tensor.shape}")
             # Convert tensor to numpy for SAM processing
             img_np = image_tensor.cpu().numpy()
             if img_np.ndim == 3:
+                print(f"[HYBRID] Transposing image from CHW to HWC format. Current shape: {img_np.shape}")
                 img_np = img_np.transpose(1, 2, 0)  # CHW -> HWC
+                print(f"[HYBRID] After transpose, shape: {img_np.shape}")
+            
             if img_np.max() <= 1.0:
+                print(f"[HYBRID] Normalizing image from [0,1] to [0,255]. Current range: [{img_np.min()}, {img_np.max()}]")
                 img_np = (img_np * 255).astype(np.uint8)
+                print(f"[HYBRID] After normalization, range: [{img_np.min()}, {img_np.max()}]")
             
             # Ensure RGB format for SAM
             if len(img_np.shape) == 2:
+                print(f"[HYBRID] Converting grayscale to RGB. Current shape: {img_np.shape}")
                 img_np = cv2.cvtColor(img_np, cv2.COLOR_GRAY2RGB)
+                print(f"[HYBRID] After conversion, shape: {img_np.shape}")
             elif img_np.shape[2] == 1:
+                print(f"[HYBRID] Converting single-channel to RGB. Current shape: {img_np.shape}")
                 img_np = cv2.cvtColor(img_np.squeeze(-1), cv2.COLOR_GRAY2RGB)
+                print(f"[HYBRID] After conversion, shape: {img_np.shape}")
             
+            print(f"[HYBRID] Calling SAM autocoder get_best_mask with image shape: {img_np.shape}, dtype: {img_np.dtype}")
+            if self.sam_autocoder is None:
+                print("[HYBRID ERROR] SAM autocoder is None! This should not happen when hybrid_enabled=True")
+                raise RuntimeError("SAM autocoder is None but hybrid_enabled=True")
+                
             # Generate mask with SAM
             sam_mask = self.sam_autocoder.get_best_mask(img_np)
+            print(f"[HYBRID] SAM mask generated: shape={sam_mask.shape}, dtype={sam_mask.dtype}, min={sam_mask.min()}, max={sam_mask.max()}")
             
             # Apply skeleton-aware post-processing
             if sam_mask.max() > 0:
+                print("[HYBRID] Applying skeleton-aware post-processing")
                 refined_mask = self.skeleton_processor.sap_refine(sam_mask)
+                print(f"[HYBRID] Refined mask: shape={refined_mask.shape}, min={refined_mask.min()}, max={refined_mask.max()}")
             else:
+                print("[HYBRID] SAM returned empty mask, skipping skeleton-aware post-processing")
                 refined_mask = sam_mask
             
             # Convert back to tensor
@@ -1806,11 +1863,22 @@ class ImageAugmentor:
             return self.safe_device_transfer(mask_tensor, self.device)
             
         except Exception as e:
-            print(f"[HYBRID] Mask generation failed: {e}")
+            print(f"[HYBRID ERROR] Mask generation failed: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # Print diagnostic info about objects
+            print(f"[HYBRID DIAGNOSTIC] hybrid_enabled = {self.hybrid_enabled}")
+            print(f"[HYBRID DIAGNOSTIC] sam_autocoder is None: {self.sam_autocoder is None}")
+            print(f"[HYBRID DIAGNOSTIC] skeleton_processor is None: {self.skeleton_processor is None}")
+            print(f"[HYBRID DIAGNOSTIC] image_tensor: shape={image_tensor.shape}, dtype={image_tensor.dtype}")
+            
             # Fallback to original mask or simple threshold
             if original_mask is not None:
+                print("[HYBRID FALLBACK] Using original mask as fallback")
                 return original_mask
             else:
+                print("[HYBRID FALLBACK] Creating empty mask as fallback")
                 return self.safe_device_transfer(torch.zeros(1, image_tensor.shape[1], image_tensor.shape[2]), self.device)
 
     def generate_diverse_sam_masks(self, image_tensor: torch.Tensor, top_k: int = 3) -> List[torch.Tensor]:
