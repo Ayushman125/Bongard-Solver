@@ -76,13 +76,26 @@ def diagnose_tensor_corruption(tensor, name="tensor", path=None):
     print(f" → After squeeze: shape={arr.shape}, dtype={arr.dtype}, min={arr.min()}, max={arr.max()}")
 
     # Test OpenCV connectedComponents
+    opencv_ok = False
+    is_corrupted = False
     try:
         cv2_arr = arr.astype(np.uint8)
         n_labels, _ = cv2.connectedComponents(cv2_arr)
         print(f" ✅ OpenCV connectedComponents succeeded: labels={n_labels}")
+        opencv_ok = True
     except Exception as e:
         print(f" ❌ OpenCV error: {e}")
-    return arr
+        is_corrupted = True
+
+    result = {
+        "shape": arr.shape,
+        "dtype": str(arr.dtype),
+        "min": arr.min(),
+        "max": arr.max(),
+        "opencv_ok": opencv_ok,
+        "corrupted": is_corrupted,
+    }
+    return result
 
 def sanitize_for_opencv(tensor):
     """Fix common tensor corruption patterns"""
