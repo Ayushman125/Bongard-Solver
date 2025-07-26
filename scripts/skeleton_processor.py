@@ -54,47 +54,97 @@ class SkeletonAwareProcessor:
         Returns:
             Refined binary mask [H,W] uint8
         """
+        print(f"[SAP] Starting refinement on mask: shape={mask_bin.shape}, min={mask_bin.min():.6f}, max={mask_bin.max():.6f}")
+        
         if mask_bin.max() == 0:
+            print("[SAP] Input mask is empty, returning zeros")
             return mask_bin.astype(np.uint8)
         
         try:
             # Normalize to 0/255
             mask_clean = self._clean_input_mask(mask_bin)
             if mask_clean.max() == 0:
+                print("[SAP] Mask became empty after cleaning, returning zeros")
                 return mask_clean
+            
+            print(f"[SAP] After cleaning: nonzero_pixels={np.count_nonzero(mask_clean)}")
             
             # Extract skeleton
             skeleton = self._extract_skeleton(mask_clean)
             if skeleton.max() == 0:
+                print("[SAP] Skeleton extraction failed, returning cleaned mask as fallback")
                 return mask_clean  # Fallback to cleaned input
+            
+            print(f"[SAP] Skeleton extracted: nonzero_pixels={np.count_nonzero(skeleton)}")
             
             # Repair gaps in skeleton
             skeleton_repaired = self._repair_skeleton_gaps(skeleton)
+            repaired_pixels = np.count_nonzero(skeleton_repaired)
+            print(f"[SAP] After gap repair: nonzero_pixels={repaired_pixels}")
             
             # Restore width using distance transform
             mask_restored = self._restore_mask_width(skeleton_repaired, mask_clean)
+            final_pixels = np.count_nonzero(mask_restored)
+            print(f"[SAP] Final result: nonzero_pixels={final_pixels}")
+            
+            # Validate result isn't empty
+            if mask_restored.max() == 0:
+                print("[SAP] Width restoration failed, returning cleaned mask")
+                return mask_clean
             
             return mask_restored.astype(np.uint8)
             
         except Exception as e:
+            print(f"[SAP] Refinement failed: {e}")
             logging.error(f"SAP refinement failed: {e}")
-            return mask_bin.astype(np.uint8)  # Return original on failure
+            # Return original on failure, properly converted to uint8
+            if mask_bin.max() <= 1:
+                return (mask_bin * 255).astype(np.uint8)
+            else:
+                return mask_bin.astype(np.uint8)
     
     def _clean_input_mask(self, mask: np.ndarray) -> np.ndarray:
-        """Clean and normalize input mask."""
-        # Convert to binary
-        if mask.max() <= 1:
+        """Clean and normalize input mask with enhanced low-value handling."""
+        # Handle very low-value masks (common with SAM outputs)
+        if mask.max() <= 0.01:
+            # For very low values, use adaptive thresholding
+            if mask.max() > 0:
+                # Use half of max value as threshold for very low-value masks
+                threshold_val = mask.max() / 2
+                mask_bin = (mask > threshold_val).astype(np.uint8) * 255
+                print(f"[SAP] Low-value mask detected (max={mask.max():.6f}), using adaptive threshold={threshold_val:.6f}")
+            else:
+                # Completely empty mask
+                return np.zeros_like(mask, dtype=np.uint8)
+        elif mask.max() <= 1:
+            # Standard float mask [0,1] -> [0,255]
             mask_bin = (mask * 255).astype(np.uint8)
         else:
+            # Already in [0,255] range or higher
             mask_bin = (mask > 127).astype(np.uint8) * 255
         
-        # Remove small noise components
-        mask_bin = remove_small_objects(
-            mask_bin > 0, min_size=self.min_component_size
-        ).astype(np.uint8) * 255
+        # Skip processing if mask is too small or empty
+        if mask_bin.max() == 0:
+            print("[SAP] Empty mask after thresholding, returning zeros")
+            return mask_bin
+            
+        nonzero_count = np.count_nonzero(mask_bin)
+        if nonzero_count < 10:
+            print(f"[SAP] Very sparse mask ({nonzero_count} pixels), minimal processing")
+            # For very sparse masks, just do basic cleanup
+            return mask_bin
         
-        # Fill small holes
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        # Remove small noise components
+        try:
+            mask_bin = remove_small_objects(
+                mask_bin > 0, min_size=min(self.min_component_size, nonzero_count // 4)
+            ).astype(np.uint8) * 255
+        except Exception as e:
+            print(f"[SAP] Small object removal failed: {e}, skipping")
+        
+        # Fill small holes - be more conservative for low-value masks
+        kernel_size = 3 if mask.max() > 0.1 else 2  # Smaller kernel for low-value masks
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
         mask_bin = cv2.morphologyEx(mask_bin, cv2.MORPH_CLOSE, kernel)
         
         return mask_bin
@@ -150,35 +200,71 @@ class SkeletonAwareProcessor:
     def _restore_mask_width(self, skeleton: np.ndarray, original_mask: np.ndarray) -> np.ndarray:
         """
         Restore mask width using distance transform and original mask guidance.
+        Enhanced to handle very thin masks and low-value inputs.
         """
         if skeleton.max() == 0:
+            print("[SAP] Empty skeleton, returning original mask")
             return original_mask
         
         # Compute distance transform of original mask
         original_bool = original_mask > 127
         if not np.any(original_bool):
+            print("[SAP] Original mask is empty, returning skeleton")
             return skeleton
         
-        distance_map = distance_transform_edt(original_bool)
+        try:
+            distance_map = distance_transform_edt(original_bool)
+        except Exception as e:
+            print(f"[SAP] Distance transform failed: {e}, using skeleton")
+            return skeleton
         
         # Get skeleton points
         skeleton_points = skeleton > 127
+        skeleton_pixel_count = np.count_nonzero(skeleton_points)
+        
+        if skeleton_pixel_count == 0:
+            print("[SAP] No skeleton points found, returning original mask")
+            return original_mask
         
         # Estimate radius at each skeleton point
         skeleton_distances = distance_map[skeleton_points]
         if len(skeleton_distances) == 0:
+            print("[SAP] No valid skeleton distances, returning original mask")
             return original_mask
         
-        # Use median radius as restoration guide
-        median_radius = max(1, int(np.median(skeleton_distances)))
+        # Use median radius as restoration guide, but be more conservative for thin masks
+        median_radius = np.median(skeleton_distances)
+        
+        # Adaptive radius based on mask characteristics
+        if skeleton_pixel_count < 50:  # Very thin mask
+            final_radius = max(1, int(median_radius * 0.8))  # More conservative
+            print(f"[SAP] Thin mask detected, using conservative radius: {final_radius}")
+        elif median_radius < 2:  # Naturally thin structures
+            final_radius = max(1, int(median_radius * 1.2))  # Slightly expand
+            print(f"[SAP] Thin structure detected, using slight expansion: {final_radius}")
+        else:
+            final_radius = max(1, int(median_radius))
+            print(f"[SAP] Normal structure, using median radius: {final_radius}")
+        
+        # Cap at reasonable size to prevent over-expansion
+        final_radius = min(final_radius, 7)
         
         # Dilate skeleton with estimated radius
-        kernel_size = min(median_radius * 2 + 1, 15)  # Cap at reasonable size
+        kernel_size = final_radius * 2 + 1
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-        restored_mask = cv2.dilate(skeleton, kernel, iterations=1)
+        
+        try:
+            restored_mask = cv2.dilate(skeleton, kernel, iterations=1)
+        except Exception as e:
+            print(f"[SAP] Dilation failed: {e}, returning skeleton")
+            return skeleton
         
         # Constrain to original mask bounds to prevent over-expansion
         restored_mask = cv2.bitwise_and(restored_mask, original_mask)
+        
+        # Validate result
+        final_nonzero = np.count_nonzero(restored_mask)
+        print(f"[SAP] Width restoration complete: {skeleton_pixel_count} skeleton -> {final_nonzero} restored pixels")
         
         return restored_mask
     

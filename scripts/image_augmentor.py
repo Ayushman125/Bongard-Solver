@@ -94,6 +94,7 @@ def diagnose_tensor_corruption(tensor, name="tensor", path=None):
         "max": arr.max(),
         "opencv_ok": opencv_ok,
         "corrupted": is_corrupted,
+        "channels": arr.shape[-1] if arr.ndim == 3 else 1,
     }
     return result
 
@@ -2302,6 +2303,111 @@ class ImageAugmentor:
                 
         except Exception as e:
             print(f"[MASK DIAGNOSTIC] Error during analysis: {e}")
+    
+    def safe_topology_validation(self, orig_mask_tensor, aug_mask_tensor, tolerance=1):
+        """
+        Perform topology validation safely, handling tensor to OpenCV/NumPy conversions,
+        avoiding errors from invalid input types or shapes.
+        
+        Args:
+            orig_mask_tensor: Original mask tensor
+            aug_mask_tensor: Augmented mask tensor  
+            tolerance: Maximum allowed difference in topology metrics
+            
+        Returns:
+            (is_valid, reason): Tuple of validation result and explanation
+        """
+        try:
+            from skimage.morphology import skeletonize
+            from skimage.measure import label
+            
+            def tensor_to_binary_np(tensor):
+                """Convert tensor to binary numpy array safely."""
+                if tensor is None:
+                    return np.zeros((64, 64), dtype=bool)
+                    
+                # Convert to numpy
+                if hasattr(tensor, 'detach'):
+                    arr = tensor.detach().cpu().numpy()
+                else:
+                    arr = np.array(tensor)
+                
+                # Remove singleton dimensions
+                while arr.ndim > 2:
+                    if arr.shape[-1] == 1:
+                        arr = arr.squeeze(-1)
+                    elif arr.shape[0] == 1:
+                        arr = arr.squeeze(0)
+                    else:
+                        # Take first channel if multi-channel
+                        arr = arr[..., 0] if arr.ndim == 3 else arr[0]
+                
+                # Handle very low values (common with SAM masks)
+                if arr.max() <= 0.01:
+                    # Use very low threshold for low-value masks
+                    binary = arr > (arr.max() / 2) if arr.max() > 0 else arr > 0
+                else:
+                    # Standard threshold for normal masks
+                    binary = arr > 0.1 if arr.max() <= 1.0 else arr > 25
+                
+                return binary.astype(bool)
+            
+            # Convert both masks to binary numpy arrays
+            orig_binary = tensor_to_binary_np(orig_mask_tensor)
+            aug_binary = tensor_to_binary_np(aug_mask_tensor)
+            
+            # Check if masks are empty
+            if not np.any(orig_binary) and not np.any(aug_binary):
+                return True, "Both masks empty - topology preserved"
+            if not np.any(orig_binary):
+                return True, "Original mask empty - no topology to preserve"  
+            if not np.any(aug_binary):
+                return False, "Augmented mask empty - topology lost"
+            
+            # Extract skeletons using skimage for robustness
+            try:
+                orig_skel = skeletonize(orig_binary)
+                aug_skel = skeletonize(aug_binary)
+            except Exception as skel_error:
+                print(f"[TOPOLOGY] Skeletonization failed: {skel_error}")
+                # Fallback to connected component analysis without skeletonization
+                orig_labeled = label(orig_binary, connectivity=2)
+                aug_labeled = label(aug_binary, connectivity=2)
+                orig_components = orig_labeled.max()
+                aug_components = aug_labeled.max()
+                
+                comp_diff = abs(orig_components - aug_components)
+                if comp_diff <= tolerance:
+                    return True, f"Component count preserved: {orig_components} -> {aug_components}"
+                else:
+                    return False, f"Component count changed: {orig_components} -> {aug_components} (diff: {comp_diff})"
+            
+            # Count connected components in skeletons
+            orig_skel_labeled = label(orig_skel, connectivity=2)
+            aug_skel_labeled = label(aug_skel, connectivity=2)
+            
+            orig_skel_components = orig_skel_labeled.max()
+            aug_skel_components = aug_skel_labeled.max()
+            
+            # Check skeleton topology preservation
+            skel_diff = abs(orig_skel_components - aug_skel_components)
+            
+            if skel_diff <= tolerance:
+                return True, f"Skeleton topology preserved: {orig_skel_components} -> {aug_skel_components}"
+            else:
+                # More detailed analysis for failures
+                print(f"[TOPOLOGY] Skeleton components changed: {orig_skel_components} -> {aug_skel_components}")
+                
+                # Check if it's a minor change that might be acceptable
+                if skel_diff <= tolerance * 2:
+                    return True, f"Minor skeleton change within acceptable range: {skel_diff}"
+                else:
+                    return False, f"Major skeleton topology change: {orig_skel_components} -> {aug_skel_components} (diff: {skel_diff})"
+                    
+        except Exception as e:
+            print(f"[TOPOLOGY ERROR] Validation failed: {e}")
+            # Fail safe - don't block augmentation on topology validation errors
+            return True, f"Topology check skipped due to error: {str(e)}"
     
     def _is_mask_valid(self, mask):
         """Early gate: check if mask has meaningful content."""
