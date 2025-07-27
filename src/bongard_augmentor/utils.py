@@ -9,6 +9,10 @@ import torch
 import numpy as np
 import cv2
 from enum import Enum, auto
+import logging
+import sys
+import yaml
+from pathlib import Path
 
 class MaskType(Enum):
     EMPTY = auto()
@@ -230,3 +234,85 @@ def safe_topology_validation(orig_mask, aug_mask):
         # Don't fail on topology errors during cleanup
         print(f"[TOPOLOGY WARNING] {e}")
         return True, "Topology check skipped due to error"
+
+def setup_logging(log_level: str = 'INFO', log_file: str = 'logs/augmentor.log'):
+    """Set up logging for the application."""
+    level = getattr(logging, log_level.upper(), logging.INFO)
+    
+    # Ensure log directory exists
+    log_dir = Path(log_file).parent
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    # Configure root logger
+    logging.basicConfig(
+        level=level,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(log_file, mode='a')
+        ]
+    )
+    log = logging.getLogger(__name__)
+    log.info(f"Logging initialized. Level: {log_level}, File: {log_file}")
+
+def get_base_config() -> Dict:
+    """Loads a base configuration from a YAML file or returns a default."""
+    # In a real-world scenario, this would load from a file
+    # For this case, we'll define a comprehensive default config here.
+    return {
+        'data': {
+            'input_path': 'data/derived_labels.json',
+            'output_path': 'data/augmented.pkl',
+            'problem_folders_path': 'data/ShapeBongard_V2/puzzles',
+        },
+        'processing': {
+            'batch_size': 32,
+            'device': 'cuda' if torch.cuda.is_available() else 'cpu',
+        },
+        'augmentation': {
+            'type': 'geometric', # 'geometric', 'photometric', 'both'
+            'geometric_params': {
+                'rotation': 15,
+                'scale_min': 0.9,
+                'scale_max': 1.1,
+                'translate_x': 0.1,
+                'translate_y': 0.1,
+                'shear': 5,
+            },
+            'photometric_params': {
+                'brightness': 0.2,
+                'contrast': 0.2,
+                'saturation': 0.2,
+                'hue': 0.1,
+            }
+        },
+        'sam': {
+            'model_type': 'vit_h',
+            'checkpoint_path': 'models/sam_vit_h_4b8939.pth',
+            'hq_checkpoint_path': 'models/sam_hq_vit_h.pth',
+            'use_hq': True,
+        },
+        'prompting': {
+            'strategy': 'hybrid', # 'grid', 'bbox', 'hybrid'
+            'grid_points_per_side': 16,
+            'use_semantic_filtering': True,
+            'concept_source': 'data/conceptnet_lite.json',
+        },
+        'refinement': {
+            'use_iterative_refinement': True,
+            'max_iterations': 3,
+            'use_morphological_cleanup': True,
+            'use_fallback_on_failure': True,
+            'fallback_strategy': 'convex_hull', # 'convex_hull', 'bbox'
+        },
+        'qa': {
+            'enabled': True,
+            'failure_rate_threshold': 0.15, # 15% failure rate triggers fallback mode
+            'metrics': ['iou', 'pixel_accuracy', 'topology_consistency'],
+            'log_dir': 'qa_adversarial',
+        },
+        'logging': {
+            'level': 'INFO',
+            'log_file': 'logs/hybrid_augmentor.log'
+        }
+    }

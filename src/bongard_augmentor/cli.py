@@ -1,88 +1,52 @@
 import argparse
-import json
-import torch
-import pickle
-from .main import ImageAugmentor
-from .dataset import ImagePathDataset
-from .utils import HYBRID_PIPELINE_AVAILABLE
+import logging
+from .hybrid import HybridAugmentor
+from .utils import setup_logging, get_base_config
 
 def main():
     """Main entry point for the augmentation script."""
     parser = argparse.ArgumentParser(description="Bongard Problem Image Augmentation")
     parser.add_argument('--input', type=str, required=True, help='Path to derived_labels.json')
     parser.add_argument('--out', type=str, required=True, help='Path to output augmented.pkl')
-    parser.add_argument('--parallel', type=int, default=1, help='Number of parallel workers')
-    parser.add_argument('--rotate', type=int, default=0, help='Max rotation angle')
-    parser.add_argument('--scale', type=float, default=1.0, help='Max scale factor')
     parser.add_argument('--batch-size', type=int, default=32, help='Batch size for processing')
     parser.add_argument('--type', type=str, default='geometric', choices=['geometric', 'photometric', 'both'], help='Type of augmentation')
-    parser.add_argument('--enable-hybrid', action='store_true', help='Enable hybrid SAM+SAP pipeline')
-    parser.add_argument('--sam-model', type=str, default='vit_h', help='SAM model type')
-    parser.add_argument('--test-corruption-fixes', action='store_true', help='Test corruption diagnostic and mitigation systems')
-    parser.add_argument('--force-emergency-qa', action='store_true', help='Force ultra-permissive emergency QA thresholds')
-    parser.add_argument('--fallback-empty', action='store_true', help='Use SAM for empty geometry masks')
-    parser.add_argument('--qa-fail-threshold', type=float, default=0.15, help='QA failure rate threshold')
+    parser.add_argument('--sam-model', type=str, default='vit_h', help='SAM model type (e.g., vit_h, vit_l, vit_b)')
+    parser.add_argument('--qa-fail-threshold', type=float, default=0.15, help='QA failure rate threshold to trigger fallback')
+    parser.add_argument('--log-level', type=str, default='INFO', help='Logging level (e.g., DEBUG, INFO, WARNING)')
+    parser.add_argument('--log-file', type=str, default='logs/augmentor.log', help='Path to the log file.')
+    # Deprecated/handled by config:
+    # --parallel, --rotate, --scale, --enable-hybrid, --test-corruption-fixes, --force-emergency-qa, --fallback-empty
     args = parser.parse_args()
 
-    print("[INIT] Initializing Bongard Hybrid Augmentation Pipeline")
-    print(f"  Input: {args.input}")
-    print(f"  Output: {args.out}")
-    print(f"  Batch size: {args.batch_size}")
-    # Always enable hybrid pipeline
-    print(f"  Hybrid enabled: True")
-    print(f"  SAM model: {args.sam_model}")
+    # 1. Setup Logging
+    setup_logging(args.log_level, args.log_file)
+    log = logging.getLogger(__name__)
 
-    with open(args.input, 'r') as f:
-        derived_labels = json.load(f)
-    image_paths = [entry['image_path'] for entry in derived_labels]
-    dataset = ImagePathDataset(image_paths, derived_labels_path=args.input)
+    # 2. Create Configuration
+    log.info("Loading base configuration.")
+    config = get_base_config()
 
-    augmentor = ImageAugmentor(batch_size=args.batch_size)
-    
-    if HYBRID_PIPELINE_AVAILABLE:
-        print("[INIT] Initializing hybrid pipeline components (SAM, SAP)")
-        augmentor.initialize_hybrid_pipeline(
-            sam_model_type=args.sam_model,
-            enable_sap=True
-        )
+    # Update config with CLI arguments
+    log.info("Updating configuration with CLI arguments.")
+    config['data']['input_path'] = args.input
+    config['data']['output_path'] = args.out
+    config['processing']['batch_size'] = args.batch_size
+    config['augmentation']['type'] = args.type
+    config['sam']['model_type'] = args.sam_model
+    config['qa']['failure_rate_threshold'] = args.qa_fail_threshold
 
-    if args.test_corruption_fixes:
-        print("[QA TEST] Running corruption fix tests...")
-        test_batch = [dataset[i] for i in range(min(3, len(dataset)))]
-        image_tensors = [item[0] for item in test_batch if item[0] is not None]
-        if not image_tensors:
-            print("[ERROR] No valid images found for corruption test. Check your input paths.")
-            return
-        images = torch.stack(image_tensors)
-        # Use a simple corruption test: add noise and print stats
-        noisy_images = images + 0.2 * torch.randn_like(images)
-        print(f"[QA TEST] Corruption test: mean={noisy_images.mean().item():.4f}, std={noisy_images.std().item():.4f}")
-        return
+    log.info(f"Final configuration loaded for pipeline.")
+    log.debug(f"Config: {config}")
 
-    all_results = []
-    for idx in range(0, len(dataset), args.batch_size):
-        batch = [dataset[i] for i in range(idx, min(idx+args.batch_size, len(dataset)))]
-        
-        images = torch.stack([item[0] for item in batch if item[0] is not None])
-        paths = [item[1] for item in batch if item[1] is not None]
-        geometries = [item[2] for item in batch if item[2] is not None]
-
-        if images.numel() == 0:
-            continue
-
-        results = augmentor.augment_batch(
-            images,
-            paths,
-            geometries,
-            augment_type=args.type,
-            batch_idx=idx // args.batch_size
-        )
-        all_results.append(results)
-
-    with open(args.out, 'wb') as f:
-        pickle.dump(all_results, f)
-
-    print(f"[MAIN] Augmentation complete. Saved {len(all_results)} batches to {args.out}")
+    # 3. Instantiate and Run the Pipeline
+    log.info("Initializing Bongard Hybrid Augmentation Pipeline.")
+    try:
+        augmentor = HybridAugmentor(config)
+        augmentor.run_pipeline()
+        log.info(f"Augmentation complete. Results saved to {config['data']['output_path']}")
+    except Exception as e:
+        log.critical(f"An unrecoverable error occurred in the pipeline: {e}", exc_info=True)
+        # In a real scenario, you might want to perform cleanup here
 
 if __name__ == "__main__":
     main()
