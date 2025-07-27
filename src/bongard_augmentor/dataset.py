@@ -54,6 +54,12 @@ class ImagePathDataset(data.Dataset):
             
         except FileNotFoundError:
             print(f"Warning: File not found {img_path}")
+            # Diagnostic: print all available files in the parent directory
+            parent_dir = os.path.dirname(img_path)
+            if os.path.exists(parent_dir):
+                print(f"Files in {parent_dir}: {os.listdir(parent_dir)}")
+            else:
+                print(f"Parent directory {parent_dir} does not exist.")
             return None, None, None
         except Exception as e:
             print(f"Warning: Error loading {img_path}: {e}")

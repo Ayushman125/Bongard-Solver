@@ -41,7 +41,8 @@ def main():
         'rotate': args.rotate,
         'scale': args.scale,
         'batch_size': args.batch_size,
-        'force_emergency_qa': args.force_emergency_qa
+        'force_emergency_qa': args.force_emergency_qa,
+        'qa': {'enabled': True}
     }
     augmentor = HybridAugmentor(config)
     images = load_images_from_json(args.input)

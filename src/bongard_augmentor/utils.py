@@ -11,6 +11,7 @@ import cv2
 from enum import Enum, auto
 import logging
 import sys
+from typing import Dict
 import yaml
 from pathlib import Path
 

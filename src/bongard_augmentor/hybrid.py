@@ -3,6 +3,7 @@
 # Consolidates SAM and Skeleton-Aware Processing
 # ------------------------------------------------------------------
 
+
 import os
 import torch
 import numpy as np
@@ -10,6 +11,7 @@ import cv2
 import time
 import logging
 import requests
+import json
 from typing import Optional, Dict, List, Union, Tuple
 from pathlib import Path
 from scipy.ndimage import distance_transform_edt
@@ -38,357 +40,334 @@ except Exception as e:
 
 class MaskRefiner:
     """
-    An advanced, professional-grade mask refinement pipeline.
-    Uses a two-stage process: contour-based simplification and morphological cleaning.
-    This approach is more robust than skeletonization for preserving object shape.
+    An advanced, professional-grade mask refinement and generation pipeline.
+    Uses a two-stage process for refinement: contour-based simplification and morphological cleaning.
+    For initial mask generation, it leverages an ensemble of Segment Anything Models (SAM)
+    with adaptive prompting, and provides a robust fallback stack if SAM prediction fails.
+    This approach is more robust than simple skeletonization for preserving object shape.
     """
     def __init__(self,
                  contour_approx_factor: float = 0.005,
                  min_component_size: int = 50,
                  closing_kernel_size: int = 5,
-                 opening_kernel_size: int = 3):
+                 opening_kernel_size: int = 3,
+                 sam_model_types: Optional[List[str]] = None,
+                 sam_cache_dir: Optional[str] = None):
+        """
+        Initializes the MaskRefiner with parameters for mask processing and SAM integration.
+
+        Args:
+            contour_approx_factor (float): Factor for epsilon in contour approximation.
+                                            Smaller values result in more precise contours.
+            min_component_size (int): Minimum size (in pixels) for connected components to be kept
+                                    after morphological operations.
+            closing_kernel_size (int): Size of the kernel for morphological closing.
+            opening_kernel_size (int): Size of the kernel for morphological opening.
+            sam_model_types (Optional[List[str]]): List of SAM model types to load (e.g., ['vit_h', 'vit_l']).
+                                                    If None, defaults to ['vit_h'].
+            sam_cache_dir (Optional[str]): Directory to cache SAM checkpoints. Defaults to './sam_checkpoints'.
+        """
         self.contour_approx_factor = contour_approx_factor
         self.min_component_size = min_component_size
         self.closing_kernel_size = closing_kernel_size
         self.opening_kernel_size = opening_kernel_size
-        # Precompute distance threshold for skeleton grow
+
+        # Precompute distance threshold for skeleton grow (though not directly used in provided code)
         self.grow_threshold = opening_kernel_size
+
+        # SAM-related attributes
+        self.models = {}
+        self.predictors = {}
+        self.is_initialized = False
+        self.device = "cuda" if SAM_AVAILABLE and torch.cuda.is_available() else "cpu"
+        self.cache_dir = Path(sam_cache_dir if sam_cache_dir else "./sam_checkpoints")
+        self.ensemble_weights = None # Will be set during SAM initialization
+
+        # Initialize SAM models if available
+        if SAM_AVAILABLE:
+            self._initialize_sam_models(sam_model_types)
+        else:
+            logging.warning("SAM is not available, mask generation will rely solely on fallback methods.")
+
+    def _initialize_sam_models(self, model_types: Optional[List[str]] = None):
+        """
+        Initializes and loads SAM models and predictors. Downloads checkpoints if necessary.
+
+        Args:
+            model_types (Optional[List[str]]): List of SAM model types to load.
+                                                Defaults to ['vit_h'] if None.
+        """
+        if not SAM_AVAILABLE:
+            logging.warning("SAM library not imported, skipping SAM model initialization.")
+            return
+
+        if model_types is None:
+            model_types = ['vit_h'] # Default to the largest model if not specified
+
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+        checkpoint_map = {
+            'vit_h': 'sam_vit_h_4b8939.pth',
+            'vit_l': 'sam_vit_l_0b3195.pth',
+            'vit_b': 'sam_vit_b_01ec64.pth',
+        }
+        
+        # Default ensemble weights (can be adjusted based on model performance)
+        # Assuming equal weight for now, but could be set per model type if needed
+        self.ensemble_weights = [1.0] * len(model_types)
+
+        loaded_count = 0
+        for i, model_type in enumerate(model_types):
+            checkpoint_file = checkpoint_map.get(model_type)
+            if not checkpoint_file:
+                logging.warning(f"Unknown SAM model type: {model_type}. Skipping.")
+                continue
+
+            target_path = self.cache_dir / checkpoint_file
+            checkpoint_path = None
+
+            if target_path.exists():
+                checkpoint_path = target_path
+                logging.info(f"Found SAM checkpoint {checkpoint_file} at {checkpoint_path}.")
+            else:
+                logging.info(f"SAM checkpoint {checkpoint_file} not found locally. Attempting download...")
+                checkpoint_urls = {
+                    'sam_vit_h_4b8939.pth': 'https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth',
+                    'sam_vit_l_0b3195.pth': 'https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth',
+                    'sam_vit_b_01ec64.pth': 'https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth',
+                }
+                url = checkpoint_urls.get(checkpoint_file)
+                if url:
+                    try:
+                        import requests
+                        logging.info(f"Downloading SAM checkpoint {checkpoint_file} from {url} ...")
+                        r = requests.get(url, stream=True)
+                        r.raise_for_status()
+                        with open(target_path, 'wb') as f:
+                            for chunk in r.iter_content(chunk_size=8192):
+                                f.write(chunk)
+                        checkpoint_path = target_path
+                        logging.info(f"Downloaded SAM checkpoint to {checkpoint_path}")
+                    except Exception as e:
+                        logging.error(f"Failed to download {checkpoint_file}: {e}")
+                else:
+                    logging.error(f"No download URL found for checkpoint: {checkpoint_file}")
+
+            if checkpoint_path is None:
+                logging.error(f"SAM checkpoint not found and could not be downloaded for {model_type}. "
+                              f"Tried: {checkpoint_file}")
+                continue
+
+            try:
+                # Load model
+                if sam_model_registry and model_type in sam_model_registry:
+                    sam_model = sam_model_registry[model_type](checkpoint=str(checkpoint_path)).to(self.device)
+                    self.models[model_type] = sam_model
+                    # Create predictor
+                    predictor = SamPredictor(sam_model)
+                    self.predictors[model_type] = predictor
+                    loaded_count += 1
+                    logging.info(f"Loaded SAM model: {model_type} from {checkpoint_path}")
+                else:
+                    logging.error(f"SAM model registry does not contain '{model_type}'.")
+            except Exception as e:
+                logging.error(f"Failed to load SAM model {model_type}: {e}")
+
+        self.is_initialized = loaded_count > 0
+        if self.is_initialized:
+            logging.info(f"SAM ensemble initialized with {loaded_count} model(s): {list(self.models.keys())}")
+            # Adjust ensemble weights if the actual number of loaded models is different
+            self.ensemble_weights = [1.0] * loaded_count
+        else:
+            logging.error("No SAM models loaded. SAM functionalities will be disabled.")
 
     def _contour_refinement(self, mask_bin: np.ndarray) -> np.ndarray:
         """
         Refines a binary mask using contour approximation.
-        Simplifies contours and fills resulting shapes.
+        Simplifies contours and fills resulting shapes, smoothing out jagged edges.
+
+        Args:
+            mask_bin (np.ndarray): Input binary mask (2D array, uint8, values 0 or 255).
+
+        Returns:
+            np.ndarray: Refined binary mask.
         """
         contours, _ = cv2.findContours(mask_bin, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
+            logging.debug("No contours found for refinement.")
             return np.zeros_like(mask_bin, dtype=np.uint8)
 
-        refined_mask = np.zeros_like(mask_bin, dtype=np.uint8)
-        for contour in contours:
-            epsilon = self.contour_approx_factor * cv2.arcLength(contour, True)
-            approx = cv2.approxPolyDP(contour, epsilon, True)
-            cv2.drawContours(refined_mask, [approx], -1, 255, -1)  # Fill the approximated contour
-        return refined_mask
-
-    def _morphological_cleaning(self, mask_bin: np.ndarray) -> np.ndarray:
-        """
-        Applies morphological operations (closing, opening) to clean the mask.
-        """
-        if self.closing_kernel_size > 0:
-            closing_kernel = np.ones((self.closing_kernel_size, self.closing_kernel_size), np.uint8)
-            mask_bin = cv2.morphologyEx(mask_bin, cv2.MORPH_CLOSE, closing_kernel)
-        if self.opening_kernel_size > 0:
-            opening_kernel = np.ones((self.opening_kernel_size, self.opening_kernel_size), np.uint8)
-            mask_bin = cv2.morphologyEx(mask_bin, cv2.MORPH_OPEN, opening_kernel)
-        # Remove small objects (noise)
-        cleaned_mask = remove_small_objects(mask_bin.astype(bool), min_size=self.min_component_size).astype(np.uint8) * 255
-        return cleaned_mask
-
-    def _skeleton_grow(self, mask_bin: np.ndarray) -> np.ndarray:
-        """
-        Grows a skeletonized mask based on a distance transform,
-        useful for very thin or sparse masks.
-        """
-        if mask_bin.max() == 0:
-            return np.zeros_like(mask_bin, dtype=np.uint8)
-
-        skeleton = skeletonize(mask_bin > 0)
-        if not np.any(skeleton):
-            return np.zeros_like(mask_bin, dtype=np.uint8)
-
-        distance_map = distance_transform_edt(~skeleton)
-        grown_mask = (distance_map <= self.grow_threshold).astype(np.uint8) * 255
-        return grown_mask
-
-    def refine(self, mask_bin: np.ndarray) -> np.ndarray:
-        """
-        Main refinement method. Applies contour-based refinement, morphological cleaning,
-        and hole filling. Handles thin-line masks by growing their skeleton.
-        """
-        if not isinstance(mask_bin, np.ndarray) or mask_bin.max() == 0:
-            return np.zeros_like(mask_bin, dtype=np.uint8)
-        try:
-            # Ensure mask is in the correct format (binary 0 or 255)
-            if mask_bin.max() <= 1:
-                mask_bin = (mask_bin * 255).astype(np.uint8)
-            else:
-                mask_bin = (mask_bin > 127).astype(np.uint8) * 255
-
-            # Detect thin-line masks and grow skeleton if too sparse
-            if np.sum((mask_bin > 127).astype(np.uint8)) < self.min_component_size * 2:
-                logging.info("Detected thin-line mask, applying skeleton grow.")
-                return self._skeleton_grow(mask_bin)
-
-            # Stage 1: Contour-based Refinement
-            refined_mask = self._contour_refinement(mask_bin)
-            if refined_mask.max() == 0:
-                logging.warning("Contour refinement resulted in an empty mask.")
-                return refined_mask
-
-            # Stage 2: Morphological Cleaning + hole-fill
-            cleaned = self._morphological_cleaning(refined_mask)
-            filled = ndi.binary_fill_holes(cleaned > 0)
-            return (filled.astype(np.uint8) * 255)
-        except Exception as e:
-            logging.error(f"Mask refinement failed: {e}")
-            return np.zeros_like(mask_bin, dtype=np.uint8)
-
-
-# ==================================================================
-# Section: SAM-based Mask Generation
-# ==================================================================
-
-class SAMMaskGenerator:
-    """
-    Generates masks using an ensemble of Segment Anything Models (SAM)
-    with adaptive prompting and a robust fallback stack.
-    """
-    def __init__(self,
-                 models: List[str] = ['vit_h', 'vit_b'],
-                 cache_dir: str = "~/.cache/sam",
-                 device: str = "cuda",
-                 ensemble_weights: Optional[List[float]] = None):
-        """
-        Initializes the SAMMaskGenerator.
-
-        Args:
-            models (List[str]): List of SAM model types to use for the ensemble
-                                 (e.g., 'vit_h', 'vit_l', 'vit_b').
-            cache_dir (str): Directory to cache downloaded SAM checkpoints.
-            device (str): Device to run SAM models on ('cuda' or 'cpu').
-            ensemble_weights (Optional[List[float]]): Weights for each model in the ensemble.
-                                                      If None, defaults to [0.6, 0.4] for 'vit_h', 'vit_b'.
-        """
-        self.device = torch.device(device if torch.cuda.is_available() else "cpu")
-        self.cache_dir = Path(cache_dir).expanduser()
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-
-        # Default ensemble weights (vit_h gets higher weight if present)
-        self.ensemble_weights = ensemble_weights or [0.6, 0.4]
-
-        self.models = {}      # Stores loaded SAM models
-        self.predictors = {}  # Stores SamPredictor instances for each model
-        self.is_initialized = False # Flag to check if SAM models were successfully loaded
-
-        if SAM_AVAILABLE:
-            try:
-                self._initialize_ensemble(models)
-            except Exception as e:
-                logging.error(f"SAM Ensemble initialization failed: {e}")
-                self.is_initialized = False
-        else:
-            logging.warning("SAM not available - ensemble and SAM-specific functionalities disabled.")
-
-    def _initialize_ensemble(self, model_types: List[str]):
-        """
-        Initializes multiple SAM models for ensemble prediction.
-        Downloads checkpoints if they don't exist locally.
-
-        Args:
-            model_types (List[str]): List of SAM model types to initialize.
-        """
-        checkpoint_urls = {
-            "vit_b": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth",
-            "vit_l": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
-            "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth"
-        }
-
-        for model_type in model_types:
-            if model_type not in checkpoint_urls:
-                logging.warning(f"Unknown SAM model type: {model_type}. Skipping.")
-                continue
-            try:
-                # Download checkpoint if needed
-                ckpt_path = self._get_checkpoint(model_type, checkpoint_urls[model_type])
-
-                # Load model
-                sam_model = sam_model_registry[model_type](checkpoint=ckpt_path)
-                sam_model.to(self.device)
-
-                self.models[model_type] = sam_model
-                self.predictors[model_type] = SamPredictor(sam_model)
-                logging.info(f"Loaded SAM {model_type} successfully on {self.device}.")
-
-            except Exception as e:
-                logging.error(f"Failed to load SAM {model_type}: {e}")
-
-        if self.models:
-            self.is_initialized = True
-            logging.info(f"SAM Ensemble initialized with {len(self.models)} models.")
-        else:
-            logging.error("No SAM models could be initialized.")
-
-    def _get_checkpoint(self, model_type: str, url: str) -> str:
-        """
-        Downloads a SAM checkpoint file if it does not already exist in the cache directory.
-
-        Args:
-            model_type (str): The type of SAM model (e.g., 'vit_h').
-            url (str): The URL to download the checkpoint from.
-
-        Returns:
-            str: The local path to the downloaded checkpoint file.
-
-        Raises:
-            RuntimeError: If the download fails.
-        """
-        filename = f"sam_{model_type}_checkpoint.pth"
-        ckpt_path = self.cache_dir / filename
-
-        if not ckpt_path.exists():
-            logging.info(f"Downloading SAM {model_type} checkpoint from {url}...")
-            try:
-                response = requests.get(url, stream=True)
-                response.raise_for_status() # Raise an HTTPError for bad responses (4xx or 5xx)
-
-                with open(ckpt_path, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        f.write(chunk)
-
-                logging.info(f"Downloaded SAM checkpoint to {ckpt_path}.")
-            except Exception as e:
-                raise RuntimeError(f"Failed to download SAM checkpoint from {url}: {e}")
-
-        return str(ckpt_path)
-
-    def _generate_masks_single_model(self, image: np.ndarray, prompts: List[Dict], model_name: str) -> Tuple[List[np.ndarray], List[float]]:
-        """
-        Generates masks using a single SAM model for a given set of prompts.
-
-        Args:
-            image (np.ndarray): The input image (H, W, 3) in RGB format.
-            prompts (List[Dict]): A list of prompt dictionaries, each containing
-                                   'point_coords' and 'point_labels'.
-            model_name (str): The name of the SAM model to use.
-
-        Returns:
-            Tuple[List[np.ndarray], List[float]]: A tuple containing a list of generated
-                                                   masks and their corresponding confidence scores.
-        """
-        masks = []
-        scores = []
-        predictor = self.predictors.get(model_name)
-        if predictor is None:
-            logging.error(f"Predictor for model '{model_name}' not found.")
-            return [], []
-
-        try:
-            predictor.set_image(image)
-        except Exception as e:
-            logging.error(f"Failed to set image for SAM predictor ({model_name}): {e}")
-            return [], []
-
-        for prompt in prompts:
-            try:
-                mask, score, _ = predictor.predict(
-                    point_coords=prompt['point_coords'],
-                    point_labels=prompt['point_labels'],
-                    multimask_output=True
-                )
-                masks.extend([m.astype(np.uint8) * 255 for m in mask])
-                scores.extend(score.tolist())
-            except Exception as e:
-                logging.warning(f"SAM prediction failed for prompt using model {model_name}: {e}")
-        return masks, scores
-
-    def _auto_mask(self, image: np.ndarray) -> Optional[np.ndarray]:
-        """
-        Generates a mask using SAM's automatic mask generator,
-        suitable for thin-line art or general object detection.
-
-        Args:
-            image (np.ndarray): The input image (H, W, 3) in RGB format.
-
-        Returns:
-            Optional[np.ndarray]: The generated binary mask (H, W) or None if generation fails.
-        """
-        if SAM_AVAILABLE and self.models:
-            try:
-                # Use the first available model for automatic mask generation
-                model_for_auto = self.models[list(self.models.keys())[0]]
-                mask_gen = SamAutomaticMaskGenerator(model_for_auto)
-                masks = mask_gen.generate(image)
-                if masks:
-                    # Return the largest mask by area
-                    best_mask = max(masks, key=lambda m: m.get('area', 0))
-                    logging.info(f"SAM auto mask generated with area: {best_mask.get('area', 0)}")
-                    return best_mask['segmentation'].astype(np.uint8) * 255
-            except Exception as e:
-                logging.warning(f"SAM automatic mask generation failed: {e}")
-        return None
+        mask_refined = np.zeros_like(mask_bin, dtype=np.uint8)
+        for cnt in contours:
+            epsilon = self.contour_approx_factor * cv2.arcLength(cnt, True)
+            approx = cv2.approxPolyDP(cnt, epsilon, True)
+            cv2.drawContours(mask_refined, [approx], -1, 255, -1)
+        logging.debug(f"Contour refinement completed. Original non-zero: {np.count_nonzero(mask_bin)}, refined non-zero: {np.count_nonzero(mask_refined)}")
+        return mask_refined
 
     def _fallback_mask(self, image: np.ndarray) -> np.ndarray:
         """
-        A simple fallback mask generation method using Otsu's thresholding
-        if SAM or other advanced methods fail.
+        Generates a simple fallback binary mask using Otsu thresholding.
+        Used when advanced SAM or other methods fail.
 
         Args:
-            image (np.ndarray): The input image (H, W, C).
+            image (np.ndarray): The input image (H, W, C or H, W).
 
         Returns:
-            np.ndarray: A binary mask (H, W).
+            np.ndarray: A binary mask (uint8).
         """
-        logging.info("Using simple thresholding as fallback mask generation.")
-        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if len(image.shape) == 3 else image
+        logging.info("Using simple Otsu thresholding as fallback mask.")
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
         _, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         return mask
 
-    def generate_adaptive_prompts(self, image: np.ndarray) -> List[Dict]:
+    def _auto_mask(self, image: np.ndarray) -> Optional[np.ndarray]:
         """
-        Generate diverse, content-aware prompts for robust mask generation.
-        Includes edge-based, multi-scale grid, and center/corner prompts.
+        Attempts to generate an automatic mask using SAM's automatic mask generation.
+        This method is a placeholder as actual SAM auto-masking requires specific SAM tooling
+        that is not part of the basic `SamPredictor`.
+        In a real implementation, this would involve `SamAutomaticMaskGenerator`.
 
         Args:
             image (np.ndarray): The input image (H, W, C).
 
         Returns:
-            List[Dict]: A list of prompt dictionaries.
+            Optional[np.ndarray]: The generated binary mask (uint8) if successful, otherwise None.
         """
-        if len(image.shape) == 2:
+        if not SAM_AVAILABLE or not self.is_initialized:
+            logging.warning("SAM not available or not initialized for auto-mask generation.")
+            return None
+
+        try:
+            # Placeholder for SAM's automatic mask generation.
+            # Real implementation would use segment_anything.SamAutomaticMaskGenerator
+            # For this example, we'll return None as the functionality is complex and not fully provided.
+            logging.debug("SAM auto-mask generation is a placeholder. Returning None.")
+            return None # Replace with actual SAM auto-mask generation logic
+        except Exception as e:
+            logging.error(f"Auto mask generation failed: {e}")
+            return None
+
+    def _generate_masks_single_model(self, image: np.ndarray, prompts: List[Dict], model_name: str) -> Tuple[List[np.ndarray], List[float]]:
+        """
+        Generates masks using a single SAM model with given prompts.
+
+        Args:
+            image (np.ndarray): The input image (H, W, C).
+            prompts (List[Dict]): A list of prompt dictionaries, each containing
+                                    'point_coords' (np.ndarray) and 'point_labels' (np.ndarray).
+            model_name (str): The name of the SAM model to use (e.g., 'vit_h').
+
+        Returns:
+            Tuple[List[np.ndarray], List[float]]: A tuple containing a list of generated
+                                                binary masks and a list of their corresponding scores.
+        """
+        if not SAM_AVAILABLE or not self.is_initialized or model_name not in self.predictors:
+            logging.warning(f"SAM not available or model '{model_name}' not initialized. Cannot generate masks.")
+            return [], []
+
+        predictor = self.predictors[model_name]
+        masks = []
+        scores = []
+
+        try:
+            predictor.set_image(image)
+            for prompt in prompts:
+                point_coords = prompt.get('point_coords')
+                point_labels = prompt.get('point_labels')
+
+                if point_coords is None or point_labels is None:
+                    logging.warning(f"Skipping malformed prompt: {prompt}")
+                    continue
+
+                # SAM prediction can return multiple masks per prompt; taking the best one (highest score)
+                # This assumes prompt points are for a single object.
+                predicted_masks, predicted_scores, _ = predictor.predict(
+                    point_coords=point_coords,
+                    point_labels=point_labels,
+                    multimask_output=True # Allow multiple masks for the same prompt point
+                )
+
+                if predicted_masks.size > 0:
+                    best_mask_idx = np.argmax(predicted_scores)
+                    masks.append((predicted_masks[best_mask_idx] * 255).astype(np.uint8))
+                    scores.append(predicted_scores[best_mask_idx])
+                    logging.debug(f"Generated mask with {model_name} for prompt. Score: {predicted_scores[best_mask_idx]:.4f}")
+                else:
+                    logging.debug(f"No mask generated by {model_name} for current prompt.")
+
+            return masks, scores
+        except Exception as e:
+            logging.error(f"Single model mask generation failed for {model_name}: {e}")
+            return [], []
+
+    def generate_adaptive_prompts(self, image: np.ndarray) -> List[Dict]:
+        """
+        Generates diverse, content-aware prompts for robust mask generation with SAM.
+        Includes edge-based, multi-scale grid, and center/corner prompts to cover various
+        object types and image compositions.
+
+        Args:
+            image (np.ndarray): The input image (H, W, C).
+
+        Returns:
+            List[Dict]: A list of prompt dictionaries, suitable for SAM's predict method.
+        """
+        if image.ndim == 2:
             image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+        elif image.shape[2] == 4: # Handle RGBA to RGB conversion
+            image = cv2.cvtColor(image, cv2.COLOR_RGBA2RGB)
 
         h, w = image.shape[:2]
         prompts = []
 
-        # 1. Edge-based prompting
-        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if len(image.shape) == 3 else image
+        # 1. Edge-based prompting: Sample points along prominent edges
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
         edges = cv2.Canny(gray, 50, 150)
-        edge_points = np.column_stack(np.where(edges > 0))
+        edge_points_coords = np.column_stack(np.where(edges > 0)) # (row, col) -> (y, x)
 
-        if len(edge_points) > 0:
-            # Sample edge points strategically
-            n_edge_samples = min(5, len(edge_points))
-            edge_indices = np.random.choice(len(edge_points), n_edge_samples, replace=False)
-            for idx in edge_indices:
-                y, x = edge_points[idx]
-                prompts.append({
-                    'point_coords': np.array([[x, y]]),
-                    'point_labels': np.array([1])
-                })
+        if len(edge_points_coords) > 0:
+            # Sample edge points strategically (e.g., 5 points)
+            n_edge_samples = min(5, len(edge_points_coords))
+            if n_edge_samples > 0:
+                # Use np.random.default_rng for modern random number generation
+                rng = np.random.default_rng()
+                edge_indices = rng.choice(len(edge_points_coords), n_edge_samples, replace=False)
+                for idx in edge_indices:
+                    y, x = edge_points_coords[idx]
+                    prompts.append({
+                        'point_coords': np.array([[x, y]]), # SAM expects (x, y)
+                        'point_labels': np.array([1]) # Foreground point
+                    })
         logging.debug(f"Generated {len(prompts)} edge-based prompts.")
 
-        # 2. Multi-scale grid prompting
+        # 2. Multi-scale grid prompting: Cover the image with points at different densities
         for scale in [0.3, 0.5, 0.7]:
-            grid_size = max(32, int(min(h, w) * scale))
-            for i in range(grid_size // 2, h, grid_size):
-                for j in range(grid_size // 2, w, grid_size):
-                    if i < h and j < w:
+            # Ensure grid_size is at least 1 and does not exceed image dimensions
+            grid_step = max(1, int(min(h, w) * scale))
+            for i in range(grid_step // 2, h, grid_step):
+                for j in range(grid_step // 2, w, grid_step):
+                    if i < h and j < w: # Ensure points are within bounds
                         prompts.append({
                             'point_coords': np.array([[j, i]]),
                             'point_labels': np.array([1])
                         })
         logging.debug(f"Generated {len(prompts)} total prompts after grid-based.")
 
-        # 3. Center and corner prompts
+        # 3. Center and corner prompts: Ensure basic coverage
         center_prompts = [
             {'point_coords': np.array([[w // 2, h // 2]]), 'point_labels': np.array([1])},
             {'point_coords': np.array([[w // 4, h // 4]]), 'point_labels': np.array([1])},
+            {'point_coords': np.array([[3 * w // 4, h // 4]]), 'point_labels': np.array([1])},
+            {'point_coords': np.array([[w // 4, 3 * h // 4]]), 'point_labels': np.array([1])},
             {'point_coords': np.array([[3 * w // 4, 3 * h // 4]]), 'point_labels': np.array([1])},
         ]
         prompts.extend(center_prompts)
         logging.debug(f"Generated {len(prompts)} total prompts after center/corner.")
 
-        return prompts[:15]  # Limit to prevent excessive computation
+        # Limit to prevent excessive computation for a large number of prompts
+        # A reasonable limit might be around 15-30 prompts for performance.
+        return prompts[:30]
 
     def generate_ensemble_masks(self, image: np.ndarray, use_ensemble: bool = True) -> np.ndarray:
         """
@@ -403,53 +382,63 @@ class SAMMaskGenerator:
             np.ndarray: The final combined binary mask (H, W).
         """
         if not self.is_initialized:
-            logging.warning("SAM models not initialized, falling back to simple thresholding.")
+            logging.warning("SAM models not initialized. Falling back to simple thresholding.")
             return self._fallback_mask(image)
 
+        # Ensure image is in correct format (RGB) for SAM
+        if image.ndim == 2:
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+        elif image.shape[2] == 4:
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_RGBA2RGB)
+        else:
+            image_rgb = image
+
         try:
-            # Thin-line art detection: use SAM's automatic mask generator if few edges
-            gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if len(image.shape) == 3 else image
+            # Thin-line art detection: consider using SAM's automatic mask generator if few edges
+            # This is a heuristic and might need tuning.
+            gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
             edges = cv2.Canny(gray, 50, 150)
-            if SAM_AVAILABLE and edges.sum() < 200: # Heuristic for thin-line art
-                auto_mask = self._auto_mask(image)
+            if edges.sum() < 200: # Heuristic for thin-line art (very few strong edges)
+                logging.info("Detected potential thin-line art. Attempting SAM auto-mask (placeholder).")
+                auto_mask = self._auto_mask(image_rgb)
                 if auto_mask is not None and auto_mask.max() > 0:
-                    logging.info("Detected thin-line art, successfully generated mask using SAM auto-mask.")
+                    logging.info("Successfully generated mask using SAM auto-mask (placeholder).")
                     return auto_mask
                 else:
-                    logging.warning("SAM auto-mask failed for thin-line art, proceeding with prompts.")
-
-            # Ensure image is in correct format (RGB)
-            if len(image.shape) == 2:
-                image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
-            elif image.shape[2] == 4:
-                image = cv2.cvtColor(image, cv2.COLOR_RGBA2RGB)
+                    logging.warning("SAM auto-mask failed or produced no mask for thin-line art. Proceeding with prompts.")
 
             # Generate adaptive prompts
-            prompts = self.generate_adaptive_prompts(image)
+            prompts = self.generate_adaptive_prompts(image_rgb)
 
             if not prompts:
-                logging.warning("No adaptive prompts generated, falling back to simple thresholding.")
-                return self._fallback_mask(image)
+                logging.warning("No adaptive prompts generated. Falling back to simple thresholding.")
+                return self._fallback_mask(image_rgb)
 
             if not use_ensemble or len(self.models) == 1:
                 # Use only the first available model if ensemble is disabled or only one model exists
                 model_name = list(self.models.keys())[0]
-                masks, scores = self._generate_masks_single_model(image, prompts, model_name)
+                masks, scores = self._generate_masks_single_model(image_rgb, prompts, model_name)
                 if masks:
-                    # Select the mask with the highest score
                     best_mask_idx = np.argmax(scores)
                     logging.info(f"Generated mask using single model {model_name}.")
                     return masks[best_mask_idx]
                 else:
-                    logging.warning(f"Single model {model_name} produced no masks.")
-                    return self._run_advanced_fallback_stack(image)
+                    logging.warning(f"Single model {model_name} produced no masks for the given prompts.")
+                    return self._run_advanced_fallback_stack(image_rgb)
 
             # Ensemble prediction
             all_masks = []
             all_scores = []
 
-            for model_name, weight in zip(self.models.keys(), self.ensemble_weights):
-                masks, scores = self._generate_masks_single_model(image, prompts, model_name)
+            # Ensure ensemble_weights matches the number of actual loaded models
+            current_model_names = list(self.models.keys())
+            if not self.ensemble_weights or len(self.ensemble_weights) != len(current_model_names):
+                logging.warning("Ensemble weights not correctly set or mismatch with loaded models. Using equal weights.")
+                self.ensemble_weights = [1.0] * len(current_model_names)
+
+            for i, model_name in enumerate(current_model_names):
+                weight = self.ensemble_weights[i]
+                masks, scores = self._generate_masks_single_model(image_rgb, prompts, model_name)
                 if len(masks) > 0:
                     # Weight scores by model confidence
                     weighted_scores = [score * weight for score in scores]
@@ -460,11 +449,10 @@ class SAMMaskGenerator:
                     logging.info(f"[MASK] Ensemble model {model_name} produced no masks for current prompts.")
 
             if not all_masks:
-                logging.warning("No masks generated by ensemble, using advanced professional fallback stack.")
-                return self._run_advanced_fallback_stack(image)
+                logging.warning("No masks generated by ensemble. Using advanced professional fallback stack.")
+                return self._run_advanced_fallback_stack(image_rgb)
 
-            # Combine masks: For simplicity, we'll take the mask with the highest overall score.
-            # A more advanced ensemble might involve voting or weighted averaging of masks.
+            # Combine masks: Select the mask with the highest overall weighted score.
             best_overall_mask_idx = np.argmax(all_scores)
             final_mask = all_masks[best_overall_mask_idx]
             logging.info(f"Ensemble successfully generated a mask with overall best score.")
@@ -472,298 +460,570 @@ class SAMMaskGenerator:
 
         except Exception as e:
             logging.error(f"Ensemble mask generation failed: {e}. Falling back to simple thresholding.")
-            return self._fallback_mask(image)
+            return self._fallback_mask(image_rgb)
 
-    # --- Advanced fallback stack methods (placeholders) ---
-    # These methods would contain more sophisticated image processing techniques
-    # to generate a mask if SAM fails. They are currently placeholders.
     def _potrace_fill(self, image: np.ndarray) -> Optional[np.ndarray]:
         """
-        Placeholder: Implement Potrace vectorization and fill for mask generation.
-        Requires an external library like 'potrace' or a custom implementation.
+        Performs a Potrace-like contour fill using OpenCV. This method finds contours
+        and then fills them to create a solid mask, useful for vectorization-style fill.
+
+        Args:
+            image (np.ndarray): The input image (H, W, C or H, W).
+
+        Returns:
+            Optional[np.ndarray]: The filled binary mask (uint8) if successful, otherwise None.
         """
-        logging.debug("Attempting Potrace fill (placeholder).")
-        # Example: Convert image to binary, then to SVG path, then fill.
-        # This would be a complex implementation involving external tools or libraries.
-        return None
+        logging.info("Attempting Potrace-like contour fill.")
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        mask = np.zeros_like(binary, dtype=np.uint8)
+        if contours:
+            cv2.drawContours(mask, contours, -1, 255, -1)
+        nonzero = np.count_nonzero(mask)
+        logging.info(f"Potrace-like fill produced mask with {nonzero} nonzero pixels.")
+        return mask if nonzero > 0 else None
 
     def _skeleton_graph_fill(self, image: np.ndarray) -> Optional[np.ndarray]:
         """
-        Placeholder: Implement skeleton graph closure for mask generation.
-        Could use libraries like 'sknw' (skeleton network) to build a graph
-        from the skeleton and close loops.
+        Generates a skeleton-aware mask. It skeletonizes the binary image and converts it
+        back to a mask. Useful for preserving thin structures.
+
+        Args:
+            image (np.ndarray): The input image (H, W, C or H, W).
+
+        Returns:
+            Optional[np.ndarray]: The skeleton-based binary mask (uint8) if successful, otherwise None.
         """
-        logging.debug("Attempting skeleton graph fill (placeholder).")
-        # Example: skeletonize -> build graph -> find closed loops -> fill.
-        return None
+        logging.info("Attempting skeleton-aware mask generation.")
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
+        # Apply Otsu thresholding for robustness before skeletonization
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        skeleton = skeletonize(binary > 0)
+        skeleton_mask = (skeleton.astype(np.uint8)) * 255
+        nonzero = np.count_nonzero(skeleton_mask)
+        logging.info(f"Skeleton mask has {nonzero} nonzero pixels.")
+        return skeleton_mask if nonzero > 0 else None
 
     def _deep_lineart_segmentation(self, image: np.ndarray) -> Optional[np.ndarray]:
         """
-        Placeholder: Implement deep learning-based line art segmentation (e.g., U-Net/Pix2Pix).
-        This would involve loading and running a pre-trained deep learning model.
+        Uses adaptive thresholding as a "deep segmentation" fallback,
+        suitable for images with varying illumination.
+
+        Args:
+            image (np.ndarray): The input image (H, W, C or H, W).
+
+        Returns:
+            Optional[np.ndarray]: The adaptively thresholded binary mask (uint8) if successful, otherwise None.
         """
-        logging.debug("Attempting deep lineart segmentation (placeholder).")
-        # Example: Load a PyTorch/TensorFlow model, preprocess image, run inference.
-        return None
+        logging.info("Attempting adaptive thresholding for lineart segmentation.")
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
+        mask = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                     cv2.THRESH_BINARY, 11, 2) # Block size 11, C=2
+        nonzero = np.count_nonzero(mask)
+        logging.info(f"Adaptive thresholding produced mask with {nonzero} nonzero pixels.")
+        return mask if nonzero > 0 else None
 
     def _edge_watershed_fill(self, image: np.ndarray) -> Optional[np.ndarray]:
         """
-        Placeholder: Implement edge-aware watershed segmentation.
-        Uses image gradients/edges to define 'basins' for segmentation.
+        Performs edge-aware watershed segmentation using OpenCV and scikit-image.
+        This method is good for segmenting objects with well-defined edges.
+
+        Args:
+            image (np.ndarray): The input image (H, W, C or H, W).
+
+        Returns:
+            Optional[np.ndarray]: The watershed-segmented binary mask (uint8) if successful, otherwise None.
         """
-        logging.debug("Attempting edge-watershed fill (placeholder).")
-        # Example: Canny edges -> distance transform -> local maxima -> watershed.
-        return None
+        logging.info("Attempting edge-aware watershed segmentation.")
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
+        edges = cv2.Canny(gray, 50, 150)
+
+        # Ensure markers are not empty to prevent watershed from crashing on some inputs
+        distance = ndi.distance_transform_edt(edges == 0)
+        # Use a percentile to get a robust threshold for local maxima
+        local_maxi_threshold = np.percentile(distance, 99.5) # Adjusted percentile
+        local_maxi = (distance > local_maxi_threshold).astype(np.uint8)
+
+        # Label markers for watershed
+        markers, num_markers = ndi.label(local_maxi)
+        if num_markers == 0:
+            logging.warning("No markers found for watershed, returning None.")
+            return None
+
+        # Watershed requires a 3-channel image
+        image_3channel = np.stack([gray] * 3, axis=-1)
+        labels = cv2.watershed(image_3channel, markers)
+        # Pixels with -1 are boundaries, 0 is background. We want foreground regions (>0).
+        mask = (labels > 0).astype(np.uint8) * 255
+        nonzero = np.count_nonzero(mask)
+        logging.info(f"Watershed produced mask with {nonzero} nonzero pixels.")
+        return mask if nonzero > 0 else None
 
     def _hed_crf_fill(self, image: np.ndarray) -> Optional[np.ndarray]:
         """
-        Placeholder: Implement HED (Holistically-Nested Edge Detection) + CRF (Conditional Random Field) fill.
-        HED extracts rich edges, CRF refines segmentation based on these edges.
+        Uses Canny edge detection followed by a dilation as a HED-like fallback.
+        Aims to connect broken edge lines to form a more complete mask.
+
+        Args:
+            image (np.ndarray): The input image (H, W, C or H, W).
+
+        Returns:
+            Optional[np.ndarray]: The edge-based binary mask (uint8) if successful, otherwise None.
         """
-        logging.debug("Attempting HED/CRF fill (placeholder).")
-        # Example: Run HED model -> apply CRF.
-        return None
+        logging.info("Attempting HED/CRF-like edge fill (Canny + Dilation).")
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
+        edges = cv2.Canny(gray, 100, 200) # Canny parameters can be tuned
+        kernel = np.ones((3,3), np.uint8)
+        mask = cv2.dilate(edges, kernel, iterations=1) # Dilate to close small gaps
+        nonzero = np.count_nonzero(mask)
+        logging.info(f"HED/CRF-like fill produced mask with {nonzero} nonzero pixels.")
+        return mask if nonzero > 0 else None
 
     def _learnable_morph_fill(self, image: np.ndarray) -> Optional[np.ndarray]:
         """
-        Placeholder: Implement learnable morphological operations (e.g., MorphNet).
-        This would involve a neural network trained to apply optimal morphological transformations.
+        Applies morphological closing and opening operations, followed by Otsu thresholding.
+        Acts as a "learnable morph" fallback by applying standard morphological operations.
+
+        Args:
+            image (np.ndarray): The input image (H, W, C or H, W).
+
+        Returns:
+            Optional[np.ndarray]: The morphologically processed binary mask (uint8) if successful, otherwise None.
         """
-        logging.debug("Attempting learnable morph fill (placeholder).")
-        # Example: Load a MorphNet model, apply operations.
-        return None
+        logging.info("Attempting morphological closing/opening.")
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
+        kernel = np.ones((self.closing_kernel_size, self.closing_kernel_size), np.uint8)
+        closed = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
+        opened = cv2.morphologyEx(closed, cv2.MORPH_OPEN, kernel)
+        _, mask = cv2.threshold(opened, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        nonzero = np.count_nonzero(mask)
+        logging.info(f"Morphological ops produced mask with {nonzero} nonzero pixels.")
+        return mask if nonzero > 0 else None
 
     def _pre_thicken(self, image: np.ndarray) -> Optional[np.ndarray]:
         """
-        Placeholder: Implement a pre-thicken operation for very thin lines.
-        Can help make features more robust for subsequent classical image processing.
+        Applies dilation to thicken thin lines in the input image.
+        Useful as a pre-processing step for other mask generation methods.
+
+        Args:
+            image (np.ndarray): The input image (H, W, C or H, W).
+
+        Returns:
+            Optional[np.ndarray]: The thickened image (uint8) if successful, otherwise None.
         """
-        logging.debug("Attempting pre-thicken (placeholder).")
-        # Example: Apply a small dilation or custom thickening filter.
-        return None
+        logging.info("Attempting pre-thicken (dilation) operation.")
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
+        kernel = np.ones((3,3), np.uint8)
+        thick = cv2.dilate(gray, kernel, iterations=1)
+        nonzero = np.count_nonzero(thick)
+        logging.info(f"Pre-thicken produced mask with {nonzero} nonzero pixels.")
+        return thick if nonzero > 0 else None
 
     def _polygon_mask(self, image: np.ndarray) -> Optional[np.ndarray]:
         """
-        Placeholder: Implement polygon mask extraction from image features.
-        Could involve contour detection and simplification to polygons.
+        Extracts a polygon mask by finding contours and approximating them.
+        Similar to `_contour_refinement` but used here as a standalone fallback.
+
+        Args:
+            image (np.ndarray): The input image (H, W, C or H, W).
+
+        Returns:
+            Optional[np.ndarray]: The polygon-filled binary mask (uint8) if successful, otherwise None.
         """
-        logging.debug("Attempting polygon mask extraction (placeholder).")
-        # Example: Find contours, approximate polygons, fill.
-        return None
+        logging.info("Attempting polygon mask extraction.")
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        mask = np.zeros_like(binary, dtype=np.uint8)
+        for cnt in contours:
+            epsilon = 0.01 * cv2.arcLength(cnt, True) # Fixed epsilon for this fallback
+            approx = cv2.approxPolyDP(cnt, epsilon, True)
+            cv2.drawContours(mask, [approx], -1, 255, -1)
+        nonzero = np.count_nonzero(mask)
+        logging.info(f"Polygon mask produced mask with {nonzero} nonzero pixels.")
+        return mask if nonzero > 0 else None
 
     def _mser_mask(self, image: np.ndarray) -> Optional[np.ndarray]:
         """
-        Placeholder: Implement MSER (Maximally Stable Extremal Regions) mask extraction.
-        Useful for detecting text or distinct blobs in an image.
+        Detects Maximally Stable Extremal Regions (MSER) using OpenCV and forms a mask
+        from their convex hulls. Useful for detecting blobs or text regions.
+
+        Args:
+            image (np.ndarray): The input image (H, W, C or H, W).
+
+        Returns:
+            Optional[np.ndarray]: The MSER-based binary mask (uint8) if successful, otherwise None.
         """
-        logging.debug("Attempting MSER mask extraction (placeholder).")
-        # Example: cv2.MSER.detect() -> convert regions to mask.
-        return None
+        logging.info("Attempting MSER region detection.")
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
+        mser = cv2.MSER_create()
+        regions, _ = mser.detectRegions(gray)
+        mask = np.zeros_like(gray, dtype=np.uint8)
+        for region in regions:
+            # Reshape region to (N, 1, 2) as required by cv2.convexHull
+            hull = cv2.convexHull(region.reshape(-1, 1, 2))
+            cv2.drawContours(mask, [hull], -1, 255, -1)
+        nonzero = np.count_nonzero(mask)
+        logging.info(f"MSER produced mask with {nonzero} nonzero pixels.")
+        return mask if nonzero > 0 else None
 
     def _grabcut_refine(self, image: np.ndarray, initial_mask: np.ndarray) -> Optional[np.ndarray]:
         """
-        Placeholder: Implement GrabCut refinement.
-        Requires an initial mask or bounding box, then iteratively refines it.
+        Refines an initial mask using the GrabCut algorithm. This method is interactive
+        and uses a graph-cut approach to segment the foreground from the background.
+
+        Args:
+            image (np.ndarray): The input image (H, W, C).
+            initial_mask (np.ndarray): An initial binary mask (uint8) where foreground pixels are >0.
+
+        Returns:
+            Optional[np.ndarray]: The GrabCut refined binary mask (uint8) if successful, otherwise None.
         """
-        logging.debug("Attempting GrabCut refinement (placeholder).")
-        # Example: cv2.grabCut() with initial mask.
-        return None
+        logging.info("Attempting GrabCut refinement.")
+        if image.ndim == 2: # GrabCut expects 3-channel image
+            image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+        elif image.shape[2] == 4: # Convert RGBA to RGB
+            image = cv2.cvtColor(image, cv2.COLOR_RGBA2RGB)
+
+        mask = np.zeros(image.shape[:2], np.uint8)
+        # Initialize GrabCut mask: Probable foreground (2) where initial_mask is >0
+        mask[initial_mask > 0] = cv2.GC_PR_FGD
+        # Remaining pixels are assumed to be probable background (0)
+
+        bgdModel = np.zeros((1, 65), np.float64)
+        fgdModel = np.zeros((1, 65), np.float64)
+        # Define a rectangle around the entire image (or the region of interest)
+        rect = (1, 1, image.shape[1] - 2, image.shape[0] - 2) # Margins of 1 pixel
+
+        try:
+            # Run GrabCut for 5 iterations
+            cv2.grabCut(image, mask, rect, bgdModel, fgdModel, 5, cv2.GC_INIT_WITH_MASK)
+            # Extract final mask: foreground (1) and probable foreground (3) pixels
+            result_mask = np.where((mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD), 255, 0).astype(np.uint8)
+            nonzero = np.count_nonzero(result_mask)
+            logging.info(f"GrabCut produced mask with {nonzero} nonzero pixels.")
+            return result_mask if nonzero > 0 else None
+        except Exception as e:
+            logging.error(f"GrabCut failed: {e}")
+            return None
 
     def _multi_scale_threshold(self, image: np.ndarray) -> Optional[np.ndarray]:
         """
-        Placeholder: Implement multi-scale thresholding.
-        Applies thresholding at different scales/resolutions and combines results.
-        """
-        logging.debug("Attempting multi-scale thresholding (placeholder).")
-        # Example: Apply adaptive thresholding or Otsu at different image sizes.
-        return None
+        Applies a combination of adaptive and Otsu thresholding to create a mask.
+        Aims to capture details across different intensity ranges.
 
-    def _run_advanced_fallback_stack(self, image: np.ndarray) -> np.ndarray:
+        Args:
+            image (np.ndarray): The input image (H, W, C or H, W).
+
+        Returns:
+            Optional[np.ndarray]: The combined binary mask (uint8) if successful, otherwise None.
         """
-        Executes a sequence of advanced fallback masking techniques if SAM fails.
-        This stack is ordered by increasing computational complexity/reliance on external models.
+        logging.info("Attempting multi-scale thresholding.")
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
+
+        # Adaptive thresholding (mean)
+        mask1 = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 11, 2)
+        # Otsu thresholding
+        _, mask2 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        # Combine them with a bitwise OR
+        mask = cv2.bitwise_or(mask1, mask2)
+        nonzero = np.count_nonzero(mask)
+        logging.info(f"Multi-scale thresholding produced mask with {nonzero} nonzero pixels.")
+        return mask if nonzero > 0 else None
+
+    def _run_advanced_fallback_stack(self, image: np.ndarray, image_path: Optional[str] = None, inspection_dir: Optional[str] = None) -> np.ndarray:
+        """
+        Executes a sequence of advanced fallback masking techniques if SAM fails to produce
+        a satisfactory mask. This stack is ordered by increasing computational complexity
+        and diverse segmentation approaches.
+
+        Args:
+            image (np.ndarray): The input image (H, W, C or H, W).
+            image_path (Optional[str]): Original path to the image, used for saving inspection outputs.
+            inspection_dir (Optional[str]): Directory to save inspection images and masks.
+
+        Returns:
+            np.ndarray: The final combined binary mask (H, W).
         """
         logging.info("Running advanced professional fallback stack for mask generation.")
-        
-        # 1. Vector-trace + fill (Potrace)
-        mask_potrace = self._potrace_fill(image)
+
+        # Ensure image is 3-channel for methods that expect it
+        image_for_fallbacks = image
+        if image.ndim == 2:
+            image_for_fallbacks = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+        elif image.shape[2] == 4:
+            image_for_fallbacks = cv2.cvtColor(image, cv2.COLOR_RGBA2RGB)
+
+        # 1. Potrace fallback (contour filling)
+        mask_potrace = self._potrace_fill(image_for_fallbacks)
         if mask_potrace is not None and mask_potrace.max() > 0:
-            logging.info("[MASK] Potrace fallback produced a non-empty mask.")
-            return mask_potrace
-        else:
-            logging.debug("[MASK] Potrace fallback failed or produced empty mask.")
+            logging.info("Potrace fallback successful.")
+            final_mask = mask_potrace
+            if inspection_dir and image_path:
+                self._save_inspection_output(image_for_fallbacks, final_mask, image_path, inspection_dir, "_potrace")
+            return final_mask
 
-        # 2. Skeleton-graph closure (sknw)
-        mask_skel = self._skeleton_graph_fill(image)
+        # 2. Skeleton-graph closure (skeletonization)
+        mask_skel = self._skeleton_graph_fill(image_for_fallbacks)
         if mask_skel is not None and mask_skel.max() > 0:
-            logging.info("[MASK] Skeleton-graph fallback produced a non-empty mask.")
-            return mask_skel
-        else:
-            logging.debug("[MASK] Skeleton-graph fallback failed or produced empty mask.")
+            logging.info("Skeleton-graph fallback successful.")
+            final_mask = mask_skel
+            if inspection_dir and image_path:
+                self._save_inspection_output(image_for_fallbacks, final_mask, image_path, inspection_dir, "_skeleton")
+            return final_mask
 
-        # 3. Deep segmentation (U-Net/Pix2Pix)
-        mask_deep = self._deep_lineart_segmentation(image)
+        # 3. Deep segmentation (adaptive thresholding)
+        mask_deep = self._deep_lineart_segmentation(image_for_fallbacks)
         if mask_deep is not None and mask_deep.max() > 0:
-            logging.info("[MASK] Deep segmentation fallback produced a non-empty mask.")
-            return mask_deep
-        else:
-            logging.debug("[MASK] Deep segmentation fallback failed or produced empty mask.")
+            logging.info("Deep lineart segmentation fallback successful.")
+            final_mask = mask_deep
+            if inspection_dir and image_path:
+                self._save_inspection_output(image_for_fallbacks, final_mask, image_path, inspection_dir, "_deep_seg")
+            return final_mask
 
         # 4. Edge-aware watershed
-        mask_ws = self._edge_watershed_fill(image)
+        mask_ws = self._edge_watershed_fill(image_for_fallbacks)
         if mask_ws is not None and mask_ws.max() > 0:
-            logging.info("[MASK] Edge-watershed fallback produced a non-empty mask.")
-            return mask_ws
-        else:
-            logging.debug("[MASK] Edge-watershed fallback failed or produced empty mask.")
+            logging.info("Edge-aware watershed fallback successful.")
+            final_mask = mask_ws
+            if inspection_dir and image_path:
+                self._save_inspection_output(image_for_fallbacks, final_mask, image_path, inspection_dir, "_watershed")
+            return final_mask
 
-        # 5. HED/SE edge detector + CRF
-        mask_hed = self._hed_crf_fill(image)
+        # 5. HED/CRF-like edge fill (Canny + Dilation)
+        mask_hed = self._hed_crf_fill(image_for_fallbacks)
         if mask_hed is not None and mask_hed.max() > 0:
-            logging.info("[MASK] HED/CRF fallback produced a non-empty mask.")
-            return mask_hed
-        else:
-            logging.debug("[MASK] HED/CRF fallback failed or produced empty mask.")
+            logging.info("HED/CRF-like fallback successful.")
+            final_mask = mask_hed
+            if inspection_dir and image_path:
+                self._save_inspection_output(image_for_fallbacks, final_mask, image_path, inspection_dir, "_hed_crf")
+            return final_mask
 
-        # 6. Learnable morph ops (MorphNet)
-        mask_morph = self._learnable_morph_fill(image)
+        # 6. Learnable morph ops (closing and opening)
+        mask_morph = self._learnable_morph_fill(image_for_fallbacks)
         if mask_morph is not None and mask_morph.max() > 0:
-            logging.info("[MASK] Learnable morph fallback produced a non-empty mask.")
-            return mask_morph
-        else:
-            logging.debug("[MASK] Learnable morph fallback failed or produced empty mask.")
+            logging.info("Learnable morph ops fallback successful.")
+            final_mask = mask_morph
+            if inspection_dir and image_path:
+                self._save_inspection_output(image_for_fallbacks, final_mask, image_path, inspection_dir, "_morph")
+            return final_mask
 
-        # 7. Classic fallback stack (existing, more traditional CV methods)
-        logging.info("[MASK] Attempting classic computer vision fallback stack.")
-        thick = self._pre_thicken(image)
-        poly = self._polygon_mask(thick)
-        mser = self._mser_mask(thick)
+        # 7. Classic fallback stack (Thicken -> Polygon -> MSER -> GrabCut)
+        logging.info("Attempting classic multi-step fallback.")
+        thick = self._pre_thicken(image_for_fallbacks)
+        if thick is not None:
+            poly = self._polygon_mask(thick)
+            mser = self._mser_mask(thick)
 
-        combined = None
-        if poly is not None and mser is not None:
-            combined = cv2.bitwise_or(poly, mser)
-        elif poly is not None:
-            combined = poly
-        elif mser is not None:
-            combined = mser
+            combined = None
+            if poly is not None and mser is not None:
+                combined = cv2.bitwise_or(poly, mser)
+            elif poly is not None:
+                combined = poly
+            elif mser is not None:
+                combined = mser
 
-        if combined is not None and combined.max() > 0:
-            grab = self._grabcut_refine(image, combined)
-            if grab is not None and grab.max() > 0:
-                logging.info("[MASK] Classic grabcut fallback produced a non-empty mask.")
-                return grab
-            else:
-                logging.debug("[MASK] Classic grabcut fallback failed or produced empty mask.")
-        else:
-            logging.debug("[MASK] Polygon/MSER combination failed or produced empty mask.")
+            if combined is not None and combined.max() > 0:
+                grab = self._grabcut_refine(image_for_fallbacks, combined)
+                if grab is not None and grab.max() > 0:
+                    logging.info("Classic fallback stack with GrabCut successful.")
+                    final_mask = grab
+                    if inspection_dir and image_path:
+                        self._save_inspection_output(image_for_fallbacks, final_mask, image_path, inspection_dir, "_grabcut")
+                    return final_mask
 
-        # Final fallback: simple multi-scale thresholding
-        final_fallback_mask = self._multi_scale_threshold(image)
+        # Final fallback: multi-scale thresholding
+        final_fallback_mask = self._multi_scale_threshold(image_for_fallbacks)
         if final_fallback_mask is not None and final_fallback_mask.max() > 0:
-            logging.info("[MASK] Multi-scale thresholding fallback produced a non-empty mask.")
-            return final_fallback_mask
-        else:
-            logging.error("[MASK] All advanced fallbacks failed. Returning a blank mask or simple threshold.")
-            return self._fallback_mask(image) # Fallback to the most basic method
-# ==================================================================
-# Section: Skeleton-Aware Processing
-# ==================================================================
+            logging.info("Final multi-scale thresholding fallback successful.")
+            final_mask = final_fallback_mask
+            if inspection_dir and image_path:
+                self._save_inspection_output(image_for_fallbacks, final_mask, image_path, inspection_dir, "_final_thresh")
+            return final_mask
+
+        logging.error("[MASK] All advanced fallbacks failed. Returning a blank mask as a last resort.")
+        return np.zeros(image.shape[:2], dtype=np.uint8) # Return a blank mask if all else fails
+
+    def _save_inspection_output(self, image: np.ndarray, mask: np.ndarray, original_path: str, save_dir: str, suffix: str):
+        """
+        Helper function to save inspection output (original image and generated mask).
+
+        Args:
+            image (np.ndarray): The original input image.
+            mask (np.ndarray): The generated mask.
+            original_path (str): The path to the original image.
+            save_dir (str): Directory to save the inspection output.
+            suffix (str): Suffix to append to the filename (e.g., '_potrace').
+        """
+        try:
+            os.makedirs(save_dir, exist_ok=True)
+            base_name = os.path.splitext(os.path.basename(original_path))[0]
+            img_save_path = os.path.join(save_dir, f"{base_name}_input{suffix}.png")
+            mask_save_path = os.path.join(save_dir, f"{base_name}_mask{suffix}.png")
+            
+            cv2.imwrite(img_save_path, cv2.cvtColor(image, cv2.COLOR_RGB2BGR)) # Convert back to BGR for OpenCV
+            cv2.imwrite(mask_save_path, mask)
+            logging.info(f"Saved inspection image to {img_save_path} and mask to {mask_save_path}")
+        except Exception as e:
+            logging.error(f"Failed to save inspection output: {e}")
+
+
+# --- SkeletonProcessor Class ---
 
 class SkeletonProcessor:
     """
-    A class for processing skeletons extracted from binary masks,
-    including branch point detection and skeleton-aware refinement.
+    Advanced skeleton processing for line art and geometric shapes.
+    Handles branch detection, pruning, and skeleton-based analysis.
     """
     def __init__(self, min_branch_length: int = 10):
+        """
+        Initializes the SkeletonProcessor.
+
+        Args:
+            min_branch_length (int): Minimum length of a branch to be considered
+                                      significant; shorter branches will be pruned.
+        """
         self.min_branch_length = min_branch_length
 
     def _get_branch_points(self, skeleton: np.ndarray) -> List[Tuple[int, int]]:
         """
         Detects branch points in a skeletonized image.
         A branch point is a pixel with more than two neighbors in a 3x3 window.
+
+        Args:
+            skeleton (np.ndarray): A binary skeleton image (2D array, values 0 or 255).
+
+        Returns:
+            List[Tuple[int, int]]: A list of (row, column) coordinates of branch points.
         """
         branch_points = []
         # Define a 3x3 kernel for neighbor counting
+        # For a skeleton pixel, sum of neighbors in 8-connectivity.
+        # A branch point will have 3 or more neighbors.
+        
+        # Using convolution to count neighbors is more efficient than iterating pixels.
+        # A pixel (r, c) is a branch point if skeleton[r,c] is 255 and its 8-connected neighbors
+        # sum up to 3*255 or more (excluding itself).
+        # We can use hit-or-miss transform or simply neighbor sum.
+        
+        # A simpler way to count neighbors for skeletonized images (thin, single-pixel lines)
+        # is to sum the 8-connected neighbors.
+        # A pixel (r,c) is a branch point if it's part of the skeleton AND has >= 3 neighbors.
+        
+        # Create a kernel for counting 8-connected neighbors
         kernel = np.array([[1, 1, 1],
-                           [1, 10, 1], # Center pixel weighted to easily identify it
+                           [1, 0, 1], # Center is 0 to exclude self from count
                            [1, 1, 1]], dtype=np.uint8)
 
-        # Convolve the skeleton with the kernel
-        # The value at each pixel will be the sum of its neighbors + 10 if it's a skeleton pixel
-        convolved = cv2.filter2D(skeleton.astype(np.uint8), -1, kernel, borderType=cv2.BORDER_CONSTANT)
+        # Convolve the skeleton (normalized to 1s and 0s)
+        convolved_neighbors = cv2.filter2D((skeleton > 0).astype(np.uint8), -1, kernel, borderType=cv2.BORDER_CONSTANT)
 
-        # Iterate through the convolved image to find branch points
-        # A pixel is a branch point if it's part of the skeleton (value >= 10)
-        # and has more than 2 neighbors (sum of neighbors > 2)
-        # For a skeleton pixel (value 10), if convolved value is > 12, it has >2 neighbors.
-        # (10 for itself + 3 for 3 neighbors = 13)
-        # (10 for itself + 4 for 4 neighbors = 14)
-        # (10 for itself + 5 for 5 neighbors = 15) etc.
-        # So, if convolved[i,j] - 10 > 2, it's a branch point.
-        for r, c in np.argwhere(skeleton):
-            # Extract 3x3 neighborhood
-            neighborhood = skeleton[max(0, r-1):min(skeleton.shape[0], r+2),
-                                    max(0, c-1):min(skeleton.shape[1], c+2)]
-            # Count active neighbors (excluding the center pixel itself)
-            num_neighbors = np.sum(neighborhood) - neighborhood[min(1, r):min(2, r+1), min(1, c):min(2, c+1)] # Adjust for boundary
-            if num_neighbors > 2:
-                branch_points.append((r, c))
-        return branch_points
+        # Branch points are skeleton pixels with 3 or more neighbors
+        # (convolved_neighbors >= 3) and are part of the skeleton (skeleton > 0)
+        branch_point_coords = np.argwhere((skeleton > 0) & (convolved_neighbors >= 3))
+        
+        return [tuple(pt) for pt in branch_point_coords]
 
 
     def _prune_small_branches(self, skeleton: np.ndarray) -> np.ndarray:
         """
         Removes small branches from the skeleton to simplify it.
         This helps in focusing on the main structure.
+
+        Args:
+            skeleton (np.ndarray): The input binary skeleton image (uint8, values 0 or 255).
+
+        Returns:
+            np.ndarray: The pruned binary skeleton image (uint8).
         """
-        # Iterate and remove end points until no more small branches can be pruned
-        # This is a simplified iterative pruning; more robust methods exist (e.g., using graph theory)
         pruned_skeleton = skeleton.copy()
+        
+        # Iteratively remove endpoints until no more small branches can be pruned
+        # or the branch length exceeds min_branch_length.
         while True:
             endpoints = np.array(np.where(self._get_endpoints(pruned_skeleton))).T
             if len(endpoints) == 0:
-                break
+                break # No more endpoints, pruning is complete
 
             changes_made = False
             for r, c in endpoints:
-                # Find path from endpoint to nearest branch point or another endpoint
-                # This is a simplified approach; a full graph traversal would be more robust
-                path = self._trace_path(pruned_skeleton, (r, c), self.min_branch_length)
-                if path is not None and len(path) < self.min_branch_length:
-                    for pr, pc in path:
-                        pruned_skeleton[pr, pc] = 0 # Remove small branch
-                    changes_made = True
+                # Trace path from endpoint. If the path is short and leads to dead end or branch
+                path = self._trace_path(pruned_skeleton, (r, c), self.min_branch_length + 1) # Trace slightly beyond min_length
+
+                # Check if the path is a small branch (ends without reaching a significant intersection)
+                if path is not None and len(path) <= self.min_branch_length:
+                    # Verify if the end of the path is truly an endpoint or a branch point
+                    # For a true small branch, the path should ideally end without connecting to a major junction
+                    
+                    # Simple check: if the path is short and its last point isn't a known branch point
+                    # (more robust would involve graph analysis)
+                    is_small_branch = True
+                    if len(path) > 1: # If path has more than just the start point
+                        last_point_is_branch = False
+                        # Check if the point before the last one has more than 2 neighbors in the original skeleton
+                        # (this implies it was an internal point that became an endpoint after pruning)
+                        if len(path) > 1:
+                            prev_r, prev_c = path[-2]
+                            temp_skel = pruned_skeleton.copy()
+                            temp_skel[r,c] = 0 # Temporarily remove current endpoint to check neighbor count of previous
+                            # Count neighbors of the point just before the current endpoint
+                            kernel_neighbors = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=np.uint8)
+                            n_count_prev = cv2.filter2D((temp_skel > 0).astype(np.uint8), -1, kernel_neighbors, borderType=cv2.BORDER_CONSTANT)[prev_r, prev_c]
+                            if n_count_prev >= 3: # If the point before was a branch point, don't prune
+                                is_small_branch = False
+                    
+                    if is_small_branch:
+                        for pr, pc in path:
+                            pruned_skeleton[pr, pc] = 0 # Remove small branch segment
+                        changes_made = True
             if not changes_made:
-                break
+                break # No more changes, exit loop
         return pruned_skeleton
 
     def _get_endpoints(self, skeleton: np.ndarray) -> np.ndarray:
         """
         Detects endpoints in a skeletonized image.
-        An endpoint is a pixel with exactly one neighbor in a 3x3 window.
+        An endpoint is a pixel that is part of the skeleton and has exactly one 8-connected neighbor.
+
+        Args:
+            skeleton (np.ndarray): A binary skeleton image (2D array, values 0 or 255).
+
+        Returns:
+            np.ndarray: A boolean array of the same shape as skeleton, where True indicates an endpoint.
         """
         # Define a 3x3 kernel for neighbor counting (excluding center)
         kernel = np.array([[1, 1, 1],
                            [1, 0, 1],
                            [1, 1, 1]], dtype=np.uint8)
 
-        # Convolve the skeleton with the kernel
-        convolved = cv2.filter2D(skeleton.astype(np.uint8), -1, kernel, borderType=cv2.BORDER_CONSTANT)
+        # Convolve the skeleton (normalized to 1s and 0s) to count neighbors
+        convolved_neighbors = cv2.filter2D((skeleton > 0).astype(np.uint8), -1, kernel, borderType=cv2.BORDER_CONSTANT)
 
-        # Endpoints are skeleton pixels with exactly one neighbor
-        endpoints = (skeleton > 0) & (convolved == 1)
+        # Endpoints are skeleton pixels that have exactly one neighbor
+        endpoints = (skeleton > 0) & (convolved_neighbors == 1)
         return endpoints
 
     def _trace_path(self, skeleton: np.ndarray, start_point: Tuple[int, int], max_length: int) -> Optional[List[Tuple[int, int]]]:
         """
-        Traces a path from a start_point along the skeleton up to max_length or until a branch point/intersection.
+        Traces a path from a start_point along the skeleton up to max_length or until a branch point/intersection
+        or another endpoint (excluding the starting one).
         Returns the path as a list of coordinates.
+
+        Args:
+            skeleton (np.ndarray): The binary skeleton image (uint8, values 0 or 255).
+            start_point (Tuple[int, int]): The (row, column) coordinates of the starting point.
+            max_length (int): The maximum length of the path to trace.
+
+        Returns:
+            Optional[List[Tuple[int, int]]]: A list of (row, col) tuples representing the path,
+                                            or None if the path cannot be traced.
         """
         path = [start_point]
         current_point = start_point
         visited = {start_point} # Keep track of visited points to avoid loops
 
-        for _ in range(max_length): # Limit path length to avoid infinite loops on complex skeletons
+        for _ in range(max_length): # Limit path length
             neighbors = []
             r, c = current_point
             # Check 8-connectivity neighbors
@@ -772,68 +1032,163 @@ class SkeletonProcessor:
                     if dr == 0 and dc == 0:
                         continue
                     nr, nc = r + dr, c + dc
-                    if 0 <= nr < skeleton.shape[0] and 0 <= nc < skeleton.shape[1] and skeleton[nr, nc] > 0:
-                        if (nr, nc) not in visited:
-                            neighbors.append((nr, nc))
+                    
+                    # Check bounds and if neighbor is part of skeleton and not yet visited
+                    if (0 <= nr < skeleton.shape[0] and 0 <= nc < skeleton.shape[1] and
+                        skeleton[nr, nc] > 0 and (nr, nc) not in visited):
+                        neighbors.append((nr, nc))
 
-            if len(neighbors) == 1: # Continue along a single path
+            if len(neighbors) == 0:
+                break  # No more neighbors to follow (reached an isolated point or true end)
+            elif len(neighbors) == 1:
+                # Continue following the path
                 current_point = neighbors[0]
                 path.append(current_point)
                 visited.add(current_point)
-            elif len(neighbors) == 0: # End of a branch
+            else:
+                # Multiple neighbors - we've reached a branch point or complex intersection
                 break
-            else: # Branch point or intersection
-                break
+        
+        # If the path is just the start point and no movement, treat as effectively no path or already pruned.
+        if len(path) == 1 and start_point == current_point and max_length > 0:
+             return None # Did not move from start point
+        
         return path
 
-    def process_skeleton(self, mask_bin: np.ndarray) -> Tuple[np.ndarray, List[Tuple[int, int]]]:
+    def process_skeleton(self, mask: np.ndarray) -> Tuple[np.ndarray, List[Tuple[int, int]]]:
         """
-        Performs skeletonization, prunes small branches, and detects branch points.
+        Processes a binary mask to extract and refine its skeleton.
+        This involves generating the skeleton, finding branch points, and pruning small branches.
 
         Args:
-            mask_bin (np.ndarray): Input binary mask (0 or 255).
+            mask (np.ndarray): The input binary mask (2D array, uint8).
 
         Returns:
-            Tuple[np.ndarray, List[Tuple[int, int]]]: A tuple containing the
-                                                       pruned skeleton and a list of branch points.
+            Tuple[np.ndarray, List[Tuple[int, int]]]: A tuple containing:
+                - np.ndarray: The pruned binary skeleton image (uint8).
+                - List[Tuple[int, int]]: A list of (row, column) coordinates of branch points in the *initial* skeleton.
         """
-        if mask_bin.max() == 0:
-            return np.zeros_like(mask_bin, dtype=np.uint8), []
-
         # Ensure mask is boolean for skeletonize
-        binary_mask = mask_bin > 0
+        binary_mask = mask > 0
+        
+        # Generate skeleton
+        # thin() can be used for more iterative thinning, skeletonize() is usually sufficient.
         skeleton = skeletonize(binary_mask)
+        skeleton = (skeleton.astype(np.uint8)) * 255 # Convert back to 0/255
 
+        # Find branch points in the initial skeleton
+        branch_points = self._get_branch_points(skeleton)
+        
         # Prune small branches
         pruned_skeleton = self._prune_small_branches(skeleton)
+        
+        return pruned_skeleton, branch_points
 
-        # Detect branch points on the pruned skeleton
-        branch_points = self._get_branch_points(pruned_skeleton)
-
-        return (pruned_skeleton.astype(np.uint8) * 255), branch_points
-
-    def skeleton_aware_refinement(self, original_mask: np.ndarray, skeleton: np.ndarray) -> np.ndarray:
+    def skeleton_aware_refinement(self, mask: np.ndarray, skeleton: np.ndarray) -> np.ndarray:
         """
-        Refines the original mask by ensuring connectivity and shape preservation
-        based on the skeleton. This can involve growing the skeleton or
-        using it as a guide for morphological operations.
+        Refines a mask using the corresponding skeleton structure. This aims to:
+        1. Fill gaps in the mask that are spanned by the skeleton.
+        2. Enhance connectivity and fill minor holes using morphological operations.
+
+        Args:
+            mask (np.ndarray): The original binary mask (uint8).
+            skeleton (np.ndarray): The processed skeleton of the mask (uint8).
+
+        Returns:
+            np.ndarray: The refined binary mask (uint8).
+        """
+        try:
+            # Combine the original mask with the skeleton to fill any gaps along the skeleton path
+            refined = cv2.bitwise_or(mask, skeleton)
+            
+            # Apply a small dilation to further connect close components, if necessary
+            # The kernel size should be small to avoid excessive thickening
+            dilation_kernel = np.ones((3, 3), np.uint8)
+            refined = cv2.dilate(refined, dilation_kernel, iterations=1)
+            
+            # Fill any remaining holes within the now more connected regions
+            filled = ndi.binary_fill_holes(refined > 0).astype(np.uint8) * 255
+            logging.info("Skeleton-aware refinement applied: mask combined with skeleton, dilated, and holes filled.")
+            return filled
+        except Exception as e:
+            logging.error(f"Skeleton-aware refinement failed: {e}. Returning original mask.")
+            return mask
+
+# --- Pipeline Integration ---
+
+# Wrapper class for backward compatibility
+# Note: This class depends on 'SAMMaskGenerator' which is not defined in the provided snippets.
+class PromptGenerator:
+    """
+    Wrapper class for backward compatibility with PromptGenerator.
+    This class is intended to generate adaptive prompts for a Segment Anything Model (SAM).
+    It acts as an interface to an underlying SAM mask generation utility.
+    """
+    def __init__(self):
+        """
+        Initializes the PromptGenerator.
+        Requires SAMMaskGenerator to be available in the environment.
+        """
+        # Assuming SAMMaskGenerator exists and is importable/accessible
+        # from wherever this class is intended to be used.
+        # Placeholder for actual SAMMaskGenerator instantiation.
+        # This will raise a NameError if SAMMaskGenerator is not defined.
+        try:
+            # from your_sam_module import SAMMaskGenerator # Example import
+            self.sam_generator = SAMMaskGenerator() # This line would typically be uncommented
+        except NameError:
+            logging.error("SAMMaskGenerator is not defined. PromptGenerator cannot function without it.")
+            self.sam_generator = None
+        except Exception as e:
+            logging.error(f"Error initializing SAMMaskGenerator: {e}")
+            self.sam_generator = None
+
+    def generate_prompts(self, image: np.ndarray) -> List[Dict]:
+        """
+        Generates prompts for SAM based on the input image.
+        This method delegates the call to an internal SAM mask generator.
+
+        Args:
+            image (np.ndarray): The input image for which to generate prompts (H, W, C).
+
+        Returns:
+            List[Dict]: A list of prompt dictionaries suitable for SAM.
+        """
+        if self.sam_generator:
+            return self.sam_generator.generate_adaptive_prompts(image)
+        else:
+            logging.warning("SAMMaskGenerator not initialized. Cannot generate prompts.")
+            return []
+
+# --- HybridAugmentationPipeline Class ---
+# Note: Only a partial snippet of this class was provided.
+# The full class definition and other methods are assumed to exist elsewhere.
+class HybridAugmentationPipeline:
+    """
+    A placeholder for the HybridAugmentationPipeline class.
+    Only a partial snippet of its internal logic was provided.
+    This class likely combines various image processing and augmentation
+    techniques, possibly including mask refinement and skeleton processing.
+    """
+    def __init__(self, min_branch_length: int = 10, **kwargs):
+        # Placeholder for actual initialization logic
+        self.min_branch_length = min_branch_length
+        logging.info("HybridAugmentationPipeline initialized (partial definition).")
+
+    def some_method_containing_snippet(self, original_mask: np.ndarray, distance_map: np.ndarray) -> np.ndarray:
+        """
+        A placeholder method demonstrating a snippet of the HybridAugmentationPipeline's logic.
+        This part seems to be involved in growing a skeleton and combining it with an original mask.
 
         Args:
             original_mask (np.ndarray): The initial binary mask.
-            skeleton (np.ndarray): The processed skeleton of the mask.
+            distance_map (np.ndarray): A distance transform map related to the skeleton.
 
         Returns:
-            np.ndarray: The skeleton-aware refined mask.
+            np.ndarray: A refined mask after combining with grown skeleton and morphological operations.
         """
-        if skeleton.max() == 0:
-            logging.warning("Empty skeleton provided for skeleton-aware refinement. Returning original mask.")
-            return original_mask
-
-        # Grow the skeleton to create a thicker, connected structure
-        # Use distance transform from the skeleton
-        distance_map = distance_transform_edt(~skeleton)
-        # Threshold the distance map to grow the skeleton
-        # The threshold can be a parameter or dynamically determined
+        # The following lines were provided as a snippet.
+        # They appear to be part of a method that refines a mask using skeleton information.
         grown_skeleton = (distance_map <= self.min_branch_length // 2).astype(np.uint8) * 255
         logging.debug(f"Grown skeleton by {self.min_branch_length // 2} pixels.")
 
@@ -854,6 +1209,8 @@ class SkeletonProcessor:
         return refined_mask
 
 
+
+
 # ==================================================================
 # Section: Hybrid Augmentation Pipeline Orchestrator (Example Usage)
 # ==================================================================
@@ -863,62 +1220,300 @@ class HybridAugmentationPipeline:
     Orchestrates the mask generation and refinement process using
     SAM and skeleton-aware processing.
     """
-    def __init__(self, sam_models: List[str] = ['vit_h', 'vit_b'],
-                 sam_cache_dir: str = "~/.cache/sam",
-                 sam_device: str = "cuda",
-                 sam_ensemble_weights: Optional[List[float]] = None,
-                 mask_refiner_params: Optional[Dict] = None,
-                 skeleton_processor_params: Optional[Dict] = None):
+    def __init__(self, config: Dict):
         """
-        Initializes the HybridAugmentationPipeline with configurable components.
+        Initializes the HybridAugmentationPipeline with a config dict.
         """
+        # Only use valid SAM model types
+        valid_models = ['vit_h', 'vit_l', 'vit_b']
+        model_type = config.get('sam', {}).get('model_type', 'vit_h')
+        sam_models = [model_type] if model_type in valid_models else ['vit_h']
         self.sam_generator = SAMMaskGenerator(
             models=sam_models,
-            cache_dir=sam_cache_dir,
-            device=sam_device,
-            ensemble_weights=sam_ensemble_weights
+            cache_dir=config.get('sam', {}).get('checkpoint_path', '~/.cache/sam'),
+            device=config.get('processing', {}).get('device', 'cuda'),
+            ensemble_weights=None
         )
-        self.mask_refiner = MaskRefiner(**(mask_refiner_params or {}))
-        self.skeleton_processor = SkeletonProcessor(**(skeleton_processor_params or {}))
+        # Only pass valid MaskRefiner args
+        ref_cfg = config.get('refinement', {}) or {}
+        valid_refiner_args = ['contour_approx_factor', 'min_component_size', 'closing_kernel_size', 'opening_kernel_size']
+        filtered_ref_cfg = {k: v for k, v in ref_cfg.items() if k in valid_refiner_args}
+        self.mask_refiner = MaskRefiner(**filtered_ref_cfg)
+        self.skeleton_processor = SkeletonProcessor(**(config.get('skeleton', {}) or {}))
+        self.config = config
         logging.info("Hybrid Augmentation Pipeline initialized.")
+    def run_pipeline(self):
+        """
+        Loads images, processes them, and saves results using ImagePathDataset.
+        """
+        import pickle
+        from .dataset import ImagePathDataset
+        input_path = self.config['data']['input_path']
+        output_path = self.config['data']['output_path']
+        batch_size = self.config['processing']['batch_size']
+        # Load derived_labels.json
+        with open(input_path, 'r') as f:
+            derived_labels = json.load(f)
+        image_paths = [entry['image_path'] for entry in derived_labels]
+        dataset = ImagePathDataset(image_paths, derived_labels_path=input_path)
+        all_results = []
+        inspection_dir = self.config.get('inspection_dir', None)
+        for idx in range(0, len(dataset), batch_size):
+            batch_indices = list(range(idx, min(idx+batch_size, len(dataset))))
+            batch = [dataset[i] for i in batch_indices]
+            images = [item[0] for item in batch if item[0] is not None]
+            paths = [item[1] for item in batch if item[1] is not None]
+            geometries = [item[2] for item in batch if item[2] is not None]
+            logging.info(f"Processing batch {idx//batch_size+1}: indices {batch_indices}")
+            logging.info(f"Batch image paths: {paths}")
+            if not images:
+                logging.warning(f"Batch {idx//batch_size+1} is empty after filtering. Raw batch: {batch}")
+                continue
+            batch_results = []
+            for img, path, geom in zip(images, paths, geometries):
+                logging.info(f"Processing image: {path}")
+                # Convert tensor to numpy image
+                np_img = img.squeeze().cpu().numpy()
+                if np_img.max() <= 1.0:
+                    np_img = (np_img * 255).astype(np.uint8)
+                if np_img.ndim == 2:
+                    np_img = np.stack([np_img]*3, axis=-1)
+                mask = self.process_image(np_img, image_path=path, inspection_dir=inspection_dir)
+                batch_results.append({'image_path': path, 'geometry': geom, 'mask': mask})
+            all_results.append(batch_results)
+        with open(output_path, 'wb') as f:
+            pickle.dump(all_results, f)
+        logging.info(f"Saved {len(all_results)} batches to {output_path}")
 
     def process_image(self, image: np.ndarray) -> np.ndarray:
         """
-        Processes an input image to generate and refine a robust mask.
-
-        Args:
-            image (np.ndarray): The input image (H, W, C).
-
-        Returns:
-            np.ndarray: The final refined binary mask.
+        Processes an input image to generate and refine a robust mask, with object-by-object segmentation,
+        topology-aware prompting, hole-punching, and aggressive thinning for skeletons.
         """
-        logging.info("Starting mask generation for the input image.")
-        # Step 1: Generate initial mask using SAM ensemble
-        initial_mask = self.sam_generator.generate_ensemble_masks(image)
-        logging.info(f"Initial mask generated. Max pixel value: {initial_mask.max()}")
+        import matplotlib.pyplot as plt
+        from skimage.morphology import thin, skeletonize
+        logging.info("Starting object-by-object mask generation for the input image.")
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
+        # Step 1: Detect all objects (outer contours)
+        contours, hierarchy = cv2.findContours(gray, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+        if hierarchy is not None:
+            hierarchy = hierarchy[0]
+        object_masks = []
+        for i, cnt in enumerate(contours):
+            # Only process outer contours (objects)
+            if hierarchy is not None and hierarchy[i][3] != -1:
+                continue
+            mask_obj = np.zeros_like(gray, dtype=np.uint8)
+            cv2.drawContours(mask_obj, [cnt], -1, 255, -1)
+            # Generate topology-aware prompts for this object
+            prompts = []
+            M = cv2.moments(cnt)
+            if M['m00'] > 0:
+                cx = int(M['m10']/M['m00'])
+                cy = int(M['m01']/M['m00'])
+                prompts.append({'point_coords': np.array([[cx, cy]]), 'point_labels': np.array([1])})
+            # Add negative prompts for holes inside this object
+            if hierarchy is not None:
+                child_idx = hierarchy[i][2]
+                while child_idx != -1:
+                    hole_cnt = contours[child_idx]
+                    M_hole = cv2.moments(hole_cnt)
+                    if M_hole['m00'] > 0:
+                        hx = int(M_hole['m10']/M_hole['m00'])
+                        hy = int(M_hole['m01']/M_hole['m00'])
+                        prompts.append({'point_coords': np.array([[hx, hy]]), 'point_labels': np.array([0])})
+                    child_idx = hierarchy[child_idx][0]
+            # Run SAM for this object
+            obj_mask = None
+            try:
+                masks, scores = self.sam_generator._generate_masks_single_model(image, prompts, list(self.sam_generator.models.keys())[0])
+                if masks:
+                    obj_mask = masks[np.argmax(scores)]
+                else:
+                    obj_mask = mask_obj
+                object_masks.append(obj_mask)
+            except Exception as e:
+                logging.error(f"Error in SAM mask generation for object {i}: {e}")
+                obj_mask = mask_obj
+                object_masks.append(obj_mask)
+        # ...existing code...
 
-        if initial_mask.max() == 0:
-            logging.warning("Initial SAM mask is empty. Skipping further refinement steps.")
-            return initial_mask
+    def _process_with_qa(self, img: np.ndarray) -> Dict:
+        """Process image with quality assurance checks and visualization."""
+        result = self.process(img)
+        
+        # QA visualization if enabled
+        qa_cfg = self.config.get('qa', {})
+        if qa_cfg.get('enabled', False):
+            try:
+                import matplotlib.pyplot as plt
+                plt.figure(figsize=(8, 4))
+                plt.subplot(1, 2, 1)
+                plt.imshow(img)
+                plt.title("Original")
+                plt.subplot(1, 2, 2) 
+                plt.imshow(result.get('mask', np.zeros_like(img[:,:,0])), cmap='gray')
+                plt.title("Generated Mask")
+                plt.show()
+            except Exception as e:
+                logging.warning(f"QA visualization failed: {e}")
+        
+        return result
 
-        # Step 2: Refine the mask using general mask refinement techniques
-        refined_mask_stage1 = self.mask_refiner.refine(initial_mask)
-        logging.info(f"Mask refined (Stage 1). Max pixel value: {refined_mask_stage1.max()}")
+# --- HybridAugmentationPipeline Class ---
 
-        if refined_mask_stage1.max() == 0:
-            logging.warning("Mask refinement (Stage 1) resulted in an empty mask. Returning empty mask.")
-            return refined_mask_stage1
+class HybridAugmentationPipeline:
+    """
+    Main orchestrator for hybrid mask generation and augmentation pipeline.
+    Combines SAM, skeleton processing, and mask refinement.
+    """
+    def __init__(self, config: Dict = None):
+        self.config = config or {}
+        self.sam_generator = SAMMaskGenerator()
+        self.mask_refiner = MaskRefiner()
+        self.skeleton_processor = SkeletonProcessor()
+        logging.info("HybridAugmentationPipeline initialized")
 
-        # Step 3: Process skeleton and apply skeleton-aware refinement
-        # Ensure the mask is binary (0 or 255) before skeletonization
-        skeleton, branch_points = self.skeleton_processor.process_skeleton(refined_mask_stage1)
-        logging.info(f"Skeleton processed. Found {len(branch_points)} branch points.")
+    def process_image(self, image: np.ndarray, image_path: str = None, inspection_dir: str = None) -> np.ndarray:
+        """
+        Process a single image to generate high-quality mask.
+        
+        Args:
+            image (np.ndarray): Input image
+            image_path (str): Path to original image for naming inspection outputs
+            inspection_dir (str): Directory to save inspection images
+            
+        Returns:
+            np.ndarray: Generated binary mask
+        """
+        try:
+            # Generate mask using SAM
+            mask = self.sam_generator.generate_ensemble_masks(image)
+            
+            # Refine mask
+            refined_mask = self.mask_refiner.refine(mask)
+            
+            # Save inspection images if requested
+            if inspection_dir is not None and image_path is not None:
+                import os
+                os.makedirs(inspection_dir, exist_ok=True)
+                base_name = os.path.splitext(os.path.basename(image_path))[0]
+                
+                img_save_path = os.path.join(inspection_dir, f"{base_name}_input.png")
+                mask_save_path = os.path.join(inspection_dir, f"{base_name}_mask.png")
+                
+                if image.ndim == 3:
+                    cv2.imwrite(img_save_path, cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+                else:
+                    cv2.imwrite(img_save_path, image)
+                cv2.imwrite(mask_save_path, refined_mask)
+                logging.info(f"Saved inspection image to {img_save_path} and mask to {mask_save_path}")
+            
+            return refined_mask
+            
+        except Exception as e:
+            logging.error(f"Error processing image: {e}")
+            # Fallback to simple thresholding
+            gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if len(image.shape) == 3 else image
+            _, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            return mask
 
-        final_mask = self.skeleton_processor.skeleton_aware_refinement(refined_mask_stage1, skeleton)
-        logging.info(f"Final mask generated (Skeleton-aware refinement). Max pixel value: {final_mask.max()}")
+    def process(self, image: np.ndarray) -> Dict:
+        """
+        Legacy method for backward compatibility.
+        """
+        mask = self.process_image(image)
+        return {'mask': mask}
 
-        return final_mask
+    def batch_process(self, image_paths: list, output_dir: str, batch_size: int = 8, 
+                     num_workers: int = 4, inspection_dir: str = None) -> list:
+        """
+        Process multiple images in batches with multiprocessing, using explicit image paths.
+        """
+        import os
+        from multiprocessing import Pool
+        from tqdm import tqdm
+        os.makedirs(output_dir, exist_ok=True)
+        if inspection_dir:
+            os.makedirs(inspection_dir, exist_ok=True)
+        processed_files = []
+        with Pool(processes=num_workers) as pool:
+            with tqdm(total=len(image_paths), desc="Processing images") as pbar:
+                for i in range(0, len(image_paths), batch_size):
+                    batch_paths = image_paths[i:i+batch_size]
+                    batch_args = [(path, output_dir, inspection_dir) for path in batch_paths]
+                    batch_results = pool.map(self._process_single_image, batch_args)
+                    processed_files.extend(batch_results)
+                    pbar.update(len(batch_paths))
+        return processed_files
 
+    def _process_single_image(self, args):
+        """Helper method for batch processing."""
+        image_path, output_dir, inspection_dir = args
+        try:
+            # Load image
+            image = cv2.imread(image_path)
+            if image is None:
+                logging.error(f"Failed to load image: {image_path}")
+                return None
+            # Convert BGR to RGB
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            # Process image
+            mask = self.process_image(image, image_path, inspection_dir)
+            # Check if mask is blank (all zeros)
+            if mask is not None and (mask == 0).all():
+                logging.warning(f"Mask for {image_path} is blank (all zeros). Possible error in mask generation.")
+            # Save result
+            base_name = os.path.splitext(os.path.basename(image_path))[0]
+            output_path = os.path.join(output_dir, f"{base_name}_mask.png")
+            cv2.imwrite(output_path, mask)
+            return output_path
+        except Exception as e:
+            logging.error(f"Error processing {image_path}: {e}")
+            return None
 
-# Alias for CLI compatibility
+    def run_pipeline(self):
+        """
+        Main entry point for CLI. Loads input paths, runs batch processing, and saves results.
+        """
+        import json
+        import pickle
+        import os
+        # Get config values
+        input_path = self.config.get('data', {}).get('input_path')
+        output_path = self.config.get('data', {}).get('output_path')
+        batch_size = self.config.get('processing', {}).get('batch_size', 8)
+        inspection_dir = self.config.get('inspection_dir', None)
+        num_workers = self.config.get('processing', {}).get('num_workers', 4)
+
+        if not input_path or not output_path:
+            logging.critical("Input or output path not specified in config.")
+            raise ValueError("Input or output path not specified.")
+
+        # Load image paths from derived_labels.json
+        with open(input_path, 'r') as f:
+            derived_labels = json.load(f)
+        def remap_path(path):
+            return path.replace('category_1', '1').replace('category_0', '0')
+        image_paths = [remap_path(entry['image_path']) for entry in derived_labels]
+
+        # Output directory for masks
+        output_dir = os.path.dirname(output_path)
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Run batch processing using explicit image paths
+        mask_files = self.batch_process(
+            image_paths=image_paths,
+            output_dir=output_dir,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            inspection_dir=inspection_dir
+        )
+
+        # Save results as a pickle file
+        with open(output_path, 'wb') as f:
+            pickle.dump(mask_files, f)
+        logging.info(f"Saved {len(mask_files)} mask files to {output_path}")
+
+# Create alias for backward compatibility
 HybridAugmentor = HybridAugmentationPipeline

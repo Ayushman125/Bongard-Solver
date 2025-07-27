@@ -7,10 +7,26 @@ class PromptGenerator:
         pass
 
     def auto_prompt(self, image):
-        # Edge-based, grid, and center/corner prompts
+        # Topology-aware: positive prompts on outer contours, negative on holes
         h, w = image.shape[:2]
         prompts = []
         gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if len(image.shape) == 3 else image
+        # Find contours and hierarchy
+        contours, hierarchy = cv2.findContours(gray, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+        if hierarchy is not None:
+            hierarchy = hierarchy[0]
+            for i, cnt in enumerate(contours):
+                M = cv2.moments(cnt)
+                if M['m00'] > 0:
+                    cx = int(M['m10']/M['m00'])
+                    cy = int(M['m01']/M['m00'])
+                    # If parent == -1, it's an outer contour (object)
+                    if hierarchy[i][3] == -1:
+                        prompts.append({'point_coords': np.array([[cx, cy]]), 'point_labels': np.array([1])})
+                    # If parent != -1, it's a hole
+                    else:
+                        prompts.append({'point_coords': np.array([[cx, cy]]), 'point_labels': np.array([0])})
+        # Fallback: edge-based prompts if no contours
         edges = cv2.Canny(gray, 50, 150)
         edge_points = np.column_stack(np.where(edges > 0))
         if len(edge_points) > 0:
@@ -19,12 +35,7 @@ class PromptGenerator:
             for idx in edge_indices:
                 y, x = edge_points[idx]
                 prompts.append({'point_coords': np.array([[x, y]]), 'point_labels': np.array([1])})
-        for scale in [0.3, 0.5, 0.7]:
-            grid_size = max(32, int(min(h, w) * scale))
-            for i in range(grid_size//2, h, grid_size):
-                for j in range(grid_size//2, w, grid_size):
-                    if i < h and j < w:
-                        prompts.append({'point_coords': np.array([[j, i]]), 'point_labels': np.array([1])})
+        # Center prompts
         center_prompts = [
             {'point_coords': np.array([[w//2, h//2]]), 'point_labels': np.array([1])},
             {'point_coords': np.array([[w//4, h//4]]), 'point_labels': np.array([1])},
@@ -34,12 +45,29 @@ class PromptGenerator:
         return prompts[:15]
 
     def self_prompt(self, image, mask):
-        # Use mask features to generate new prompts
+        # Use mask features to generate new prompts, topology-aware
         ys, xs = np.where(mask > 127)
         if len(xs) == 0:
             return self.auto_prompt(image)
-        idxs = np.random.choice(len(xs), min(5, len(xs)), replace=False)
-        prompts = [{'point_coords': np.array([[xs[i], ys[i]]]), 'point_labels': np.array([1])} for i in idxs]
+        # Find contours in mask
+        mask_uint8 = (mask > 127).astype(np.uint8) * 255
+        contours, hierarchy = cv2.findContours(mask_uint8, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+        prompts = []
+        if hierarchy is not None:
+            hierarchy = hierarchy[0]
+            for i, cnt in enumerate(contours):
+                M = cv2.moments(cnt)
+                if M['m00'] > 0:
+                    cx = int(M['m10']/M['m00'])
+                    cy = int(M['m01']/M['m00'])
+                    if hierarchy[i][3] == -1:
+                        prompts.append({'point_coords': np.array([[cx, cy]]), 'point_labels': np.array([1])})
+                    else:
+                        prompts.append({'point_coords': np.array([[cx, cy]]), 'point_labels': np.array([0])})
+        # Fallback: random mask points
+        if len(prompts) == 0:
+            idxs = np.random.choice(len(xs), min(5, len(xs)), replace=False)
+            prompts = [{'point_coords': np.array([[xs[i], ys[i]]]), 'point_labels': np.array([1])} for i in idxs]
         return prompts
 
     def composable_prompt(self, image, masks):
