@@ -38,6 +38,8 @@ data/raw/ShapeBongard_V2/bd/*.zip
 data/raw/ShapeBongard_V2/ff/*.zip
 data/raw/ShapeBongard_V2/hd/*.zip
 
+sam_checkpoints/
+
 # QA checking and review folders
 qa_grids/
 qa_adversarial/
@@ -50,3 +52,4 @@ qa_outliers/
 test_hybrid_pipeline.py
 *.ipynb
 hybrid_test_output/
+
