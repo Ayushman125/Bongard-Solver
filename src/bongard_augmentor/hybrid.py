@@ -352,6 +352,66 @@ from .dataset import ImagePathDataset
 # --- Main Hybrid Augmentation Pipeline ---
 
 class HybridAugmentationPipeline:
+
+    def adaptive_mask_quality_check(self, mask: np.ndarray, image: np.ndarray) -> tuple:
+        """
+        Use content-aware thresholds instead of fixed percentages for mask validation.
+        Returns (mask_quality_fail, reason, min_threshold, max_threshold)
+        """
+        nonzero = np.count_nonzero(mask)
+        total_pixels = mask.size
+        fill_ratio = nonzero / total_pixels
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
+        # Foreground estimation using Otsu
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        expected_fg_ratio = np.count_nonzero(binary) / total_pixels
+        min_threshold = max(0.005, expected_fg_ratio * 0.1)
+        max_threshold = min(0.7, expected_fg_ratio * 3.0)
+        mask_quality_fail = False
+        reason = ""
+        if fill_ratio > max_threshold:
+            reason = f"Mask too large: {nonzero} pixels, {fill_ratio:.2%}. Expected max {max_threshold:.2%}"
+            mask_quality_fail = True
+        elif fill_ratio < min_threshold:
+            reason = f"Mask too small: {nonzero} pixels, {fill_ratio:.2%}. Expected min {min_threshold:.2%}"
+            mask_quality_fail = True
+        return mask_quality_fail, reason, min_threshold, max_threshold
+
+    def multi_scale_sam_mask(self, image: np.ndarray, scales: list = [1.0, 0.75, 0.5]) -> np.ndarray:
+        """
+        Process image at multiple scales and combine results using majority voting.
+        """
+        masks = []
+        # Use PromptGenerator for intelligent prompt generation
+        prompt_gen = PromptGenerator()
+        for scale in scales:
+            if scale != 1.0:
+                h, w = image.shape[:2]
+                scaled_h, scaled_w = int(h * scale), int(w * scale)
+                scaled_image = cv2.resize(image, (scaled_w, scaled_h))
+            else:
+                scaled_image = image
+            point_coords, point_labels = prompt_gen.intelligent_sam_prompts(scaled_image)
+            try:
+                self.sam_generator.set_image(scaled_image)
+                sam_masks, scores, _ = self.sam_generator.predict(point_coords, point_labels, multimask_output=True)
+                best_mask = sam_masks[np.argmax(scores)]
+                if scale != 1.0:
+                    best_mask = cv2.resize((best_mask*255).astype(np.uint8), (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
+                else:
+                    best_mask = (best_mask*255).astype(np.uint8)
+                masks.append(best_mask)
+            except Exception as e:
+                logging.warning(f"SAM failed at scale {scale}: {e}")
+                continue
+        if masks:
+            combined = np.zeros_like(masks[0], dtype=np.float32)
+            for mask in masks:
+                combined += mask.astype(np.float32)
+            combined = (combined >= (255 * len(masks) / 2)).astype(np.uint8) * 255
+            return combined
+        else:
+            return np.zeros(image.shape[:2], dtype=np.uint8)
     def benchmark_enabled_processing(self, image: np.ndarray, image_type: str = "unknown") -> Tuple[np.ndarray, Dict]:
         """
         Comprehensive performance benchmarking with timing, success rate, resource monitoring, and analytics.
@@ -487,69 +547,66 @@ class HybridAugmentationPipeline:
 
     def process_image(self, image: np.ndarray, image_path: str = None, inspection_dir: str = None) -> np.ndarray:
         """
-        Uses official SAM model to generate the initial mask, then applies skeleton-aware refinement and QA.
+        Strengthened classical mask generation: CLAHE, morphological cleaning, contour filtering, edge-guided refinement. Only use SAM as fallback if all else fails.
         """
         use_cuda = hasattr(cv2, 'cuda') and cv2.cuda.getCudaEnabledDeviceCount() > 0
         gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
 
-        # --- Use SAM to generate mask ---
-        try:
-            self.sam_generator.set_image(image)
-            h, w = image.shape[:2]
-            # Use a central point as a prompt (can be improved for your use case)
-            point_coords = np.array([[w // 2, h // 2]])
-            point_labels = np.array([1])
-            masks, scores, logits = self.sam_generator.predict(point_coords, point_labels, multimask_output=True)
-            # Use the best mask (highest score)
-            sam_mask = masks[np.argmax(scores)]
-            sam_mask = (sam_mask * 255).astype(np.uint8)
-        except Exception as e:
-            logging.error(f"SAM mask generation failed: {e}. Falling back to edge-based mask.")
-            # Fallback to edge-based mask if SAM fails
-            sam_mask = np.zeros_like(gray, dtype=np.uint8)
+        # --- Adaptive histogram equalization (CLAHE) for contrast enhancement ---
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        gray_eq = clahe.apply(gray)
 
-        # --- Skeleton-aware edge refinement ---
-        skeleton, branch_points = self.skeleton_processor.process_skeleton(sam_mask)
-        mask_refined = self.skeleton_processor.skeleton_aware_refinement(sam_mask, skeleton)
+        # --- Otsu thresholding on enhanced image ---
+        _, mask = cv2.threshold(gray_eq, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-        # --- Post-Processing Refinement (via MaskRefiner) ---
-        mask_post = self.mask_refiner.robust_binary_conversion_pipeline(mask_refined)
+        # --- Morphological cleaning (opening then closing) ---
+        morph_kernel = np.ones((3,3), np.uint8)
+        mask_clean = cv2.morphologyEx(mask, cv2.MORPH_OPEN, morph_kernel, iterations=1)
+        mask_clean = cv2.morphologyEx(mask_clean, cv2.MORPH_CLOSE, morph_kernel, iterations=2)
 
-        # --- Mask Quality Check & Fallback (via MaskRefiner) ---
-        nonzero = np.count_nonzero(mask_post)
-        mask_quality_fail = False
-        if nonzero > (gray.size * 0.25):
-            logging.warning(f"Mask too large ({nonzero} pixels). Using fallback pipeline.")
-            mask_quality_fail = True
-        elif nonzero < (gray.size * 0.01):
-            logging.warning(f"Mask too small ({nonzero} pixels). Using fallback pipeline.")
-            mask_quality_fail = True
+        # --- Contour filtering: remove small objects ---
+        contours, _ = cv2.findContours(mask_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        min_area = max(32, int(0.0005 * mask_clean.shape[0] * mask_clean.shape[1]))
+        mask_contour = np.zeros_like(mask_clean)
+        for cnt in contours:
+            if cv2.contourArea(cnt) >= min_area:
+                cv2.drawContours(mask_contour, [cnt], -1, 255, -1)
 
-        if mask_quality_fail:
-            # Use MaskRefiner's optimized fallback
-            final_mask = self.mask_refiner.optimized_fallback_execution_pipeline(mask_post, image, fallback_type='edge')
+        # --- Edge-guided refinement: reinforce mask with Canny edges ---
+        edges = cv2.Canny(gray_eq, 50, 150)
+        mask_edge = cv2.bitwise_or(mask_contour, edges)
+
+        # --- Skeleton-aware refinement ---
+        skeleton, _ = self.skeleton_processor.process_skeleton(mask_edge)
+        mask_refined = self.skeleton_processor.skeleton_aware_refinement(mask_edge, skeleton)
+
+        # --- Fill small holes ---
+        mask_filled = ndi.binary_fill_holes(mask_refined > 0).astype(np.uint8) * 255
+
+        # --- Final robust binary conversion ---
+        mask_post = self.mask_refiner.robust_binary_conversion_pipeline(mask_filled)
+
+        # --- Adaptive Mask Quality Check ---
+        mask_quality_fail, reason, min_thr, max_thr = self.adaptive_mask_quality_check(mask_post, image)
+        if not mask_quality_fail:
+            final_mask = mask_post
         else:
-            # Use MaskRefiner's mask quality validation with real MC-Dropout if possible
-            model = None
-            input_tensor = None
-            device = self.config.get('processing', {}).get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
-            if hasattr(self, 'sam_generator') and hasattr(self.sam_generator, 'predictor') and self.sam_generator.predictor is not None:
-                model = getattr(self.sam_generator, 'model', None)
-                img = image
-                if img.ndim == 2:
-                    img = np.stack([img]*3, axis=-1)
-                img_tensor = torch.from_numpy(img).float().permute(2,0,1).unsqueeze(0) / 255.0
-                input_tensor = img_tensor.to(device)
-            def qa_call():
-                return self.mask_refiner.validate_mask_quality_with_confidence(
-                    mask_post, image, prediction_scores=[], model=model, input_tensor=input_tensor, mc_dropout_runs=20, device=device)
-            if device == 'cuda':
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(qa_call)
-                    validated_mask, quality_score, metrics = future.result()
-            else:
-                validated_mask, quality_score, metrics = qa_call()
-            final_mask = validated_mask
+            logging.warning(f"Classical mask validation failed: {reason}. Using SAM as fallback.")
+            # --- Fast SAM fallback ---
+            try:
+                sam_mask = self.multi_scale_sam_mask(image, scales=[1.0])  # Only use 1.0 scale for speed
+                skeleton_sam, _ = self.skeleton_processor.process_skeleton(sam_mask)
+                mask_sam_refined = self.skeleton_processor.skeleton_aware_refinement(sam_mask, skeleton_sam)
+                mask_sam_post = self.mask_refiner.robust_binary_conversion_pipeline(mask_sam_refined)
+                mask_quality_fail_sam, reason_sam, _, _ = self.adaptive_mask_quality_check(mask_sam_post, image)
+                if not mask_quality_fail_sam:
+                    final_mask = mask_sam_post
+                else:
+                    logging.warning(f"SAM fallback also failed: {reason_sam}. Using MaskRefiner fallback.")
+                    final_mask = self.mask_refiner.optimized_fallback_execution_pipeline(mask_post, image, fallback_type='edge')
+            except Exception as e:
+                logging.error(f"SAM fallback error: {e}. Using MaskRefiner fallback.")
+                final_mask = self.mask_refiner.optimized_fallback_execution_pipeline(mask_post, image, fallback_type='edge')
 
         # Robust hole/background separation using flood fill and bitwise ops (unchanged)
         if use_cuda:

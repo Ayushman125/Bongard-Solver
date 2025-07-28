@@ -3,6 +3,46 @@ import cv2
 import logging
 
 class PromptGenerator:
+    def intelligent_sam_prompts(self, image: np.ndarray, n_edge_samples: int = 4, n_grid: int = 4) -> tuple:
+        """
+        Generate multiple strategic prompts for better SAM performance on abstract images.
+        Returns (point_coords, point_labels)
+        """
+        h, w = image.shape[:2]
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
+        # 1. Edge-based prompts
+        edges = cv2.Canny(gray, 50, 150)
+        edge_points = np.column_stack(np.where(edges > 0))
+        positive_points = []
+        rng = np.random.default_rng(42)
+        if len(edge_points) > 0:
+            n_samples = min(n_edge_samples, len(edge_points))
+            edge_indices = rng.choice(len(edge_points), n_samples, replace=False)
+            for idx in edge_indices:
+                y, x = edge_points[idx]
+                positive_points.append([x, y])
+        # 2. Grid sampling (avoid center bias)
+        grid_points = []
+        for gy in range(1, n_grid+1):
+            for gx in range(1, n_grid+1):
+                y = int(h * gy / (n_grid+1))
+                x = int(w * gx / (n_grid+1))
+                if gray[y, x] > 50:
+                    grid_points.append([x, y])
+        positive_points.extend(grid_points)
+        # 3. Negative points (background)
+        negative_points = []
+        for gy in range(1, n_grid+1):
+            for gx in range(1, n_grid+1):
+                y = int(h * gy / (n_grid+1))
+                x = int(w * gx / (n_grid+1))
+                if gray[y, x] < 20:
+                    negative_points.append([x, y])
+        # Compose arrays
+        all_points = positive_points + negative_points
+        point_coords = np.array(all_points) if all_points else np.array([[w//2, h//2]])
+        point_labels = np.array([1]*len(positive_points) + [0]*len(negative_points)) if all_points else np.array([1])
+        return point_coords, point_labels
     def __init__(self, ppo_agent=None):
         self.ppo_agent = ppo_agent
 
