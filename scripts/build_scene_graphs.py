@@ -1,17 +1,25 @@
+from collections import Counter
+from scipy import stats
+from shapely.geometry import Polygon
 
-import sys
 import os
-import argparse
+import sys
 import pickle
 import json
-import networkx as nx
-import numpy as np
-from tqdm import tqdm
-from shapely.geometry import Polygon
-from collections import Counter
-import scipy.stats as stats
 import hashlib
+import time
+import argparse
 import concurrent.futures
+from tqdm import tqdm
+import numpy as np
+from PIL import Image
+import networkx as nx
+import logging
+import cv2
+try:
+    from src.bongard_augmentor.kb_sqlite import CommonsenseKB
+except ImportError:
+    CommonsenseKB = None
 import threading
 import time
 from PIL import Image
@@ -28,44 +36,89 @@ except ImportError:
 from src.bongard_augmentor.knowledge_fusion import MultiSourceKnowledgeFusion
 from src.bongard_augmentor.sgcore_validator import SGScoreValidator
 from src.bongard_augmentor.hierarchical_predicates import HierarchicalPredicatePredictor
+from src.bongard_augmentor.feature_extractors import RealFeatureExtractor
+from src.bongard_augmentor.adaptive_predicates import AdaptivePredicateThresholds, create_adaptive_predicate_functions
+
 class EnhancedSceneGraphBuilder:
     def __init__(self):
-        # Initialize enhanced components
         self.knowledge_fusion = MultiSourceKnowledgeFusion()
         self.sgcore_validator = SGScoreValidator()
         self.hierarchical_predictor = HierarchicalPredicatePredictor()
+        self.feature_extractor = RealFeatureExtractor(
+            clip_model_name="openai/clip-vit-base-patch32",
+            sam_encoder_path="sam_checkpoints/sam_vit_h_4b8939.pth",
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            cache_features=True
+        )
+        logging.info("EnhancedSceneGraphBuilder initialized with real feature extraction")
+
+    def _create_mask_from_vertices(self, vertices, image_shape):
+        mask = np.zeros(image_shape, dtype=np.uint8)
+        vertices_array = np.array(vertices, dtype=np.int32)
+        cv2.fillPoly(mask, [vertices_array], 255)
+        return mask
+
+    def _create_mask_from_bbox(self, bbox, image_shape):
+        mask = np.zeros(image_shape, dtype=np.uint8)
+        x1, y1, x2, y2 = [int(coord) for coord in bbox]
+        mask[y1:y2, x1:x2] = 255
+        return mask
 
     async def build_enhanced_scene_graph(self, image_path: str, base_scene_graph: dict) -> dict:
-        """
-        Build scene graph with exponential quality improvements using advanced modules.
-        """
-        # 1. Knowledge-enhanced relationship prediction
+        image = Image.open(image_path)
+        image_np = np.array(image)
+        objects = base_scene_graph.get('objects', [])
+        object_features = {}
+        for obj in objects:
+            obj_id = obj.get('id', f"obj_{len(object_features)}")
+            if 'vertices' in obj and len(obj['vertices']) >= 3:
+                mask = self._create_mask_from_vertices(obj['vertices'], image_np.shape[:2])
+            else:
+                bbox = obj.get('bbox', [0, 0, image_np.shape[1], image_np.shape[0]])
+                mask = self._create_mask_from_bbox(bbox, image_np.shape[:2])
+            try:
+                features = self.feature_extractor.extract_object_features(image_np, mask, obj_id)
+                object_features[obj_id] = features
+                logging.info(f"Extracted features for object {obj_id}: shape {features.shape}")
+            except Exception as e:
+                logging.error(f"Feature extraction failed for object {obj_id}: {e}")
+                object_features[obj_id] = torch.zeros(384)
         enhanced_relationships = []
         for rel in base_scene_graph.get('relationships', []):
-            enriched_rels = await self.knowledge_fusion.get_enriched_relationships(
-                rel.get('subject'), rel.get('object'), [rel.get('predicate')]
-            )
-            enhanced_relationships.extend(enriched_rels)
-
-        # 2. Hierarchical predicate refinement (dummy features for now)
-        # In a real pipeline, extract features for each subject/object pair
-        subject_features = np.zeros((1, 384))
-        object_features = np.zeros((1, 384))
-        knowledge_embeddings = None
-        refined_relationships = self.hierarchical_predictor.predict_with_bayesian_inference(
-            subject_features, object_features, knowledge_embeddings
-        )
-
-        # 3. SGScore validation and correction
-        image = Image.open(image_path)
+            subject_id = rel.get('subject_id')
+            object_id = rel.get('object_id')
+            if subject_id in object_features and object_id in object_features:
+                try:
+                    enriched_rels = await self.knowledge_fusion.get_enriched_relationships(
+                        rel.get('subject', ''), rel.get('object', ''), [rel.get('predicate', '')]
+                    )
+                    enhanced_relationships.extend(enriched_rels)
+                except Exception as e:
+                    logging.warning(f"Knowledge fusion failed for relationship: {e}")
+                    enhanced_relationships.append(rel)
+            else:
+                enhanced_relationships.append(rel)
+        # Hierarchical predicate refinement (example: process pairs)
+        refined_relationships = []
+        for i in range(0, len(enhanced_relationships), 2):
+            if i + 1 < len(enhanced_relationships):
+                rel1 = enhanced_relationships[i]
+                rel2 = enhanced_relationships[i+1]
+                # Example: use features for refinement (dummy call)
+                subject_features = object_features.get(rel1.get('subject_id'), torch.zeros(384))
+                object_features_ = object_features.get(rel1.get('object_id'), torch.zeros(384))
+                knowledge_embeddings = None
+                refined = self.hierarchical_predictor.predict_with_bayesian_inference(
+                    subject_features, object_features_, knowledge_embeddings
+                )
+                refined_relationships.extend(refined)
+            else:
+                refined_relationships.append(enhanced_relationships[i])
         validation_results = await self.sgcore_validator.validate_scene_graph(
-            image, {'objects': base_scene_graph.get('objects', []), 'relationships': refined_relationships}
+            image, {'objects': objects, 'relationships': refined_relationships}
         )
-
-        # 4. Apply corrections based on validation (identity for now)
         final_scene_graph = base_scene_graph.copy()
         final_scene_graph['relationships'] = refined_relationships
-
         return {
             'scene_graph': final_scene_graph,
             'quality_metrics': {
@@ -78,7 +131,7 @@ class EnhancedSceneGraphBuilder:
 # Ensure project root is in sys.path for imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.commonsense_kb import CommonsenseKB
+from src.commonsense_kb_sqlite import SQLiteCommonsenseKB
 from integration.task_profiler import TaskProfiler
 
 try:
@@ -361,6 +414,7 @@ def profile_optimal_batch_size(records, build_func):
     print(f"[INFO] Selected optimal batch size: {best_size}")
     return best_size
 
+
 def main():
     parser = argparse.ArgumentParser(description="Build scene graphs from augmented images and derived labels")
     parser.add_argument('--aug', type=str, required=True, help='Path to augmented.pkl containing object records')
@@ -371,31 +425,36 @@ def main():
     parser.add_argument('--feedback-dir', type=str, default='feedback_samples', help='Directory to save QA/feedback images')
     parser.add_argument('--feedback-rate', type=int, default=20, help='Save every Nth sample for feedback (default: 20, set 1 to save all)')
     args = parser.parse_args()
-    # --- Mask QA and Feedback Logic (Edge-based only) ---
+
+    # Adaptive predicate threshold learning
+    adaptive_thresholds = AdaptivePredicateThresholds(
+        history_size=1000,
+        confidence_level=0.95,
+        adaptation_rate=0.1,
+        min_samples=50
+    )
+    threshold_cache_path = args.out.replace('.pkl', '_thresholds.json')
+    adaptive_thresholds.load_learned_thresholds(threshold_cache_path)
+
+    # ...existing code for loading data...
     import cv2
     import numpy as np
     import shutil
     def mask_quality_stats(image, mask):
-        # Convert to grayscale if needed
         if image.ndim == 3:
             image_gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
         else:
             image_gray = image
         mask_bin = (mask > 0).astype(np.uint8)
-        # Extract edges from both image and mask
         edges_img = cv2.Canny(image_gray.astype(np.uint8), 50, 150)
         edges_mask = cv2.Canny(mask.astype(np.uint8), 50, 150)
-        # Flatten to 1D for set operations
         edges_img_flat = (edges_img > 0).flatten()
         edges_mask_flat = (edges_mask > 0).flatten()
-        # Edge-based IoU (Jaccard)
         intersection = np.logical_and(edges_img_flat, edges_mask_flat).sum()
         union = np.logical_or(edges_img_flat, edges_mask_flat).sum()
         edge_iou = intersection / (union + 1e-6) if union > 0 else 1.0
-        # Precision and recall
         precision = intersection / (edges_mask_flat.sum() + 1e-6) if edges_mask_flat.sum() > 0 else 1.0
         recall = intersection / (edges_img_flat.sum() + 1e-6) if edges_img_flat.sum() > 0 else 1.0
-        # Accept if edge IoU is high (e.g., >0.5) or both precision and recall are high
         clinically_acceptable = (edge_iou > 0.5) or (precision > 0.7 and recall > 0.7)
         stats = {
             'edge_iou': edge_iou,
@@ -422,7 +481,6 @@ def main():
         side_by_side = cv2.hconcat([img_bgr, mask_color])
         cv2.imwrite(side_by_side_path, side_by_side)
 
-    # Hash input and parameters for cache validation
     params_dict = {
         'aug': args.aug,
         'labels': args.labels,
@@ -431,13 +489,10 @@ def main():
     }
     current_hash = compute_hash([args.aug, args.labels], params_dict)
     hash_path = args.out + '.hash'
-
-    # Check cache validity
     if cache_valid(args.out, hash_path, current_hash):
         print(f"[INFO] Cache valid for {args.out}. Skipping graph build.")
         return
 
-    # Async I/O for loading large files, with logging
     def async_load_pickle(path):
         print(f"[LOG] Loading pickle file: {path}")
         with open(path, 'rb') as f:
@@ -470,7 +525,6 @@ def main():
     else:
         print("graphtype not found. Runtime schema validation is DISABLED.")
 
-    # Profile and tune batch size if requested
     if args.batch_size == 0:
         batch_size = profile_optimal_batch_size(augmented_data, build_func)
     else:
@@ -478,41 +532,9 @@ def main():
 
     graphs = []
     profiler = TaskProfiler()
-
-    # Image feature cache (hash-based)
-    image_feature_cache = {}
-
-    def get_image_features(img_path, params=None):
-        """Load image, preprocess with Kornia if available, and cache features."""
-        cache_key = hashlib.sha256((img_path + str(params)).encode()).hexdigest()
-        if cache_key in image_feature_cache:
-            print(f"[LOG] Using cached image features for {img_path}")
-            return image_feature_cache[cache_key]
-        if not os.path.exists(img_path):
-            print(f"[ERROR] Image file not found: {img_path}")
-            return None
-        print(f"[LOG] Loading image: {img_path}")
-        try:
-            if TORCH_KORNIA_AVAILABLE:
-                img = Image.open(img_path).convert('RGB')
-                tensor = torchvision.transforms.ToTensor()(img).unsqueeze(0).cuda()
-                aug = kornia.augmentation.RandomAffine(degrees=10)
-                tensor_aug = aug(tensor)
-                image_feature_cache[cache_key] = tensor_aug.cpu()
-                print(f"[LOG] Augmented image loaded and processed (Kornia) for {img_path}")
-                return tensor_aug.cpu()
-            else:
-                img = Image.open(img_path).convert('RGB')
-                arr = np.array(img)
-                image_feature_cache[cache_key] = arr
-                print(f"[LOG] Image loaded (PIL/numpy) for {img_path}")
-                return arr
-        except Exception as e:
-            print(f"[ERROR] Failed to load/process image {img_path}: {e}")
-            return None
-
     import asyncio
     enhanced_builder = EnhancedSceneGraphBuilder()
+
     def process_batch(batch):
         batch_graphs = []
         skipped = 0
@@ -529,12 +551,10 @@ def main():
             if img_path:
                 img_path = img_path.replace('category_1', '1').replace('category_0', '0')
             print(f"[LOG] Processing record idx={idx}, id={img_id}, img_path={img_path}")
-            # Build base scene graph (existing logic)
             base_scene_graph = {
                 'objects': record.get('objects', []),
-                'relationships': []  # You may want to extract relationships from your build_func or elsewhere
+                'relationships': []
             }
-            # --- Enhanced scene graph building ---
             try:
                 enhanced_result = asyncio.run(
                     enhanced_builder.build_enhanced_scene_graph(img_path, base_scene_graph)
@@ -548,7 +568,6 @@ def main():
                 print(f"[DEBUG] Sample skipped record: {sample_skipped}")
         return batch_graphs
 
-    # Batch processing with persistent workers
     batches = [augmented_data[i:i+batch_size] for i in range(0, len(augmented_data), batch_size)]
     print(f"[LOG] Starting batch processing: {len(batches)} batches, batch_size={batch_size}, parallel={args.parallel}")
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.parallel) as executor:
@@ -567,7 +586,6 @@ def main():
 
     if len(graphs) == 0:
         print(f"[ERROR] No scene graphs were produced. Check input data and filtering logic.")
-        # Print a sample input record for debugging
         if len(augmented_data) > 0:
             print(f"[DEBUG] Sample input record: {augmented_data[0]}")
             if isinstance(augmented_data[0], dict):
@@ -578,8 +596,9 @@ def main():
         pickle.dump(graphs, f)
     save_hash(hash_path, current_hash)
     print(f"Saved {len(graphs)} scene graphs to {args.out}")
-
     log_diversity_metrics(graphs)
+    adaptive_thresholds.save_learned_thresholds(threshold_cache_path)
+    logging.info(f"Saved adaptive thresholds to {threshold_cache_path}")
 
 if __name__ == "__main__":
     main()
