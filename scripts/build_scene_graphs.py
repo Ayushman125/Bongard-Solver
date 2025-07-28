@@ -457,7 +457,23 @@ class EnhancedSceneGraphBuilder:
                     object_features[obj_id] = features
                     logging.debug(f"Extracted features for object {obj_id}: shape {features.shape}")
                 except Exception as e:
+                    # Add detailed tensor shape/type logging if possible
+                    import traceback
                     logging.error(f"Feature extraction failed for object {obj_id}: {e}. No features for this object.")
+                    # Try to log the shapes/types of the tensors involved if possible
+                    try:
+                        import torch
+                        # If RealFeatureExtractor exposes internal tensors, log them
+                        if hasattr(self.feature_extractor, 'last_clip_input'):
+                            t = self.feature_extractor.last_clip_input
+                            logging.error(f"last_clip_input type: {type(t)}, shape: {getattr(t, 'shape', None)}")
+                        if hasattr(self.feature_extractor, 'last_mask_input'):
+                            t = self.feature_extractor.last_mask_input
+                            logging.error(f"last_mask_input type: {type(t)}, shape: {getattr(t, 'shape', None)}")
+                    except Exception as log_e:
+                        logging.error(f"(While logging tensor shapes) {log_e}\n{traceback.format_exc()}")
+                    # Log the traceback for the original error
+                    logging.error(traceback.format_exc())
             else:
                 logging.debug(f"Feature extractor not available or mask is None for object {obj_id}. Skipping feature extraction.")
 
@@ -562,27 +578,62 @@ def mask_quality_stats(image, mask):
     }
     return stats
 
-def save_feedback_images(image, mask, base_name, feedback_dir):
-    """Saves input image, mask, and a side-by-side comparison for feedback."""
+def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None):
+    """Saves input image, mask, scene graph visualization, and side-by-side comparisons for feedback."""
+    import matplotlib.pyplot as plt
+    import networkx as nx
     os.makedirs(feedback_dir, exist_ok=True)
     img_save_path = os.path.join(feedback_dir, f"{base_name}_input.png")
     mask_save_path = os.path.join(feedback_dir, f"{base_name}_mask.png")
     side_by_side_path = os.path.join(feedback_dir, f"{base_name}_side_by_side.png")
+    graph_img_path = os.path.join(feedback_dir, f"{base_name}_graph.png")
+    img_graph_side_by_side_path = os.path.join(feedback_dir, f"{base_name}_img_graph.png")
 
+    # Save real image
     if image.ndim == 3:
         img_bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
     else:
         img_bgr = image
-
     cv2.imwrite(img_save_path, img_bgr)
-    cv2.imwrite(mask_save_path, mask)
 
-    mask_color = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-    if img_bgr.shape[:2] != mask_color.shape[:2]:
-        mask_color = cv2.resize(mask_color, (img_bgr.shape[1], img_bgr.shape[0]), interpolation=cv2.INTER_NEAREST)
+    # Save mask if provided
+    if mask is not None:
+        cv2.imwrite(mask_save_path, mask)
+        mask_color = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+        if img_bgr.shape[:2] != mask_color.shape[:2]:
+            mask_color = cv2.resize(mask_color, (img_bgr.shape[1], img_bgr.shape[0]), interpolation=cv2.INTER_NEAREST)
+        side_by_side = cv2.hconcat([img_bgr, mask_color])
+        cv2.imwrite(side_by_side_path, side_by_side)
 
-    side_by_side = cv2.hconcat([img_bgr, mask_color])
-    cv2.imwrite(side_by_side_path, side_by_side)
+    # Save scene graph visualization if provided
+    if scene_graph is not None and 'graph' in scene_graph:
+        G = scene_graph['graph']
+        # Draw the graph using networkx and matplotlib
+        plt.figure(figsize=(5, 5))
+        pos = nx.spring_layout(G, seed=42) if len(G.nodes) > 1 else nx.random_layout(G)
+        node_labels = {n: str(n) for n in G.nodes()}
+        edge_labels = {(u, v): d.get('predicate', '') for u, v, d in G.edges(data=True)}
+        nx.draw(G, pos, with_labels=True, node_color='skyblue', edge_color='gray', node_size=700, font_size=8)
+        nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_size=7)
+        plt.tight_layout()
+        plt.axis('off')
+        plt.savefig(graph_img_path, bbox_inches='tight', pad_inches=0.1)
+        plt.close()
+
+        # Combine real image and graph viz side by side
+        try:
+            graph_img = cv2.imread(graph_img_path)
+            if graph_img is not None:
+                # Resize graph image to match height of real image
+                h_img = img_bgr.shape[0]
+                h_graph, w_graph = graph_img.shape[:2]
+                scale = h_img / h_graph
+                new_w = int(w_graph * scale)
+                graph_img_resized = cv2.resize(graph_img, (new_w, h_img), interpolation=cv2.INTER_AREA)
+                img_graph_side = cv2.hconcat([img_bgr, graph_img_resized])
+                cv2.imwrite(img_graph_side_by_side_path, img_graph_side)
+        except Exception as e:
+            logging.warning(f"Failed to create side-by-side image and graph: {e}")
 
 def remap_path(path):
     return path.replace('category_1', '1').replace('category_0', '0')
@@ -599,6 +650,7 @@ async def _process_single_item_optimized(item, feature_cache, batch_validator, r
         {'model': 'optimized'}
     )
     features = feature_cache.load_features(cache_key_features, device='cuda')
+
 
     # Robustly ensure 'objects' is a list of dicts for all input types
     record = dict(item)  # always shallow copy to avoid mutating input
@@ -630,32 +682,72 @@ async def _process_single_item_optimized(item, feature_cache, batch_validator, r
             obj = dict(record)
         record['objects'] = [obj]
 
+    # Ensure every object has 'label' and 'category' keys (default empty string)
+    for obj in record['objects']:
+        if 'label' not in obj:
+            obj['label'] = ''
+        if 'category' not in obj:
+            obj['category'] = ''
 
+    # --- DEBUG LOGGING: Print all objects and their key attributes ---
+    logging.info(f"[DEBUG] Number of objects in input: {len(record['objects'])}")
+    for idx, obj in enumerate(record['objects']):
+        logging.info(f"[DEBUG] Input object {idx}: id={obj.get('id')}, label={obj.get('label')}, category={obj.get('category')}, keys={list(obj.keys())}")
+        if 'vertices' in obj:
+            logging.info(f"[DEBUG] Object {idx} vertices: {obj['vertices']}")
+        if 'bbox' in obj:
+            logging.info(f"[DEBUG] Object {idx} bbox: {obj['bbox']}")
 
-    if isinstance(record, dict) and 'objects' in record and isinstance(record['objects'], list):
-        graph_obj = build_graph_unvalidated(record)
-        # Always wrap in a dict with expected keys
-        base_scene_graph = {
-            'objects': record['objects'],
-            'relationships': [],  # relationships will be filled by enhanced_builder
-            'graph': graph_obj
-        }
-    else:
-        logging.error(f"Item passed to build_graph_unvalidated is not a valid dict with 'objects' key: {type(record)}, keys: {list(record.keys()) if isinstance(record, dict) else 'N/A'}")
-        return {
-            'image_path': image_path,
-            'scene_graph': None,
-            'quality_metrics': {},
-            'processing_metadata': {
-                'features_from_cache': features is not None,
-                'cache_key': cache_key_features
-            }
-        }
+    graph_obj = build_graph_unvalidated(record)
+
+    # --- DEBUG LOGGING: Print all nodes and edges in the resulting scene graph ---
+    logging.info(f"[DEBUG] Scene graph has {graph_obj.number_of_nodes()} nodes and {graph_obj.number_of_edges()} edges.")
+    for idx, (node_id, node_data) in enumerate(graph_obj.nodes(data=True)):
+        logging.info(f"[DEBUG] Scene graph node {idx}: id={node_id}, label={node_data.get('label')}, category={node_data.get('category')}, keys={list(node_data.keys())}")
+    for idx, (u, v, data) in enumerate(graph_obj.edges(data=True)):
+        logging.info(f"[DEBUG] Scene graph edge {idx}: {u} -> {v}, predicate={data.get('predicate')}, keys={list(data.keys())}")
+
+    # Always wrap in a dict with expected keys
+    base_scene_graph = {
+        'objects': record['objects'],
+        'relationships': [],  # relationships will be filled by enhanced_builder
+        'graph': graph_obj
+    }
 
     # Enhanced scene graph building (async)
     scene_graph_data = await enhanced_builder.build_enhanced_scene_graph(image_path, base_scene_graph)
     scene_graph = scene_graph_data['scene_graph']
     quality_metrics = scene_graph_data['quality_metrics']
+
+    # Save feedback images (real + graph) for every Nth sample if feedback_dir is set
+    # Use base_name from image_path
+    feedback_dir = None
+    base_name = None
+    try:
+        import inspect
+        frame = inspect.currentframe()
+        outer = frame.f_back
+        if 'args' in outer.f_locals:
+            feedback_dir = outer.f_locals['args'].feedback_dir if hasattr(outer.f_locals['args'], 'feedback_dir') else None
+            feedback_rate = outer.f_locals['args'].feedback_rate if hasattr(outer.f_locals['args'], 'feedback_rate') else 20
+        else:
+            feedback_dir = 'feedback_samples'
+            feedback_rate = 20
+    except Exception:
+        feedback_dir = 'feedback_samples'
+        feedback_rate = 20
+    # Only save for every Nth sample (e.g., feedback_rate=20 means every 20th)
+    if feedback_dir and hasattr(scene_graph, 'get'):
+        # Use image_path as base_name
+        import os
+        base_name = os.path.splitext(os.path.basename(image_path))[0]
+        # Save only if this is the Nth sample (optional: could use a counter or random)
+        # For now, save for all (user can filter later)
+        try:
+            img = cv2.imread(image_path)
+            save_feedback_images(img, None, base_name, feedback_dir, scene_graph=scene_graph)
+        except Exception as e:
+            logging.warning(f"Failed to save feedback images for {image_path}: {e}")
 
     # Store features if they were newly computed by the EnhancedSceneGraphBuilder's feature_extractor
     # This assumes EnhancedSceneGraphBuilder updates features in 'obj_id' in its internal state or returns them

@@ -34,9 +34,11 @@ class RealFeatureExtractor:
                 logging.info("SAM image encoder loaded successfully")
             except Exception as e:
                 logging.warning(f"Failed to load SAM encoder: {e}")
+        # For openai/clip-vit-base-patch32, the feature dim is 768
+        # SAM encoder outputs 256-dim features per mask (not 1280)
         self.feature_fusion = FeatureFusionNetwork(
-            clip_dim=512,
-            sam_dim=1280 if self.sam_encoder else 0,
+            clip_dim=768,
+            sam_dim=256 if self.sam_encoder else 0,
             output_dim=384
         ).to(device)
         logging.info(f"RealFeatureExtractor initialized on {device}")
@@ -70,12 +72,14 @@ class RealFeatureExtractor:
         early_features = hidden_states[6]
         mid_features = hidden_states[9]
         late_features = hidden_states[12]
-        mask_resized = cv2.resize(mask.astype(np.uint8), (14, 14), interpolation=cv2.INTER_NEAREST)
+        # For ViT-B/32, patch grid is 7x7 (49 patches)
+        patch_grid_size = 7
+        mask_resized = cv2.resize(mask.astype(np.uint8), (patch_grid_size, patch_grid_size), interpolation=cv2.INTER_NEAREST)
         mask_tensor = torch.from_numpy(mask_resized).float().to(self.device)
-        mask_tensor = mask_tensor.view(1, -1, 1)
+        mask_tensor = mask_tensor.view(1, -1, 1)  # [1, 49, 1]
         def masked_pool(features, mask_weights):
-            patch_features = features[:, 1:, :]
-            weighted_features = patch_features * mask_weights
+            patch_features = features[:, 1:, :]  # [1, 49, C]
+            weighted_features = patch_features * mask_weights  # [1, 49, C]
             mask_sum = mask_weights.sum(dim=1, keepdim=True) + 1e-6
             pooled = weighted_features.sum(dim=1) / mask_sum.squeeze(-1)
             return pooled
