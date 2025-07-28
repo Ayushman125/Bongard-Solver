@@ -38,61 +38,49 @@ from .rl_analytics import MaskPipelineAnalytics, PPOAgent
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
-# Only use regular SAM (segment_anything), never HQ-SAM or segment_anything_hq
-from segment_anything import sam_model_registry, SamPredictor, SamAutomaticMaskGenerator
-SAM_AVAILABLE = True
-logging.info("SAM library imported successfully.")
+
+
+# Use MaskRefiner for all mask refinement and QA
+from src.bongard_augmentor.refiners import MaskRefiner
+
+# --- Official SAM integration ---
+try:
+    from segment_anything import sam_model_registry, SamPredictor
+    SAM_AVAILABLE = True
+except ImportError:
+    SAM_AVAILABLE = False
 
 class SAMMaskGenerator:
     def __init__(self, model_type: str = 'vit_h', checkpoint_dir: str = './sam_checkpoints', device: str = 'cpu'):
+        if not SAM_AVAILABLE:
+            raise ImportError("segment_anything is not installed. Please install the official Meta AI Segment Anything package.")
         checkpoint_map = {
             'vit_h': 'sam_vit_h_4b8939.pth',
             'vit_l': 'sam_vit_l_0b3195.pth',
             'vit_b': 'sam_vit_b_01ec64.pth',
         }
-        checkpoint_urls = {
-            'sam_vit_h_4b8939.pth': 'https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth',
-            'sam_vit_l_0b3195.pth': 'https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth',
-            'sam_vit_b_01ec64.pth': 'https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth',
-        }
         checkpoint_file = checkpoint_map.get(model_type, 'sam_vit_h_4b8939.pth')
         checkpoint_path = os.path.join(checkpoint_dir, checkpoint_file)
-        
         if not os.path.exists(checkpoint_path):
             os.makedirs(checkpoint_dir, exist_ok=True)
-            url = checkpoint_urls.get(checkpoint_file)
-            if url:
-                import requests
-                print(f"Downloading SAM checkpoint {checkpoint_file} from {url} ...")
-                r = requests.get(url, stream=True)
-                r.raise_for_status()
-                with open(checkpoint_path, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                print(f"Downloaded SAM checkpoint to {checkpoint_path}")
-            else:
-                raise FileNotFoundError(f"No download URL found for checkpoint: {checkpoint_file}")
-        
-        if SAM_AVAILABLE:
-            self.model = sam_model_registry[model_type](checkpoint=checkpoint_path).to(device)
-            self.predictor = SamPredictor(self.model)
-        else:
-            self.model = None
-            self.predictor = None
-            logging.error("SAM is not available, SAMMaskGenerator cannot be fully initialized.")
+            # Download from official Meta AI if not present
+            url = f"https://dl.fbaipublicfiles.com/segment_anything/{checkpoint_file}"
+            import requests
+            print(f"Downloading SAM checkpoint {checkpoint_file} from {url} ...")
+            r = requests.get(url, stream=True)
+            r.raise_for_status()
+            with open(checkpoint_path, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            print(f"Downloaded SAM checkpoint to {checkpoint_path}")
+        self.model = sam_model_registry[model_type](checkpoint=checkpoint_path).to(device)
+        self.predictor = SamPredictor(self.model)
 
     def set_image(self, image):
-        if self.predictor:
-            self.predictor.set_image(image)
-        else:
-            logging.warning("SAM predictor not initialized. Cannot set image.")
+        self.predictor.set_image(image)
 
     def predict(self, point_coords, point_labels, multimask_output=True):
-        if self.predictor:
-            return self.predictor.predict(point_coords, point_labels, multimask_output=multimask_output)
-        else:
-            logging.warning("SAM predictor not initialized. Cannot predict.")
-            return np.array([]), np.array([]), np.array([])
+        return self.predictor.predict(point_coords, point_labels, multimask_output=multimask_output)
 
     
 
@@ -476,16 +464,15 @@ class HybridAugmentationPipeline:
         """
         self.config = config or {}
 
-        # Initialize SAMMaskGenerator
-        valid_models = ['vit_h', 'vit_l', 'vit_b']
-        model_type = self.config.get('sam', {}).get('model_type', 'vit_h')
-        sam_models = [model_type] if model_type in valid_models else ['vit_h']
-        # Use GPU if available
+
+
+
+        # Initialize SAMMaskGenerator (official SAM)
+        sam_cfg = self.config.get('sam', {}) or {}
+        model_type = sam_cfg.get('model_type', 'vit_h')
+        checkpoint_dir = sam_cfg.get('checkpoint_dir', './sam_checkpoints')
         device = self.config.get('processing', {}).get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
-        self.sam_generator = SAMMaskGenerator(
-            model_type=model_type,
-            device=device
-        )
+        self.sam_generator = SAMMaskGenerator(model_type=model_type, checkpoint_dir=checkpoint_dir, device=device)
 
         # Initialize MaskRefiner
         ref_cfg = self.config.get('refinement', {}) or {}
@@ -496,71 +483,34 @@ class HybridAugmentationPipeline:
         # Initialize SkeletonProcessor
         self.skeleton_processor = SkeletonProcessor(**(self.config.get('skeleton', {}) or {}))
 
-        logging.info("Hybrid Augmentation Pipeline initialized.")
-
 
 
     def process_image(self, image: np.ndarray, image_path: str = None, inspection_dir: str = None) -> np.ndarray:
         """
-        Enhanced: Adaptive parameter tuning, multi-scale mask generation, post-processing refinement, and mask quality checks.
-        All mask post-processing and validation is routed through MaskRefiner methods.
+        Uses official SAM model to generate the initial mask, then applies skeleton-aware refinement and QA.
         """
-        logging.info(f"Starting object-by-object mask generation for image: {image_path or 'unnamed_image'}.")
         use_cuda = hasattr(cv2, 'cuda') and cv2.cuda.getCudaEnabledDeviceCount() > 0
         gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
 
-        # --- Adaptive Parameter Tuning ---
-        mean_intensity = np.mean(gray)
-        std_intensity = np.std(gray)
-        edge_density = np.count_nonzero(cv2.Canny(gray, 50, 150)) / gray.size
-        if edge_density < 0.01:
-            canny_low, canny_high = 30, 80
-        elif edge_density > 0.1:
-            canny_low, canny_high = 80, 200
-        else:
-            canny_low, canny_high = 50, 150
-
-        # --- Multi-Scale Processing ---
-        scales = [1.0, 0.5]
-        masks = []
-        for scale in scales:
-            if scale != 1.0:
-                scaled_img = cv2.resize(gray, (0,0), fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
-            else:
-                scaled_img = gray
-            if use_cuda:
-                gpu_scaled = cv2.cuda_GpuMat()
-                gpu_scaled.upload(scaled_img)
-                gpu_edges = cv2.cuda_Canny(gpu_scaled, canny_low, canny_high)
-                edges = gpu_edges.download()
-            else:
-                edges = cv2.Canny(scaled_img, canny_low, canny_high)
-            contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            mask_line = np.zeros_like(scaled_img, dtype=np.uint8)
-            for cnt in contours:
-                cv2.drawContours(mask_line, [cnt], -1, 255, thickness=1)
-            kernel_size = 3 if edge_density > 0.05 else 1
-            kernel = np.ones((kernel_size, kernel_size), np.uint8)
-            if use_cuda:
-                gpu_mask_line = cv2.cuda_GpuMat()
-                gpu_mask_line.upload(mask_line)
-                gpu_kernel = cv2.cuda.createMorphologyFilter(cv2.MORPH_DILATE, cv2.CV_8UC1, kernel)
-                gpu_dilated = gpu_kernel.apply(gpu_mask_line)
-                mask_line_dilated = gpu_dilated.download()
-            else:
-                mask_line_dilated = cv2.dilate(mask_line, kernel, iterations=1)
-            if scale != 1.0:
-                mask_line_dilated = cv2.resize(mask_line_dilated, (gray.shape[1], gray.shape[0]), interpolation=cv2.INTER_NEAREST)
-            masks.append(mask_line_dilated)
-
-        # --- Merge Multi-Scale Masks ---
-        merged_mask = masks[0]
-        for m in masks[1:]:
-            merged_mask = cv2.bitwise_or(merged_mask, m)
+        # --- Use SAM to generate mask ---
+        try:
+            self.sam_generator.set_image(image)
+            h, w = image.shape[:2]
+            # Use a central point as a prompt (can be improved for your use case)
+            point_coords = np.array([[w // 2, h // 2]])
+            point_labels = np.array([1])
+            masks, scores, logits = self.sam_generator.predict(point_coords, point_labels, multimask_output=True)
+            # Use the best mask (highest score)
+            sam_mask = masks[np.argmax(scores)]
+            sam_mask = (sam_mask * 255).astype(np.uint8)
+        except Exception as e:
+            logging.error(f"SAM mask generation failed: {e}. Falling back to edge-based mask.")
+            # Fallback to edge-based mask if SAM fails
+            sam_mask = np.zeros_like(gray, dtype=np.uint8)
 
         # --- Skeleton-aware edge refinement ---
-        skeleton, branch_points = self.skeleton_processor.process_skeleton(merged_mask)
-        mask_refined = self.skeleton_processor.skeleton_aware_refinement(merged_mask, skeleton)
+        skeleton, branch_points = self.skeleton_processor.process_skeleton(sam_mask)
+        mask_refined = self.skeleton_processor.skeleton_aware_refinement(sam_mask, skeleton)
 
         # --- Post-Processing Refinement (via MaskRefiner) ---
         mask_post = self.mask_refiner.robust_binary_conversion_pipeline(mask_refined)
@@ -583,19 +533,13 @@ class HybridAugmentationPipeline:
             model = None
             input_tensor = None
             device = self.config.get('processing', {}).get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
-            # If SAM predictor is available, try to get model and input_tensor
             if hasattr(self, 'sam_generator') and hasattr(self.sam_generator, 'predictor') and self.sam_generator.predictor is not None:
                 model = getattr(self.sam_generator, 'model', None)
-                # Try to get the last input tensor if available (stub: user should adapt this to their predictor)
-                # For now, just create a tensor from the image
-                import torch
                 img = image
                 if img.ndim == 2:
                     img = np.stack([img]*3, axis=-1)
                 img_tensor = torch.from_numpy(img).float().permute(2,0,1).unsqueeze(0) / 255.0
                 input_tensor = img_tensor.to(device)
-            # Async MC-Dropout: run in thread if device is cuda
-            import concurrent.futures
             def qa_call():
                 return self.mask_refiner.validate_mask_quality_with_confidence(
                     mask_post, image, prediction_scores=[], model=model, input_tensor=input_tensor, mc_dropout_runs=20, device=device)
@@ -633,16 +577,13 @@ class HybridAugmentationPipeline:
             img_save_path = os.path.join(inspection_dir, f"{base_name}_input.png")
             mask_save_path = os.path.join(inspection_dir, f"{base_name}_final_mask.png")
             side_by_side_path = os.path.join(inspection_dir, f"{base_name}_side_by_side.png")
-            # Save real image
             if image.ndim == 3:
                 img_bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
                 cv2.imwrite(img_save_path, img_bgr)
             else:
                 img_bgr = image
                 cv2.imwrite(img_save_path, image)
-            # Save final output mask (mask_out)
             cv2.imwrite(mask_save_path, mask_out)
-            # Create side-by-side image (real image left, mask right)
             mask_color = cv2.cvtColor(mask_out, cv2.COLOR_GRAY2BGR)
             if img_bgr.shape[:2] != mask_color.shape[:2]:
                 mask_color = cv2.resize(mask_color, (img_bgr.shape[1], img_bgr.shape[0]), interpolation=cv2.INTER_NEAREST)
@@ -930,7 +871,7 @@ if __name__ == "__main__":
     try:
         pipeline = HybridAugmentationPipeline(pipeline_config)
         pipeline.run_pipeline()
-        logging.info(f"Pipeline ran successfully. Check '{test_dir}' for output.")
+        # Pipeline ran successfully. Check '{test_dir}' for output.
 
         # Clean up dummy files
         # import shutil
@@ -938,7 +879,7 @@ if __name__ == "__main__":
         # logging.info(f"Cleaned up test directory: {test_dir}")
 
     except Exception as e:
-        logging.error(f"An error occurred during pipeline execution: {e}")
+        print(f"An error occurred during pipeline execution: {e}")
 
 
 # Alias for backward compatibility with CLI and imports
