@@ -39,52 +39,13 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 
 
-
 # Use MaskRefiner for all mask refinement and QA
 from src.bongard_augmentor.refiners import MaskRefiner
 
 # --- Official SAM integration ---
-try:
-    from segment_anything import sam_model_registry, SamPredictor
-    SAM_AVAILABLE = True
-except ImportError:
-    SAM_AVAILABLE = False
+# SAM is fully disabled: do not import, load, or define any SAM-related classes or logic.
 
-class SAMMaskGenerator:
-    def __init__(self, model_type: str = 'vit_h', checkpoint_dir: str = './sam_checkpoints', device: str = 'cpu'):
-        if not SAM_AVAILABLE:
-            raise ImportError("segment_anything is not installed. Please install the official Meta AI Segment Anything package.")
-        checkpoint_map = {
-            'vit_h': 'sam_vit_h_4b8939.pth',
-            'vit_l': 'sam_vit_l_0b3195.pth',
-            'vit_b': 'sam_vit_b_01ec64.pth',
-        }
-        checkpoint_file = checkpoint_map.get(model_type, 'sam_vit_h_4b8939.pth')
-        checkpoint_path = os.path.join(checkpoint_dir, checkpoint_file)
-        if not os.path.exists(checkpoint_path):
-            os.makedirs(checkpoint_dir, exist_ok=True)
-            # Download from official Meta AI if not present
-            url = f"https://dl.fbaipublicfiles.com/segment_anything/{checkpoint_file}"
-            import requests
-            print(f"Downloading SAM checkpoint {checkpoint_file} from {url} ...")
-            r = requests.get(url, stream=True)
-            r.raise_for_status()
-            with open(checkpoint_path, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            print(f"Downloaded SAM checkpoint to {checkpoint_path}")
-        self.model = sam_model_registry[model_type](checkpoint=checkpoint_path).to(device)
-        self.predictor = SamPredictor(self.model)
-
-    def set_image(self, image):
-        self.predictor.set_image(image)
-
-    def predict(self, point_coords, point_labels, multimask_output=True):
-        return self.predictor.predict(point_coords, point_labels, multimask_output=multimask_output)
-
-    
-
-            # --- SkeletonProcessor Class ---
+# --- SkeletonProcessor Class ---
 class SkeletonProcessor:
     def sam_skeleton_intelligent_fusion(self, sam_mask: np.ndarray, skeleton: np.ndarray, confidence_map: np.ndarray = None) -> np.ndarray:
         """
@@ -379,39 +340,10 @@ class HybridAugmentationPipeline:
 
     def multi_scale_sam_mask(self, image: np.ndarray, scales: list = [1.0, 0.75, 0.5]) -> np.ndarray:
         """
-        Process image at multiple scales and combine results using majority voting.
+        SAM is disabled. This function now returns a blank mask.
         """
-        masks = []
-        # Use PromptGenerator for intelligent prompt generation
-        prompt_gen = PromptGenerator()
-        for scale in scales:
-            if scale != 1.0:
-                h, w = image.shape[:2]
-                scaled_h, scaled_w = int(h * scale), int(w * scale)
-                scaled_image = cv2.resize(image, (scaled_w, scaled_h))
-            else:
-                scaled_image = image
-            point_coords, point_labels = prompt_gen.intelligent_sam_prompts(scaled_image)
-            try:
-                self.sam_generator.set_image(scaled_image)
-                sam_masks, scores, _ = self.sam_generator.predict(point_coords, point_labels, multimask_output=True)
-                best_mask = sam_masks[np.argmax(scores)]
-                if scale != 1.0:
-                    best_mask = cv2.resize((best_mask*255).astype(np.uint8), (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
-                else:
-                    best_mask = (best_mask*255).astype(np.uint8)
-                masks.append(best_mask)
-            except Exception as e:
-                logging.warning(f"SAM failed at scale {scale}: {e}")
-                continue
-        if masks:
-            combined = np.zeros_like(masks[0], dtype=np.float32)
-            for mask in masks:
-                combined += mask.astype(np.float32)
-            combined = (combined >= (255 * len(masks) / 2)).astype(np.uint8) * 255
-            return combined
-        else:
-            return np.zeros(image.shape[:2], dtype=np.uint8)
+        logging.info("SAM is disabled. multi_scale_sam_mask returns blank mask.")
+        return np.zeros(image.shape[:2], dtype=np.uint8)
     def benchmark_enabled_processing(self, image: np.ndarray, image_type: str = "unknown") -> Tuple[np.ndarray, Dict]:
         """
         Comprehensive performance benchmarking with timing, success rate, resource monitoring, and analytics.
@@ -528,11 +460,8 @@ class HybridAugmentationPipeline:
 
 
         # Initialize SAMMaskGenerator (official SAM)
-        sam_cfg = self.config.get('sam', {}) or {}
-        model_type = sam_cfg.get('model_type', 'vit_h')
-        checkpoint_dir = sam_cfg.get('checkpoint_dir', './sam_checkpoints')
-        device = self.config.get('processing', {}).get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
-        self.sam_generator = SAMMaskGenerator(model_type=model_type, checkpoint_dir=checkpoint_dir, device=device)
+        # SAM is fully disabled: do not initialize or load any SAM model.
+        self.sam_generator = None
 
         # Initialize MaskRefiner
         ref_cfg = self.config.get('refinement', {}) or {}
@@ -591,22 +520,8 @@ class HybridAugmentationPipeline:
         if not mask_quality_fail:
             final_mask = mask_post
         else:
-            logging.warning(f"Classical mask validation failed: {reason}. Using SAM as fallback.")
-            # --- Fast SAM fallback ---
-            try:
-                sam_mask = self.multi_scale_sam_mask(image, scales=[1.0])  # Only use 1.0 scale for speed
-                skeleton_sam, _ = self.skeleton_processor.process_skeleton(sam_mask)
-                mask_sam_refined = self.skeleton_processor.skeleton_aware_refinement(sam_mask, skeleton_sam)
-                mask_sam_post = self.mask_refiner.robust_binary_conversion_pipeline(mask_sam_refined)
-                mask_quality_fail_sam, reason_sam, _, _ = self.adaptive_mask_quality_check(mask_sam_post, image)
-                if not mask_quality_fail_sam:
-                    final_mask = mask_sam_post
-                else:
-                    logging.warning(f"SAM fallback also failed: {reason_sam}. Using MaskRefiner fallback.")
-                    final_mask = self.mask_refiner.optimized_fallback_execution_pipeline(mask_post, image, fallback_type='edge')
-            except Exception as e:
-                logging.error(f"SAM fallback error: {e}. Using MaskRefiner fallback.")
-                final_mask = self.mask_refiner.optimized_fallback_execution_pipeline(mask_post, image, fallback_type='edge')
+            logging.warning(f"Classical mask validation failed: {reason}. Using MaskRefiner fallback only (SAM is disabled).")
+            final_mask = self.mask_refiner.optimized_fallback_execution_pipeline(mask_post, image, fallback_type='edge')
 
         # Robust hole/background separation using flood fill and bitwise ops (unchanged)
         if use_cuda:
@@ -822,9 +737,9 @@ class HybridAugmentationPipeline:
 
     def run_pipeline(self):
         """
-        Main entry point for the pipeline. Loads input image paths from a JSON file,
+        Main entry point for the pipeline. Loads input image paths and metadata from a JSON file (derived_labels.json),
         runs batch processing to generate masks, and saves the results as a pickle file.
-        This method is typically called from a command-line interface.
+        Each output record is a dict containing all fields from derived_labels plus the generated mask path, for compatibility with scene graph builder.
         """
         # Get config values
         input_path = self.config.get('data', {}).get('input_path')
@@ -837,7 +752,7 @@ class HybridAugmentationPipeline:
             logging.critical("Input or output path not specified in config. Please check 'data.input_path' and 'data.output_path'.")
             raise ValueError("Input or output path not specified.")
 
-        # Load image paths from derived_labels.json
+        # Load full records from derived_labels.json
         if not os.path.exists(input_path):
             logging.critical(f"Input file not found: {input_path}")
             raise FileNotFoundError(f"Input file not found: {input_path}")
@@ -846,30 +761,58 @@ class HybridAugmentationPipeline:
             derived_labels = json.load(f)
 
         # Remap paths as specified in the original snippet
-        # This remapping seems specific to how image paths are stored vs. how they're accessed.
         def remap_path(path):
-            # Example remapping, adjust as per actual path structure if needed
             return path.replace('category_1', '1').replace('category_0', '0')
-        image_paths = [remap_path(entry['image_path']) for entry in derived_labels]
 
         # Output directory for masks
         output_dir = os.path.dirname(output_path)
         os.makedirs(output_dir, exist_ok=True)
-        logging.info(f"Processing {len(image_paths)} images. Output masks will be saved to: {output_dir}")
+        logging.info(f"Processing {len(derived_labels)} images. Output masks will be saved to: {output_dir}")
 
-        # Run batch processing using explicit image paths
-        mask_files = self.batch_process(
-            image_paths=image_paths,
-            output_dir=output_dir,
-            batch_size=batch_size,
-            num_workers=num_workers,
-            inspection_dir=inspection_dir
-        )
+        # For each record, generate mask and build output dict
+        output_records = []
+        for entry in tqdm(derived_labels, desc="Augmenting images", mininterval=0.5):
+            # Defensive copy to avoid mutating input
+            record = dict(entry)
+            img_path = remap_path(record['image_path'])
+            if not os.path.exists(img_path):
+                logging.warning(f"Image file not found: {img_path}. Skipping.")
+                continue
+            image = cv2.imread(img_path)
+            if image is None:
+                logging.warning(f"Failed to load image: {img_path}. Skipping.")
+                continue
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB) if image.ndim == 3 else image
+            mask = self.process_image(image, img_path, inspection_dir)
+            # Save mask to file
+            base_name = os.path.splitext(os.path.basename(img_path))[0]
+            mask_path = os.path.join(output_dir, f"{base_name}_mask.png")
+            try:
+                cv2.imwrite(mask_path, mask)
+            except Exception as e:
+                logging.error(f"Failed to save mask to {mask_path}: {e}")
+                continue
+            # Add mask_path to record
+            record['mask_path'] = mask_path
+            # Optionally, wrap geometry/features in 'objects' for scene graph compatibility
+            # If 'geometry' and 'features' exist, create 'objects' list
+            if 'geometry' in record and 'features' in record:
+                obj = {
+                    'id': record.get('id', base_name),
+                    'vertices': record['geometry'],
+                }
+                # Copy all feature fields into object
+                obj.update(record['features'])
+                # Optionally add shape_label if present
+                if 'shape_label' in record:
+                    obj['shape_label'] = record['shape_label']
+                record['objects'] = [obj]
+            output_records.append(record)
 
-        # Save results (paths to generated mask files) as a pickle file
+        # Save results (list of dicts) as a pickle file
         with open(output_path, 'wb') as f:
-            pickle.dump(mask_files, f)
-        logging.info(f"Pipeline finished. Saved {len(mask_files)} mask file paths to {output_path}")
+            pickle.dump(output_records, f)
+        logging.info(f"Pipeline finished. Saved {len(output_records)} records to {output_path}")
 
 # Alias for backward compatibility with CLI and imports
 HybridAugmentor = HybridAugmentationPipeline
@@ -912,10 +855,6 @@ if __name__ == "__main__":
             'batch_size': 2,
             'num_workers': 1,
             'device': device_str
-        },
-        'sam': {
-            'model_type': 'vit_b', # Use a valid model type from the stub
-            'checkpoint_path': '~/.cache/sam'
         },
         'refinement': {
             'closing_kernel_size': 3,
