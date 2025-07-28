@@ -317,7 +317,59 @@ def main():
     parser.add_argument('--out', type=str, required=True, help='Output pickle file for scene graphs')
     parser.add_argument('--parallel', type=int, default=4, help='Number of parallel workers')
     parser.add_argument('--batch-size', type=int, default=16, help='Batch size for graph building (0=auto)')
+    parser.add_argument('--feedback-dir', type=str, default='feedback_samples', help='Directory to save QA/feedback images')
+    parser.add_argument('--feedback-rate', type=int, default=20, help='Save every Nth sample for feedback (default: 20, set 1 to save all)')
     args = parser.parse_args()
+    # --- Mask QA and Feedback Logic (Edge-based only) ---
+    import cv2
+    import numpy as np
+    import shutil
+    def mask_quality_stats(image, mask):
+        # Convert to grayscale if needed
+        if image.ndim == 3:
+            image_gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        else:
+            image_gray = image
+        mask_bin = (mask > 0).astype(np.uint8)
+        # Extract edges from both image and mask
+        edges_img = cv2.Canny(image_gray.astype(np.uint8), 50, 150)
+        edges_mask = cv2.Canny(mask.astype(np.uint8), 50, 150)
+        # Flatten to 1D for set operations
+        edges_img_flat = (edges_img > 0).flatten()
+        edges_mask_flat = (edges_mask > 0).flatten()
+        # Edge-based IoU (Jaccard)
+        intersection = np.logical_and(edges_img_flat, edges_mask_flat).sum()
+        union = np.logical_or(edges_img_flat, edges_mask_flat).sum()
+        edge_iou = intersection / (union + 1e-6) if union > 0 else 1.0
+        # Precision and recall
+        precision = intersection / (edges_mask_flat.sum() + 1e-6) if edges_mask_flat.sum() > 0 else 1.0
+        recall = intersection / (edges_img_flat.sum() + 1e-6) if edges_img_flat.sum() > 0 else 1.0
+        # Accept if edge IoU is high (e.g., >0.5) or both precision and recall are high
+        clinically_acceptable = (edge_iou > 0.5) or (precision > 0.7 and recall > 0.7)
+        stats = {
+            'edge_iou': edge_iou,
+            'edge_precision': precision,
+            'edge_recall': recall,
+            'clinically_acceptable': clinically_acceptable
+        }
+        return stats
+
+    def save_feedback_images(image, mask, base_name, feedback_dir):
+        os.makedirs(feedback_dir, exist_ok=True)
+        img_save_path = os.path.join(feedback_dir, f"{base_name}_input.png")
+        mask_save_path = os.path.join(feedback_dir, f"{base_name}_mask.png")
+        side_by_side_path = os.path.join(feedback_dir, f"{base_name}_side_by_side.png")
+        if image.ndim == 3:
+            img_bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        else:
+            img_bgr = image
+        cv2.imwrite(img_save_path, img_bgr)
+        cv2.imwrite(mask_save_path, mask)
+        mask_color = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+        if img_bgr.shape[:2] != mask_color.shape[:2]:
+            mask_color = cv2.resize(mask_color, (img_bgr.shape[1], img_bgr.shape[0]), interpolation=cv2.INTER_NEAREST)
+        side_by_side = cv2.hconcat([img_bgr, mask_color])
+        cv2.imwrite(side_by_side_path, side_by_side)
 
     # Hash input and parameters for cache validation
     params_dict = {
@@ -431,8 +483,31 @@ def main():
                 record['image_features'] = image_features
             else:
                 print(f"[WARN] No image path found for record id={img_id}")
+            # --- Mask QA and Feedback ---
+            # Try to get mask and image for QA (if available in record)
+            mask_path = record.get('mask_path') or record.get('mask')
+            mask = None
+            image = None
+            try:
+                if mask_path and os.path.exists(mask_path):
+                    mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+                if img_path and os.path.exists(img_path):
+                    image = cv2.imread(img_path, cv2.IMREAD_COLOR)
+                    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            except Exception as e:
+                print(f"[WARN] Could not load image/mask for QA: {e}")
+            if mask is not None and image is not None:
+                stats = mask_quality_stats(image, mask)
+                record['mask_qa'] = stats
+                # Save for feedback if failed QA or every Nth sample
+                feedback_dir = args.feedback_dir
+                feedback_rate = max(1, args.feedback_rate)
+                base_name = f"{img_id or idx}"
+                if (not stats['clinically_acceptable']) or (idx % feedback_rate == 0):
+                    save_feedback_images(image, mask, base_name, feedback_dir)
+            else:
+                record['mask_qa'] = {'error': 'missing image or mask'}
             # objects is now a list of dicts, each representing an object (or the image itself)
-            # No need to update from derived_labels, as objects are already correct
             G = build_func(record)
             batch_graphs.append(G)
         if skipped > 0:
