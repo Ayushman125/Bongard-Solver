@@ -8,33 +8,37 @@ from typing import Dict, List, Tuple, Optional
 import networkx as nx
 from collections import defaultdict
 import logging
-from src.commonsense_kb_sqlite import SQLiteCommonsenseKB
+from src.commonsense_kb_api import ConceptNetAPI
+
 
 class MultiSourceKnowledgeFusion:
     """
-    Advanced knowledge fusion system integrating full ConceptNet, embeddings, and learned models
+    Advanced knowledge fusion system integrating ConceptNet REST API, embeddings, and learned models
     with confidence weighting for exponential relationship quality improvement.
     """
-    def __init__(self, cache_size: int = 10000):
-        # Use SQLite-backed ConceptNet for efficient, disk-based KB queries
-        self.conceptnet_kb = SQLiteCommonsenseKB()
+    def __init__(self, cache_size: int = 10000, conceptnet_api_url: str = "http://api.conceptnet.io"):
+        # Use ConceptNet REST API for robust, up-to-date KB queries
+        self.conceptnet_kb = ConceptNetAPI(base_url=conceptnet_api_url, cache_size=cache_size, rate_limit=0.1)
         self.knowledge_cache = {}
         self.relationship_hierarchy = self._build_relationship_hierarchy()
         self.commonsense_validator = CommonsenseValidator()
         self.knowledge_gnn = KnowledgeGraphNN(hidden_dim=384, num_layers=3)
-        logging.info("Initialized MultiSourceKnowledgeFusion with SQLite ConceptNet KB (conceptnet-lite)")
+        logging.info("Initialized MultiSourceKnowledgeFusion with ConceptNet REST API")
 
     async def get_enriched_relationships(self, subject: str, obj: str, candidate_predicates: List[str]) -> List[Dict]:
         """
-        Retrieve and rank relationships using multi-source knowledge fusion with full KB.
+        Retrieve and rank relationships using multi-source knowledge fusion with ConceptNet REST API.
         """
-        # Query full ConceptNet KB
+        # Query ConceptNet API for direct and path relations
         direct_relations = self.conceptnet_kb.query_direct_relations(subject, obj)
-        semantic_relations = self.conceptnet_kb.semantic_query_with_embeddings(subject, obj, top_k=10)
-        path_relations = self.conceptnet_kb.find_relationship_paths(subject, obj, max_hops=3)
+        path_relations = self.conceptnet_kb.find_relationship_paths(subject, obj, max_hops=2)
 
         # Combine and score
-        all_rels = direct_relations + semantic_relations
+        all_rels = direct_relations
+        for path in path_relations:
+            for rel in path:
+                all_rels.append(rel)
+
         rels_by_pred = defaultdict(list)
         for rel in all_rels:
             if rel['predicate'] in candidate_predicates:
