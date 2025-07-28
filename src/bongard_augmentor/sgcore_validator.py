@@ -1,3 +1,5 @@
+import os
+os.environ["TRANSFORMERS_CACHE"] = "C:/Users/HP/hf_cache"
 import asyncio
 from typing import Dict, List, Optional, Tuple
 import torch

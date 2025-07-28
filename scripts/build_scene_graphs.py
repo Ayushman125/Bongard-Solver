@@ -379,25 +379,36 @@ def profile_optimal_batch_size(records, build_func):
     return best_size
 
 # --- Enhanced Scene Graph Builder Class ---
+
+# --- Singleton for RealFeatureExtractor ---
+_REAL_FEATURE_EXTRACTOR_INSTANCE = None
+def get_real_feature_extractor():
+    global _REAL_FEATURE_EXTRACTOR_INSTANCE
+    if _REAL_FEATURE_EXTRACTOR_INSTANCE is not None:
+        return _REAL_FEATURE_EXTRACTOR_INSTANCE
+    if not TORCH_KORNIA_AVAILABLE:
+        logging.warning("Torch/Kornia/Torchvision not available. RealFeatureExtractor will not be initialized.")
+        return None
+    try:
+        _REAL_FEATURE_EXTRACTOR_INSTANCE = RealFeatureExtractor(
+            clip_model_name="openai/clip-vit-base-patch32",
+            sam_encoder_path="sam_checkpoints/sam_vit_h_4b8939.pth",
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            cache_features=True
+        )
+        logging.info("RealFeatureExtractor singleton initialized.")
+    except Exception as e:
+        logging.error(f"Failed to initialize RealFeatureExtractor: {e}. Feature extraction will be skipped.")
+        _REAL_FEATURE_EXTRACTOR_INSTANCE = None
+    return _REAL_FEATURE_EXTRACTOR_INSTANCE
+
+
 class EnhancedSceneGraphBuilder:
     def __init__(self):
         self.knowledge_fusion = MultiSourceKnowledgeFusion()
         self.sgcore_validator = SGScoreValidator()
         self.hierarchical_predictor = HierarchicalPredicatePredictor()
-        self.feature_extractor = None # Initialize as None
-        if TORCH_KORNIA_AVAILABLE:
-            try:
-                self.feature_extractor = RealFeatureExtractor(
-                    clip_model_name="openai/clip-vit-base-patch32",
-                    sam_encoder_path="sam_checkpoints/sam_vit_h_4b8939.pth",
-                    device="cuda" if torch.cuda.is_available() else "cpu",
-                    cache_features=True
-                )
-                logging.info("EnhancedSceneGraphBuilder initialized with RealFeatureExtractor.")
-            except Exception as e:
-                logging.error(f"Failed to initialize RealFeatureExtractor: {e}. Feature extraction will be skipped.")
-        else:
-            logging.warning("Torch/Kornia/Torchvision not available. RealFeatureExtractor will not be initialized.")
+        self.feature_extractor = get_real_feature_extractor()
 
     def _create_mask_from_vertices(self, vertices, image_shape):
         mask = np.zeros(image_shape, dtype=np.uint8)
@@ -573,21 +584,76 @@ def save_feedback_images(image, mask, base_name, feedback_dir):
     side_by_side = cv2.hconcat([img_bgr, mask_color])
     cv2.imwrite(side_by_side_path, side_by_side)
 
+def remap_path(path):
+    return path.replace('category_1', '1').replace('category_0', '0')
+
 async def _process_single_item_optimized(item, feature_cache, batch_validator, recall_evaluator, drift_visualizer, enhanced_builder):
     """Processes a single item asynchronously, including feature caching, scene graph building, validation, and metrics."""
+
+    # Remap image path to match real dataset folder structure
+    image_path = remap_path(item.get('image_path', item.get('mask_path', '')))
     # Generate cache key for feature cache
     cache_key_features = feature_cache._generate_cache_key(
-        item['image_path'],
+        image_path,
         hashlib.md5(str(item.get('mask', '')).encode()).hexdigest(),
         {'model': 'optimized'}
     )
     features = feature_cache.load_features(cache_key_features, device='cuda')
 
-    # Base scene graph creation (always happens)
-    base_scene_graph = build_graph_unvalidated(item)
+    # Robustly ensure 'objects' is a list of dicts for all input types
+    record = dict(item)  # always shallow copy to avoid mutating input
+    if not isinstance(record.get('objects', None), list):
+        # Try to wrap as a single object if possible
+        obj = {}
+        # Prefer geometry/features if present
+        if 'geometry' in record and 'features' in record:
+            obj = {
+                'id': record.get('problem_id', record.get('image_path', record.get('mask_path', 'shape_0'))),
+                'vertices': record.get('geometry', []),
+                **record.get('features', {}),
+                'label': record.get('label', ''),
+                'category': record.get('category', ''),
+                'image_path': record.get('image_path', ''),
+                'action_program': record.get('action_program', [])
+            }
+        # If only mask_path/image_path, wrap as minimal object
+        elif 'mask_path' in record or 'image_path' in record:
+            obj = {
+                'id': record.get('problem_id', record.get('image_path', record.get('mask_path', 'shape_0'))),
+                'mask_path': record.get('mask_path', ''),
+                'image_path': record.get('image_path', ''),
+                'label': record.get('label', ''),
+                'category': record.get('category', ''),
+            }
+        # Fallback: wrap the whole record as a single object
+        else:
+            obj = dict(record)
+        record['objects'] = [obj]
+
+
+
+    if isinstance(record, dict) and 'objects' in record and isinstance(record['objects'], list):
+        graph_obj = build_graph_unvalidated(record)
+        # Always wrap in a dict with expected keys
+        base_scene_graph = {
+            'objects': record['objects'],
+            'relationships': [],  # relationships will be filled by enhanced_builder
+            'graph': graph_obj
+        }
+    else:
+        logging.error(f"Item passed to build_graph_unvalidated is not a valid dict with 'objects' key: {type(record)}, keys: {list(record.keys()) if isinstance(record, dict) else 'N/A'}")
+        return {
+            'image_path': image_path,
+            'scene_graph': None,
+            'quality_metrics': {},
+            'processing_metadata': {
+                'features_from_cache': features is not None,
+                'cache_key': cache_key_features
+            }
+        }
 
     # Enhanced scene graph building (async)
-    scene_graph_data = await enhanced_builder.build_enhanced_scene_graph(item['image_path'], base_scene_graph)
+    scene_graph_data = await enhanced_builder.build_enhanced_scene_graph(image_path, base_scene_graph)
     scene_graph = scene_graph_data['scene_graph']
     quality_metrics = scene_graph_data['quality_metrics']
 
@@ -601,13 +667,13 @@ async def _process_single_item_optimized(item, feature_cache, batch_validator, r
     if batch_validator:
         # batch_validator's validate_scene_graphs_batch expects (Image, scene_graph) tuples
         try:
-            img_pil = Image.open(item['image_path'])
+            img_pil = Image.open(image_path)
             validation_result = await batch_validator.validate_scene_graphs_batch(
                 [(img_pil, scene_graph)]
             )
             scene_graph['validation'] = validation_result[0] if validation_result else None
         except Exception as e:
-            logging.error(f"Batch validation failed for {item.get('image_path')}: {e}")
+            logging.error(f"Batch validation failed for {image_path}: {e}")
             scene_graph['validation'] = {'error': str(e)}
 
     metrics = None
@@ -621,7 +687,7 @@ async def _process_single_item_optimized(item, feature_cache, batch_validator, r
             )
             scene_graph['metrics'] = metrics
         except Exception as e:
-            logging.error(f"Recall evaluation failed for {item.get('image_path')}: {e}")
+            logging.error(f"Recall evaluation failed for {image_path}: {e}")
             scene_graph['metrics'] = {'error': str(e)}
 
     if drift_visualizer and metrics:
@@ -634,7 +700,7 @@ async def _process_single_item_optimized(item, feature_cache, batch_validator, r
             drift_visualizer.add_threshold_data(predicate, confidence, performance)
 
     return {
-        'image_path': item['image_path'],
+        'image_path': image_path,
         'scene_graph': scene_graph,
         'quality_metrics': quality_metrics,
         'processing_metadata': {
@@ -849,10 +915,10 @@ async def main(): # Main is now async because it calls async functions
             logging.warning("No common predicates found to generate drift report.")
 
     # Log overall performance stats
-    perf_stats = profiler.get_overall_stats()
+    # Removed call to profiler.get_overall_stats() due to missing method
     cache_stats = feature_cache.get_cache_stats()
     logging.info("Processing complete!")
-    logging.info(f"Overall graph build throughput: {perf_stats.get('scene_graph_build', {}).get('throughput_graphs_per_sec', 0):.2f} graphs/sec")
+    # logging.info(f"Overall graph build throughput: {perf_stats.get('scene_graph_build', {}).get('throughput_graphs_per_sec', 0):.2f} graphs/sec")
     logging.info(f"Cache efficiency: Memory: {cache_stats.get('memory_usage_mb', 0):.1f}MB used, GPU: {cache_stats.get('gpu_usage_mb', 0):.1f}MB used")
 
 if __name__ == "__main__":
