@@ -29,16 +29,22 @@ def mc_dropout_mask_prediction(model, input_tensor, n_runs=20, device='cpu'):
     model.eval()
     enable_dropout(model)
     all_masks = []
+    all_logits = []
     with torch.no_grad():
         for _ in range(n_runs):
             output = model(input_tensor.to(device))
-            # Assume output is a mask probability map (B, 1, H, W) or (B, H, W)
+            # DataParallel/multi-GPU: output may be list/tuple of tensors
             if isinstance(output, (tuple, list)):
                 output = output[0]
+            # If output is still a list (e.g., DataParallel), stack along batch dim
+            if isinstance(output, (list, tuple)):
+                output = torch.cat([o if isinstance(o, torch.Tensor) else torch.tensor(o) for o in output], dim=0)
             mask_prob = torch.sigmoid(output) if output.shape[1] == 1 else output
             mask_np = mask_prob.detach().cpu().numpy()
             all_masks.append(mask_np)
+            all_logits.append(output.detach().cpu().numpy())
     all_masks = np.stack(all_masks, axis=0) # (n_runs, B, 1, H, W) or (n_runs, ...)
+    all_logits = np.stack(all_logits, axis=0)
     mean_mask = np.mean(all_masks, axis=0)
     var_mask = np.var(all_masks, axis=0)
-    return mean_mask, var_mask, all_masks
+    return mean_mask, var_mask, all_logits

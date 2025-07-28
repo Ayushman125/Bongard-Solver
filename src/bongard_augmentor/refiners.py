@@ -32,6 +32,24 @@ except ImportError:
 
 class MaskRefiner:
 
+    def _platt_scaling(self, logits, temperature=1.0):
+        # Platt scaling: sigmoid(logit / T)
+        if logits is None or len(logits) == 0:
+            return None
+        import scipy.special
+        logits = np.asarray(logits, dtype=np.float32)
+        scaled = scipy.special.expit(logits / temperature)
+        return scaled
+
+    def _calibrated_confidence(self, prediction_scores, logits=None, temperature=1.0):
+        # Use Platt/temperature scaling if logits are available
+        if logits is not None and len(logits) > 0:
+            scaled = self._platt_scaling(logits, temperature)
+            return float(np.mean(scaled))
+        if prediction_scores is not None and len(prediction_scores) > 0:
+            return float(np.mean(prediction_scores))
+        return 0.5
+
     def _run_advanced_fallback_stack(self, image: np.ndarray, mask: np.ndarray = None, min_quality: float = 0.5, max_time: float = 2.0) -> np.ndarray:
         """
         Runs all fallback methods in a dynamic, profiled order, terminating early if a high-quality mask is found.
@@ -552,7 +570,7 @@ class MaskRefiner:
         
         return filled_holes * 255 # Return binary mask (0 or 255)
 
-    def validate_mask_quality_with_confidence(self, mask: np.ndarray, image: np.ndarray, prediction_scores: list, model=None, input_tensor=None, mc_dropout_runs: int = 20, device: str = 'cpu') -> tuple:
+    def validate_mask_quality_with_confidence(self, mask: np.ndarray, image: np.ndarray, prediction_scores: list, model=None, input_tensor=None, mc_dropout_runs: int = 20, device: str = 'cpu', logits=None, temperature: float = 1.0) -> tuple:
         """
         Comprehensive mask quality validation using SSIM, boundary coherence,
         confidence calibration, and uncertainty quantification.
@@ -583,19 +601,27 @@ class MaskRefiner:
         else:
             edge_overlap = np.sum((edges_img > 0) & (edges_mask > 0)) / (sum_edges_img + 1e-6)
 
-        # Confidence calibration (Platt scaling placeholder)
-        conf_score = np.mean(prediction_scores) if prediction_scores else 0.5
 
         # Uncertainty quantification (Monte Carlo dropout)
+        logits_mc = None
         if model is not None and input_tensor is not None:
             try:
-                mean_mask, var_mask, _ = mc_dropout_mask_prediction(model, input_tensor, n_runs=mc_dropout_runs, device=device)
+                mean_mask, var_mask, logits_mc = mc_dropout_mask_prediction(model, input_tensor, n_runs=mc_dropout_runs, device=device)
                 uncertainty = float(np.mean(var_mask))
             except Exception as e:
                 logging.warning(f"MC Dropout failed: {e}. Falling back to std of prediction_scores.")
                 uncertainty = np.std(prediction_scores) if prediction_scores and len(prediction_scores) > 1 else 0.0
         else:
             uncertainty = np.std(prediction_scores) if prediction_scores and len(prediction_scores) > 1 else 0.0
+
+        # Confidence calibration (Platt/temperature scaling)
+        # Use MC logits if available, else use provided logits, else fallback to prediction_scores
+        use_logits = None
+        if logits_mc is not None and hasattr(logits_mc, 'shape') and logits_mc.shape[0] > 0:
+            use_logits = np.mean(logits_mc, axis=0)
+        elif logits is not None and len(logits) > 0:
+            use_logits = logits
+        conf_score = self._calibrated_confidence(prediction_scores, logits=use_logits, temperature=temperature)
 
         # Dice coefficient
         def calculate_dice_coefficient(a, b):

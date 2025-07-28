@@ -359,38 +359,9 @@ class SkeletonProcessor:
             logging.error(f"Skeleton-aware refinement failed: {e}. Returning original mask.")
             return mask
 
-# --- Stub/Placeholder Classes for Dependencies ---
-# These are added to make the provided snippet runnable.
-# In a real application, these would be imported from their respective modules.
+from .dataset import ImagePathDataset
 
-
-
-class ImagePathDataset:
-    """
-    Stub class for ImagePathDataset.
-    Simulates loading image data and associated labels/geometries.
-    """
-    def __init__(self, image_paths: List[str], derived_labels_path: str = None):
-        self.image_paths = image_paths
-        self.derived_labels = {}
-        if derived_labels_path and os.path.exists(derived_labels_path):
-            with open(derived_labels_path, 'r') as f:
-                self.derived_labels = {entry['image_path']: entry for entry in json.load(f)}
-        logging.warning("Using a stub ImagePathDataset. Image loading is simulated.")
-
-    def __len__(self):
-        return len(self.image_paths)
-
-    def __getitem__(self, idx):
-        path = self.image_paths[idx]
-        # Simulate image loading
-        dummy_image = np.zeros((256, 256, 3), dtype=np.uint8) # Dummy image
-        # Simulate geometry/label loading
-        geometry = self.derived_labels.get(path, {}).get('geometry', {})
-        logging.debug(f"Simulating loading {path}")
-        return dummy_image, path, geometry
-
- # --- Main Hybrid Augmentation Pipeline ---
+# --- Main Hybrid Augmentation Pipeline ---
 
 class HybridAugmentationPipeline:
     def benchmark_enabled_processing(self, image: np.ndarray, image_type: str = "unknown") -> Tuple[np.ndarray, Dict]:
@@ -608,9 +579,32 @@ class HybridAugmentationPipeline:
             # Use MaskRefiner's optimized fallback
             final_mask = self.mask_refiner.optimized_fallback_execution_pipeline(mask_post, image, fallback_type='edge')
         else:
-            # Use MaskRefiner's mask quality validation
-            validated_mask, quality_score, metrics = self.mask_refiner.validate_mask_quality_with_confidence(
-                mask_post, image, prediction_scores=[], model=None, input_tensor=None, mc_dropout_runs=20, device='cpu')
+            # Use MaskRefiner's mask quality validation with real MC-Dropout if possible
+            model = None
+            input_tensor = None
+            device = self.config.get('processing', {}).get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
+            # If SAM predictor is available, try to get model and input_tensor
+            if hasattr(self, 'sam_generator') and hasattr(self.sam_generator, 'predictor') and self.sam_generator.predictor is not None:
+                model = getattr(self.sam_generator, 'model', None)
+                # Try to get the last input tensor if available (stub: user should adapt this to their predictor)
+                # For now, just create a tensor from the image
+                import torch
+                img = image
+                if img.ndim == 2:
+                    img = np.stack([img]*3, axis=-1)
+                img_tensor = torch.from_numpy(img).float().permute(2,0,1).unsqueeze(0) / 255.0
+                input_tensor = img_tensor.to(device)
+            # Async MC-Dropout: run in thread if device is cuda
+            import concurrent.futures
+            def qa_call():
+                return self.mask_refiner.validate_mask_quality_with_confidence(
+                    mask_post, image, prediction_scores=[], model=model, input_tensor=input_tensor, mc_dropout_runs=20, device=device)
+            if device == 'cuda':
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(qa_call)
+                    validated_mask, quality_score, metrics = future.result()
+            else:
+                validated_mask, quality_score, metrics = qa_call()
             final_mask = validated_mask
 
         # Robust hole/background separation using flood fill and bitwise ops (unchanged)
