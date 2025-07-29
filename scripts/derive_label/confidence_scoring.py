@@ -1,3 +1,60 @@
+import numpy as np
+from scipy.optimize import minimize
+
+class TemperatureScaler:
+    def __init__(self):
+        self.temperature = 1.0
+
+    def fit(self, logits, true_labels):
+        # logits: (N, C), true_labels: (N,)
+        def nll(temp):
+            temp = temp[0]
+            scaled = logits / temp
+            log_probs = scaled - np.logaddexp.reduce(scaled, axis=1, keepdims=True)
+            return -np.mean(log_probs[np.arange(len(true_labels)), true_labels])
+        res = minimize(nll, x0=[1.0], bounds=[(0.05, 10.0)])
+        self.temperature = float(res.x)
+
+    def calibrate(self, logits):
+        return logits / self.temperature
+
+def score_confidence(logits, label_idx):
+    # logits: (C,), label_idx: int
+    probs = np.exp(logits) / np.sum(np.exp(logits))
+    return float(probs[label_idx])
+import numpy as np
+from scipy.optimize import minimize
+
+# --- Temperature Scaling for Confidence Calibration ---
+class TemperatureScaler:
+    def __init__(self):
+        self.temperature = 1.0
+
+    def fit(self, logits, true_labels):
+        """
+        Fit temperature on a held-out set.
+        logits: np.ndarray shape (N, C)
+        true_labels: np.ndarray shape (N,)
+        """
+        def nll(temp):
+            scaled = logits / temp
+            log_probs = scaled - np.logaddexp.reduce(scaled, axis=1, keepdims=True)
+            return -np.mean(log_probs[np.arange(len(true_labels)), true_labels])
+
+        res = minimize(nll, x0=[1.0], bounds=[(0.05, 10.0)])
+        self.temperature = float(res.x)
+
+    def calibrate(self, logits):
+        """
+        Apply learned temperature.
+        """
+        return logits / self.temperature
+
+# Example usage in scoring confidence
+def score_confidence(logits, label):
+    calibrated_logits = TemperatureScaler().calibrate(logits)
+    probs = np.exp(calibrated_logits) / np.sum(np.exp(calibrated_logits))
+    return probs[label]
 from collections import defaultdict
 
 # --- Detector Reliability Matrix ---

@@ -1,3 +1,31 @@
+import numpy as np
+
+def dawid_skene(annotations, max_iter=10):
+    # annotations: list of lists, each inner list are labels from different detectors
+    annotators = len(annotations)
+    items = len(annotations[0])
+    label_set = set(sum(annotations, []))
+    label_idx = {l:i for i,l in enumerate(label_set)}
+    C = len(label_set)
+    pi = np.full((annotators, C, C), 1/C)
+    p_true = np.full((items, C), 1/C)
+    for _ in range(max_iter):
+        # E-step
+        for i in range(items):
+            probs = np.ones(C)
+            for a in range(annotators):
+                obs = label_idx[annotations[a][i]]
+                probs *= pi[a,:,obs]
+            p_true[i] = probs / probs.sum()
+        # M-step
+        for a in range(annotators):
+            for t in range(C):
+                for o in range(C):
+                    mask = [label_idx[annotations[a][i]]==o for i in range(items)]
+                    pi[a,t,o] = (p_true[:,t][mask].sum() + 1e-6)
+                pi[a,t] /= pi[a,t].sum()
+    true_labels = [list(label_set)[np.argmax(p)] for p in p_true]
+    return true_labels
 import logging
 import numpy as np
 from shapely.geometry import Polygon
@@ -17,6 +45,42 @@ label_specificity_score = {
     'degenerate_point_cloud': 90, 'multi_segment_line': 91, 'degenerate_hull_polygon': 92,
     'unknown': 0, 'error': -1, 'missing_deps_polygon': -2,
 }
+
+
+
+# --- Dawid-Skene Multi-Annotator Consensus ---
+def dawid_skene(annotations, max_iter=10):
+    """
+    annotations: list of lists, each inner list are labels from different detectors
+    returns aggregated labels
+    """
+    annotators = len(annotations)
+    items = len(annotations[0])
+    label_set = set(sum(annotations, []))
+    label_idx = {l:i for i,l in enumerate(label_set)}
+    C = len(label_set)
+    pi = np.full((annotators, C, C), 1/C)
+    p_true = np.full((items, C), 1/C)
+    for _ in range(max_iter):
+        for i in range(items):
+            probs = np.ones(C)
+            for a in range(annotators):
+                obs = label_idx[annotations[a][i]]
+                probs *= pi[a,:,obs]
+            p_true[i] = probs / probs.sum()
+        for a in range(annotators):
+            for t in range(C):
+                for o in range(C):
+                    mask = [label_idx[annotations[a][i]]==o for i in range(items)]
+                    pi[a,t,o] = (p_true[:,t][mask].sum() + 1e-6)
+                pi[a,t] /= pi[a,t].sum()
+    true_labels = [list(label_set)[np.argmax(p)] for p in p_true]
+    return true_labels
+
+# Example usage:
+# detector_outputs = [detector_list[i].batch_labels for i in range(len(detector_list))]
+# final_labels = dawid_skene(detector_outputs)
+
 
 def post_process_scene_labels(objects, problem_id, scene_context=None):
     """

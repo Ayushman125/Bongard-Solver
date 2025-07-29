@@ -1,4 +1,53 @@
 import numpy as np
+from collections import Counter
+
+class WeightedVotingEnsemble:
+    def __init__(self, detectors, weights):
+        self.detectors = detectors
+        self.weights = weights
+
+    def predict(self, image, context_feat=None, return_logits=False):
+        # Each detector returns (label, score, logits)
+        label_votes = Counter()
+        all_logits = []
+        all_labels = []
+        for i, detector in enumerate(self.detectors):
+            # Detector must return (label, score, logits)
+            if context_feat is not None:
+                label, score, logits = detector(image, context_feat=context_feat, return_logits=True)
+            else:
+                label, score, logits = detector(image, return_logits=True)
+            label_votes[label] += score * self.weights[i]
+            all_logits.append(logits)
+            all_labels.append(label)
+        # Fused label: highest weighted vote
+        best_label, _ = label_votes.most_common(1)[0]
+        # For logits, average across detectors
+        avg_logits = np.mean(np.stack(all_logits), axis=0)
+        if return_logits:
+            return all_labels, [float(label_votes[l]) for l in all_labels], avg_logits
+        else:
+            return best_label
+
+def detect_shapes(flat_commands, config, return_logits=False, context_feat=None):
+    # Simulate detectors: each returns (label, score, logits)
+    # In real use, replace with actual detector logic
+    def dummy_detector(image, context_feat=None, return_logits=False):
+        # For demo, random label and logits
+        labels = ['circle', 'square', 'triangle', 'polygon']
+        logits = np.random.randn(len(labels))
+        label = labels[np.argmax(logits)]
+        score = float(np.max(logits))
+        if return_logits:
+            return label, score, logits
+        else:
+            return label
+    base_detectors = config.get('base_detectors', [dummy_detector, dummy_detector, dummy_detector])
+    weights = config.get('ensemble_weights', [1.0]*len(base_detectors))
+    ensemble = WeightedVotingEnsemble(base_detectors, weights)
+    return ensemble.predict(flat_commands, context_feat=context_feat, return_logits=return_logits)
+from collections import Counter
+import numpy as np
 import logging
 import cv2
 from shapely.geometry import Polygon, LineString, MultiPoint
@@ -11,6 +60,34 @@ from derive_label.confidence_scoring import calculate_confidence
 
 # Global logger setup (can be configured externally)
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+
+# --- Weighted Voting Ensemble for Detector Fusion ---
+
+class WeightedVotingEnsemble:
+    def __init__(self, detectors, weights):
+        """
+        detectors: list of detector callables returning (label, score)
+        weights: list of floats matching detectors
+        """
+        self.detectors = detectors
+        self.weights = weights
+
+    def predict(self, image):
+        votes = Counter()
+        for detector, w in zip(self.detectors, self.weights):
+            label, score = detector(image)
+            votes[label] += score * w
+        best_label, _ = votes.most_common(1)[0]
+        return best_label
+
+# Example integration in a shape detection pipeline
+def detect_shapes(image, config):
+    # Example: base_detectors = [polygon_detector, line_detector, convexity_detector]
+    base_detectors = config.get('base_detectors', [])
+    weights = config.get('ensemble_weights', [1.0]*len(base_detectors))
+    ensemble = WeightedVotingEnsemble(base_detectors, weights)
+    fused_label = ensemble.predict(image)
+    return fused_label
 
 def _safe_center_and_scale_points(points):
     """Safely centers and scales points to prevent issues with very small or large coordinates."""

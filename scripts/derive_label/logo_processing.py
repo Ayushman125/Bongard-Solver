@@ -1,3 +1,38 @@
+import torch
+import torch.nn as nn
+
+class ContextEncoder(nn.Module):
+    def __init__(self, feature_dim, hidden_dim):
+        super().__init__()
+        self.query = nn.Linear(feature_dim, hidden_dim)
+        self.key   = nn.Linear(feature_dim, hidden_dim)
+        self.value = nn.Linear(feature_dim, hidden_dim)
+        self.softmax = nn.Softmax(dim=-1)
+
+    def forward(self, features):
+        # features: Tensor of shape (N, feature_dim)
+        Q = self.query(features)
+        K = self.key(features)
+        V = self.value(features)
+        attn = self.softmax(Q @ K.T / (K.shape[-1]**0.5))
+        context = attn @ V
+        return context
+
+def extract_batch_features(batch_flat_commands, shape_creation_dependencies, D=32):
+    # Dummy batch feature extraction for demo
+    import numpy as np
+    batch_features = []
+    for flat_commands in batch_flat_commands:
+        # Use LOGO parser to get shape objects, then extract features
+        objects, _ = create_shape_from_stroke_pipeline(flat_commands, **shape_creation_dependencies)
+        if objects and 'coords' in objects[0]:
+            feat = image_processing_features(objects[0]['coords'])
+        else:
+            feat = np.zeros(D)
+        batch_features.append(feat)
+    return np.stack(batch_features)
+import torch
+import torch.nn as nn
 import logging
 import numpy as np
 import cv2
@@ -30,6 +65,27 @@ from derive_label.semantic_refinement import (
 )
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+
+class ContextEncoder(nn.Module):
+    def __init__(self, feature_dim, hidden_dim):
+        super().__init__()
+        self.query = nn.Linear(feature_dim, hidden_dim)
+        self.key   = nn.Linear(feature_dim, hidden_dim)
+        self.value = nn.Linear(feature_dim, hidden_dim)
+        self.softmax = nn.Softmax(dim=-1)
+
+    def forward(self, features):
+        # features: Tensor of shape (N, feature_dim)
+        Q = self.query(features)
+        K = self.key(features)
+        V = self.value(features)
+        attn = self.softmax(Q @ K.T / (K.shape[-1]**0.5))
+        context = attn @ V
+        return context
+
+# Example usage in pipeline:
+# features = extract_image_features(batch_images)   # (N, D)
+# context_feats = ContextEncoder(D, H)(torch.Tensor(features))
 
 def flatten_action_program(action_program):
     """Recursively flattens nested lists in an action program."""

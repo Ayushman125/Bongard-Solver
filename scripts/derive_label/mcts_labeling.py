@@ -1,3 +1,18 @@
+import torch
+import numpy as np
+
+def mc_dropout_predict(model, inputs, n_samples=10):
+    model.train()
+    preds = []
+    with torch.no_grad():
+        for _ in range(n_samples):
+            logits = model(inputs)
+            preds.append(torch.softmax(logits, dim=-1).cpu().numpy())
+    preds = np.stack(preds)  # (n_samples, batch, classes)
+    mean_pred = preds.mean(axis=0)
+    epistemic_uncertainty = preds.var(axis=0).mean(axis=1)
+    return mean_pred, epistemic_uncertainty
+import torch
 import copy
 import random
 import numpy as np
@@ -7,6 +22,23 @@ import logging
 from derive_label.geometric_detectors import detect_vertices
 from derive_label.confidence_scoring import consensus_vote, DETECTOR_RELIABILITY
 from derive_label.image_features import extract_clean_mask_and_skeleton
+
+# --- Bayesian Uncertainty via Monte Carlo Dropout ---
+def mc_dropout_predict(model, inputs, n_samples=10):
+    model.train()  # enable dropout
+    preds = []
+    with torch.no_grad():
+        for _ in range(n_samples):
+            logits = model(inputs)
+            preds.append(torch.softmax(logits, dim=-1).cpu().numpy())
+    preds = np.stack(preds)  # (n_samples, batch, classes)
+    mean_pred = preds.mean(axis=0)
+    epistemic_uncertainty = preds.var(axis=0).mean(axis=1)
+    return mean_pred, epistemic_uncertainty
+
+# Example usage in label generation:
+# mean_probs, unc = mc_dropout_predict(your_model, image_tensor)
+# if unc > config['uncertainty_threshold']: flag_for_review()
 
 class MCTSNode:
     def __init__(self, state, parent=None, action=None):

@@ -1,3 +1,20 @@
+def select_uncertain_samples(uncertainties, budget):
+    # uncertainties: dict {image_id: uncertainty_score}
+    sorted_ids = sorted(uncertainties, key=lambda x: uncertainties[x], reverse=True)
+    return sorted_ids[:budget]
+# --- Active Learning Sample Selection ---
+def select_uncertain_samples(uncertainties, budget):
+    """
+    uncertainties: dict {image_id: uncertainty_score}
+    budget: int number of samples to review
+    returns list of image_ids
+    """
+    sorted_ids = sorted(uncertainties, key=lambda x: uncertainties[x], reverse=True)
+    return sorted_ids[:budget]
+
+# Example usage in validation pass:
+# unc_map = {img_id: model_uncertainty(img) for img in all_images}
+# to_review = select_uncertain_samples(unc_map, budget=config['review_budget'])
 import logging
 import numpy as np
 from math import hypot # Import hypot for distance calculations
