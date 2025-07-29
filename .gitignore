@@ -15,6 +15,7 @@ develop-eggs/
 venv/
 data/
 logs/
+feedback_samples/
 
 # Bongard-LOGO large dataset folders and files
 data/raw/ShapeBongard_V2/
