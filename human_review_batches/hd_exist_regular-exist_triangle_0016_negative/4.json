@@ -1,0 +1,143 @@
+{
+  "problem_id": "hd_exist_regular-exist_triangle_0016",
+  "generated_labels": [
+    "polygon_vertices_2"
+  ],
+  "num_objects": 1,
+  "confidence_tier": "Tier 4: Low-Confidence/Ambiguous (Flagged Issues)",
+  "flagging_reasons": [
+    "Object obj_0 has detector disagreement: Multiple strong candidate labels found: ['polygon_vertices_2', 'geometric_symmetric_horizontal_and_vertical_reflection_and_rotational_180']"
+  ],
+  "validation_issues": [
+    {
+      "severity": "WARNING",
+      "rule_name": "DetectorDisagreement",
+      "message": "Object obj_0 label 'polygon_vertices_2' shows disagreement among individual detectors: Multiple strong candidate labels found: ['polygon_vertices_2', 'geometric_symmetric_horizontal_and_vertical_reflection_and_rotational_180'].",
+      "object_id": "obj_0",
+      "found_label": "polygon_vertices_2"
+    }
+  ],
+  "action_program": [
+    "line_zigzag_0.500-0.500",
+    "line_zigzag_0.500-0.667",
+    "line_circle_0.500-0.667",
+    "line_zigzag_0.500-0.667",
+    "line_zigzag_0.500-0.667",
+    "line_circle_0.500-0.667"
+  ],
+  "object_properties": [
+    {
+      "is_closed_geometric": false,
+      "area_geometric": 0.0,
+      "perimeter_geometric": 0.0,
+      "centroid_geometric": [
+        50.0,
+        58.35
+      ],
+      "num_points_in_stroke": 2,
+      "num_detected_vertices": 2,
+      "detected_vertices_coords": [
+        [
+          50.0,
+          50.0
+        ],
+        [
+          50.0,
+          66.7
+        ]
+      ],
+      "fourier_descriptors": [],
+      "geometric_symmetry_score": 0.0,
+      "geometric_symmetry_type": "horizontal_and_vertical_reflection_and_rotational_180",
+      "geometric_orientation_deg": 90.0,
+      "image_features": {
+        "robust_mask_area": 54,
+        "robust_skeleton_area": 16,
+        "robust_fill_ratio": 0.29629629080932796,
+        "image_area_pixels": 54,
+        "image_density": 0.003295898437298834,
+        "n_contours": 1,
+        "contour_lengths": [
+          38.0
+        ],
+        "contour_areas": [
+          34.0
+        ],
+        "simplified_contours": [
+          [
+            [
+              9.0,
+              10.0
+            ],
+            [
+              9.0,
+              27.0
+            ],
+            [
+              11.0,
+              27.0
+            ],
+            [
+              11.0,
+              10.0
+            ]
+          ]
+        ],
+        "simplified_n_vertices": [
+          4
+        ],
+        "n_holes": 0,
+        "skeleton_sum_pixels": 20,
+        "max_medial_axis_distance": 2.0,
+        "morph_closed_area": 54,
+        "morph_opened_area": 54,
+        "bbox_area": 54,
+        "eccentricity": 0.9875384540069388,
+        "major_axis_length": 20.752509888364507,
+        "minor_axis_length": 3.265986323710904,
+        "orientation_rad": 0.0,
+        "perimeter": 38.0,
+        "solidity": 1.0,
+        "extent": 1.0,
+        "form_factor": 0.46993352680433637,
+        "hu_moments": [
+          2.6980704405239093,
+          5.3340394127489885,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "canny_edge_pixels": 38,
+        "canny_edge_density": 0.0023193359373584388,
+        "otsu_threshold_value": 0.0
+      },
+      "betti_numbers": [
+        1,
+        0
+      ],
+      "semantic_connected_segments": 1,
+      "is_quadrilateral_like_semantic": false,
+      "is_smooth_curve_semantic": false,
+      "is_composite_shape_semantic": false,
+      "is_convex_physics": false,
+      "physics_symmetry_score": 0.0,
+      "physics_symmetry_type": "none",
+      "num_arcs_physics": 0,
+      "num_straight_segments_physics": 0,
+      "is_occluded_physics": false,
+      "is_touching_ground_physics": false,
+      "is_floating_physics": false,
+      "is_stable_physics": false,
+      "num_contact_points_physics": 0,
+      "detector_consensus": {
+        "agreement": false,
+        "disagreement_reason": "Multiple strong candidate labels found: ['polygon_vertices_2', 'geometric_symmetric_horizontal_and_vertical_reflection_and_rotational_180']"
+      },
+      "robust_symmetry_score": null,
+      "robust_symmetry_axis_deg": null,
+      "boundary_autocorr_symmetry": null
+    }
+  ]
+}

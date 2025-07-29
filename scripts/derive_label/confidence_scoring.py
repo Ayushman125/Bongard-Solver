@@ -1,3 +1,41 @@
+from sklearn.isotonic import IsotonicRegression
+from sklearn.linear_model import LogisticRegression
+
+class PlattScaler:
+    def __init__(self):
+        self.model = LogisticRegression(solver='liblinear')
+        self.fitted = False
+
+    def fit(self, logits, true_labels):
+        # For binary tasks, take logit difference
+        X = logits[:, 1] - logits[:, 0]
+        self.model.fit(X.reshape(-1,1), true_labels)
+        self.fitted = True
+
+    def calibrate(self, logits):
+        X = (logits[:,1] - logits[:,0]).reshape(-1,1)
+        return self.model.predict_proba(X)
+
+class IsotonicScaler:
+    def __init__(self):
+        self.iso = IsotonicRegression(out_of_bounds='clip')
+        self.fitted = False
+
+    def fit(self, scores, true_labels):
+        self.iso.fit(scores, true_labels)
+        self.fitted = True
+
+    def calibrate(self, scores):
+        return self.iso.predict(scores)
+
+def initialize_confidence_calibrator(config):
+    # Dummy: expects config['calib_path'] to provide (logits, labels)
+    # Replace with real data loading as needed
+    logits, labels = np.load(config['calib_path'] + '_logits.npy'), np.load(config['calib_path'] + '_labels.npy')
+    scaler = TemperatureScaler()
+    scaler.fit(logits, labels)
+    return scaler
+
 import numpy as np
 from scipy.optimize import minimize
 
@@ -20,8 +58,22 @@ class TemperatureScaler:
 
 def score_confidence(logits, label_idx):
     # logits: (C,), label_idx: int
+    # Default: temperature scaling
     probs = np.exp(logits) / np.sum(np.exp(logits))
     return float(probs[label_idx])
+
+def score_confidence_advanced(logits, label, method='temperature', platt_scaler=None, iso_scaler=None):
+    # logits: (N, C) or (C,)
+    if logits.ndim == 1:
+        logits = logits[None, :]
+    # Temperature scaling (default)
+    temp_probs = np.exp(logits) / np.sum(np.exp(logits), axis=1, keepdims=True)
+    if method == 'platt' and platt_scaler is not None and platt_scaler.fitted:
+        return platt_scaler.calibrate(logits)[:, label]
+    elif method == 'isotonic' and iso_scaler is not None and iso_scaler.fitted:
+        pos_scores = temp_probs[:,1] if logits.shape[1]==2 else temp_probs.max(axis=1)
+        return iso_scaler.calibrate(pos_scores)
+    return temp_probs[:, label]
 import numpy as np
 from scipy.optimize import minimize
 

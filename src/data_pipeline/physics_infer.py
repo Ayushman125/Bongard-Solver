@@ -5,7 +5,7 @@ Geometry + physics feature extractor for Bongard-LOGO shapes.
 All methods are safe: they never bubble exceptions.
 """
 import time
-from shapely.geometry import Polygon, MultiPolygon, LineString
+from shapely.geometry import Polygon, MultiPolygon, LineString, Point
 import functools
 import logging
 import math
@@ -85,7 +85,7 @@ class PhysicsInference:
     @staticmethod
     def safe_extract_vertices(obj):
         """
-        From list, Polygon, or MultiPolygon → python list of (x,y).
+        From list, Polygon, or MultiPolygon  python list of (x,y).
         Handles various input types gracefully.
         """
         if isinstance(obj, np.ndarray) and obj.ndim == 2 and obj.shape[1] == 2:
@@ -94,12 +94,18 @@ class PhysicsInference:
             # Ensure it's a list of tuples/lists that look like (x,y)
             if all(isinstance(p, (list, tuple)) and len(p) == 2 for p in obj):
                 return obj
-        if hasattr(obj, "exterior") and obj.exterior: # Check if exterior exists and is not empty
-            return list(obj.exterior.coords)
-        if hasattr(obj, "geoms") and obj.geoms: # Check if geoms exists and is not empty
-            largest = max(obj.geoms, key=lambda p: p.area)
-            if largest.exterior:
-                return list(largest.exterior.coords)
+        if hasattr(obj, "exterior") and getattr(obj, "exterior", None) is not None:
+            coords = list(obj.exterior.coords)
+            if len(coords) > 0:
+                return coords
+        if hasattr(obj, "geoms") and getattr(obj, "geoms", None) is not None:
+            geoms = list(obj.geoms)
+            if len(geoms) > 0:
+                largest = max(geoms, key=lambda p: p.area)
+                if hasattr(largest, "exterior") and getattr(largest, "exterior", None) is not None:
+                    coords = list(largest.exterior.coords)
+                    if len(coords) > 0:
+                        return coords
         return []
 
     @staticmethod
@@ -383,20 +389,18 @@ class PhysicsInference:
         support_points = []
         for s in all_shapes:
             verts = np.array(s.get('vertices', []))
-            if verts.size > 0:
+            if verts is not None and verts.size > 0:
                 # Find points closest to the "down" direction
                 # For gravity_direction (0,1), this is points with max y
                 # For gravity_direction (0,-1), this is points with min y
                 # More generally, project onto the normalized gravity vector
-                
-                # Assume gravity is (0,1) for simplicity (downwards in image coords typically)
-                # So we look for minimum y values
-                if len(verts) > 0:
+                if verts.shape[0] > 0:
                     min_y_val = np.min(verts[:, 1])
                     bottom_points = verts[verts[:, 1] <= min_y_val + support_threshold]
-                    support_points.extend(bottom_points.tolist())
+                    if bottom_points.shape[0] > 0:
+                        support_points.extend(bottom_points.tolist())
         
-        if not support_points or len(support_points) < 3:
+        if not support_points or (isinstance(support_points, list) and len(support_points) < 3):
             # Cannot form a base if less than 3 support points
             return False, 0.1 # Unstable, low confidence
 

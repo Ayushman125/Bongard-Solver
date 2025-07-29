@@ -1,3 +1,25 @@
+from sklearn.metrics import cohen_kappa_score
+import statsmodels.stats.inter_rater as irr
+try:
+    from crowd_lab import CrowdlabAggregator
+    CROWD_LAB_AVAILABLE = True
+except ImportError:
+    CROWD_LAB_AVAILABLE = False
+
+def crodlab_consensus(detector_outputs):
+    if not CROWD_LAB_AVAILABLE:
+        raise ImportError('crowd-lab not installed')
+    matrix = list(zip(*detector_outputs))
+    agg = CrowdlabAggregator(matrix)
+    return agg.get_consensus_labels()
+
+def compute_kappa(detector_outputs):
+    kappas = []
+    for i in range(len(detector_outputs)):
+        for j in range(i+1, len(detector_outputs)):
+            kappas.append(cohen_kappa_score(detector_outputs[i], detector_outputs[j]))
+    fleiss = irr.fleiss_kappa(detector_outputs)
+    return sum(kappas)/len(kappas) if kappas else 0.0, fleiss
 import numpy as np
 
 def dawid_skene(annotations, max_iter=10):

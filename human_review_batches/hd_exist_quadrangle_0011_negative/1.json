@@ -1,0 +1,229 @@
+{
+  "problem_id": "hd_exist_quadrangle_0011",
+  "generated_labels": [
+    "irregular_quadrangle"
+  ],
+  "num_objects": 1,
+  "confidence_tier": "Tier 4: Low-Confidence/Ambiguous (Flagged Issues)",
+  "flagging_reasons": [
+    "Object obj_0 has detector disagreement: Multiple strong candidate labels found: ['hough_line', 'irregular_quadrangle', 'polygon_vertices_5', 'convex_polygon', 'has_holes_imgproc']"
+  ],
+  "validation_issues": [
+    {
+      "severity": "CRITICAL",
+      "rule_name": "QuadrangleMismatch",
+      "message": "Expected quadrilateral or rectangle labels for 'hd_exist_quadrangle_0011' problem, but none found with sufficient confidence and 4 vertices.",
+      "expected_keywords": [
+        "quadrilateral",
+        "rectangle",
+        "quadrangle"
+      ]
+    },
+    {
+      "severity": "WARNING",
+      "rule_name": "DetectorDisagreement",
+      "message": "Object obj_0 label 'irregular_quadrangle' shows disagreement among individual detectors: Multiple strong candidate labels found: ['hough_line', 'irregular_quadrangle', 'polygon_vertices_5', 'convex_polygon', 'has_holes_imgproc'].",
+      "object_id": "obj_0",
+      "found_label": "irregular_quadrangle"
+    }
+  ],
+  "action_program": [
+    "line_circle_0.500-0.500",
+    "arc_zigzag_0.500_0.625-0.750",
+    "line_normal_0.500-0.750",
+    "line_normal_0.500-0.333",
+    "arc_circle_0.500_0.625-0.750",
+    "line_zigzag_0.500-0.750"
+  ],
+  "object_properties": [
+    {
+      "is_closed_geometric": true,
+      "area_geometric": 260.625,
+      "perimeter_geometric": 125.68405543576296,
+      "centroid_geometric": [
+        54.166666666666664,
+        61.1
+      ],
+      "num_points_in_stroke": 6,
+      "hough_line_detection": {
+        "start": [
+          51.0,
+          32.300000000000004
+        ],
+        "end": [
+          63.0,
+          75.30000000000001
+        ],
+        "length": 44.643028571099435,
+        "orientation": 74.40718906073366
+      },
+      "convexity_defects_analysis": {
+        "num_convexity_defects": 0
+      },
+      "num_detected_vertices": 5,
+      "detected_vertices_coords": [
+        [
+          50.0,
+          50.0
+        ],
+        [
+          62.5,
+          75.0
+        ],
+        [
+          50.0,
+          75.0
+        ],
+        [
+          62.5,
+          75.0
+        ],
+        [
+          50.0,
+          75.0
+        ]
+      ],
+      "fourier_descriptors": [],
+      "geometric_symmetry_score": Infinity,
+      "geometric_symmetry_type": "none",
+      "geometric_orientation_deg": 79.27079919510463,
+      "image_features": {
+        "robust_mask_area": 334,
+        "robust_skeleton_area": 70,
+        "robust_fill_ratio": 0.20958083769586575,
+        "image_area_pixels": 334,
+        "image_density": 0.020385742186255752,
+        "n_contours": 2,
+        "contour_lengths": [
+          104.97056245803833,
+          37.31370830535889
+        ],
+        "contour_areas": [
+          347.0,
+          80.0
+        ],
+        "simplified_contours": [
+          [
+            [
+              9.0,
+              10.0
+            ],
+            [
+              9.0,
+              52.0
+            ],
+            [
+              22.0,
+              53.0
+            ],
+            [
+              22.0,
+              47.0
+            ],
+            [
+              11.0,
+              10.0
+            ]
+          ],
+          [
+            [
+              12.0,
+              38.0
+            ],
+            [
+              14.0,
+              38.0
+            ],
+            [
+              15.0,
+              39.0
+            ],
+            [
+              15.0,
+              40.0
+            ],
+            [
+              19.0,
+              47.0
+            ],
+            [
+              19.0,
+              50.0
+            ],
+            [
+              18.0,
+              51.0
+            ],
+            [
+              12.0,
+              51.0
+            ],
+            [
+              11.0,
+              50.0
+            ],
+            [
+              11.0,
+              39.0
+            ]
+          ]
+        ],
+        "simplified_n_vertices": [
+          5,
+          10
+        ],
+        "n_holes": 1,
+        "skeleton_sum_pixels": 71,
+        "max_medial_axis_distance": 5.0,
+        "morph_closed_area": 334,
+        "morph_opened_area": 334,
+        "bbox_area": 616,
+        "eccentricity": 0.9616166226427504,
+        "major_axis_length": 47.80376903309701,
+        "minor_axis_length": 13.117189683406947,
+        "orientation_rad": 0.1571061153796836,
+        "perimeter": 142.2842712474619,
+        "solidity": 0.8067632850241546,
+        "extent": 0.5422077922077922,
+        "form_factor": 0.20732064109076606,
+        "hu_moments": [
+          2.743714562847843,
+          5.467933691139613,
+          5.999788261446877,
+          5.999963194095707,
+          5.999999999999993,
+          5.999999943210477,
+          -6.0
+        ],
+        "canny_edge_pixels": 131,
+        "canny_edge_density": 0.007995605468261988,
+        "otsu_threshold_value": 0.0
+      },
+      "betti_numbers": [
+        1,
+        0
+      ],
+      "semantic_connected_segments": 5,
+      "is_quadrilateral_like_semantic": false,
+      "is_smooth_curve_semantic": false,
+      "is_composite_shape_semantic": false,
+      "is_convex_physics": true,
+      "physics_symmetry_score": 5.555555555555557,
+      "physics_symmetry_type": "none",
+      "num_arcs_physics": 4,
+      "num_straight_segments_physics": 0,
+      "is_occluded_physics": false,
+      "is_touching_ground_physics": false,
+      "is_floating_physics": false,
+      "is_stable_physics": false,
+      "num_contact_points_physics": 0,
+      "detector_consensus": {
+        "agreement": false,
+        "disagreement_reason": "Multiple strong candidate labels found: ['hough_line', 'irregular_quadrangle', 'polygon_vertices_5', 'convex_polygon', 'has_holes_imgproc']"
+      },
+      "robust_symmetry_score": null,
+      "robust_symmetry_axis_deg": null,
+      "boundary_autocorr_symmetry": null
+    }
+  ]
+}

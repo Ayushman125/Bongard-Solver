@@ -1,0 +1,183 @@
+{
+  "problem_id": "ff_nact5_0141",
+  "generated_labels": [
+    "degenerate_hull_polygon"
+  ],
+  "num_objects": 1,
+  "confidence_tier": "Tier 4: Low-Confidence/Ambiguous (Flagged Issues)",
+  "flagging_reasons": [
+    "Object obj_0 has detector disagreement: Final label 'degenerate_hull_polygon' not strongly supported by high-confidence detectors. Strong candidates: ['hough_line', 'physics_has_2_straight_segments']"
+  ],
+  "validation_issues": [
+    {
+      "severity": "WARNING",
+      "rule_name": "DetectorDisagreement",
+      "message": "Object obj_0 label 'degenerate_hull_polygon' shows disagreement among individual detectors: Final label 'degenerate_hull_polygon' not strongly supported by high-confidence detectors. Strong candidates: ['hough_line', 'physics_has_2_straight_segments'].",
+      "object_id": "obj_0",
+      "found_label": "degenerate_hull_polygon"
+    },
+    {
+      "severity": "CRITICAL",
+      "rule_name": "AllObjectsDegenerateOrUnknown",
+      "message": "Image contains 1 objects, but all are labeled as 'unknown' or 'degenerate' (or have very low confidence). This suggests a processing failure."
+    },
+    {
+      "severity": "WARNING",
+      "rule_name": "OverallLowConfidence",
+      "message": "The average confidence of all derived labels for this image is very low (0.20)."
+    }
+  ],
+  "action_program": [
+    "line_square_1.000-0.500",
+    "line_triangle_1.000-0.500",
+    "arc_zigzag_0.500_0.625-0.500",
+    "arc_normal_0.500_0.625-0.333",
+    "arc_circle_0.500_0.625-0.500"
+  ],
+  "object_properties": [
+    {
+      "is_closed_geometric": false,
+      "area_geometric": 0.0,
+      "perimeter_geometric": 54.199999999999996,
+      "centroid_geometric": [
+        75.47278597785979,
+        47.42721402214022
+      ],
+      "num_points_in_stroke": 4,
+      "hough_line_detection": {
+        "start": [
+          61.5,
+          50.300000000000004
+        ],
+        "end": [
+          100.5,
+          50.300000000000004
+        ],
+        "length": 39.0,
+        "orientation": 0.0
+      },
+      "min_bounding_circle": {
+        "center": [
+          81.25,
+          41.650001525878906
+        ],
+        "radius": 20.525327682495117,
+        "area": 1323.5186676877197,
+        "avg_dist_from_circumference": 9.953652348837494e-05,
+        "area_fill_ratio": 0.0
+      },
+      "num_detected_vertices": 2,
+      "detected_vertices_coords": [
+        [
+          100.0,
+          50.0
+        ],
+        [
+          62.5,
+          50.0
+        ]
+      ],
+      "fourier_descriptors": [],
+      "geometric_symmetry_score": Infinity,
+      "geometric_symmetry_type": "none",
+      "geometric_orientation_deg": -169.83934199522332,
+      "image_features": {
+        "robust_mask_area": 167,
+        "robust_skeleton_area": 54,
+        "robust_fill_ratio": 0.32335329147692643,
+        "image_area_pixels": 167,
+        "image_density": 0.010192871093127876,
+        "n_contours": 1,
+        "contour_lengths": [
+          112.82842707633972
+        ],
+        "contour_areas": [
+          110.0
+        ],
+        "simplified_contours": [
+          [
+            [
+              9.0,
+              10.0
+            ],
+            [
+              10.0,
+              28.0
+            ],
+            [
+              48.0,
+              28.0
+            ],
+            [
+              48.0,
+              26.0
+            ],
+            [
+              12.0,
+              26.0
+            ],
+            [
+              11.0,
+              10.0
+            ]
+          ]
+        ],
+        "simplified_n_vertices": [
+          6
+        ],
+        "n_holes": 0,
+        "skeleton_sum_pixels": 57,
+        "max_medial_axis_distance": 2.0,
+        "morph_closed_area": 167,
+        "morph_opened_area": 167,
+        "bbox_area": 760,
+        "eccentricity": 0.9524871304466294,
+        "major_axis_length": 52.746819203213406,
+        "minor_axis_length": 16.065564708545175,
+        "orientation_rad": 1.33097119983622,
+        "perimeter": 112.82842712474618,
+        "solidity": 0.367032967032967,
+        "extent": 0.21973684210526315,
+        "form_factor": 0.16485011986406287,
+        "hu_moments": [
+          2.3503586909290073,
+          4.831985758756199,
+          5.985758384196997,
+          5.996926844298444,
+          5.999999999974361,
+          5.999994904232135,
+          5.999999999960072
+        ],
+        "canny_edge_pixels": 112,
+        "canny_edge_density": 0.006835937499582768,
+        "otsu_threshold_value": 0.0
+      },
+      "betti_numbers": [
+        1,
+        0
+      ],
+      "semantic_connected_segments": 3,
+      "is_quadrilateral_like_semantic": false,
+      "is_smooth_curve_semantic": false,
+      "is_composite_shape_semantic": false,
+      "is_convex_physics": false,
+      "physics_symmetry_score": 8.349999999999996,
+      "physics_symmetry_type": "none",
+      "num_arcs_physics": 2,
+      "num_straight_segments_physics": 2,
+      "num_convexity_defects": 0,
+      "is_occluded_physics": false,
+      "is_touching_ground_physics": false,
+      "is_floating_physics": false,
+      "is_stable_physics": false,
+      "num_contact_points_physics": 0,
+      "detector_consensus": {
+        "agreement": false,
+        "disagreement_reason": "Final label 'degenerate_hull_polygon' not strongly supported by high-confidence detectors. Strong candidates: ['hough_line', 'physics_has_2_straight_segments']"
+      },
+      "robust_symmetry_score": null,
+      "robust_symmetry_axis_deg": null,
+      "boundary_autocorr_symmetry": null
+    }
+  ]
+}

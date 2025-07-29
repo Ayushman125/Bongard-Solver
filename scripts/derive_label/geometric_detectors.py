@@ -1,3 +1,36 @@
+from sklearn.ensemble import RandomForestClassifier
+import torch
+import torch.nn as nn
+
+class StackingEnsemble:
+    def __init__(self, base_detectors):
+        self.detectors = base_detectors
+        self.meta = RandomForestClassifier(n_estimators=50)
+        self._fitted = False
+
+    def fit(self, images, true_labels):
+        X = []
+        for img in images:
+            feats = np.hstack([det(img)[1] for det in self.detectors])
+            X.append(feats)
+        self.meta.fit(np.vstack(X), true_labels)
+        self._fitted = True
+
+    def predict(self, image):
+        feats = np.hstack([det(image)[1] for det in self.detectors]).reshape(1,-1)
+        return self.meta.predict(feats)[0]
+
+class DetectorAttention(nn.Module):
+    def __init__(self, embed_dim, num_heads=4):
+        super().__init__()
+        self.linear = nn.Linear(embed_dim, embed_dim)
+        self.attn = nn.MultiheadAttention(embed_dim, num_heads)
+
+    def forward(self, embeddings):
+        Q = K = V = self.linear(embeddings).unsqueeze(1)
+        attn_out, _ = self.attn(Q, K, V)
+        return attn_out.squeeze(1).mean(dim=0)
+
 import numpy as np
 from collections import Counter
 
@@ -31,9 +64,7 @@ class WeightedVotingEnsemble:
 
 def detect_shapes(flat_commands, config, return_logits=False, context_feat=None):
     # Simulate detectors: each returns (label, score, logits)
-    # In real use, replace with actual detector logic
     def dummy_detector(image, context_feat=None, return_logits=False):
-        # For demo, random label and logits
         labels = ['circle', 'square', 'triangle', 'polygon']
         logits = np.random.randn(len(labels))
         label = labels[np.argmax(logits)]
@@ -44,6 +75,22 @@ def detect_shapes(flat_commands, config, return_logits=False, context_feat=None)
             return label
     base_detectors = config.get('base_detectors', [dummy_detector, dummy_detector, dummy_detector])
     weights = config.get('ensemble_weights', [1.0]*len(base_detectors))
+    # Stacking meta-learner
+    if 'calib_images' in config and 'calib_labels' in config:
+        stacker = StackingEnsemble(base_detectors)
+        if not getattr(stacker, '_fitted', False):
+            stacker.fit(config['calib_images'], config['calib_labels'])
+        return stacker.predict(flat_commands)
+    # Attention-based fusion
+    if context_feat is not None:
+        embeds = []
+        for det in base_detectors:
+            _, score, logits = det(flat_commands, context_feat=context_feat, return_logits=True)
+            embeds.append(torch.tensor(logits, dtype=torch.float))
+        embeds = torch.stack(embeds)
+        fused = DetectorAttention(embed_dim=embeds.size(-1))(embeds)
+        return fused.argmax().item()
+    # Default: weighted voting
     ensemble = WeightedVotingEnsemble(base_detectors, weights)
     return ensemble.predict(flat_commands, context_feat=context_feat, return_logits=return_logits)
 from collections import Counter

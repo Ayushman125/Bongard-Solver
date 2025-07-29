@@ -1,0 +1,104 @@
+{
+  "problem_id": "hd_exist_quadrangle_0011",
+  "generated_labels": [
+    "elongated_jagged_shape_imgproc"
+  ],
+  "num_objects": 1,
+  "confidence_tier": "Tier 4: Low-Confidence/Ambiguous (Flagged Issues)",
+  "flagging_reasons": [
+    "Object obj_0 has detector disagreement: Multiple strong candidate labels found: ['polygon_vertices_2', 'hough_line', 'elongated_jagged_shape_imgproc', 'geometric_symmetric_rotational_180']"
+  ],
+  "validation_issues": [
+    {
+      "severity": "CRITICAL",
+      "rule_name": "QuadrangleMismatch",
+      "message": "Expected quadrilateral or rectangle labels for 'hd_exist_quadrangle_0011' problem, but none found with sufficient confidence and 4 vertices.",
+      "expected_keywords": [
+        "quadrilateral",
+        "rectangle",
+        "quadrangle"
+      ]
+    },
+    {
+      "severity": "WARNING",
+      "rule_name": "DetectorDisagreement",
+      "message": "Object obj_0 label 'elongated_jagged_shape_imgproc' shows disagreement among individual detectors: Multiple strong candidate labels found: ['polygon_vertices_2', 'hough_line', 'elongated_jagged_shape_imgproc', 'geometric_symmetric_rotational_180'].",
+      "object_id": "obj_0",
+      "found_label": "elongated_jagged_shape_imgproc"
+    }
+  ],
+  "action_program": [
+    "arc_zigzag_0.500_0.875-0.500",
+    "arc_zigzag_0.500_0.375-0.250"
+  ],
+  "object_properties": [
+    {
+      "is_closed_geometric": false,
+      "area_geometric": 0.0,
+      "perimeter_geometric": 0.0,
+      "centroid_geometric": [
+        62.5,
+        37.5
+      ],
+      "num_points_in_stroke": 2,
+      "hough_line_detection": {
+        "start": [
+          36.5,
+          26.0
+        ],
+        "end": [
+          88.5,
+          51.0
+        ],
+        "length": 57.697486947006624,
+        "orientation": 25.67681568183822
+      },
+      "num_detected_vertices": 2,
+      "detected_vertices_coords": [
+        [
+          87.5,
+          50.0
+        ],
+        [
+          37.5,
+          25.0
+        ]
+      ],
+      "fourier_descriptors": [],
+      "geometric_symmetry_score": 0.0,
+      "geometric_symmetry_type": "rotational_180",
+      "geometric_orientation_deg": -153.434948822922,
+      "image_features": {
+        "robust_mask_area": 0,
+        "robust_skeleton_area": 0,
+        "robust_fill_ratio": 0.0,
+        "rasterization_empty": true
+      },
+      "betti_numbers": [
+        1,
+        0
+      ],
+      "semantic_connected_segments": 1,
+      "is_quadrilateral_like_semantic": false,
+      "is_smooth_curve_semantic": false,
+      "is_composite_shape_semantic": false,
+      "is_convex_physics": false,
+      "physics_symmetry_score": 0.0,
+      "physics_symmetry_type": "none",
+      "num_arcs_physics": 0,
+      "num_straight_segments_physics": 0,
+      "is_occluded_physics": false,
+      "is_touching_ground_physics": false,
+      "is_floating_physics": false,
+      "is_stable_physics": false,
+      "num_contact_points_physics": 0,
+      "detector_consensus": {
+        "agreement": false,
+        "disagreement_reason": "Multiple strong candidate labels found: ['polygon_vertices_2', 'hough_line', 'elongated_jagged_shape_imgproc', 'geometric_symmetric_rotational_180']"
+      },
+      "robust_symmetry_score": null,
+      "robust_symmetry_axis_deg": null,
+      "boundary_autocorr_symmetry": null
+    }
+  ]
+}

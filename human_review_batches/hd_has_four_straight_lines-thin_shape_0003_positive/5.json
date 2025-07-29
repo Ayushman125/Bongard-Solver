@@ -1,0 +1,201 @@
+{
+  "problem_id": "hd_has_four_straight_lines-thin_shape_0003",
+  "generated_labels": [
+    "physically_convex"
+  ],
+  "num_objects": 1,
+  "confidence_tier": "Tier 4: Low-Confidence/Ambiguous (Flagged Issues)",
+  "flagging_reasons": [
+    "Object obj_0 has detector disagreement: Multiple strong candidate labels found: ['polygon_vertices_3', 'hough_line', 'convex_polygon', 'physically_convex']"
+  ],
+  "validation_issues": [
+    {
+      "severity": "WARNING",
+      "rule_name": "DetectorDisagreement",
+      "message": "Object obj_0 label 'physically_convex' shows disagreement among individual detectors: Multiple strong candidate labels found: ['polygon_vertices_3', 'hough_line', 'convex_polygon', 'physically_convex'].",
+      "object_id": "obj_0",
+      "found_label": "physically_convex"
+    }
+  ],
+  "action_program": [
+    "line_normal_1.000-0.500",
+    "line_normal_0.387-0.917",
+    "line_normal_0.553-0.583",
+    "line_normal_0.223-0.667"
+  ],
+  "object_properties": [
+    {
+      "is_closed_geometric": true,
+      "area_geometric": 647.9055238226719,
+      "perimeter_geometric": 156.26701378826914,
+      "centroid_geometric": [
+        64.42417930709188,
+        67.15456292026897
+      ],
+      "num_points_in_stroke": 4,
+      "hough_line_detection": {
+        "start": [
+          38.3,
+          92.0
+        ],
+        "end": [
+          100.3,
+          52.0
+        ],
+        "length": 73.78346698278686,
+        "orientation": -32.82854179141253
+      },
+      "convexity_defects_analysis": {
+        "num_convexity_defects": 0
+      },
+      "num_detected_vertices": 3,
+      "detected_vertices_coords": [
+        [
+          100.0,
+          50.0
+        ],
+        [
+          55.300000000000004,
+          58.3
+        ],
+        [
+          22.3,
+          66.7
+        ]
+      ],
+      "fourier_descriptors": [],
+      "geometric_symmetry_score": Infinity,
+      "geometric_symmetry_type": "none",
+      "geometric_orientation_deg": 157.8590368224973,
+      "image_features": {
+        "robust_mask_area": 341,
+        "robust_skeleton_area": 93,
+        "robust_fill_ratio": 0.272727271927486,
+        "image_area_pixels": 341,
+        "image_density": 0.020812988279979676,
+        "n_contours": 2,
+        "contour_lengths": [
+          71.79898953437805,
+          163.82337474822998
+        ],
+        "contour_areas": [
+          62.0,
+          177.0
+        ],
+        "simplified_contours": [
+          [
+            [
+              43.0,
+              18.0
+            ],
+            [
+              38.0,
+              18.0
+            ],
+            [
+              19.0,
+              24.0
+            ],
+            [
+              12.0,
+              25.0
+            ],
+            [
+              12.0,
+              27.0
+            ],
+            [
+              19.0,
+              26.0
+            ],
+            [
+              38.0,
+              20.0
+            ],
+            [
+              43.0,
+              20.0
+            ]
+          ],
+          [
+            [
+              88.0,
+              10.0
+            ],
+            [
+              41.0,
+              42.0
+            ],
+            [
+              28.0,
+              47.0
+            ],
+            [
+              27.0,
+              52.0
+            ],
+            [
+              88.0,
+              12.0
+            ]
+          ]
+        ],
+        "simplified_n_vertices": [
+          8,
+          5
+        ],
+        "n_holes": 0,
+        "skeleton_sum_pixels": 99,
+        "max_medial_axis_distance": 2.8284271247461903,
+        "morph_closed_area": 341,
+        "morph_opened_area": 341,
+        "bbox_area": 2666,
+        "eccentricity": 0.998922306182806,
+        "major_axis_length": 87.50558391330773,
+        "minor_axis_length": 4.061452888795126,
+        "orientation_rad": -0.9742597631176617,
+        "perimeter": 161.3380951166243,
+        "solidity": 0.6749311294765841,
+        "extent": 0.0918979744936234,
+        "form_factor": 0.11827748963727368,
+        "hu_moments": [
+          2.1911949697240356,
+          4.7037363580574985,
+          5.949006901797489,
+          5.994247536961099,
+          5.999999999857934,
+          5.9999836585536075,
+          5.9999999998115285
+        ],
+        "canny_edge_pixels": 228,
+        "canny_edge_density": 0.013916015624150634,
+        "otsu_threshold_value": 0.0
+      },
+      "betti_numbers": [
+        1,
+        0
+      ],
+      "semantic_connected_segments": 3,
+      "is_quadrilateral_like_semantic": false,
+      "is_smooth_curve_semantic": false,
+      "is_composite_shape_semantic": false,
+      "is_convex_physics": true,
+      "physics_symmetry_score": 18.415331764349848,
+      "physics_symmetry_type": "none",
+      "num_arcs_physics": 1,
+      "num_straight_segments_physics": 1,
+      "is_occluded_physics": false,
+      "is_touching_ground_physics": false,
+      "is_floating_physics": false,
+      "is_stable_physics": false,
+      "num_contact_points_physics": 0,
+      "detector_consensus": {
+        "agreement": false,
+        "disagreement_reason": "Multiple strong candidate labels found: ['polygon_vertices_3', 'hough_line', 'convex_polygon', 'physically_convex']"
+      },
+      "robust_symmetry_score": null,
+      "robust_symmetry_axis_deg": null,
+      "boundary_autocorr_symmetry": null
+    }
+  ]
+}

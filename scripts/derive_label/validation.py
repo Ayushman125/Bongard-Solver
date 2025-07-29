@@ -1,3 +1,37 @@
+def dynamic_threshold(epoch, base=0.9, min_t=0.6, decay=0.01):
+    return max(base - decay * epoch, min_t)
+
+def validate_batch(preds, confs, epoch, config):
+    thr = dynamic_threshold(epoch, config.get('base_thr',0.9), config.get('min_thr',0.6), config.get('decay',0.01))
+    results = []
+    for p, c in zip(preds, confs):
+        if c >= thr:
+            results.append({'label': p, 'confidence': c, 'review': False})
+        else:
+            results.append({'label': p, 'confidence': c, 'review': True})
+    return results
+
+def self_training(model, unlabeled_loader, thresh=0.95):
+    pseudo_images, pseudo_labels = [], []
+    for imgs in unlabeled_loader:
+        probs = model.predict_proba(imgs).max(axis=1)
+        lbls = model.predict(imgs)
+        mask = probs >= thresh
+        pseudo_images.extend(imgs[mask])
+        pseudo_labels.extend(lbls[mask])
+    if pseudo_images:
+        model.fit(pseudo_images, pseudo_labels)
+
+def co_training(modelA, modelB, unlabeled_loader, k=100):
+    for imgs in unlabeled_loader:
+        pA, lA = modelA.predict_proba(imgs).max(axis=1), modelA.predict(imgs)
+        pB, lB = modelB.predict_proba(imgs).max(axis=1), modelB.predict(imgs)
+        selA = imgs[pA>pB][:k]
+        selB = imgs[pB>pA][:k]
+        if len(selB):
+            modelA.fit(selB, modelB.predict(selB))
+        if len(selA):
+            modelB.fit(selA, modelA.predict(selA))
 def select_uncertain_samples(uncertainties, budget):
     # uncertainties: dict {image_id: uncertainty_score}
     sorted_ids = sorted(uncertainties, key=lambda x: uncertainties[x], reverse=True)

@@ -1,0 +1,249 @@
+{
+  "problem_id": "hd_has_curve-has_two_parts_0006",
+  "generated_labels": [
+    "physically_convex"
+  ],
+  "num_objects": 1,
+  "confidence_tier": "Tier 4: Low-Confidence/Ambiguous (Flagged Issues)",
+  "flagging_reasons": [
+    "Object obj_0 has detector disagreement: Multiple strong candidate labels found: ['self_intersecting_decomposed_polygon', 'polygon_vertices_6', 'physically_convex']"
+  ],
+  "validation_issues": [
+    {
+      "severity": "WARNING",
+      "rule_name": "DetectorDisagreement",
+      "message": "Object obj_0 label 'physically_convex' shows disagreement among individual detectors: Multiple strong candidate labels found: ['self_intersecting_decomposed_polygon', 'polygon_vertices_6', 'physically_convex'].",
+      "object_id": "obj_0",
+      "found_label": "physically_convex"
+    }
+  ],
+  "action_program": [
+    "line_normal_0.200-0.500",
+    "line_normal_0.361-0.344",
+    "arc_normal_0.500_0.625-0.804",
+    "line_normal_0.500-0.750",
+    "line_normal_0.226-0.417",
+    "line_normal_0.204-0.906",
+    "line_normal_0.204-0.437",
+    "line_normal_0.288-0.938"
+  ],
+  "object_properties": [
+    {
+      "is_closed_geometric": true,
+      "area_geometric": 509.63443019189054,
+      "perimeter_geometric": 120.724941418481,
+      "centroid_geometric": [
+        42.383956777716705,
+        56.45694954219846
+      ],
+      "num_points_in_stroke": 8,
+      "ellipse_fit": {
+        "center": [
+          37.18675770901261,
+          66.03583951824476
+        ],
+        "axes": [
+          29.840126756912074,
+          23.65217773114197
+        ],
+        "angle": 1.5827179860295761
+      },
+      "hough_line_detection": {
+        "start": [
+          34.0,
+          33.4
+        ],
+        "end": [
+          61.0,
+          81.4
+        ],
+        "length": 55.07267925205746,
+        "orientation": 60.642246457208735
+      },
+      "convexity_defects_analysis": {
+        "is_self_intersecting": true,
+        "num_simple_components": 2
+      },
+      "num_detected_vertices": 6,
+      "detected_vertices_coords": [
+        [
+          20.0,
+          50.0
+        ],
+        [
+          36.1,
+          34.4
+        ],
+        [
+          62.5,
+          80.4
+        ],
+        [
+          50.0,
+          75.0
+        ],
+        [
+          22.6,
+          41.699999999999996
+        ],
+        [
+          28.799999999999997,
+          93.8
+        ]
+      ],
+      "fourier_descriptors": [],
+      "geometric_symmetry_score": Infinity,
+      "geometric_symmetry_type": "none",
+      "geometric_orientation_deg": 72.11741035051232,
+      "image_features": {
+        "robust_mask_area": 539,
+        "robust_skeleton_area": 113,
+        "robust_fill_ratio": 0.2096474949728247,
+        "image_area_pixels": 539,
+        "image_density": 0.032897949216742065,
+        "n_contours": 2,
+        "contour_lengths": [
+          16.242640614509583,
+          253.33809304237366
+        ],
+        "contour_areas": [
+          15.5,
+          401.0
+        ],
+        "simplified_contours": [
+          [
+            [
+              47.0,
+              53.0
+            ],
+            [
+              47.0,
+              55.0
+            ],
+            [
+              48.0,
+              55.0
+            ],
+            [
+              49.0,
+              56.0
+            ],
+            [
+              52.0,
+              56.0
+            ],
+            [
+              52.0,
+              54.0
+            ],
+            [
+              51.0,
+              53.0
+            ],
+            [
+              51.0,
+              52.0
+            ],
+            [
+              49.0,
+              52.0
+            ],
+            [
+              48.0,
+              53.0
+            ]
+          ],
+          [
+            [
+              27.0,
+              10.0
+            ],
+            [
+              9.0,
+              20.0
+            ],
+            [
+              9.0,
+              67.0
+            ],
+            [
+              15.0,
+              56.0
+            ],
+            [
+              18.0,
+              70.0
+            ],
+            [
+              15.0,
+              25.0
+            ],
+            [
+              41.0,
+              52.0
+            ],
+            [
+              18.0,
+              22.0
+            ]
+          ]
+        ],
+        "simplified_n_vertices": [
+          10,
+          8
+        ],
+        "n_holes": 0,
+        "skeleton_sum_pixels": 128,
+        "max_medial_axis_distance": 4.47213595499958,
+        "morph_closed_area": 539,
+        "morph_opened_area": 539,
+        "bbox_area": 2013,
+        "eccentricity": 0.8556274413167215,
+        "major_axis_length": 61.3516632300974,
+        "minor_axis_length": 31.75514211763618,
+        "orientation_rad": -0.05008096278734813,
+        "perimeter": 249.1959594928933,
+        "solidity": 0.3591352859135286,
+        "extent": 0.25583705911574767,
+        "form_factor": 0.10421616804489127,
+        "hu_moments": [
+          2.607563593475573,
+          5.720992181068455,
+          5.99814075869388,
+          5.999554562863862,
+          5.999999999999065,
+          -5.999999703830337,
+          5.999999999999994
+        ],
+        "canny_edge_pixels": 264,
+        "canny_edge_density": 0.016113281249016523,
+        "otsu_threshold_value": 0.0
+      },
+      "betti_numbers": [
+        1,
+        0
+      ],
+      "semantic_connected_segments": 6,
+      "is_quadrilateral_like_semantic": false,
+      "is_smooth_curve_semantic": false,
+      "is_composite_shape_semantic": false,
+      "is_convex_physics": true,
+      "physics_symmetry_score": 7.771284263747961,
+      "physics_symmetry_type": "none",
+      "num_arcs_physics": 5,
+      "num_straight_segments_physics": 2,
+      "is_occluded_physics": false,
+      "is_touching_ground_physics": false,
+      "is_floating_physics": false,
+      "is_stable_physics": false,
+      "num_contact_points_physics": 0,
+      "detector_consensus": {
+        "agreement": false,
+        "disagreement_reason": "Multiple strong candidate labels found: ['self_intersecting_decomposed_polygon', 'polygon_vertices_6', 'physically_convex']"
+      },
+      "robust_symmetry_score": null,
+      "robust_symmetry_axis_deg": null,
+      "boundary_autocorr_symmetry": null
+    }
+  ]
+}

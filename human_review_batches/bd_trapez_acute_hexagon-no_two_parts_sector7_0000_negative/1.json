@@ -1,0 +1,658 @@
+{
+  "problem_id": "bd_trapez_acute_hexagon-no_two_parts_sector7_0000",
+  "generated_labels": [
+    "physically_convex"
+  ],
+  "num_objects": 1,
+  "confidence_tier": "Tier 4: Low-Confidence/Ambiguous (Flagged Issues)",
+  "flagging_reasons": [
+    "Object obj_0 has detector disagreement: Multiple strong candidate labels found: ['self_intersecting_decomposed_polygon', 'physically_convex', 'polygon_vertices_10', 'has_holes_imgproc']"
+  ],
+  "validation_issues": [
+    {
+      "severity": "WARNING",
+      "rule_name": "DetectorDisagreement",
+      "message": "Object obj_0 label 'physically_convex' shows disagreement among individual detectors: Multiple strong candidate labels found: ['self_intersecting_decomposed_polygon', 'physically_convex', 'polygon_vertices_10', 'has_holes_imgproc'].",
+      "object_id": "obj_0",
+      "found_label": "physically_convex"
+    }
+  ],
+  "action_program": [
+    "line_normal_1.000-0.500",
+    "line_normal_0.632-0.801",
+    "line_normal_0.283-0.824",
+    "line_normal_0.200-0.375",
+    "line_normal_0.283-0.375",
+    "line_normal_0.632-0.824",
+    "line_circle_0.500-0.500",
+    "arc_circle_0.500_0.667-0.750",
+    "line_circle_0.500-0.750",
+    "line_normal_0.400-0.083",
+    "line_triangle_0.400-0.750",
+    "line_triangle_0.566-0.875",
+    "line_circle_0.566-0.250",
+    "line_normal_0.400-0.875",
+    "line_zigzag_0.400-0.750"
+  ],
+  "object_properties": [
+    {
+      "is_closed_geometric": true,
+      "area_geometric": 619.0975501432663,
+      "perimeter_geometric": 113.82736885218225,
+      "centroid_geometric": [
+        31.265005365243912,
+        60.01547968641275
+      ],
+      "num_points_in_stroke": 15,
+      "ellipse_fit": {
+        "center": [
+          56.45856180829076,
+          48.69791581403419
+        ],
+        "axes": [
+          35.37326986347513,
+          33.38022058407386
+        ],
+        "angle": 2.4836400535457104
+      },
+      "hough_line_detection": {
+        "start": [
+          41.0,
+          7.300000000000001
+        ],
+        "end": [
+          54.0,
+          88.3
+        ],
+        "length": 82.03657720797473,
+        "orientation": 80.88213724620421
+      },
+      "convexity_defects_analysis": {
+        "is_self_intersecting": true,
+        "num_simple_components": 2
+      },
+      "num_detected_vertices": 10,
+      "detected_vertices_coords": [
+        [
+          100.0,
+          50.0
+        ],
+        [
+          63.2,
+          80.10000000000001
+        ],
+        [
+          28.299999999999997,
+          82.39999999999999
+        ],
+        [
+          20.0,
+          37.5
+        ],
+        [
+          28.299999999999997,
+          37.5
+        ],
+        [
+          66.7,
+          75.0
+        ],
+        [
+          50.0,
+          75.0
+        ],
+        [
+          40.0,
+          75.0
+        ],
+        [
+          56.599999999999994,
+          87.5
+        ],
+        [
+          40.0,
+          75.0
+        ]
+      ],
+      "fourier_descriptors": [
+        72.20521607083029,
+        110.92676695853888,
+        178.33685398462086,
+        81.98254149224518,
+        208.35748661820043,
+        143.7160664237929,
+        43.397735185041604,
+        46.87944708066922,
+        50.53216878216226,
+        219.07203785546528
+      ],
+      "geometric_symmetry_score": Infinity,
+      "geometric_symmetry_type": "none",
+      "geometric_orientation_deg": 76.20819099846703,
+      "image_features": {
+        "robust_mask_area": 1505,
+        "robust_skeleton_area": 324,
+        "robust_fill_ratio": 0.2152823918835333,
+        "image_area_pixels": 1505,
+        "image_density": 0.09185791015064344,
+        "n_contours": 9,
+        "contour_lengths": [
+          57.11269783973694,
+          22.485281229019165,
+          302.9533175230026,
+          33.3137081861496,
+          22.485281229019165,
+          20.485281229019165,
+          19.656854152679443,
+          28.485281229019165,
+          105.69848430156708
+        ],
+        "contour_areas": [
+          51.0,
+          17.0,
+          1844.5,
+          54.0,
+          33.0,
+          29.0,
+          26.0,
+          43.0,
+          498.5
+        ],
+        "simplified_contours": [
+          [
+            [
+              81.0,
+              59.0
+            ],
+            [
+              79.0,
+              59.0
+            ],
+            [
+              76.0,
+              63.0
+            ],
+            [
+              74.0,
+              63.0
+            ],
+            [
+              71.0,
+              67.0
+            ],
+            [
+              69.0,
+              67.0
+            ],
+            [
+              66.0,
+              71.0
+            ],
+            [
+              64.0,
+              71.0
+            ],
+            [
+              62.0,
+              73.0
+            ],
+            [
+              62.0,
+              75.0
+            ],
+            [
+              64.0,
+              75.0
+            ],
+            [
+              67.0,
+              71.0
+            ],
+            [
+              69.0,
+              71.0
+            ],
+            [
+              72.0,
+              67.0
+            ],
+            [
+              74.0,
+              67.0
+            ],
+            [
+              77.0,
+              63.0
+            ],
+            [
+              79.0,
+              63.0
+            ],
+            [
+              81.0,
+              61.0
+            ]
+          ],
+          [
+            [
+              90.0,
+              52.0
+            ],
+            [
+              88.0,
+              52.0
+            ],
+            [
+              88.0,
+              53.0
+            ],
+            [
+              87.0,
+              54.0
+            ],
+            [
+              85.0,
+              54.0
+            ],
+            [
+              83.0,
+              56.0
+            ],
+            [
+              83.0,
+              58.0
+            ],
+            [
+              85.0,
+              58.0
+            ],
+            [
+              87.0,
+              56.0
+            ],
+            [
+              87.0,
+              55.0
+            ],
+            [
+              88.0,
+              54.0
+            ],
+            [
+              90.0,
+              54.0
+            ]
+          ],
+          [
+            [
+              29.0,
+              10.0
+            ],
+            [
+              29.0,
+              47.0
+            ],
+            [
+              25.0,
+              48.0
+            ],
+            [
+              19.0,
+              39.0
+            ],
+            [
+              9.0,
+              40.0
+            ],
+            [
+              18.0,
+              85.0
+            ],
+            [
+              28.0,
+              85.0
+            ],
+            [
+              29.0,
+              90.0
+            ],
+            [
+              33.0,
+              84.0
+            ],
+            [
+              48.0,
+              90.0
+            ],
+            [
+              48.0,
+              85.0
+            ],
+            [
+              60.0,
+              76.0
+            ],
+            [
+              48.0,
+              62.0
+            ],
+            [
+              48.0,
+              27.0
+            ],
+            [
+              38.0,
+              48.0
+            ]
+          ],
+          [
+            [
+              35.0,
+              74.0
+            ],
+            [
+              36.0,
+              73.0
+            ],
+            [
+              38.0,
+              73.0
+            ],
+            [
+              39.0,
+              74.0
+            ],
+            [
+              39.0,
+              77.0
+            ],
+            [
+              40.0,
+              78.0
+            ],
+            [
+              44.0,
+              78.0
+            ],
+            [
+              45.0,
+              79.0
+            ],
+            [
+              45.0,
+              81.0
+            ],
+            [
+              44.0,
+              82.0
+            ],
+            [
+              38.0,
+              82.0
+            ],
+            [
+              35.0,
+              79.0
+            ]
+          ],
+          [
+            [
+              32.0,
+              62.0
+            ],
+            [
+              34.0,
+              62.0
+            ],
+            [
+              36.0,
+              64.0
+            ],
+            [
+              36.0,
+              66.0
+            ],
+            [
+              35.0,
+              67.0
+            ],
+            [
+              35.0,
+              69.0
+            ],
+            [
+              34.0,
+              70.0
+            ],
+            [
+              32.0,
+              70.0
+            ],
+            [
+              31.0,
+              69.0
+            ],
+            [
+              31.0,
+              63.0
+            ]
+          ],
+          [
+            [
+              40.0,
+              60.0
+            ],
+            [
+              42.0,
+              60.0
+            ],
+            [
+              43.0,
+              61.0
+            ],
+            [
+              43.0,
+              62.0
+            ],
+            [
+              44.0,
+              63.0
+            ],
+            [
+              44.0,
+              66.0
+            ],
+            [
+              43.0,
+              67.0
+            ],
+            [
+              41.0,
+              67.0
+            ],
+            [
+              39.0,
+              65.0
+            ],
+            [
+              39.0,
+              61.0
+            ]
+          ],
+          [
+            [
+              43.0,
+              47.0
+            ],
+            [
+              45.0,
+              47.0
+            ],
+            [
+              46.0,
+              48.0
+            ],
+            [
+              46.0,
+              53.0
+            ],
+            [
+              45.0,
+              54.0
+            ],
+            [
+              43.0,
+              54.0
+            ],
+            [
+              42.0,
+              53.0
+            ],
+            [
+              42.0,
+              48.0
+            ]
+          ],
+          [
+            [
+              32.0,
+              46.0
+            ],
+            [
+              34.0,
+              46.0
+            ],
+            [
+              35.0,
+              47.0
+            ],
+            [
+              35.0,
+              53.0
+            ],
+            [
+              36.0,
+              54.0
+            ],
+            [
+              36.0,
+              56.0
+            ],
+            [
+              35.0,
+              57.0
+            ],
+            [
+              33.0,
+              57.0
+            ],
+            [
+              31.0,
+              54.0
+            ],
+            [
+              31.0,
+              47.0
+            ]
+          ],
+          [
+            [
+              13.0,
+              41.0
+            ],
+            [
+              19.0,
+              42.0
+            ],
+            [
+              29.0,
+              56.0
+            ],
+            [
+              29.0,
+              81.0
+            ],
+            [
+              26.0,
+              83.0
+            ],
+            [
+              20.0,
+              83.0
+            ],
+            [
+              18.0,
+              81.0
+            ],
+            [
+              12.0,
+              48.0
+            ]
+          ]
+        ],
+        "simplified_n_vertices": [
+          18,
+          12,
+          15,
+          12,
+          10,
+          10,
+          8,
+          10,
+          8
+        ],
+        "n_holes": 6,
+        "skeleton_sum_pixels": 329,
+        "max_medial_axis_distance": 7.211102550927978,
+        "morph_closed_area": 1505,
+        "morph_opened_area": 1505,
+        "bbox_area": 4212,
+        "eccentricity": 0.8225094798862478,
+        "major_axis_length": 76.47447448640696,
+        "minor_axis_length": 43.49496446170694,
+        "orientation_rad": 0.20208165522101867,
+        "perimeter": 531.4213562373095,
+        "solidity": 0.4794661190965092,
+        "extent": 0.33262108262108264,
+        "form_factor": 0.06234045855302531,
+        "hu_moments": [
+          2.8358416147138397,
+          5.936033005593188,
+          5.999704296933406,
+          5.999928096157504,
+          -5.999999999999981,
+          -5.999999996482058,
+          -5.999999999999985
+        ],
+        "canny_edge_pixels": 561,
+        "canny_edge_density": 0.03424072265416011,
+        "otsu_threshold_value": 0.0
+      },
+      "betti_numbers": [
+        1,
+        0
+      ],
+      "semantic_connected_segments": 12,
+      "is_quadrilateral_like_semantic": false,
+      "is_smooth_curve_semantic": false,
+      "is_composite_shape_semantic": false,
+      "is_convex_physics": true,
+      "physics_symmetry_score": 9.799120958969116,
+      "physics_symmetry_type": "none",
+      "num_arcs_physics": 9,
+      "num_straight_segments_physics": 0,
+      "is_occluded_physics": false,
+      "is_touching_ground_physics": false,
+      "is_floating_physics": false,
+      "is_stable_physics": false,
+      "num_contact_points_physics": 0,
+      "detector_consensus": {
+        "agreement": false,
+        "disagreement_reason": "Multiple strong candidate labels found: ['self_intersecting_decomposed_polygon', 'physically_convex', 'polygon_vertices_10', 'has_holes_imgproc']"
+      },
+      "robust_symmetry_score": null,
+      "robust_symmetry_axis_deg": null,
+      "boundary_autocorr_symmetry": null
+    }
+  ]
+}

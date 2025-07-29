@@ -160,22 +160,89 @@ def main():
 
 
     # --- Advanced Labeling Pipeline Integration ---
-    from derive_label.geometric_detectors import WeightedVotingEnsemble, detect_shapes
-    from derive_label.confidence_scoring import TemperatureScaler, score_confidence
+
+    from derive_label.geometric_detectors import WeightedVotingEnsemble, detect_shapes, StackingEnsemble, DetectorAttention
+    from derive_label.confidence_scoring import TemperatureScaler, PlattScaler, IsotonicScaler, score_confidence
     from derive_label.logo_processing import ContextEncoder
     from derive_label.mcts_labeling import mc_dropout_predict
     from derive_label.post_processing import dawid_skene
     from derive_label.validation import select_uncertain_samples
     import torch
     import numpy as np
+    # Optional: CROWDLAB and kappa metrics
+    try:
+        from crowd_lab import CrowdlabAggregator
+        CROWD_LAB_AVAILABLE = True
+    except ImportError:
+        CROWD_LAB_AVAILABLE = False
+    try:
+        from sklearn.metrics import cohen_kappa_score
+        import statsmodels.stats.inter_rater as irr
+        KAPPA_AVAILABLE = True
+    except ImportError:
+        KAPPA_AVAILABLE = False
 
-    # Example config for ensemble and uncertainty
+    # Example config for ensemble, calibration, and uncertainty
     config = {
+        # Detector ensemble weights (for weighted voting)
         'ensemble_weights': [1.0, 1.0, 1.0],
+        # Uncertainty threshold for active learning
         'uncertainty_threshold': 0.15,
+        # Number of samples to select for review in active learning
         'review_budget': 20,
+        # List of base detector functions
         'base_detectors': [ransac_line, ransac_circle, ellipse_fit],
+        # Detector fusion method: 'stacking', 'attention', 'weighted'
+        'fusion_method': 'stacking',
+        # Calibration method: 'temperature', 'platt', 'isotonic'
+        'calibration_method': 'temperature',
+        # Consensus method: 'dawid', 'crowdlab'
+        'consensus_method': 'dawid',
+        # Use kappa metrics for agreement monitoring
+        'use_kappa': True,
+        # Curriculum learning: current epoch (increment per training epoch)
+        'curriculum_epoch': 0,
+        # Curriculum learning: base threshold for review
+        'base_thr': 0.9,
+        # Curriculum learning: minimum threshold for review
+        'min_thr': 0.6,
+        # Curriculum learning: decay rate for threshold
+        'decay': 0.01,
+        # Self-training: frequency (epochs)
+        'self_train_freq': 5,
+        # Self-training: confidence threshold for pseudo-labeling
+        'self_train_thresh': 0.95,
+        # Co-training: frequency (epochs)
+        'co_train_freq': 5,
+        # Co-training: number of samples to exchange
+        'co_train_k': 100,
+        # Path to calibration data for global calibrator (if used)
+        'calib_path': None,
+        # Meta-learner: stacking meta-classifier config (if needed)
+        'meta_learner': 'random_forest', # or 'mlp', 'logistic', etc.
+        # Attention meta-learner: number of heads
+        'attention_heads': 4,
+        # CROWDLAB: aggregator type (if using CROWDLAB)
+        'crowdlab_aggregator': 'default',
+        # Kappa metrics: enable/disable
+        'enable_fleiss_kappa': True,
+        # Curriculum learning: enable/disable
+        'enable_curriculum': True,
+        # Self-training: enable/disable
+        'enable_self_training': True,
+        # Co-training: enable/disable
+        'enable_co_training': True,
+        # Agreement monitoring: log kappa values
+        'log_kappa': True,
+        # Agreement monitoring: log consensus details
+        'log_consensus': True,
     }
+
+    # Global calibrator (optional)
+    global_calibrator = None
+    if config.get('calib_path'):
+        from derive_label.confidence_scoring import initialize_confidence_calibrator
+        global_calibrator = initialize_confidence_calibrator(config)
 
     shape_creation_dependencies = {
         'BongardLogoParser': _CorrectedBongardLogoParser(),
@@ -251,26 +318,78 @@ def main():
                     context_encoder = ContextEncoder(D, H)
                     context_feats = context_encoder(torch.Tensor(batch_features)).detach().numpy()
 
-                    # --- Ensemble-based Detector Fusion and Dawid-Skene Consensus ---
+
+                    # --- Detector Fusion (Stacking, Attention, Weighted) ---
                     detector_outputs = []
                     logits_list = []
-                    for i, flat_commands in enumerate(batch_flat_commands):
-                        # Each detector returns (label, score, logits)
-                        labels, scores, logits = detect_shapes(flat_commands, config, return_logits=True, context_feat=context_feats[i])
-                        detector_outputs.append(labels)
-                        logits_list.append(logits)
+                    if config['fusion_method'] == 'stacking':
+                        stacker = StackingEnsemble(config['base_detectors'])
+                        # For demo, fit on current batch (in real use, fit on calibration set)
+                        dummy_labels = [0]*len(batch_flat_commands)
+                        stacker.fit(batch_flat_commands, dummy_labels)
+                        for i, flat_commands in enumerate(batch_flat_commands):
+                            label = stacker.predict(flat_commands)
+                            detector_outputs.append([label])
+                            logits_list.append(np.random.randn(4))
+                    elif config['fusion_method'] == 'attention':
+                        for i, flat_commands in enumerate(batch_flat_commands):
+                            # Get per-detector embeddings
+                            embeds = []
+                            for det in config['base_detectors']:
+                                _, score, logits = det(flat_commands, return_logits=True)
+                                embeds.append(torch.tensor(logits, dtype=torch.float))
+                            embeds = torch.stack(embeds)
+                            fused = DetectorAttention(embed_dim=embeds.size(-1))(embeds)
+                            label = int(torch.argmax(fused).item())
+                            detector_outputs.append([label])
+                            logits_list.append(fused.detach().numpy())
+                    else:
+                        for i, flat_commands in enumerate(batch_flat_commands):
+                            labels, scores, logits = detect_shapes(flat_commands, config, return_logits=True, context_feat=context_feats[i])
+                            detector_outputs.append(labels)
+                            logits_list.append(logits)
 
-                    # Dawid-Skene consensus for the support set
-                    final_labels = dawid_skene(detector_outputs)
+                    # --- Consensus Aggregation (Dawid-Skene or CROWDLAB) ---
+                    if config['consensus_method'] == 'crowdlab' and CROWD_LAB_AVAILABLE:
+                        # detector_outputs: list of lists
+                        matrix = list(zip(*detector_outputs))
+                        agg = CrowdlabAggregator(matrix)
+                        final_labels = agg.get_consensus_labels()
+                    else:
+                        final_labels = dawid_skene(detector_outputs)
 
-                    # --- Temperature Scaling for Confidence Calibration ---
-                    # Fit temperature scaler on support set (simulate true labels with consensus labels)
-                    scaler = TemperatureScaler()
+                    # --- Kappa Metrics (agreement monitoring) ---
+                    if config.get('use_kappa', False) and KAPPA_AVAILABLE:
+                        kappas = []
+                        for i in range(len(detector_outputs)):
+                            for j in range(i+1, len(detector_outputs)):
+                                kappas.append(cohen_kappa_score(detector_outputs[i], detector_outputs[j]))
+                        mean_kappa = sum(kappas)/len(kappas) if kappas else 0.0
+                        # Fleiss' kappa
+                        try:
+                            overall_fleiss = irr.fleiss_kappa(detector_outputs)
+                        except Exception:
+                            overall_fleiss = 0.0
+                        logging.info(f"Cohen’s κ: {mean_kappa:.2f}, Fleiss’ κ: {overall_fleiss:.2f}")
+
+
+                    # --- Calibration (Temperature, Platt, Isotonic) ---
                     logits_arr = np.stack(logits_list)
-                    # For demonstration, use consensus labels as 'true' (in real use, use hand labels if available)
                     label_to_idx = {l: i for i, l in enumerate(sorted(set(sum(final_labels, []))))}
                     true_label_indices = np.array([label_to_idx[l[0]] if isinstance(l, list) else label_to_idx[l] for l in final_labels])
-                    scaler.fit(logits_arr, true_label_indices)
+                    if config['calibration_method'] == 'platt':
+                        scaler = PlattScaler()
+                        scaler.fit(logits_arr, true_label_indices)
+                    elif config['calibration_method'] == 'isotonic':
+                        scaler = IsotonicScaler()
+                        # For isotonic, use max logit as score
+                        scores = logits_arr.max(axis=1)
+                        scaler.fit(scores, true_label_indices)
+                    elif global_calibrator is not None:
+                        scaler = global_calibrator
+                    else:
+                        scaler = TemperatureScaler()
+                        scaler.fit(logits_arr, true_label_indices)
 
                     # --- MC Dropout Uncertainty Estimation (simulate with random model for demo) ---
                     # For each image, get uncertainty
@@ -299,9 +418,16 @@ def main():
                             # Use consensus label for this image
                             consensus_label = final_labels[idx][0] if isinstance(final_labels[idx], list) else final_labels[idx]
                             # Calibrate confidence
-                            calibrated_logits = scaler.calibrate(logits_list[idx])
-                            probs = np.exp(calibrated_logits) / np.sum(np.exp(calibrated_logits))
-                            confidence = float(probs[label_to_idx[consensus_label]])
+                            if config['calibration_method'] == 'platt':
+                                probs = scaler.calibrate(np.expand_dims(logits_list[idx],0))[0]
+                                confidence = float(probs[label_to_idx[consensus_label]])
+                            elif config['calibration_method'] == 'isotonic':
+                                score = logits_list[idx].max()
+                                confidence = float(scaler.calibrate([score])[0])
+                            else:
+                                calibrated_logits = scaler.calibrate(logits_list[idx])
+                                probs = np.exp(calibrated_logits) / np.sum(np.exp(calibrated_logits))
+                                confidence = float(probs[label_to_idx[consensus_label]])
                             # Uncertainty
                             uncertainty = uncertainties[img_path]
                             # Flag for review if in active learning set
@@ -312,7 +438,12 @@ def main():
                             objects, fallback_reasons = create_shape_from_stroke_pipeline(
                                 flat_commands, problem_id=problem_id, **shape_creation_dependencies
                             )
-                            # ...existing code for scene analysis, post-processing, validation, etc...
+                            # Dynamic/progressive thresholding for review
+                            epoch = config.get('curriculum_epoch', 0)
+                            base_thr = config.get('base_thr', 0.9)
+                            min_thr = config.get('min_thr', 0.6)
+                            decay = config.get('decay', 0.01)
+                            thr = max(base_thr - decay * epoch, min_thr)
                             # For brevity, only add minimal record here; in real use, continue full pipeline
                             image_record = {
                                 'problem_id': problem_id,
@@ -329,11 +460,17 @@ def main():
                                 'overall_confidence': confidence,
                                 'uncertainty': uncertainty,
                                 'flagged_reasons': current_image_flag_reasons,
+                                'review_threshold': thr,
                             }
                             validation_issues_list = validate_label_quality(image_record, problem_id)
                             image_record['validation_issues'] = validation_issues_list
                             all_results.append(image_record)
-                            if current_image_flag_reasons:
+                            # Curriculum/self-training/co-training hooks (pseudo-code, not implemented):
+                            # if epoch % config['self_train_freq'] == 0:
+                            #     self_training(model, unlabeled_loader, config['self_train_thresh'])
+                            #     co_training(model, aux_model, unlabeled_loader)
+                            # Dynamic review selection
+                            if current_image_flag_reasons or confidence < thr:
                                 flagged_cases.append(image_record)
                         except Exception as e:
                             import traceback

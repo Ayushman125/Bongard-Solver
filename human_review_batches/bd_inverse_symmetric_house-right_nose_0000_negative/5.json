@@ -1,0 +1,346 @@
+{
+  "problem_id": "bd_inverse_symmetric_house-right_nose_0000",
+  "generated_labels": [
+    "physically_convex"
+  ],
+  "num_objects": 1,
+  "confidence_tier": "Tier 4: Low-Confidence/Ambiguous (Flagged Issues)",
+  "flagging_reasons": [
+    "Object obj_0 has detector disagreement: Multiple strong candidate labels found: ['self_intersecting_decomposed_polygon', 'physically_convex', 'has_holes_imgproc']"
+  ],
+  "validation_issues": [
+    {
+      "severity": "WARNING",
+      "rule_name": "DetectorDisagreement",
+      "message": "Object obj_0 label 'physically_convex' shows disagreement among individual detectors: Multiple strong candidate labels found: ['self_intersecting_decomposed_polygon', 'physically_convex', 'has_holes_imgproc'].",
+      "object_id": "obj_0",
+      "found_label": "physically_convex"
+    },
+    {
+      "severity": "WARNING",
+      "rule_name": "SymmetryMismatch",
+      "message": "Problem ID 'bd_inverse_symmetric_house-right_nose_0000' suggests symmetry, but no strongly symmetric object was found.",
+      "expected_keywords": [
+        "symmetric",
+        "symmetry"
+      ]
+    }
+  ],
+  "action_program": [
+    "line_circle_1.000-0.500",
+    "line_zigzag_0.600-0.750",
+    "line_square_0.640-0.857",
+    "line_normal_0.640-0.285",
+    "line_square_0.600-0.857",
+    "line_normal_0.400-0.500",
+    "line_square_0.300-0.750",
+    "line_triangle_0.539-0.311",
+    "line_zigzag_0.500-0.939",
+    "line_normal_0.500-0.250",
+    "line_triangle_0.640-0.893",
+    "line_triangle_0.500-0.607"
+  ],
+  "object_properties": [
+    {
+      "is_closed_geometric": true,
+      "area_geometric": 266.3280000000001,
+      "perimeter_geometric": 94.06401547439765,
+      "centroid_geometric": [
+        76.0,
+        60.068000000000005
+      ],
+      "num_points_in_stroke": 12,
+      "ellipse_fit": {
+        "center": [
+          65.35022336392201,
+          55.37008855811153
+        ],
+        "axes": [
+          35.73774001499172,
+          26.332176517459995
+        ],
+        "angle": 2.262660579171068
+      },
+      "hough_line_detection": {
+        "start": [
+          48.0,
+          92.0
+        ],
+        "end": [
+          48.0,
+          26.0
+        ],
+        "length": 66.0,
+        "orientation": -90.0
+      },
+      "convexity_defects_analysis": {
+        "is_self_intersecting": true,
+        "num_simple_components": 2
+      },
+      "num_detected_vertices": 5,
+      "detected_vertices_coords": [
+        [
+          100.0,
+          50.0
+        ],
+        [
+          60.0,
+          75.0
+        ],
+        [
+          60.0,
+          85.7
+        ],
+        [
+          40.0,
+          50.0
+        ],
+        [
+          50.0,
+          60.699999999999996
+        ]
+      ],
+      "fourier_descriptors": [
+        102.82646703469818,
+        9.495982509169908,
+        81.73824074446429,
+        137.38865493379305,
+        123.19357806786087,
+        215.2126854997168,
+        79.21794897932203,
+        83.79389891563196,
+        44.31907038736261,
+        14.67536426074457
+      ],
+      "geometric_symmetry_score": Infinity,
+      "geometric_symmetry_type": "none",
+      "geometric_orientation_deg": 94.38547999898012,
+      "image_features": {
+        "robust_mask_area": 1044,
+        "robust_skeleton_area": 206,
+        "robust_fill_ratio": 0.1973180074738333,
+        "image_area_pixels": 1044,
+        "image_density": 0.06372070312111079,
+        "n_contours": 3,
+        "contour_lengths": [
+          58.041630148887634,
+          330.7523069381714,
+          40.72792184352875
+        ],
+        "contour_areas": [
+          83.5,
+          832.5,
+          68.5
+        ],
+        "simplified_contours": [
+          [
+            [
+              23.0,
+              36.0
+            ],
+            [
+              19.0,
+              35.0
+            ],
+            [
+              19.0,
+              38.0
+            ],
+            [
+              17.0,
+              39.0
+            ],
+            [
+              17.0,
+              41.0
+            ],
+            [
+              11.0,
+              54.0
+            ],
+            [
+              11.0,
+              57.0
+            ],
+            [
+              13.0,
+              57.0
+            ],
+            [
+              20.0,
+              43.0
+            ],
+            [
+              23.0,
+              41.0
+            ]
+          ],
+          [
+            [
+              29.0,
+              10.0
+            ],
+            [
+              31.0,
+              79.0
+            ],
+            [
+              33.0,
+              60.0
+            ],
+            [
+              45.0,
+              74.0
+            ],
+            [
+              45.0,
+              59.0
+            ],
+            [
+              79.0,
+              35.0
+            ],
+            [
+              46.0,
+              54.0
+            ],
+            [
+              45.0,
+              13.0
+            ],
+            [
+              38.0,
+              40.0
+            ],
+            [
+              35.0,
+              16.0
+            ]
+          ],
+          [
+            [
+              34.0,
+              44.0
+            ],
+            [
+              36.0,
+              44.0
+            ],
+            [
+              37.0,
+              45.0
+            ],
+            [
+              37.0,
+              48.0
+            ],
+            [
+              38.0,
+              49.0
+            ],
+            [
+              38.0,
+              53.0
+            ],
+            [
+              39.0,
+              54.0
+            ],
+            [
+              39.0,
+              59.0
+            ],
+            [
+              38.0,
+              60.0
+            ],
+            [
+              35.0,
+              60.0
+            ],
+            [
+              34.0,
+              59.0
+            ],
+            [
+              34.0,
+              57.0
+            ],
+            [
+              35.0,
+              56.0
+            ],
+            [
+              35.0,
+              54.0
+            ],
+            [
+              33.0,
+              51.0
+            ],
+            [
+              33.0,
+              45.0
+            ]
+          ]
+        ],
+        "simplified_n_vertices": [
+          10,
+          10,
+          16
+        ],
+        "n_holes": 1,
+        "skeleton_sum_pixels": 227,
+        "max_medial_axis_distance": 5.0,
+        "morph_closed_area": 1044,
+        "morph_opened_area": 1042,
+        "bbox_area": 3710,
+        "eccentricity": 0.7236098360491405,
+        "major_axis_length": 64.0984600763866,
+        "minor_axis_length": 44.24134988772876,
+        "orientation_rad": 0.024987652951049804,
+        "perimeter": 368.6518036156091,
+        "solidity": 0.40608695652173915,
+        "extent": 0.2517520215633423,
+        "form_factor": 0.08636226306783894,
+        "hu_moments": [
+          2.8290601909697983,
+          5.968423284757741,
+          5.999807071616295,
+          5.999951310940373,
+          5.9999999999999964,
+          -5.999999991066761,
+          5.99999999999999
+        ],
+        "canny_edge_pixels": 397,
+        "canny_edge_density": 0.024230957029771058,
+        "otsu_threshold_value": 0.0
+      },
+      "betti_numbers": [
+        1,
+        0
+      ],
+      "semantic_connected_segments": 11,
+      "is_quadrilateral_like_semantic": false,
+      "is_smooth_curve_semantic": false,
+      "is_composite_shape_semantic": false,
+      "is_convex_physics": true,
+      "physics_symmetry_score": 9.372038998017084,
+      "physics_symmetry_type": "none",
+      "num_arcs_physics": 4,
+      "num_straight_segments_physics": 2,
+      "is_occluded_physics": false,
+      "is_touching_ground_physics": false,
+      "is_floating_physics": false,
+      "is_stable_physics": false,
+      "num_contact_points_physics": 0,
+      "detector_consensus": {
+        "agreement": false,
+        "disagreement_reason": "Multiple strong candidate labels found: ['self_intersecting_decomposed_polygon', 'physically_convex', 'has_holes_imgproc']"
+      },
+      "robust_symmetry_score": null,
+      "robust_symmetry_axis_deg": null,
+      "boundary_autocorr_symmetry": null
+    }
+  ]
+}
