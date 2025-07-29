@@ -5,6 +5,8 @@ import logging
 
 # MCTS specific helper functions (from image_features)
 from derive_label.geometric_detectors import detect_vertices
+from derive_label.confidence_scoring import consensus_vote, DETECTOR_RELIABILITY
+from derive_label.image_features import extract_clean_mask_and_skeleton
 
 class MCTSNode:
     def __init__(self, state, parent=None, action=None):
@@ -26,11 +28,27 @@ class MCTSNode:
         options = label_options_fn(self.state, idx)
         for label in options:
             new_state = copy.deepcopy(self.state)
-            new_state['labels'][idx] = label
-            new_state['unlabeled'] = [i for i in new_state['unlabeled'] if i != idx]
-            child = MCTSNode(new_state, parent=self, action=(idx, label))
-            self.children.append(child)
-        return self.children
+def label_options_fn(state, idx):
+    """
+    Uses geometric/statistical techniques to propose label options for a shape, using consensus_vote and robust mask features.
+    """
+    shape = state['shapes'][idx]
+    # Collect candidate labels from all detectors
+    candidate_labels = shape.get('possible_labels', {})
+    detector_confidences = shape.get('detector_confidences', {})
+    # Optionally, add mask/skeleton QA as context
+    mask, skeleton, qa = extract_clean_mask_and_skeleton(np.array(shape.get('vertices', [])))
+    context = {'fill_ratio': qa.get('fill_ratio', 0.0)}
+    final_label, label_ranking, label_sources = consensus_vote(
+        candidate_labels, detector_confidences, DETECTOR_RELIABILITY, context)
+    options = [final_label] if final_label != 'AMBIGUOUS' else [l for l, _ in label_ranking[:2]]
+    return options
+
+    new_state['labels'][idx] = label
+    new_state['unlabeled'] = [i for i in new_state['unlabeled'] if i != idx]
+    child = MCTSNode(new_state, parent=self, action=(idx, label))
+    self.children.append(child)
+    return self.children
 
     def best_child(self, c_param=1.4):
         choices_weights = [child.value / (child.visits + 1e-6) + \
@@ -46,10 +64,27 @@ def mcts_search(initial_state, label_options_fn, reward_fn, n_sim=100):
         while node.children:
             node = node.best_child()
         # Expansion
-        if not node.is_terminal():
-            node.expand(label_options_fn)
-            if node.children:
-                node = random.choice(node.children)
+def reward_fn(state):
+    """
+    Calculates a reward for a given labeled state, incorporating mask/skeleton QA.
+    """
+    score = 0
+    labels = list(state['labels'].values())
+    if not labels:
+        return 0
+    for idx, l in enumerate(labels):
+        shape = state['shapes'][idx]
+        mask, skeleton, qa = extract_clean_mask_and_skeleton(np.array(shape.get('vertices', [])))
+        fill_ratio = qa.get('fill_ratio', 0.0)
+        score += fill_ratio
+    # Uniformity bonus
+    if len(set(labels)) == 1:
+        score += 1
+    return score / len(labels)
+    if not node.is_terminal():
+        node.expand(label_options_fn)
+        if node.children:
+            node = random.choice(node.children)
         # Simulation
         sim_state = copy.deepcopy(node.state)
         while sim_state['unlabeled']:

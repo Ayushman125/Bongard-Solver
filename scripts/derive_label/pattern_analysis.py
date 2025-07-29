@@ -1,3 +1,64 @@
+# --- Robust Symmetry Score from Vertices ---
+def symmetry_score_from_vertices(vertices):
+    """
+    Estimate the degree of reflection symmetry for a polygon/contour given by vertices.
+    Returns (score, axis_angle_deg):
+        score: float in [0,1], higher is more symmetric
+        axis_angle_deg: angle (in degrees) of best symmetry axis (0 = horizontal, 90 = vertical)
+    """
+    import numpy as np
+    if vertices is None or len(vertices) < 3:
+        return 0.0, None
+    verts = np.array(vertices)
+    centroid = np.mean(verts, axis=0)
+    verts_centered = verts - centroid
+    best_score = 0.0
+    best_axis = None
+    # Test axes from 0 to 180 deg (step 10 deg for speed, can refine if needed)
+    for angle_deg in np.arange(0, 180, 10):
+        theta = np.deg2rad(angle_deg)
+        axis = np.array([np.cos(theta), np.sin(theta)])
+        # Reflect points across axis
+        proj = np.dot(verts_centered, axis)
+        reflected = verts_centered - 2 * np.outer(proj, axis)
+        # For each reflected point, find closest original point
+        dists = np.linalg.norm(reflected[:, None, :] - verts_centered[None, :, :], axis=2)
+        min_dists = np.min(dists, axis=1)
+        # Symmetry score: 1 - (mean normalized distance)
+        norm = np.linalg.norm(verts_centered, axis=1).mean() + 1e-6
+        score = 1.0 - (min_dists.mean() / norm)
+        if score > best_score:
+            best_score = score
+            best_axis = angle_deg
+    return float(np.clip(best_score, 0.0, 1.0)), float(best_axis) if best_axis is not None else None
+
+# --- Boundary Autocorrelation Symmetry ---
+def boundary_autocorr_symmetry(vertices):
+    """
+    Estimate symmetry by autocorrelation of boundary distances (rotation/reflection invariant).
+    Returns a float in [0,1], higher is more symmetric.
+    """
+    import numpy as np
+    if vertices is None or len(vertices) < 3:
+        return 0.0
+    verts = np.array(vertices)
+    # Compute pairwise distances along the boundary (closed loop)
+    n = len(verts)
+    dists = np.linalg.norm(verts - np.roll(verts, -1, axis=0), axis=1)
+    # Autocorrelation of the distance sequence
+    dists_mean = dists - np.mean(dists)
+    autocorr = np.correlate(dists_mean, dists_mean, mode='full')
+    autocorr = autocorr[autocorr.size // 2:]
+    # Normalize: peak at lag 0 is always max, look for secondary peaks
+    if len(autocorr) < 2:
+        return 0.0
+    main_peak = autocorr[0]
+    if main_peak == 0:
+        return 0.0
+    # Find the highest non-zero-lag peak (periodicity/symmetry)
+    sec_peak = np.max(autocorr[1:])
+    score = sec_peak / main_peak
+    return float(np.clip(score, 0.0, 1.0))
 import numpy as np
 import logging
 from shapely.geometry import Polygon, MultiPoint, LineString
@@ -15,17 +76,19 @@ logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 def detect_grid_pattern(centers, alignment_tolerance=10, uniformity_threshold=0.15):
     """
     Detects if a set of centers forms a grid pattern using clustering on projected axes.
+
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
     This version focuses on robustness and explicit alignment checks.
     Returns (is_grid, grid_info, confidence)
     """
     try:
         from sklearn.cluster import MiniBatchKMeans # More scalable than KMeans
-        
+
         centers_np = np.array(centers)
         n_points = len(centers_np)
         if n_points < 4: # Need at least 2x2 for a grid
             return False, None, 0.0
-        
+
         xs = centers_np[:, 0].reshape(-1, 1)
         ys = centers_np[:, 1].reshape(-1, 1)
 
@@ -35,13 +98,13 @@ def detect_grid_pattern(centers, alignment_tolerance=10, uniformity_threshold=0.
 
         # Iterate through possible number of rows/columns
         # Sensible max: up to sqrt(n_points) or 10, whichever is smaller, to avoid overfitting to noise
-        max_dim_k = min(int(np.sqrt(n_points)) + 1, 10) 
+        max_dim_k = min(int(np.sqrt(n_points)) + 1, 10)
 
         for k_x in range(2, max_dim_k + 1):
             for k_y in range(2, max_dim_k + 1):
                 if k_x * k_y > n_points * 2: # Avoid trying too many clusters for sparse points
                     continue
-                
+
                 try:
                     # Cluster X and Y coordinates
                     kmeans_x = MiniBatchKMeans(n_clusters=k_x, n_init='auto', random_state=0, batch_size=256).fit(xs)
@@ -51,17 +114,17 @@ def detect_grid_pattern(centers, alignment_tolerance=10, uniformity_threshold=0.
 
                 grid_x_lines = np.sort(kmeans_x.cluster_centers_.flatten())
                 grid_y_lines = np.sort(kmeans_y.cluster_centers_.flatten())
-                
+
                 # Check for uniformity of spacing between grid lines
                 dx_spacings = np.diff(grid_x_lines)
                 dy_spacings = np.diff(grid_y_lines)
-                
+
                 uniformity_x = np.std(dx_spacings) / (np.mean(dx_spacings) + 1e-6) if len(dx_spacings) > 0 else 0.0
                 uniformity_y = np.std(dy_spacings) / (np.mean(dy_spacings) + 1e-6) if len(dy_spacings) > 0 else 0.0
-                
+
                 is_uniform_x = uniformity_x < uniformity_threshold
                 is_uniform_y = uniformity_y < uniformity_threshold
-                
+
                 if not is_uniform_x or not is_uniform_y:
                     continue # Not a uniform grid
 
@@ -72,9 +135,9 @@ def detect_grid_pattern(centers, alignment_tolerance=10, uniformity_threshold=0.
                     is_aligned_y = np.min(np.abs(c[1] - grid_y_lines)) < alignment_tolerance
                     if is_aligned_x and is_aligned_y:
                         aligned_points_count += 1
-                
+
                 alignment_ratio = aligned_points_count / n_points
-                
+
                 # Confidence combines uniformity, alignment, and density of grid points
                 # If the actual number of points is close to k_x * k_y (a full grid) then confidence is higher
                 density_conf = calculate_confidence(n_points, max_value=k_x * k_y, min_value=0.0) # Higher if more points fill the grid cells
@@ -90,7 +153,7 @@ def detect_grid_pattern(centers, alignment_tolerance=10, uniformity_threshold=0.
                     best_grid_conf = current_conf
                     best_grid_info = {
                         'n_rows': k_y, 'n_cols': k_x, # Rows typically map to Y, Cols to X
-                        'grid_spacing_x': float(np.mean(dx_spacings)) if len(dx_spacings) > 0 else 0.0, 
+                        'grid_spacing_x': float(np.mean(dx_spacings)) if len(dx_spacings) > 0 else 0.0,
                         'grid_spacing_y': float(np.mean(dy_spacings)) if len(dy_spacings) > 0 else 0.0,
                         'alignment_ratio': float(alignment_ratio),
                         'uniformity_x': float(uniformity_x),
@@ -98,11 +161,11 @@ def detect_grid_pattern(centers, alignment_tolerance=10, uniformity_threshold=0.
                     }
                     if alignment_ratio > 0.7 and current_conf > 0.6: # Stricter condition for 'is_grid' flag
                         is_best_grid = True
-        
+
         # Final decision on is_grid
         if is_best_grid: # Only return True if the best grid is highly confident and well-aligned
             return True, best_grid_info, best_grid_conf
-        
+
         return False, best_grid_info, best_grid_conf # Always return best info, even if not 'is_grid'
     except ImportError:
         logging.debug("[PatternAnalysis] sklearn (MiniBatchKMeans) not installed, skipping grid pattern detection.")
@@ -118,19 +181,22 @@ def detect_periodicity(centers, frequency_threshold=0.1):
     More robust for various periodicities than simple autocorrelation.
     Returns (is_periodic, dominant_periods, confidence)
     """
+
     centers_np = np.array(centers)
     n_points = len(centers_np)
-    if n_points < 3: return False, [], 0.0 
+    if n_points < 3: return False, [], 0.0
 
     all_periods = []
     confidences = []
+
+    alignment_tolerance = 5.0  # Default value for alignment tolerance (pixels)
 
     for dim_idx, coords in enumerate([centers_np[:, 0], centers_np[:, 1]]):
         if len(coords) < 3: continue
 
         # Sort coordinates to represent spatial sequence
         sorted_coords = np.sort(coords)
-        
+
         # Consider the distances between points instead of raw coordinates for periodicity
         diffs = np.diff(sorted_coords)
         if len(diffs) < 2 or np.sum(diffs) == 0: continue # Need enough differences
@@ -138,13 +204,13 @@ def detect_periodicity(centers, frequency_threshold=0.1):
         # Use FFT on a histogram/density estimate of the differences
         # Create a "signal" representing the distribution of point differences
         hist, bin_edges = np.histogram(diffs, bins='auto', density=True)
-        
+
         if len(hist) < 2: continue
 
         # Perform FFT on the histogram
         fft_result = np.fft.fft(hist)
         power_spectrum = np.abs(fft_result)**2
-        
+
         # Frequencies corresponding to bins
         sample_freq = 1.0 / (bin_edges[1] - bin_edges[0]) # Frequency of sampling in diffs space
         frequencies = np.fft.fftfreq(len(hist), d=1/sample_freq) # Frequencies in 1/pixel units
@@ -160,20 +226,20 @@ def detect_periodicity(centers, frequency_threshold=0.1):
 
         if dominant_freq > 1e-6: # Avoid division by zero and near-zero frequencies
             dominant_period = 1.0 / dominant_freq
-            
+
             # Confidence for periodicity: strength of the dominant peak relative to total power
             total_power = np.sum(power_spectrum)
             if total_power > 0:
                 peak_power = power_spectrum[dominant_freq_idx]
                 current_conf = calculate_confidence(peak_power, max_value=total_power, min_value=0.0)
-                
+
                 # Further refine confidence: how many points are actually aligned to this period
                 aligned_points_count = 0
                 for i in range(1, len(sorted_coords)):
                     if np.isclose((sorted_coords[i] - sorted_coords[0]) % dominant_period, 0, atol=alignment_tolerance) or \
                        np.isclose((sorted_coords[i] - sorted_coords[0]) % dominant_period, dominant_period, atol=alignment_tolerance):
                         aligned_points_count += 1
-                
+
                 alignment_ratio = aligned_points_count / n_points
                 current_conf *= alignment_ratio # Penalize if points don't align well
 

@@ -33,7 +33,7 @@ def post_process_scene_labels(objects, problem_id, scene_context=None):
     # Rule 1: Part-Whole Consistency
     for obj in objects:
         # Fix ambiguous array truth value
-        if 'part_of' in obj and obj['part_of'] is not None:
+        if 'part_of' in obj and obj.get('part_of') is not None:
             logging.debug(f"[PostProcessing] part_of check passed for obj {obj.get('id')}")
             parent_id = obj['part_of']
             parent_obj = objects_by_id.get(parent_id)
@@ -52,7 +52,7 @@ def post_process_scene_labels(objects, problem_id, scene_context=None):
     # Rule 2: Ambiguity/Occlusion Resolution
     for obj in objects:
         # Fix ambiguous array truth value
-        if 'ambiguity' in obj and obj.get('ambiguity') is not None and len(obj['ambiguity']) > 0:
+        if 'ambiguity' in obj and obj.get('ambiguity') is not None and isinstance(obj['ambiguity'], (list, tuple)) and len(obj['ambiguity']) > 0:
             logging.debug(f"[PostProcessing] ambiguity check passed for obj {obj.get('id')}")
             for amb_info in obj['ambiguity']:
                 relation = amb_info.get('relation')
@@ -100,11 +100,11 @@ def post_process_scene_labels(objects, problem_id, scene_context=None):
             for obj in objects: obj.setdefault('flags', []).append('participates_in_tiling')
 
     # Rule 4: Uniformity Enforcement
-    if objects is not None and len(objects) > 1:
+    if objects is not None and isinstance(objects, (list, tuple)) and len(objects) > 1:
         # Heuristic: If problem ID contains a plural and objects are many and simple, assume uniformity
         assume_uniformity = False
         if problem_id and ("circles" in problem_id or "triangles" in problem_id or "squares" in problem_id or "polygons" in problem_id):
-            if len(objects) > 2 and all(o['num_points'] < 10 for o in objects):
+            if len(objects) > 2 and all(('num_points' in o and isinstance(o['num_points'], (int, float)) and o['num_points'] < 10) for o in objects):
                 assume_uniformity = True
 
         if assume_uniformity:

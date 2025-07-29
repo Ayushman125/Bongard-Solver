@@ -15,7 +15,7 @@ logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 def _safe_center_and_scale_points(points):
     """Safely centers and scales points to prevent issues with very small or large coordinates."""
     pts = np.array(points)
-    if pts.shape[0] < 2:
+    if pts is None or (hasattr(pts, 'size') and pts.size == 0) or (hasattr(pts, 'shape') and pts.shape[0] < 2):
         return pts, 1.0, np.array([0.0, 0.0])
 
     min_coords = np.min(pts, axis=0)
@@ -246,12 +246,13 @@ def hough_lines_detector(points, min_vote_threshold=30, min_line_length=15, max_
     Returns (is_line, confidence, line_params) based on the longest dominant line.
     """
     try:
-        if points.shape[0] < 2: return False, 0.0, None
+        if hasattr(points, 'shape') and points.shape[0] < 2:
+            return False, 0.0, None
 
         # Determine optimal image size for Hough Transform based on point spread
         min_x, min_y = np.min(points, axis=0)
         max_x, max_y = np.max(points, axis=0)
-        
+
         # Add a border to ensure lines at edges are captured
         border_px = 10
         img_width = int(max_x - min_x) + 2 * border_px
@@ -259,29 +260,29 @@ def hough_lines_detector(points, min_vote_threshold=30, min_line_length=15, max_
 
         # Handle cases where points are very clustered (e.g., single point)
         if img_width < 1 or img_height < 1:
-            if points.shape[0] > 1 and np.linalg.norm(points[-1] - points[0]) < 5: # Small cluster, not a line
+            if hasattr(points, 'shape') and points.shape[0] > 1 and np.linalg.norm(points[-1] - points[0]) < 5: # Small cluster, not a line
                 return False, 0.0, None
             img_width = img_height = 50 # Minimum size for very small objects
 
         img = np.zeros((img_height, img_width), dtype=np.uint8)
-        
+
         # Translate points to the new image coordinate system
         translated_points = (points - np.array([min_x, min_y]) + border_px).astype(np.int32)
 
         # Draw the polyline onto the image
         cv2.polylines(img, [translated_points], isClosed=False, color=255, thickness=2)
-        
+
         # Apply Canny edge detection for better line detection input
         edges = cv2.Canny(img, 50, 150, apertureSize=3) # Use apertureSize=3 (default) for typical edges
 
         # Perform probabilistic Hough Line Transform
-        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 
-                                threshold=min_vote_threshold, 
-                                minLineLength=min_line_length, 
+        lines = cv2.HoughLinesP(edges, 1, np.pi / 180,
+                                threshold=min_vote_threshold,
+                                minLineLength=min_line_length,
                                 maxLineGap=max_line_gap)
-        
+
         line_params = None
-        if lines is not None and len(lines) > 0:
+        if lines is not None and hasattr(lines, '__len__') and len(lines) > 0:
             # Find the longest line segment detected by Hough
             longest_line = None
             max_len_px = 0
@@ -291,12 +292,12 @@ def hough_lines_detector(points, min_vote_threshold=30, min_line_length=15, max_
                 if curr_len > max_len_px:
                     max_len_px = curr_len
                     longest_line = line_seg[0]
-            
+
             if longest_line is not None:
                 # Convert coordinates back to original scale
                 orig_x1, orig_y1 = longest_line[0] - border_px + min_x, longest_line[1] - border_px + min_y
                 orig_x2, orig_y2 = longest_line[2] - border_px + min_x, longest_line[3] - border_px + min_y
-                
+
                 actual_len = hypot(orig_x2 - orig_x1, orig_y2 - orig_y1)
                 actual_orientation = np.degrees(np.arctan2(orig_y2 - orig_y1, orig_x2 - orig_x1))
 
@@ -306,14 +307,14 @@ def hough_lines_detector(points, min_vote_threshold=30, min_line_length=15, max_
                     'length': float(actual_len),
                     'orientation': float(actual_orientation)
                 }
-                
+
                 # Confidence: Based on the length of the longest detected line relative to the overall extent of points.
                 # Also consider the number of points that align with this line (inlier concept).
-                
+
                 # Simple confidence for now: ratio of detected line length to overall path length/bbox diagonal
                 total_path_length = np.sum(np.linalg.norm(np.diff(points, axis=0), axis=1))
                 bbox_diag = hypot(max_x - min_x, max_y - min_y)
-                
+
                 if bbox_diag > 0:
                     conf_length = actual_len / bbox_diag
                 else:
@@ -321,10 +322,10 @@ def hough_lines_detector(points, min_vote_threshold=30, min_line_length=15, max_
 
                 # If the line is very short relative to the total path, confidence is low
                 confidence = calculate_confidence(conf_length, max_value=1.0, min_value=0.2) # min_value for threshold
-                
+
                 if confidence > 0.5: # Only return true if confidence is reasonable
                     return True, confidence, line_params
-        
+
         return False, 0.0, None
     except Exception as e:
         logging.error(f"[GeometricDetectors] Error in HoughLinesP: {e}")
@@ -337,7 +338,7 @@ def convexity_defects_detector(points):
     Returns (num_defects, type_label, confidence, extra_properties)
     """
     try:
-        if points.shape[0] < 3:
+        if hasattr(points, 'shape') and points.shape[0] < 3:
             return 0, 'degenerate_shape', 0.0, {}
 
         # Round and convert to int for OpenCV, but keep original for Shapely
@@ -433,7 +434,7 @@ def convexity_defects_detector(points):
 def fourier_descriptors(points, n_descriptors=10):
     """Computes Fourier descriptors for shape analysis. Returns (descriptors, confidence)"""
     pts = np.array(points)
-    if pts.shape[0] < n_descriptors: 
+    if hasattr(pts, 'shape') and pts.shape[0] < n_descriptors:
         return np.array([]).tolist(), 0.0 # Return list for JSON serialization
     complex_pts = pts[:, 0] + 1j * pts[:, 1]
     coeffs = np.fft.fft(complex_pts)

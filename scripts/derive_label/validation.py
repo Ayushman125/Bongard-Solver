@@ -140,7 +140,7 @@ def validate_label_quality(
                        expected_keywords=['circle', 'circular', 'ellipse'])
 
     # Rule 4: "polygon" general (distinguish from degenerate/simple shapes)
-    if 'polygon' in problem_id_lower and 'polygons' not in problem_id_lower: # Avoid "many polygons"
+    if ('polygon' in problem_id_lower and 'polygons' not in problem_id_lower): # Avoid "many polygons"
         found_generic_polygon = False
         for obj in objects:
             label = obj.get('label', '').lower()

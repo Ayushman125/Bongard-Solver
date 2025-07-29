@@ -5,9 +5,10 @@ from shapely.geometry import Polygon, MultiPoint, LineString
 from shapely.ops import polygonize, linemerge
 import copy
 
-# Import external dependencies (from src.data_pipeline)
-from src.data_pipeline.logo_parser import BongardLogoParser
-from src.data_pipeline.physics_infer import PhysicsInference # Keeping this as external
+# Import PhysicsInference for physics-based features
+from src.data_pipeline.physics_infer import PhysicsInference
+
+
 
 # Import internal modularized functions
 from derive_label.confidence_scoring import calculate_confidence
@@ -62,14 +63,14 @@ def create_shape_from_stroke_pipeline(flat_commands, problem_id=None, **kwargs):
     object_id_counter = 0
 
     for stroke_idx, stroke_obj in enumerate(strokes_data):
-        if not stroke_obj.get('coords') or len(stroke_obj['coords']) == 0:
+        coords = stroke_obj.get('coords')
+        if coords is None or (isinstance(coords, (list, np.ndarray)) and len(coords) == 0):
             logging.warning(f"Skipping stroke {stroke_idx}: No coordinates found.")
             continue
 
         object_id = f"obj_{object_id_counter}"
-        vertices_np = np.array(stroke_obj['coords'])
-        
-        if vertices_np.shape[0] < 1: # Single point is now valid, but check for empty array
+        vertices_np = np.array(coords)
+        if vertices_np is None or vertices_np.size == 0 or vertices_np.shape[0] < 1:
             logging.warning(f"Skipping object {object_id}: Empty vertices array.")
             continue
 

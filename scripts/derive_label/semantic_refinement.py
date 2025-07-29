@@ -1,3 +1,25 @@
+from derive_label.confidence_scoring import consensus_vote, DETECTOR_RELIABILITY
+
+def analyze_detector_consensus(obj, scene_context=None):
+    """
+    Aggregates candidate labels and confidences from all detectors for an object,
+    applies confidence-weighted voting and context-aware arbitration.
+    Modifies obj in place to add 'detector_consensus' property.
+    """
+    candidate_labels = obj.get('possible_labels', {})
+    detector_confidences = obj.get('detector_confidences', {})
+    context = {}
+    if scene_context and scene_context.get('grid_pattern', {}).get('is_grid'):
+        context['is_grid'] = scene_context['grid_pattern']['is_grid']
+    final_label, label_ranking, label_sources = consensus_vote(
+        candidate_labels, detector_confidences, DETECTOR_RELIABILITY, context)
+    obj['detector_consensus'] = {
+        'final_label': final_label,
+        'label_ranking': label_ranking,
+        'label_sources': label_sources,
+        'agreement': final_label != 'AMBIGUOUS',
+        'disagreement_reason': 'Ambiguous consensus' if final_label == 'AMBIGUOUS' else None
+    }
 import numpy as np
 import logging
 from shapely.geometry import Polygon
@@ -76,6 +98,9 @@ def detect_connected_line_segments(vertices_np, epsilon=5.0, min_len=10):
             point_vec_3d = np.pad(point_vec, (0, 1), 'constant') if point_vec.shape[-1] == 2 else point_vec
             cross_prod = np.abs(np.cross(line_vec_3d, point_vec_3d))
             dist = cross_prod / line_len
+            # Ensure dist is a scalar for comparison
+            if isinstance(dist, np.ndarray):
+                dist = float(np.max(dist))
             if dist > max_dist:
                 max_dist = dist
                 index = i
@@ -96,32 +121,36 @@ def detect_connected_line_segments(vertices_np, epsilon=5.0, min_len=10):
         logging.debug(f"[SemanticRefinement] Not enough points for line segments: {vertices_np}")
         return []
     elif n_points == 2:
-        if np.linalg.norm(vertices_np[1] - vertices_np[0]) > min_len:
-            return [(vertices_np[0].tolist(), vertices_np[1].tolist())]
+        diff = np.array(vertices_np[1]) - np.array(vertices_np[0])
+        if np.linalg.norm(diff) > min_len:
+            return [(np.array(vertices_np[0]).tolist(), np.array(vertices_np[1]).tolist())]
         else:
             logging.debug(f"[SemanticRefinement] Two points but too short for line segment: {vertices_np}")
             return []
     
-    simplified_points_list = rdp(vertices_np.tolist(), epsilon)
+    simplified_points_list = rdp(np.array(vertices_np).tolist(), epsilon)
     simplified_points = np.array(simplified_points_list)
-    
+
     segments = []
     for i in range(len(simplified_points) - 1):
-        p1 = simplified_points[i]
-        p2 = simplified_points[i + 1]
+        p1 = np.array(simplified_points[i])
+        p2 = np.array(simplified_points[i + 1])
         if np.linalg.norm(p2 - p1) > min_len:
             segments.append((p1.tolist(), p2.tolist()))
     return segments
 
 def is_quadrilateral_like(vertices_np):
     segments = detect_connected_line_segments(vertices_np, epsilon=5.0, min_len=5)
-    
-    if segments and len(segments) == 4:
+    if segments is not None and len(segments) == 4:
         first_point = np.array(segments[0][0])
         last_point = np.array(segments[-1][1])
         perimeter = sum(np.linalg.norm(np.array(s[1]) - np.array(s[0])) for s in segments)
-        
-        if np.linalg.norm(first_point - last_point) < 20 and perimeter > 0:
+        # Explicitly check array shapes and use np.linalg.norm safely
+        if (
+            isinstance(first_point, np.ndarray) and isinstance(last_point, np.ndarray)
+            and first_point.shape == last_point.shape
+            and np.linalg.norm(first_point - last_point) < 20 and perimeter > 0
+        ):
             return True
     return False
 
@@ -159,17 +188,14 @@ def generate_semantic_label(vertices_np, primary_label, problem_id=None, candida
             semantic_label = 'six_straight_line_figure'
         elif 'line' in semantic_label or 'polyline' in semantic_label:
             semantic_label = 'multi_line_composite'
-        
     elif len(line_segments) >= 4:
-        if problem_id and 'quadrangle' in problem_id or is_quadrilateral_like(vertices_np):
+        if (problem_id and 'quadrangle' in problem_id) or is_quadrilateral_like(vertices_np):
             semantic_label = 'irregular_quadrangle'
         elif 'line' in semantic_label or 'polyline' in semantic_label:
             semantic_label = 'multi_line_figure'
-            
     elif is_smooth_curve(vertices_np):
         if 'curve' not in semantic_label:
             semantic_label = 'curved_path'
-            
     elif is_composite_shape(vertices_np):
         if 'composite' not in semantic_label and 'multi' not in semantic_label:
             semantic_label = 'composite_shape'

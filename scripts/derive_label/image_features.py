@@ -12,6 +12,32 @@ from derive_label.confidence_scoring import calculate_confidence
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
+def extract_clean_mask_and_skeleton(vertices_np, img_size_px=64):
+    """
+    Extracts a clean binary mask and skeleton from vertices, with contour hierarchy, adaptive thresholding,
+    morphological cleaning, and fallback logic. Returns mask, skeleton, and QA metrics.
+    """
+    if vertices_np is None or vertices_np.size == 0 or vertices_np.shape[0] < 1:
+        return np.zeros((img_size_px, img_size_px), dtype=np.uint8), np.zeros((img_size_px, img_size_px), dtype=np.uint8), {'area': 0, 'skeleton_area': 0, 'fill_ratio': 0.0}
+    img = _rasterize_vertices_to_image(vertices_np, img_size_px=img_size_px)
+    thresh_val = threshold_otsu(img) if np.any(img) else 0
+    mask = (img > thresh_val).astype(np.uint8)
+    sq_footprint = np.ones((3, 3), dtype=bool)
+    mask = closing(opening(mask, sq_footprint), sq_footprint)
+    try:
+        contours, hierarchy = cv2.findContours(mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    except Exception:
+        contours, hierarchy = [], None
+    skeleton = skeletonize(mask > 0)
+    area = np.sum(mask)
+    skeleton_area = np.sum(skeleton)
+    fill_ratio = skeleton_area / (area + 1e-6)
+    if area == 0 or fill_ratio < 0.05:
+        edges = cv2.Canny(img, 50, 150)
+        mask = closing(opening(edges, sq_footprint), sq_footprint)
+        skeleton = skeletonize(mask > 0)
+    return mask, skeleton, {'area': area, 'skeleton_area': skeleton_area, 'fill_ratio': fill_ratio}
+
 
 def _rasterize_vertices_to_image(vertices_np, img_size_px=64, thickness=2, is_closed=False):
     """
@@ -19,7 +45,7 @@ def _rasterize_vertices_to_image(vertices_np, img_size_px=64, thickness=2, is_cl
     Handles single points, lines, and polygons.
     Ensures consistent image generation for various feature extractors.
     """
-    if vertices_np.size == 0 or vertices_np.shape[0] < 1:
+    if vertices_np is None or vertices_np.size == 0 or vertices_np.shape[0] < 1:
         return np.zeros((img_size_px, img_size_px), dtype=np.uint8)
 
     pts = np.round(vertices_np).astype(np.int32)
@@ -111,15 +137,16 @@ def image_processing_features(vertices_np):
     if vertices_np.size == 0 or vertices_np.shape[0] < 1:
         return features
 
-    # Determine if the shape is closed for accurate rasterization
-    is_closed_shape = bool(np.linalg.norm(vertices_np[0] - vertices_np[-1]) < 1e-1) if vertices_np.shape[0] > 1 else False
-
-    # Rasterize the stroke into a binary image using the helper
-    img_binary = _rasterize_vertices_to_image(vertices_np, img_size_px=128, thickness=2, is_closed=is_closed_shape)
-    
-    if np.sum(img_binary) == 0: # Handle cases where rasterization results in empty image
+    # --- Robust mask extraction, skeletonization, QA ---
+    mask, skeleton, qa = extract_clean_mask_and_skeleton(vertices_np, img_size_px=128)
+    features['robust_mask_area'] = int(np.sum(mask))
+    features['robust_skeleton_area'] = int(np.sum(skeleton))
+    features['robust_fill_ratio'] = qa.get('fill_ratio', 0.0)
+    if features['robust_mask_area'] == 0:
         features['rasterization_empty'] = True
         return features
+
+    img_binary = mask
 
     try:
         # --- Basic Image Properties ---
