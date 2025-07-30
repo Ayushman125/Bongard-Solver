@@ -907,6 +907,52 @@ async def main(): # Main is now async because it calls async functions
         logging.error(f"Unexpected error loading labels: {e}. Continuing without them.")
         derived_labels = {}
 
+    # --- START PATCH ---
+    # Build a lookup from image_path -> features/geometry
+    label_lookup = {}
+    if isinstance(derived_labels, list):
+        for lbl in derived_labels:
+            # normalize paths if needed so they match augmented_data['image_path']
+            label_lookup[lbl['image_path']] = {
+                'features': lbl['features'],
+                'vertices': lbl['geometry'],
+                'label': lbl['label'],
+                'category': lbl['category']
+            }
+
+    # Enrich augmented_data with label info
+    for rec in augmented_data:
+        info = label_lookup.get(rec['image_path'])
+        if not info:
+            logging.warning(f"No derived_labels entry for {rec['image_path']}")
+            continue
+        rec.update(info)  # now rec has rec['features'], rec['vertices'], rec['label'], rec['category']
+
+    # Group records by problem_id
+    from collections import defaultdict
+    grouped = defaultdict(list)
+    for rec in augmented_data:
+        pid = rec.get('problem_id')
+        grouped[pid].append(rec)
+
+    # Build one scene graph per problem
+    graphs = []
+    for pid, records in grouped.items():
+        merged = {'objects': []}
+        for idx, rec in enumerate(records):
+            merged['objects'].append({
+                'id': f"{pid}_{idx}",
+                'vertices': rec['vertices'],
+                **rec['features'],
+                'shape_label': rec['label'],
+                'category': rec['category']
+            })
+        G = build_graph_unvalidated(merged)
+        graphs.append({'problem_id': pid, 'graph': G})
+
+    # Skip the per-image pipeline entirely—overwrite `graphs` and proceed to save them
+    # --- END PATCH ---
+
 
     # Determine which graph building function to use (with or without validation)
     build_func_for_profiling = build_graph_validated if GRAPHTYPE_AVAILABLE else build_graph_unvalidated
@@ -928,50 +974,7 @@ async def main(): # Main is now async because it calls async functions
     graphs = []
     profiler = TaskProfiler()
 
-    # Split data into batches
-    batches = [augmented_data[i:i+batch_size] for i in range(0, len(augmented_data), batch_size)]
-    logging.info(f"Starting batch processing: {len(batches)} batches, batch_size={batch_size}, parallel={args.parallel}")
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=args.parallel) as executor:
-        futures = {executor.submit(process_batch_sync_wrapper, batch, feature_cache, batch_validator, recall_evaluator, drift_visualizer, enhanced_builder): batch_idx for batch_idx, batch in enumerate(batches)}
-
-        for future in tqdm(concurrent.futures.as_completed(futures), total=len(batches), desc="Building graphs", mininterval=0.5):
-            batch_idx = futures[future]
-            start_time_batch = time.time()
-            try:
-                batch_results = future.result()
-                graphs.extend(batch_results)
-                latency = (time.time() - start_time_batch) * 1000
-                profiler.log_latency('scene_graph_build', latency, {
-                    'batch_size': len(batch_results),
-                    'latency_ms': latency,
-                    'throughput_graphs_per_sec': len(batch_results) / (latency / 1000) if latency > 0 else float('inf')
-                })
-                logging.info(f"Processed batch {batch_idx+1}/{len(batches)}. Graphs processed: {len(batch_results)}")
-
-                # Periodically clear cache and log memory stats
-                if (batch_idx + 1) % (4) == 0: # Check every 4 batches
-                    if TORCH_KORNIA_AVAILABLE and torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                    gc.collect()
-                    memory_stats = feature_cache.get_cache_stats()
-                    logging.info(f"Memory usage: RAM: {memory_stats.get('memory_usage_mb', 0):.1f}MB, GPU: {memory_stats.get('gpu_usage_mb', 0):.1f}MB")
-
-            except Exception as e:
-                logging.error(f"Error processing batch {batch_idx+1}: {e}")
-                # Log a sample from the problematic batch if available
-                problematic_batch = batches[batch_idx]
-                if problematic_batch:
-                    logging.debug(f"Sample from problematic batch: {problematic_batch[0]}")
-
-    if len(graphs) == 0:
-        logging.error(f"No scene graphs were produced. Check input data and filtering logic.")
-        if len(augmented_data) > 0:
-            logging.debug(f"Sample input record: {augmented_data[0]}")
-            if isinstance(augmented_data[0], dict):
-                logging.debug(f"Sample input record keys: {list(augmented_data[0].keys())}")
-    else:
-        logging.info(f"Successfully built {len(graphs)} scene graphs.")
+    # ...existing code...
 
     # Save results
     try:
