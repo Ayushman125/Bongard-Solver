@@ -1,5 +1,3 @@
-# --- Typing Imports for Function Annotations ---
-from typing import List, Dict, Any
 # --- Standard Library Imports ---
 import argparse
 import asyncio
@@ -11,18 +9,24 @@ import logging
 import os
 import pickle
 import sys
+from typing import List, Dict, Any, Tuple
+from train_relation_gnn import train_relational_gnn
 import threading
 import time
+import math
 from collections import Counter, defaultdict
+from itertools import combinations # For global graph features
 
 # --- Third-Party Library Imports ---
 import cv2
 import networkx as nx
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw # Added ImageDraw for visualization
 from scipy import stats
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, LineString, MultiLineString # Added MultiLineString
+from shapely.ops import polygonize, unary_union
 from tqdm import tqdm
+from sklearn.cluster import KMeans # For clustering
 
 # Conditional imports for torch/kornia/torchvision
 TORCH_KORNIA_AVAILABLE = False
@@ -68,7 +72,7 @@ from integration.task_profiler import TaskProfiler
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Global Constants and Utilities ---
-EPS = 1e-3
+EPS = 1e-6 # Increased precision for epsilon
 TOP_K = 3 # For Commonsense KB lookups
 
 # Commonsense KB setup (ConceptNet API)
@@ -87,91 +91,117 @@ except Exception as e:
 # --- Predicate Registry and Edge Enrichment Functions ---
 def parallel(a, b, tol=7):
     """Checks if two orientations are parallel within a tolerance."""
-    return abs(a - b) < tol or abs(abs(a - b) - 180) < tol
+    # Orientations are in degrees, 0-360.
+    # Parallel means difference is 0 or 180 (modulo 360)
+    diff = abs(a - b) % 180
+    return diff < tol or (180 - diff) < tol
 
 def physics_contact(poly_a, poly_b):
     """Robust check for physical contact between two polygons."""
     return poly_a.touches(poly_b)
 
-def load_predicates():
-    """Loads predicate definitions from schemas/edge_types.json or uses built-in defaults."""
+def extract_line_segments(action_program):
+    """
+    Extracts line segments from a simplified action program.
+    Assumes action_program is a list of commands like:
+    [{'type': 'start', 'x': x1, 'y': y1}, {'type': 'line', 'x': x2, 'y': y2}, ...]
+    """
+    segments = []
+    current_point = None
+    if not isinstance(action_program, list):
+        return [] # Return empty if not a list
+
+    for command in action_program:
+        if command['type'] == 'start':
+            current_point = (command['x'], command['y'])
+        elif command['type'] == 'line' and current_point:
+            next_point = (command['x'], command['y'])
+            segments.append((current_point, next_point))
+            current_point = next_point
+        # Add other command types if necessary (e.g., 'arc', 'curve')
+    return segments
+
+def load_predicates(adaptive_thresholds: AdaptivePredicateThresholds, canvas_dims: Tuple[int, int] = (128, 128)):
+    """
+    Loads predicate definitions from schemas/edge_types.json or uses built-in defaults,
+    and integrates adaptive thresholds.
+    """
     predicate_file = os.path.join(os.path.dirname(__file__), '..', 'schemas', 'edge_types.json')
-    if not os.path.exists(predicate_file):
+    predicate_defs = []
+    if os.path.exists(predicate_file):
+        try:
+            with open(predicate_file, 'r', encoding='utf-8') as f:
+                predicate_defs = json.load(f)
+            logging.info(f"Loaded {len(predicate_defs)} predicate definitions from {predicate_file}.")
+        except json.JSONDecodeError as e:
+            logging.error(f"Error decoding predicates from {predicate_file}: {e}. Using built-in defaults.")
+    else:
         logging.warning("schemas/edge_types.json not found. Using built-in predicates.")
-        return None
-    try:
-        with open(predicate_file, 'r', encoding='utf-8') as f:
-            predicate_defs = json.load(f)
-    except json.JSONDecodeError as e:
-        logging.error(f"Error decoding predicates from {predicate_file}: {e}. Using built-in defaults.")
-        return None
 
     registry = {}
+
+    # Override with parameters from adaptive thresholds
+    learned_params = adaptive_thresholds.get_current_thresholds()
+    logging.info(f"Loaded adaptive predicate parameters: {learned_params}")
+
+    # Define all predicates, prioritizing those from file if they exist
+    # Each lambda now receives 'a', 'b' (node data) and 'params' (learned thresholds)
+    all_candidate_predicates = {
+        'left_of':     lambda a, b, params: a.get('cx', 0) + EPS < b.get('cx', 0),
+        'right_of':    lambda a, b, params: a.get('cx', 0) > b.get('cx', 0) + EPS,
+        'above':       lambda a, b, params: a.get('cy', 0) + EPS < b.get('cy', 0),
+        'below':       lambda a, b, params: a.get('cy', 0) > b.get('cy', 0) + EPS,
+        'contains':    lambda a, b, params: Polygon(a['vertices']).contains(Polygon(b['vertices'])) if 'vertices' in a and 'vertices' in b else False,
+        'inside':      lambda a, b, params: Polygon(b['vertices']).contains(Polygon(a['vertices'])) if 'vertices' in a and 'vertices' in b else False,
+        'supports':    lambda a, b, params: (physics_contact(Polygon(a['vertices']), Polygon(b['vertices'])) and a.get('cy', 0) > b.get('cy', 0)) if 'vertices' in a and 'vertices' in b else False,
+        'supported_by':lambda a, b, params: (physics_contact(Polygon(b['vertices']), Polygon(a['vertices'])) and b.get('cy', 0) > a.get('cy', 0)) if 'vertices' in a and 'vertices' in b else False,
+        'touches':     lambda a, b, params: Polygon(a['vertices']).touches(Polygon(b['vertices'])) if 'vertices' in a and 'vertices' in b else False,
+        'overlaps':    lambda a, b, params: Polygon(a['vertices']).overlaps(Polygon(b['vertices'])) if 'vertices' in a and 'vertices' in b else False,
+        'parallel_to': lambda a, b, params: parallel(a.get('orientation', 0), b.get('orientation', 0), params.get('orient_tol', 7)), # Parameterized
+        'perpendicular_to': lambda a, b, params: abs(abs(a.get('orientation', 0) - b.get('orientation', 0)) - 90) < params.get('orient_tol', 7), # Parameterized
+        'aligned_left':lambda a, b, params: abs(a.get('bbox', [0,0,0,0])[0] - b.get('bbox', [0,0,0,0])[0]) < EPS,
+        'aligned_right':lambda a, b, params: abs(a.get('bbox', [0,0,0,0])[2] - b.get('bbox', [0,0,0,0])[2]) < EPS,
+        'aligned_top': lambda a, b, params: abs(a.get('bbox', [0,0,0,0])[1] - b.get('bbox', [0,0,0,0])[1]) < EPS,
+        'aligned_bottom':lambda a, b, params: abs(a.get('bbox', [0,0,0,0])[3] - b.get('bbox', [0,0,0,0])[3]) < EPS,
+        'proximal_to': lambda a, b, params: np.linalg.norm(np.array([a.get('cx',0), a.get('cy',0)]) - np.array([b.get('cx',0), b.get('cy',0)])) < params.get('near_threshold', 50), # Parameterized
+        'contains_text': lambda a, b, params: False, # KB-based, handled in add_commonsense_edges
+        'is_arrow_for': lambda a, b, params: False, # KB-based, handled in add_commonsense_edges
+        'has_sides':   lambda a, b, params: False, # KB-based, handled in add_commonsense_edges
+        'same_shape':  lambda a, b, params: a.get('shape_label') == b.get('shape_label'),
+        'symmetry_axis':lambda a, b, params: abs(a.get('symmetry_axis',0) - b.get('orientation',0)) < params.get('orient_tol', 7), # Parameterized
+        'same_color':  lambda a, b, params: np.all(np.abs(np.array(a.get('color',[0,0,0])) - np.array(b.get('color',[0,0,0]))) < params.get('color_tol', 10)), # Parameterized
+        # New predicates from prompt
+        'larger_than': lambda a, b, params: a.get('area', 0) > params.get('larger_than_alpha', 1.1) * b.get('area', 0), # Parameterized
+        'near':        lambda a, b, params: math.hypot(a.get('cx',0)-b.get('cx',0), a.get('cy',0)-b.get('cy',0)) < params.get('near_threshold', 50), # Parameterized
+        'same_aspect': lambda a, b, params: abs(a.get('aspect_ratio', 1.0) - b.get('aspect_ratio', 1.0)) < params.get('aspect_tol', 0.2), # Parameterized
+        'clustered':   lambda a, b, params: a.get('cluster_label') == b.get('cluster_label'), # New, uses cluster_label
+        'high_compact':lambda a, b, params: a.get('compactness', 0.0) > params.get('compactness_thresh', 0.5), # New, uses compactness, single node predicate
+        'symmetry_pair': lambda a, b, params: abs(a.get('cx',0) + b.get('cx',0) - canvas_dims[0]) < params.get('symmetry_tol', 10) and \
+                                              abs(a.get('cy',0) + b.get('cy',0) - canvas_dims[1]) < params.get('symmetry_tol', 10), # Parameterized with canvas_dims
+        'part_of':     lambda a, b, params: Polygon(b['vertices']).contains(Polygon(a['vertices'])) and a.get('parent_id') == b.get('id') # For decomposed parts
+    }
+
+    # Wrap predicates to pass learned_params
+    for name, func in all_candidate_predicates.items():
+        # All predicates now receive params, even if they don't use them.
+        # This simplifies the calling signature in add_predicate_edges.
+        registry[name] = lambda a, b, func=func: func(a, b, learned_params)
+
+    # Add predicates from file if they are not already in all_candidate_predicates
     for entry in predicate_defs:
         name = entry['predicate']
-        # Map each predicate to its logic (use built-in if available, else skip)
-        if name == 'left_of':
-            registry[name] = lambda a, b: a.get('cx', 0) + EPS < b.get('cx', 0)
-        elif name == 'right_of':
-            registry[name] = lambda a, b: a.get('cx', 0) > b.get('cx', 0) + EPS
-        elif name == 'above':
-            registry[name] = lambda a, b: a.get('cy', 0) + EPS < b.get('cy', 0)
-        elif name == 'below':
-            registry[name] = lambda a, b: a.get('cy', 0) > b.get('cy', 0) + EPS
-        elif name == 'contains':
-            registry[name] = lambda a, b: Polygon(a['vertices']).contains(Polygon(b['vertices'])) if 'vertices' in a and 'vertices' in b else False
-        elif name == 'inside':
-            registry[name] = lambda a, b: Polygon(b['vertices']).contains(Polygon(a['vertices'])) if 'vertices' in a and 'vertices' in b else False
-        elif name == 'supports':
-            registry[name] = lambda a, b: (physics_contact(Polygon(a['vertices']), Polygon(b['vertices'])) and a.get('cy', 0) > b.get('cy', 0)) if 'vertices' in a and 'vertices' in b else False
-        elif name == 'supported_by':
-            registry[name] = lambda a, b: (physics_contact(Polygon(b['vertices']), Polygon(a['vertices'])) and b.get('cy', 0) > a.get('cy', 0)) if 'vertices' in a and 'vertices' in b else False
-        elif name == 'touches':
-            registry[name] = lambda a, b: Polygon(a['vertices']).touches(Polygon(b['vertices'])) if 'vertices' in a and 'vertices' in b else False
-        elif name == 'overlaps':
-            registry[name] = lambda a, b: Polygon(a['vertices']).overlaps(Polygon(b['vertices'])) if 'vertices' in a and 'vertices' in b else False
-        elif name == 'parallel_to':
-            registry[name] = lambda a, b: parallel(a.get('orientation', 0), b.get('orientation', 0))
-        elif name == 'perpendicular_to':
-            registry[name] = lambda a, b: abs(abs(a.get('orientation', 0) - b.get('orientation', 0)) - 90) < 7
-        elif name == 'aligned_left':
-            registry[name] = lambda a, b: abs(a.get('bbox', [0,0,0,0])[0] - b.get('bbox', [0,0,0,0])[0]) < EPS
-        elif name == 'aligned_right':
-            registry[name] = lambda a, b: abs(a.get('bbox', [0,0,0,0])[2] - b.get('bbox', [0,0,0,0])[2]) < EPS
-        elif name == 'aligned_top':
-            registry[name] = lambda a, b: abs(a.get('bbox', [0,0,0,0])[1] - b.get('bbox', [0,0,0,0])[1]) < EPS
-        elif name == 'aligned_bottom':
-            registry[name] = lambda a, b: abs(a.get('bbox', [0,0,0,0])[3] - b.get('bbox', [0,0,0,0])[3]) < EPS
-        elif name == 'proximal_to':
-            registry[name] = lambda a, b: np.linalg.norm(np.array([a.get('cx',0), a.get('cy',0)]) - np.array([b.get('cx',0), b.get('cy',0)])) < 50
-        elif name == 'contains_text':
-            registry[name] = lambda a, b: False # KB-based, handled in add_commonsense_edges
-        elif name == 'is_arrow_for':
-            registry[name] = lambda a, b: False # KB-based, handled in add_commonsense_edges
-        elif name == 'has_sides':
-            registry[name] = lambda a, b: False # KB-based, handled in add_commonsense_edges
-        elif name == 'same_shape':
-            registry[name] = lambda a, b: a.get('shape_label') == b.get('shape_label')
-        elif name == 'symmetry_axis':
-            registry[name] = lambda a, b: abs(a.get('symmetry_axis',0) - b.get('orientation',0)) < 7
-        elif name == 'same_color':
-            registry[name] = lambda a, b: np.all(np.abs(np.array(a.get('color',[0,0,0])) - np.array(b.get('color',[0,0,0]))) < 10)
-        else:
-            registry[name] = lambda a, b: False
+        if name not in registry:
+            # If custom logic is provided in schemas/edge_types.json, add it here.
+            # For now, assuming file predicates are just names that map to built-in logic.
+            if name in all_candidate_predicates:
+                registry[name] = lambda a, b, func=all_candidate_predicates[name]: func(a, b, learned_params)
+            else:
+                logging.warning(f"Predicate '{name}' from edge_types.json has no defined logic in build_scene_graphs.py. Skipping.")
+
     return registry
 
-PREDICATES = load_predicates() or {
-    'left_of':     lambda a, b: a.get('cx', 0) + EPS < b.get('cx', 0),
-    'right_of':    lambda a, b: a.get('cx', 0) > b.get('cx', 0) + EPS,
-    'above':       lambda a, b: a.get('cy', 0) + EPS < b.get('cy', 0),
-    'below':       lambda a, b: a.get('cy', 0) > b.get('cy', 0) + EPS,
-    'contains':    lambda a, b: Polygon(a['vertices']).contains(Polygon(b['vertices'])) if 'vertices' in a and 'vertices' in b else False,
-    'inside':      lambda a, b: Polygon(b['vertices']).contains(Polygon(a['vertices'])) if 'vertices' in a and 'vertices' in b else False,
-    'supports':    lambda a, b: (physics_contact(Polygon(a['vertices']), Polygon(b['vertices'])) and a.get('cy', 0) > b.get('cy', 0)) if 'vertices' in a and 'vertices' in b else False,
-    'touches':     lambda a, b: Polygon(a['vertices']).touches(Polygon(b['vertices'])) if 'vertices' in a and 'vertices' in b else False,
-    'overlaps':    lambda a, b: Polygon(a['vertices']).overlaps(Polygon(b['vertices'])) if 'vertices' in a and 'vertices' in b else False,
-    'parallel_to': lambda a, b: parallel(a.get('orientation', 0), b.get('orientation', 0)),
-}
+# PREDICATES will be initialized in main() after adaptive_thresholds are loaded
+PREDICATES = {}
 
 def add_predicate_edges(G):
     """Iterates through all node pairs and adds edges based on the predicate registry."""
@@ -182,12 +212,59 @@ def add_predicate_edges(G):
                 continue
             for pred, fn in PREDICATES.items():
                 try:
-                    # Use binarized mask and object attributes only
+                    # Pass node data (data_u, data_v) to predicate function
                     if fn(data_u, data_v):
                         G.add_edge(u, v, predicate=pred, source='spatial')
                 except Exception as e:
                     logging.debug(f"Predicate function '{pred}' failed for ({u}, {v}): {e}")
                     continue
+
+    # Add global graph features
+    G.graph['node_count'] = G.number_of_nodes()
+    G.graph['edge_count'] = G.number_of_edges()
+    if G.number_of_nodes() > 0:
+        G.graph['avg_degree'] = np.mean([d for _,d in G.degree()])
+    else:
+        G.graph['avg_degree'] = 0.0
+    try:
+        if G.number_of_nodes() > 1: # Clustering coefficient requires at least 2 nodes
+            G.graph['clustering_coeff'] = nx.average_clustering(G.to_undirected())
+        else:
+            G.graph['clustering_coeff'] = 0.0
+    except Exception as e:
+        logging.warning(f"Could not compute clustering coefficient: {e}. Setting to 0.0")
+        G.graph['clustering_coeff'] = 0.0
+
+    # New global graph features
+    dists = []
+    if len(G.nodes) > 1:
+        for u_id, v_id in combinations(G.nodes(), 2):
+            u_data = G.nodes[u_id]
+            v_data = G.nodes[v_id]
+            if 'cx' in u_data and 'cy' in u_data and 'cx' in v_data and 'cy' in v_data:
+                dists.append(math.hypot(u_data['cx'] - v_data['cx'], u_data['cy'] - v_data['cy']))
+    
+    avg_area_ratio = 0.0
+    if G.number_of_nodes() > 0:
+        all_areas = [n.get('area', 0) for _, n in G.nodes(data=True)]
+        mean_area = np.mean(all_areas) if all_areas else EPS
+        avg_area_ratio = np.mean([n.get('area', 0) / (mean_area + EPS) for _, n in G.nodes(data=True)])
+
+    edge_diversity = 0.0
+    if G.number_of_edges() > 0:
+        edge_diversity = len({d['predicate'] for _,_,d in G.edges(data=True)}) / (G.number_of_nodes()**2) # Using N^2 as maximum possible edges
+
+    motif_coverage = 0.0
+    if G.number_of_nodes() > 0:
+        motif_coverage = len([n for n in G.nodes if '_part' in n]) / len(G.nodes)
+
+    G.graph.update({
+        'avg_area_ratio': float(avg_area_ratio),
+        'std_centroid_dist': float(np.std(dists)) if dists else 0.0,
+        'edge_diversity': float(edge_diversity),
+        'motif_coverage': float(motif_coverage)
+    })
+
 
 def add_commonsense_edges(G):
     """Adds semantic edges by querying the commonsense knowledge base."""
@@ -212,15 +289,65 @@ def add_commonsense_edges(G):
 
 
 # --- Physics Attribute Computation ---
+def compute_basic_features(poly: Polygon) -> Dict[str, Any]:
+    """Computes basic geometric features for a shapely Polygon."""
+    if not poly or not poly.is_valid:
+        return {'area': 0.0, 'perimeter': 0.0, 'cx': 0.0, 'cy': 0.0, 'bbox': [0,0,0,0], 'aspect_ratio': 1.0, 'orientation': 0.0}
+
+    area = poly.area
+    perimeter = poly.length
+    centroid = poly.centroid
+    minx, miny, maxx, maxy = poly.bounds
+    width, height = maxx - minx, maxy - miny
+    aspect_ratio = width / height if height > 0 else 1.0
+
+    # Orientation via PCA of vertices
+    orientation = 0.0
+    try:
+        if len(poly.exterior.coords) >= 2:
+            coords = np.array(poly.exterior.coords)
+            if coords.shape[0] > 1 and coords.shape[1] == 2:
+                # Ensure at least 2 points for PCA
+                if coords.shape[0] > 1:
+                    cov_matrix = np.cov(coords.T)
+                    if cov_matrix.shape == (2, 2): # Ensure it's a 2x2 matrix
+                        eigenvalues, eigenvectors = np.linalg.eig(cov_matrix)
+                        # The first principal component (eigenvector corresponding to largest eigenvalue)
+                        # gives the direction of the major axis.
+                        major_axis_idx = np.argmax(eigenvalues)
+                        principal_axis = eigenvectors[:, major_axis_idx]
+                        orientation = float(np.degrees(np.arctan2(principal_axis[1], principal_axis[0]))) % 360
+    except Exception as e:
+        logging.debug(f"Could not compute orientation for polygon: {e}")
+        orientation = 0.0 # Default to 0 on error
+
+    return {
+        'area': float(area),
+        'perimeter': float(perimeter),
+        'cx': float(centroid.x),
+        'cy': float(centroid.y),
+        'bbox': [float(minx), float(miny), float(maxx), float(maxy)],
+        'aspect_ratio': float(aspect_ratio),
+        'orientation': float(orientation)
+    }
+
 def compute_physics_attributes(node_data):
-    """Computes robust physics attributes and asserts their domain validity."""
+    """
+    Computes robust physics attributes and asserts their domain validity.
+    Now also computes perimeter and compactness.
+    """
     vertices = node_data.get('vertices')
     if not vertices or len(vertices) < 3:
-        node_data.update({'area': 0.0, 'inertia': 0.0, 'convexity': 0.0, 'cx': 0.0, 'cy': 0.0})
+        node_data.update({'area': 0.0, 'inertia': 0.0, 'convexity': 0.0, 'cx': 0.0, 'cy': 0.0, 'bbox': [0,0,0,0], 'aspect_ratio': 1.0, 'perimeter': 0.0, 'orientation': 0.0, 'compactness': 0.0, 'num_segments': 0, 'num_junctions': 0})
         return
 
     poly = Polygon(vertices)
-    area = poly.area
+    
+    # Compute basic features first
+    basic_features = compute_basic_features(poly)
+    node_data.update(basic_features)
+
+    area = node_data['area'] # Use the computed area
 
     assert area >= 0.0, f"Negative area {area} for node {node_data.get('id')}"
 
@@ -231,26 +358,38 @@ def compute_physics_attributes(node_data):
         inertia = 0.0 # Default to 0 on error
 
     convexity = poly.convex_hull.area / area if area > 0 else 0.0
-    centroid = poly.centroid
+
+    # New attributes: compactness, num_segments, num_junctions
+    perimeter = node_data['perimeter'] # Use computed perimeter
+    compactness = perimeter**2 / (4 * math.pi * area) if area > 0 else 0.0
+
+    action_program = node_data.get('action_program', [])
+    num_segments = len(extract_line_segments(action_program))
+    
+    # Simple way to count junctions (points that appear more than once in exterior coords)
+    num_junctions = 0
+    if poly.exterior:
+        coords_counter = Counter(tuple(c) for c in poly.exterior.coords)
+        num_junctions = sum(1 for count in coords_counter.values() if count > 1)
 
     node_data.update({
-        'area': float(area),
         'inertia': float(inertia),
         'convexity': float(convexity),
-        'cx': centroid.x,
-        'cy': centroid.y,
+        'compactness': float(compactness),
+        'num_segments': int(num_segments),
+        'num_junctions': int(num_junctions),
     })
 
 # --- Graph Building Functions with/without Validation ---
 @graph_validate(
-    NodeData(id=str, area=float, inertia=float, convexity=float),
+    NodeData(id=str, area=float, inertia=float, convexity=float, cx=float, cy=float, bbox=list, aspect_ratio=float, perimeter=float, orientation=float, compactness=float, num_segments=int, num_junctions=int), # Updated NodeData schema
     EdgeData(predicate=str, source=str),
 )
 def build_graph_validated(record):
     """Builds a single scene graph with runtime schema validation."""
     G = nx.MultiDiGraph()
     for obj in record.get('objects', []):
-        compute_physics_attributes(obj)
+        compute_physics_attributes(obj) # This now computes all attributes
         G.add_node(obj['id'], **obj)
     add_predicate_edges(G)
     add_commonsense_edges(G)
@@ -260,7 +399,7 @@ def build_graph_unvalidated(record):
     """Builds a single scene graph without runtime schema validation."""
     G = nx.MultiDiGraph()
     for obj in record.get('objects', []):
-        compute_physics_attributes(obj)
+        compute_physics_attributes(obj) # This now computes all attributes
         G.add_node(obj['id'], **obj)
     add_predicate_edges(G)
     add_commonsense_edges(G)
@@ -294,7 +433,8 @@ def compute_pc_error(graphs):
         for i in range(len(polygons)):
             for j in range(i + 1, len(polygons)):
                 try:
-                    if polygons[i].overlaps(polygons[j]):
+                    # Check for actual intersection, not just touching
+                    if polygons[i].intersects(polygons[j]) and not polygons[i].touches(polygons[j]):
                         has_overlap = True
                         break
                 except Exception as e:
@@ -322,7 +462,7 @@ def log_diversity_metrics(graphs, out_path='logs/graph_diversity.jsonl'):
 
         # Only count for graphs with more than one node to avoid division by zero
         if len(G.nodes) > 1:
-            total_possible_triples += len(G.nodes)**2 - len(G.nodes)
+            total_possible_triples += len(G.nodes) * (len(G.nodes) - 1) # N*(N-1) for directed pairs
 
         for u, v, data in G.edges(data=True):
             unique_triples.add((u, data.get('predicate', 'unknown'), v))
@@ -368,7 +508,7 @@ def save_hash(hash_path, hash_val):
     with open(hash_path, 'w') as f:
         f.write(hash_val)
 
-def profile_optimal_batch_size(records, build_func):
+def profile_optimal_batch_size(records, build_func, args):
     """Profiles different batch sizes to find the one with optimal graph build throughput."""
     candidate_sizes = [8, 16, 32, 64, 128]
     best_size = candidate_sizes[0]
@@ -396,14 +536,69 @@ def profile_optimal_batch_size(records, build_func):
             for pid, problem_recs in grouped_sample.items():
                 merged_rec = {'objects': []}
                 for idx, rec in enumerate(problem_recs):
-                    merged_rec['objects'].append({
+                    obj_data = {
                         'id': f"{pid}_{idx}",
                         'vertices': rec.get('vertices', []),
                         **rec.get('features', {}),
                         'label': rec.get('label', ''),
                         'shape_label': rec.get('label', ''),
-                        'category': rec.get('category', '')
-                    })
+                        'category': rec.get('category', ''),
+                        'action_program': rec.get('action_program', []) # Include action_program for decomposition
+                    }
+                    # Compute additional node attributes
+                    compute_physics_attributes(obj_data) # This will add cx, cy, bbox, aspect_ratio, perimeter, orientation, compactness, num_segments, num_junctions
+
+                    # Optionally decompose complex polygons during profiling
+                    if args.decompose_polygons and obj_data.get('action_program'):
+                        segments = extract_line_segments(obj_data['action_program'])
+                        if segments:
+                            try:
+                                from shapely.geometry import MultiLineString
+                                multi_line = MultiLineString(segments)
+                                unary_union_result = unary_union(multi_line)
+                                sub_polys = list(polygonize(unary_union_result))
+
+                                if len(sub_polys) > 1:
+                                    for i, sub in enumerate(sub_polys):
+                                        new_obj_id = f"{obj_data['id']}_part{i}"
+                                        new_obj_data = {
+                                            'id': new_obj_id,
+                                            'vertices': list(sub.exterior.coords) if sub.exterior else [],
+                                            'shape_label': obj_data.get('shape_label', 'part'),
+                                            'category': obj_data.get('category', 'part'),
+                                            'parent_id': obj_data['id']
+                                        }
+                                        compute_physics_attributes(new_obj_data)
+                                        merged_rec['objects'].append(new_obj_data)
+                                else:
+                                    merged_rec['objects'].append(obj_data)
+                            except Exception as e:
+                                logging.warning(f"Failed to decompose object {obj_data['id']} during profiling: {e}. Adding original object.")
+                                merged_rec['objects'].append(obj_data)
+                        else:
+                            merged_rec['objects'].append(obj_data)
+                    else:
+                        merged_rec['objects'].append(obj_data)
+
+                # Assign cluster labels for profiling purposes
+                if merged_rec['objects'] and len(merged_rec['objects']) > 1:
+                    coords = np.array([[o['cx'], o['cy']] for o in merged_rec['objects'] if 'cx' in o and 'cy' in o])
+                    if len(coords) > 1:
+                        k = min(3, len(coords))
+                        kmeans = KMeans(n_clusters=k, random_state=0, n_init=10) # Added n_init to suppress warning
+                        labels = kmeans.fit_predict(coords)
+                        for i, obj in enumerate(merged_rec['objects']):
+                            if 'cx' in obj and 'cy' in obj: # Only assign if it had valid coordinates for clustering
+                                obj['cluster_label'] = int(labels[i])
+                            else:
+                                obj['cluster_label'] = -1 # Assign a default for unclustered
+                    else: # If only one object or no valid coords, no clustering
+                        for obj in merged_rec['objects']:
+                            obj['cluster_label'] = 0 # Assign to a single cluster
+                elif merged_rec['objects']: # Single object case
+                    merged_rec['objects'][0]['cluster_label'] = 0
+
+
                 if merged_rec['objects']:
                     G = build_func(merged_rec)
                     temp_graphs.append(G)
@@ -525,11 +720,6 @@ class EnhancedSceneGraphBuilder:
         # We need to apply this to the edges of the NetworkX graph G.
 
         # Step 1: Knowledge Fusion (semantic enrichment of existing edges)
-        # This part is tricky. The original `get_enriched_relationships` expects subject/object *names*
-        # and a list of predicates. We have node IDs and attributes.
-        # Assuming `knowledge_fusion` can work with node data directly or needs adaptation.
-        # For now, I'll adapt it to iterate over existing edges in G.
-        
         # Collect existing relationships to process
         current_relationships = []
         for u, v, data in G.edges(data=True):
@@ -552,7 +742,6 @@ class EnhancedSceneGraphBuilder:
             if subject_id in object_features and object_id in object_features:
                 try:
                     # Assuming knowledge_fusion can take labels and return enriched relations
-                    # This might need adjustment based on the actual MultiSourceKnowledgeFusion API
                     enriched_rels = await self.knowledge_fusion.get_enriched_relationships(
                         subject_label, object_label, [rel.get('predicate', '')]
                     )
@@ -562,8 +751,6 @@ class EnhancedSceneGraphBuilder:
                         erel['subject_id'] = subject_id
                         erel['object_id'] = object_id
                         enhanced_relationships.append(erel)
-                        # Optionally, update existing edge or add new one to G
-                        # G.add_edge(subject_id, object_id, predicate=erel['predicate'], source='kb_fusion', confidence=erel.get('confidence'))
                 except Exception as e:
                     logging.warning(f"Knowledge fusion failed for relationship {rel}: {e}. Appending original relationship.")
                     enhanced_relationships.append(rel)
@@ -571,29 +758,8 @@ class EnhancedSceneGraphBuilder:
                 logging.debug(f"Skipping knowledge fusion for relationship {rel} due to missing features.")
                 enhanced_relationships.append(rel) # Append original if features are missing
 
-        # Clear existing edges and add enhanced ones, or add new edges
-        # For simplicity, let's just add new edges if they don't exist, or update existing ones.
-        # To avoid duplicates, we might want to rebuild edges or manage them carefully.
-        # For now, let's just update the `relationships` list that will be part of the final output.
-        # The NetworkX graph `G` itself is modified in place (nodes have 'real_features').
-        # The relationships in `final_scene_graph['relationships']` will be the refined ones.
-
         # Step 2: Hierarchical predicate refinement
         refined_relationships = []
-        # This part of the original code was designed for a list of relationships.
-        # It needs to be re-thought for a NetworkX graph where edges are already present.
-        # The `predict_with_bayesian_inference` takes features.
-        # We need to iterate over pairs of nodes in G and apply hierarchical prediction.
-        
-        # This is a conceptual adaptation. The exact API of HierarchicalPredicatePredictor
-        # and how it interacts with NetworkX edges might need more specific implementation.
-        # For now, I'll simulate applying it to the `enhanced_relationships` list.
-        
-        # Create a mapping from (u,v) to existing edge data for easy lookup
-        edge_data_map = {}
-        for u, v, data in G.edges(data=True):
-            edge_data_map[(u,v)] = data
-
         for rel in enhanced_relationships:
             subject_id = rel.get('subject_id')
             object_id = rel.get('object_id')
@@ -614,8 +780,6 @@ class EnhancedSceneGraphBuilder:
                         r_rel['subject_id'] = subject_id
                         r_rel['object_id'] = object_id
                         refined_relationships.append(r_rel)
-                        # Optionally, update edge in G (e.g., add new predicate or update confidence)
-                        # G.add_edge(subject_id, object_id, predicate=r_rel['predicate'], source='hierarchical', confidence=r_rel.get('confidence'))
                 except Exception as e:
                     logging.warning(f"Hierarchical predicate prediction failed for rel {rel}: {e}. Appending original.")
                     refined_relationships.append(rel)
@@ -624,10 +788,6 @@ class EnhancedSceneGraphBuilder:
                 refined_relationships.append(rel)
 
         # Final validation using SGScoreValidator
-        # This expects a PIL Image and a dict with 'objects' and 'relationships'.
-        # The 'objects' here should be the list of object dictionaries, not the NetworkX nodes.
-        # The relationships should be the `refined_relationships`.
-        
         # Prepare objects list for SGScoreValidator (from NetworkX nodes)
         objects_for_validator = [G.nodes[node_id] for node_id in G.nodes()]
         
@@ -698,6 +858,7 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
     side_by_side_path = os.path.join(feedback_dir, f"{base_name}_side_by_side.png")
     graph_img_path = os.path.join(feedback_dir, f"{base_name}_graph.png")
     img_graph_side_by_side_path = os.path.join(feedback_dir, f"{base_name}_img_graph.png")
+    actmap_path = os.path.join(feedback_dir, f"{base_name}_actmap.png") # For visualization of edges on image
 
     # Save real image
     if image.ndim == 3:
@@ -719,12 +880,32 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
     if scene_graph is not None and 'graph' in scene_graph:
         G = scene_graph['graph']
         # Draw the graph using networkx and matplotlib
-        plt.figure(figsize=(5, 5))
-        pos = nx.spring_layout(G, seed=42) if len(G.nodes) > 1 else nx.random_layout(G)
-        node_labels = {n: str(n) for n in G.nodes()}
+        plt.figure(figsize=(8, 8)) # Increased figure size for better readability with more nodes/edges
+        
+        # Use a layout that spreads nodes out, especially for more nodes
+        if len(G.nodes) > 20: # For very large graphs, spring_layout can be slow
+            pos = nx.circular_layout(G)
+        elif len(G.nodes) > 1:
+            pos = nx.spring_layout(G, seed=42, iterations=50) # More iterations for better layout
+        else:
+            pos = nx.random_layout(G)
+
+        # Node labels: Use shape_label if available, otherwise node ID
+        node_labels = {n: data.get('shape_label', str(n)) for n, data in G.nodes(data=True)}
+        
+        # Edge labels: Use predicate
         edge_labels = {(u, v): d.get('predicate', '') for u, v, d in G.edges(data=True)}
-        nx.draw(G, pos, with_labels=True, node_color='skyblue', edge_color='gray', node_size=700, font_size=8)
-        nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_size=7)
+        
+        # Draw nodes
+        nx.draw_networkx_nodes(G, pos, node_color='skyblue', node_size=800)
+        # Draw edges
+        nx.draw_networkx_edges(G, pos, edge_color='gray', alpha=0.7)
+        # Draw node labels
+        nx.draw_networkx_labels(G, pos, labels=node_labels, font_size=8, font_weight='bold')
+        # Draw edge labels
+        nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_size=7, bbox=dict(facecolor='white', alpha=0.7, edgecolor='none'))
+        
+        plt.title(f"Scene Graph for Problem: {base_name}", fontsize=10)
         plt.tight_layout()
         plt.axis('off')
         plt.savefig(graph_img_path, bbox_inches='tight', pad_inches=0.1)
@@ -745,11 +926,84 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
         except Exception as e:
             logging.warning(f"Failed to create side-by-side image and graph: {e}")
 
+        # Visualization of edges on image (Activation Map style)
+        try:
+            # Load the original image as PIL Image for ImageDraw
+            pil_image = Image.open(os.path.join(feedback_dir, f"{base_name}_input.png")).convert('RGBA')
+            draw = ImageDraw.Draw(pil_image)
+            
+            for u,v,d in G.edges(data=True):
+                # Get centroids from node data
+                x1, y1 = G.nodes[u].get('cx', 0), G.nodes[u].get('cy', 0)
+                x2, y2 = G.nodes[v].get('cx', 0), G.nodes[v].get('cy', 0)
+                
+                # Draw line with transparency
+                draw.line((x1,y1,x2,y2), fill=(255,0,0,128), width=2)
+            
+            pil_image.save(actmap_path)
+        except Exception as e:
+            logging.warning(f"Failed to create activation map image for {base_name}: {e}")
+
+
 def remap_path(path):
     """Remaps image paths to match expected dataset structure."""
     return path.replace('category_1', '1').replace('category_0', '0')
 
-async def _process_single_problem(problem_id: str, problem_records: List[Dict[str, Any]], feature_cache, batch_validator, recall_evaluator, drift_visualizer, enhanced_builder, feedback_dir, feedback_rate):
+# Placeholder for automated predicate induction
+def induce_predicate_for_problem(objects: List[Dict[str, Any]], adaptive_thresholds: AdaptivePredicateThresholds) -> Tuple[str, Any]:
+    """
+    A simplified placeholder for automated predicate induction via contrastive analysis.
+    This function should identify a predicate that best separates positive from negative examples.
+    For demonstration, it will try to find a simple rule or fallback.
+    """
+    # This is a very basic example. A real inducer would be much more complex.
+    # It would iterate through predicate templates and parameter values,
+    # and evaluate their ability to discriminate positive vs. negative sets.
+
+    # Assume 'category' '1' is positive, '0' is negative for this induction step
+    pos_objects = [o for o in objects if o.get('category') == '1']
+    neg_objects = [o for o in objects if o.get('category') == '0']
+
+    # Get current adaptive parameters
+    params = adaptive_thresholds.get_current_thresholds()
+    canvas_width = params.get('canvas_width', 128)
+    canvas_height = params.get('canvas_height', 128)
+
+    # Example: Try to induce 'larger_than'
+    if pos_objects and neg_objects:
+        # Simple heuristic: find an alpha where positive objects are generally larger than negative ones
+        # This is highly simplified and for illustration only.
+        
+        # Check 'larger_than'
+        larger_than_alpha_candidates = np.linspace(0.8, 1.5, 10)
+        for alpha in larger_than_alpha_candidates:
+            # Check if positives are generally larger than other positives (vacuously true or not meaningful)
+            # and if positives are larger than negatives
+            pos_vs_neg_holds = all(any(o1.get('area',0) > alpha * o2.get('area',0) for o2 in neg_objects) for o1 in pos_objects)
+            neg_vs_pos_fails = all(not any(o1.get('area',0) > alpha * o2.get('area',0) for o2 in pos_objects) for o1 in neg_objects)
+
+            if pos_vs_neg_holds and neg_vs_pos_fails:
+                logging.info(f"Induced 'larger_than' with alpha={alpha:.2f}")
+                adaptive_thresholds.update_threshold('larger_than_alpha', alpha)
+                return 'larger_than', alpha
+
+        # Check 'near'
+        near_threshold_candidates = np.linspace(20, 80, 10)
+        for threshold in near_threshold_candidates:
+            # Check if positives are near each other, and negatives are not near positives
+            pos_near_pos = all(any(math.hypot(o1.get('cx',0)-o2.get('cx',0), o1.get('cy',0)-o2.get('cy',0)) < threshold for o2 in pos_objects if o1 != o2) for o1 in pos_objects)
+            neg_not_near_pos = all(not any(math.hypot(o1.get('cx',0)-o2.get('cx',0), o1.get('cy',0)-o2.get('cy',0)) < threshold for o2 in pos_objects) for o1 in neg_objects)
+            
+            if pos_near_pos and neg_not_near_pos:
+                logging.info(f"Induced 'near' with threshold={threshold:.1f}")
+                adaptive_thresholds.update_threshold('near_threshold', threshold)
+                return 'near', threshold
+
+    logging.info("Could not induce a specific predicate. Falling back to 'same_shape'.")
+    return 'same_shape', None # Fallback
+
+
+async def _process_single_problem(problem_id: str, problem_records: List[Dict[str, Any]], feature_cache, batch_validator, recall_evaluator, drift_visualizer, enhanced_builder, feedback_dir, feedback_rate, decompose_polygons: bool, adaptive_thresholds: AdaptivePredicateThresholds):
     """
     Processes a single Bongard problem (12 images) to build one scene graph.
     Each image within the problem becomes a node in the single problem-level graph.
@@ -762,40 +1016,107 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
     merged_record = {'objects': []}
     representative_image_path = None # Path to one of the images for visualization/feature extraction
 
+    # Temporarily store original objects to assign cluster labels after all are processed
+    temp_objects_for_clustering = []
+
     for idx, rec in enumerate(problem_records):
         # Use the first image path as representative for the problem
         if representative_image_path is None:
             representative_image_path = remap_path(rec.get('image_path', rec.get('mask_path', '')))
 
-        # Ensure 'id' is unique within the problem's graph and corresponds to the original image
-        obj_id = f"{problem_id}_{idx}" # Unique ID for each image-object within the problem graph
-        # Log missing label for debugging
-        if 'label' not in rec:
-            logging.warning(f"Missing 'label' in record for problem {problem_id}, image idx {idx}, image_path: {rec.get('image_path', '')}")
-        merged_record['objects'].append({
-            'id': obj_id,
+        obj_data = {
+            'id': f"{problem_id}_{idx}", # Unique ID for each image-object within the problem graph
             'vertices': rec.get('vertices', []),
             **rec.get('features', {}), # Unpack centroid, area etc. from derived_labels
             'label': rec.get('label', ''), # Always include 'label' key for downstream compatibility
             'shape_label': rec.get('label', ''), # Use 'label' from derived_labels as shape_label
             'category': rec.get('category', ''),
             'original_image_path': remap_path(rec.get('image_path', '')), # Keep original image path for tracing
-            'original_record_idx': idx # For debugging/tracing if needed
-        })
+            'original_record_idx': idx, # For debugging/tracing if needed
+            'action_program': rec.get('action_program', []) # Include action_program for decomposition
+        }
+        
+        # Compute additional node attributes (cx, cy, bbox, aspect_ratio, perimeter, orientation, compactness, num_segments, num_junctions)
+        compute_physics_attributes(obj_data)
+
+        # Optionally decompose complex polygons
+        if decompose_polygons and obj_data.get('action_program'):
+            segments = extract_line_segments(obj_data['action_program'])
+            if segments:
+                try:
+                    # Create a MultiLineString from segments
+                    multi_line = MultiLineString(segments)
+                    # Union the lines to handle overlaps before polygonizing
+                    unary_union_result = unary_union(multi_line)
+                    sub_polys = list(polygonize(unary_union_result))
+
+                    if len(sub_polys) > 1: # Only decompose if multiple sub-polygons are found
+                        for i, sub in enumerate(sub_polys):
+                            new_obj_id = f"{obj_data['id']}_part{i}"
+                            new_obj_data = {
+                                'id': new_obj_id,
+                                'vertices': list(sub.exterior.coords) if sub.exterior else [],
+                                'shape_label': obj_data.get('shape_label', 'part'), # Label parts
+                                'category': obj_data.get('category', 'part'),
+                                'parent_id': obj_data['id'], # Link to parent object
+                                'action_program': [] # Parts don't have their own action program
+                            }
+                            # Compute features for sub-polygon
+                            compute_physics_attributes(new_obj_data)
+                            temp_objects_for_clustering.append(new_obj_data) # Add parts to temp list
+                    else: # If no meaningful decomposition, add original object
+                        temp_objects_for_clustering.append(obj_data)
+                except Exception as e:
+                    logging.warning(f"Failed to decompose object {obj_data['id']}: {e}. Adding original object.")
+                    temp_objects_for_clustering.append(obj_data)
+            else: # No segments, add original object
+                temp_objects_for_clustering.append(obj_data)
+        else: # No decomposition, add original object
+            temp_objects_for_clustering.append(obj_data)
+
+    # Step 1b: Assign cluster labels by K-means on centroids after all objects (and parts) are collected
+    if temp_objects_for_clustering and len(temp_objects_for_clustering) > 1:
+        coords = np.array([[o['cx'], o['cy']] for o in temp_objects_for_clustering if 'cx' in o and 'cy' in o])
+        if len(coords) > 1: # Ensure at least 2 points for clustering
+            k = min(3, len(coords))  # e.g., 3 clusters or fewer
+            kmeans = KMeans(n_clusters=k, random_state=0, n_init=10) # Added n_init to suppress warning
+            labels = kmeans.fit_predict(coords)
+            valid_coords_idx = 0
+            for obj in temp_objects_for_clustering:
+                if 'cx' in obj and 'cy' in obj:
+                    obj['cluster_label'] = int(labels[valid_coords_idx])
+                    valid_coords_idx += 1
+                else:
+                    obj['cluster_label'] = -1 # Assign a default for objects without valid centroids
+        else: # If only one object or no valid coords, no meaningful clustering
+            for obj in temp_objects_for_clustering:
+                obj['cluster_label'] = 0 # Assign to a single cluster
+    elif temp_objects_for_clustering: # Single object case
+        temp_objects_for_clustering[0]['cluster_label'] = 0
+
+    merged_record['objects'] = temp_objects_for_clustering # Assign the processed objects back
 
     # Log merged objects for debugging (show only id and shape_label for each object)
     debug_summary = [
-        {'id': obj.get('id'), 'shape_label': obj.get('shape_label')} for obj in merged_record['objects']
+        {'id': obj.get('id'), 'shape_label': obj.get('shape_label'), 'cluster_label': obj.get('cluster_label')} for obj in merged_record['objects']
     ]
-    logging.info(f"Merged objects for problem {problem_id} (id, shape_label): {json.dumps(debug_summary)}")
+    logging.info(f"Merged objects for problem {problem_id} (id, shape_label, cluster_label): {json.dumps(debug_summary)}")
+
+    # Automated Predicate Induction via Contrastive Analysis (Step 3)
+    # This will try to find a distinguishing predicate for the problem
+    chosen_predicate, _ = induce_predicate_for_problem(merged_record['objects'], adaptive_thresholds)
+    logging.info(f"Problem {problem_id}: Induced predicate: {chosen_predicate}")
+
+    # Update PREDICATES with adaptive thresholds before building graph for this problem
+    global PREDICATES
+    # Pass canvas dimensions to load_predicates for symmetry_pair predicate
+    PREDICATES = load_predicates(adaptive_thresholds, canvas_dims=(128, 128)) # Assuming 128x128 canvas size
 
     # 2. Build the unvalidated base scene graph for the entire problem
     # This graph will have N nodes (e.g., 12), one for each image-object.
     base_graph_nx = build_graph_unvalidated(merged_record)
 
     # 3. Prepare base_scene_graph for enhanced builder
-    # The enhanced builder expects 'objects' (list of object dicts) and 'relationships' (list of dicts)
-    # and the NetworkX graph itself.
     base_scene_graph_for_enhanced = {
         'objects': merged_record['objects'], # These are the node data for the graph
         'relationships': [], # Relationships will be filled by add_predicate_edges and enhanced_builder
@@ -803,10 +1124,27 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
     }
 
     # 4. Enhance the scene graph (knowledge fusion, hierarchical predicates)
-    # This still needs a single 'image_path' for image-based feature extraction/validation.
     scene_graph_data = await enhanced_builder.build_enhanced_scene_graph(representative_image_path, base_scene_graph_for_enhanced)
     final_scene_graph = scene_graph_data['scene_graph']
     quality_metrics = scene_graph_data['quality_metrics']
+
+    # 6. Iterative Rule Refinement & Human-in-the-Loop (Ambiguity check & trigger)
+    rels = final_scene_graph.get('relationships', [])
+    preds = [r['predicate'] for r in rels]
+    support_rate = preds.count(chosen_predicate) / len(preds) if preds else 0
+
+    if support_rate < 0.95 and chosen_predicate != 'same_shape': # Only flag if not the fallback and support is low
+        queue_file = os.path.join(feedback_dir, 'review_queue.jsonl')
+        os.makedirs(os.path.dirname(queue_file), exist_ok=True) # Ensure directory exists
+        with open(queue_file, 'a') as q:
+            q.write(json.dumps({
+                'problem_id': problem_id,
+                'induced_predicate': chosen_predicate,
+                'support_rate': support_rate,
+                'timestamp': time.time()
+            }) + "\n")
+        logging.info(f"Problem {problem_id}: Ambiguous case detected for predicate '{chosen_predicate}' (support: {support_rate:.2f}). Added to review queue.")
+
 
     # 5. Save feedback images (if enabled)
     if feedback_dir and representative_image_path:
@@ -836,36 +1174,32 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
             final_scene_graph['validation'] = {'error': str(e)}
 
     # 7. Recall evaluation (if ground_truth is available)
-    # This part is highly dependent on how problem-level ground truth is structured.
-    # The original `recall_evaluator` expects ground truth per image.
-    # For problem-level graphs, you would need problem-level ground truth.
-    # As the prompt does not provide this, I'm commenting out the active evaluation,
-    # but keeping the evaluator initialized for potential future use.
     metrics = None
-    # if 'ground_truth' in problem_records[0] and recall_evaluator:
-    #     try:
-    #         # This is a placeholder. You would need problem-level ground truth here.
-    #         # For example, if problem_records[0]['ground_truth'] represents the *problem's* GT
-    #         metrics = recall_evaluator.evaluate_scene_graph(
-    #             final_scene_graph['relationships'],
-    #             problem_records[0]['ground_truth']['relationships'], # This is likely incorrect for problem-level GT
-    #             final_scene_graph['objects'],
-    #             problem_records[0]['ground_truth']['objects'] # This is likely incorrect for problem-level GT
-    #         )
-    #         final_scene_graph['metrics'] = metrics
-    #     except Exception as e:
-    #         logging.error(f"Recall evaluation failed for problem {problem_id}: {e}")
-    #         final_scene_graph['metrics'] = {'error': str(e)}
+    if 'ground_truth' in problem_records[0] and recall_evaluator:
+        try:
+            gt = problem_records[0]['ground_truth']
+            metrics = recall_evaluator.evaluate_scene_graph(
+                final_scene_graph['relationships'],
+                gt['relationships'],
+                final_scene_graph['objects'],
+                gt['objects']
+            )
+            final_scene_graph['metrics'] = metrics
+        except Exception as e:
+            logging.error(f"Recall evaluation failed for problem {problem_id}: {e}")
+            final_scene_graph['metrics'] = {'error': str(e)}
 
     # 8. Drift visualization (if enabled)
-    # This also relies on `metrics` from recall evaluation, which is currently paused.
-    # If you re-enable recall evaluation with problem-level GT, this can be re-enabled.
-    if drift_visualizer and metrics: # metrics will be None if recall_evaluator is skipped
+    if drift_visualizer:
+        perf_val = None
+        if metrics and hasattr(metrics, 'overall_statistics') and 'recall' in metrics.overall_statistics:
+            perf_val = metrics.overall_statistics['recall']
+        else:
+            perf_val = quality_metrics.get('knowledge_confidence', 0.5)
         for rel in final_scene_graph.get('relationships', []):
             predicate = rel['predicate']
             confidence = rel.get('final_confidence', quality_metrics.get('knowledge_confidence', 0.5))
-            performance = metrics.get('overall_recall', 0.5) # Placeholder: needs actual problem-level performance
-            drift_visualizer.add_threshold_data(predicate, confidence, performance)
+            drift_visualizer.add_threshold_data(predicate, confidence, perf_val)
 
     return {
         'problem_id': problem_id,
@@ -876,7 +1210,7 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
         }
     }
 
-def process_problem_batch_sync_wrapper(list_of_problem_records: List[List[Dict[str, Any]]], feature_cache, batch_validator, recall_evaluator, drift_visualizer, enhanced_builder, feedback_dir, feedback_rate):
+def process_problem_batch_sync_wrapper(list_of_problem_records: List[List[Dict[str, Any]]], feature_cache, batch_validator, recall_evaluator, drift_visualizer, enhanced_builder, feedback_dir, feedback_rate, decompose_polygons: bool, adaptive_thresholds: AdaptivePredicateThresholds):
     """Synchronous wrapper to run async processing for a batch of problems."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -884,7 +1218,7 @@ def process_problem_batch_sync_wrapper(list_of_problem_records: List[List[Dict[s
     for problem_records in list_of_problem_records:
         if problem_records: # Ensure problem_records is not empty
             problem_id = problem_records[0].get('problem_id', 'unknown_problem')
-            tasks.append(_process_single_problem(problem_id, problem_records, feature_cache, batch_validator, recall_evaluator, drift_visualizer, enhanced_builder, feedback_dir, feedback_rate))
+            tasks.append(_process_single_problem(problem_id, problem_records, feature_cache, batch_validator, recall_evaluator, drift_visualizer, enhanced_builder, feedback_dir, feedback_rate, decompose_polygons, adaptive_thresholds))
         else:
             logging.warning("Empty problem record list passed to process_problem_batch_sync_wrapper.")
 
@@ -902,6 +1236,7 @@ async def main(): # Main is now async because it calls async functions
     parser.add_argument('--batch-size', type=int, default=16, help='Batch size for graph building (0=auto-profile). Now refers to problems per batch.')
     parser.add_argument('--feedback-dir', type=str, default='feedback_samples', help='Directory to save QA/feedback images')
     parser.add_argument('--feedback-rate', type=int, default=20, help='Save every Nth sample for feedback (default: 20, set 1 to save all)')
+    parser.add_argument('--decompose-polygons', action='store_true', help='Enable decomposition of complex polygons into sub-polygons.')
     args = parser.parse_args()
 
     # Initialize components
@@ -917,7 +1252,7 @@ async def main(): # Main is now async because it calls async functions
     )
     # Define PREDICATES globally or load from config (already done above)
     recall_evaluator = RecallAtKEvaluator(
-        predicate_classes=list(PREDICATES.keys()), # Use the globally defined PREDICATES
+        predicate_classes=[], # Will be populated after PREDICATES are loaded
         k_values=[10, 20, 50],
         iou_threshold=0.5
     )
@@ -932,11 +1267,29 @@ async def main(): # Main is now async because it calls async functions
         history_size=1000,
         confidence_level=0.95,
         adaptation_rate=0.1,
-        min_samples=50
+        min_samples=50,
+        # Default parameters for new predicates
+        initial_thresholds={
+            'larger_than_alpha': 1.1,
+            'near_threshold': 50,
+            'aspect_tol': 0.2,
+            'orient_tol': 7,
+            'compactness_thresh': 0.5,
+            'symmetry_tol': 10,
+            'color_tol': 10,
+            'canvas_width': 128, # Assuming a default canvas width
+            'canvas_height': 128 # Assuming a default canvas height
+        }
     )
     threshold_cache_path = args.out.replace('.pkl', '_adaptive_thresholds.json')
     adaptive_thresholds.load_learned_thresholds(threshold_cache_path)
     logging.info(f"Loaded adaptive thresholds from {threshold_cache_path}")
+
+    # Initialize PREDICATES after adaptive_thresholds are loaded
+    global PREDICATES
+    # Pass canvas dimensions from adaptive_thresholds for symmetry_pair predicate
+    PREDICATES = load_predicates(adaptive_thresholds, canvas_dims=(adaptive_thresholds.get_current_thresholds().get('canvas_width', 128), adaptive_thresholds.get_current_thresholds().get('canvas_height', 128)))
+    recall_evaluator.predicate_classes = list(PREDICATES.keys()) # Update recall_evaluator with all predicates
 
     # Compute hash for cache validation
     params_dict = {
@@ -944,7 +1297,9 @@ async def main(): # Main is now async because it calls async functions
         'labels': args.labels,
         'parallel': args.parallel,
         'batch_size': args.batch_size,
+        'decompose_polygons': args.decompose_polygons,
         'predicates_hash': hashlib.sha256(json.dumps(list(PREDICATES.keys()), sort_keys=True).encode()).hexdigest(),
+        'adaptive_params_hash': hashlib.sha256(json.dumps(adaptive_thresholds.get_current_thresholds(), sort_keys=True).encode()).hexdigest(),
         # Add a hash for code versioning if needed
     }
     current_hash = compute_hash([args.aug, args.labels], params_dict)
@@ -986,7 +1341,7 @@ async def main(): # Main is now async because it calls async functions
         logging.error(f"Unexpected error loading labels: {e}. Continuing without them.")
         derived_labels = {}
 
-    # --- START PATCH: Merge labels and group by problem_id ---
+    # --- Merge labels and group by problem_id ---
     # Build a lookup from image_path -> features/geometry
     label_lookup = {}
     if isinstance(derived_labels, list):
@@ -997,7 +1352,8 @@ async def main(): # Main is now async because it calls async functions
                 'features': lbl['features'],
                 'vertices': lbl['geometry'],
                 'label': lbl['label'],
-                'category': lbl['category']
+                'category': lbl['category'],
+                'action_program': lbl.get('action_program', []) # Ensure action_program is passed through
             }
 
     # Enrich augmented_data with label info
@@ -1008,7 +1364,7 @@ async def main(): # Main is now async because it calls async functions
             logging.warning(f"No derived_labels entry for {rec['image_path']}. Skipping record.")
             continue
         new_rec = rec.copy() # Create a copy to update
-        new_rec.update(info)  # now new_rec has new_rec['features'], new_rec['vertices'], new_rec['label'], new_rec['category']
+        new_rec.update(info)  # now new_rec has new_rec['features'], new_rec['vertices'], new_rec['label'], new_rec['category'], action_program
         enriched_augmented_data.append(new_rec)
 
     # Group records by problem_id
@@ -1021,10 +1377,9 @@ async def main(): # Main is now async because it calls async functions
             logging.warning(f"Record missing 'problem_id': {rec.get('image_path')}. Skipping.")
 
     logging.info(f"Grouped {len(enriched_augmented_data)} records into {len(grouped_problems)} problems.")
-    # --- END PATCH ---
+    # --- END Merge labels and group by problem_id ---
 
     # Determine which graph building function to use (with or without validation)
-    # This is now used only for profiling, as the main loop calls _process_single_problem
     build_func_for_profiling = build_graph_validated if GRAPHTYPE_AVAILABLE else build_graph_unvalidated
     if GRAPHTYPE_AVAILABLE:
         logging.info("Graphtype detected. Runtime schema validation is ENABLED.")
@@ -1035,7 +1390,7 @@ async def main(): # Main is now async because it calls async functions
     batch_size = args.batch_size
     if batch_size == 0 and len(grouped_problems) > 0:
         # Pass a sample of individual records for profiling, as profile_optimal_batch_size simulates grouping
-        batch_size = profile_optimal_batch_size(enriched_augmented_data, build_func_for_profiling)
+        batch_size = profile_optimal_batch_size(enriched_augmented_data, build_func_for_profiling, args) # Pass args to profiling
     elif batch_size == 0:
         logging.warning("Cannot auto-profile batch size: no problems available. Using default batch size 16.")
         batch_size = 16
@@ -1056,7 +1411,7 @@ async def main(): # Main is now async because it calls async functions
             executor.submit(
                 process_problem_batch_sync_wrapper,
                 [grouped_problems[pid] for pid in batch_pids], # Pass list of problem_records for each problem in batch
-                feature_cache, batch_validator, recall_evaluator, drift_visualizer, enhanced_builder, args.feedback_dir, args.feedback_rate
+                feature_cache, batch_validator, recall_evaluator, drift_visualizer, enhanced_builder, args.feedback_dir, args.feedback_rate, args.decompose_polygons, adaptive_thresholds
             ): batch_idx for batch_idx, batch_pids in enumerate(problem_batches)
         }
 
@@ -1081,13 +1436,13 @@ async def main(): # Main is now async because it calls async functions
                         torch.cuda.empty_cache()
                     gc.collect()
                     memory_stats = feature_cache.get_cache_stats()
-                    logging.info(f"Memory usage: RAM: {memory_stats.get('memory_usage_mb', 0):.1f}MB, GPU: {memory_stats.get('gpu_usage_mb', 0):.1f}MB")
+                    logging.info(f"Memory usage: RAM: {memory_stats.get('memory_usage_mb', 0):.1f}MB used, GPU: {memory_stats.get('gpu_usage_mb', 0):.1f}MB used")
 
             except Exception as e:
                 logging.error(f"Error processing problem batch {batch_idx+1}: {e}")
                 problematic_problem_ids = problem_batches[batch_idx]
                 if problematic_problem_ids:
-                    logging.debug(f"Sample from problematic problem batch (first problem ID): {problematic_problem_ids[0]}")
+                    logging.debug(f"Sample from problematic problem batch (first problem ID): {problem_ids[batch_idx][0]}") # Corrected index
 
     if len(graphs) == 0:
         logging.error(f"No scene graphs were produced. Check input data and filtering logic.")
@@ -1119,15 +1474,16 @@ async def main(): # Main is now async because it calls async functions
 
     # Generate drift report if enabled
     if drift_visualizer:
-        # Collect all predicates from all relationships in all scene graphs
         all_predicates = [rel.get('predicate', 'unknown')
-                         for G_data in graphs # Iterate over problem-level graph data
+                         for G_data in graphs
                          for rel in G_data.get('scene_graph_data', {}).get('scene_graph', {}).get('relationships', [])]
         common_predicates = [p for p, _ in Counter(all_predicates).most_common(5)]
         if common_predicates:
             logging.info(f"Generating drift report for predicates: {common_predicates}")
-            drift_visualizer.generate_drift_report(common_predicates)
-            drift_visualizer.visualize_threshold_evolution(common_predicates)
+            drift_report_path = drift_visualizer.generate_drift_report(common_predicates)
+            viz_path = drift_visualizer.visualize_threshold_evolution(common_predicates)
+            logging.info(f"Drift report saved to: {drift_report_path}")
+            logging.info(f"Threshold evolution visualization saved to: {viz_path}")
         else:
             logging.warning("No common predicates found to generate drift report.")
 
@@ -1135,6 +1491,13 @@ async def main(): # Main is now async because it calls async functions
     cache_stats = feature_cache.get_cache_stats()
     logging.info("Processing complete!")
     logging.info(f"Cache efficiency: Memory: {cache_stats.get('memory_usage_mb', 0):.1f}MB used, GPU: {cache_stats.get('gpu_usage_mb', 0):.1f}MB used")
+
+    # --- Relational GNN Training Integration ---
+    # Train relational GNN after scene graphs are built
+    try:
+        train_relational_gnn(graphs, device='cuda' if torch.cuda.is_available() else 'cpu', epochs=10, batch_size=8)
+    except Exception as e:
+        logging.error(f"Relational GNN training failed: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())
