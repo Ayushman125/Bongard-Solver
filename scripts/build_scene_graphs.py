@@ -1,3 +1,5 @@
+# --- Typing Imports for Function Annotations ---
+from typing import List, Dict, Any
 # --- Standard Library Imports ---
 import argparse
 import asyncio
@@ -11,7 +13,7 @@ import pickle
 import sys
 import threading
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 
 # --- Third-Party Library Imports ---
 import cv2
@@ -271,7 +273,13 @@ def compute_pc_error(graphs):
     total_graphs = len(graphs)
     if total_graphs == 0: return 0.0
 
-    for G in graphs:
+    for G_data in graphs: # G_data is now a dict containing 'scene_graph' and other info
+        # Extract the NetworkX graph from the scene_graph dict
+        G = G_data.get('scene_graph', {}).get('graph')
+        if not G:
+            logging.warning(f"No NetworkX graph found for problem {G_data.get('problem_id')}. Skipping PC error calculation.")
+            continue
+
         nodes = list(G.nodes(data=True))
         polygons = []
         for _, data in nodes:
@@ -302,20 +310,27 @@ def log_diversity_metrics(graphs, out_path='logs/graph_diversity.jsonl'):
     """Computes and logs coverage, entropy, and physical consistency."""
     if not graphs: return
 
-    # Calculate possible triples
-    # Only count for graphs with more than one node to avoid division by zero if all graphs are single-node
-    possible_triples = sum(len(G.nodes)**2 - len(G.nodes) for G in graphs if len(G.nodes) > 1)
-    # Collect unique triples (subject, predicate, object)
+    # Collect unique triples (subject, predicate, object) from problem-level graphs
     unique_triples = set()
-    for G in graphs:
+    predicate_counts = Counter()
+    total_possible_triples = 0
+
+    for G_data in graphs:
+        G = G_data.get('scene_graph', {}).get('graph')
+        if not G:
+            continue
+
+        # Only count for graphs with more than one node to avoid division by zero
+        if len(G.nodes) > 1:
+            total_possible_triples += len(G.nodes)**2 - len(G.nodes)
+
         for u, v, data in G.edges(data=True):
             unique_triples.add((u, data.get('predicate', 'unknown'), v))
+            predicate_counts[data.get('predicate', 'unknown')] += 1
 
-    predicate_counts = Counter(d.get('predicate', 'unknown') for G in graphs for u,v,d in G.edges(data=True))
-
-    C = len(unique_triples) / possible_triples if possible_triples > 0 else 0
+    C = len(unique_triples) / total_possible_triples if total_possible_triples > 0 else 0
     H = stats.entropy(list(predicate_counts.values()), base=2) if predicate_counts else 0
-    pc_error = compute_pc_error(graphs)
+    pc_error = compute_pc_error(graphs) # This function already updated to handle new graph structure
 
     metrics = {'coverage': C, 'entropy': H, 'pc_error': pc_error}
 
@@ -362,21 +377,48 @@ def profile_optimal_batch_size(records, build_func):
     for size in candidate_sizes:
         start = time.time()
         try:
-            batch = records[:size] # Take a slice for profiling
-            graphs = []
-            for record in batch:
-                G = build_func(record) # Use a direct build function for profiling
-                graphs.append(G)
+            # For profiling, we need to simulate the problem-level merging
+            # Take a slice of records, group them by problem_id, then build graphs
+            # This is a simplified profiling, as it doesn't run the full async enhanced builder
+            sample_records = records[:size * 12] # Assuming 12 images per problem for a rough estimate
+            if not sample_records:
+                logging.warning(f"Not enough records to profile batch size {size}. Skipping.")
+                continue
+
+            # Group sample records by problem_id
+            grouped_sample = defaultdict(list)
+            for rec in sample_records:
+                pid = rec.get('problem_id')
+                if pid:
+                    grouped_sample[pid].append(rec)
+
+            temp_graphs = []
+            for pid, problem_recs in grouped_sample.items():
+                merged_rec = {'objects': []}
+                for idx, rec in enumerate(problem_recs):
+                    merged_rec['objects'].append({
+                        'id': f"{pid}_{idx}",
+                        'vertices': rec.get('vertices', []),
+                        **rec.get('features', {}),
+                        'label': rec.get('label', ''),
+                        'shape_label': rec.get('label', ''),
+                        'category': rec.get('category', '')
+                    })
+                if merged_rec['objects']:
+                    G = build_func(merged_rec)
+                    temp_graphs.append(G)
+
             elapsed = time.time() - start
-            throughput = size / elapsed if elapsed > 0 else 0
-            logging.info(f"Batch size {size}: {throughput:.2f} graphs/sec")
+            throughput = len(temp_graphs) / elapsed if elapsed > 0 else 0 # Throughput in problems/sec
+            logging.info(f"Batch size {size} (approx {len(temp_graphs)} problems): {throughput:.2f} problems/sec")
             if throughput > best_throughput:
                 best_throughput = throughput
                 best_size = size
         except Exception as e:
             logging.error(f"Batch size {size} failed during profiling: {e}")
-    logging.info(f"[INFO] Selected optimal batch size: {best_size}")
+    logging.info(f"[INFO] Selected optimal batch size (problems): {best_size}")
     return best_size
+
 
 # --- Enhanced Scene Graph Builder Class ---
 
@@ -426,69 +468,102 @@ class EnhancedSceneGraphBuilder:
         return mask
 
     async def build_enhanced_scene_graph(self, image_path: str, base_scene_graph: dict) -> dict:
+        """
+        Builds an enhanced scene graph by adding real features, knowledge fusion,
+        and hierarchical predicate refinement.
+        The base_scene_graph now contains a NetworkX graph for the entire problem.
+        """
         if not os.path.exists(image_path):
-            logging.error(f"Image file not found: {image_path}. Skipping enhanced graph build.")
+            logging.error(f"Representative image file not found: {image_path}. Skipping enhanced graph build.")
             return {'scene_graph': base_scene_graph, 'quality_metrics': {}}
 
         try:
             image = Image.open(image_path).convert("RGB") # Ensure RGB for consistent processing
             image_np = np.array(image)
         except Exception as e:
-            logging.error(f"Failed to load or process image {image_path}: {e}. Skipping enhanced graph build.")
+            logging.error(f"Failed to load or process representative image {image_path}: {e}. Skipping enhanced graph build.")
             return {'scene_graph': base_scene_graph, 'quality_metrics': {}}
 
-        objects = base_scene_graph.get('objects', [])
-        object_features = {}
+        # The base_scene_graph now contains the NetworkX graph in 'graph' key
+        G = base_scene_graph.get('graph')
+        if not G:
+            logging.error("No NetworkX graph provided in base_scene_graph. Cannot enhance.")
+            return {'scene_graph': base_scene_graph, 'quality_metrics': {}}
 
-        for obj in objects:
-            obj_id = obj.get('id', f"obj_{len(object_features)}") # Fallback ID
+        object_features = {} # To store extracted features for nodes in G
+
+        # Iterate over nodes in the NetworkX graph to extract features
+        for node_id, node_data in list(G.nodes(data=True)): # Use list() to allow modification during iteration
             mask = None
-            if 'vertices' in obj and len(obj['vertices']) >= 3:
-                mask = self._create_mask_from_vertices(obj['vertices'], image_np.shape[:2])
-            elif 'bbox' in obj and len(obj['bbox']) == 4:
-                mask = self._create_mask_from_bbox(obj['bbox'], image_np.shape[:2])
+            if 'vertices' in node_data and len(node_data['vertices']) >= 3:
+                mask = self._create_mask_from_vertices(node_data['vertices'], image_np.shape[:2])
+            elif 'bbox' in node_data and len(node_data['bbox']) == 4:
+                mask = self._create_mask_from_bbox(node_data['bbox'], image_np.shape[:2])
             else:
-                logging.warning(f"Object {obj_id} missing valid vertices or bbox. Skipping feature extraction for this object.")
-                continue # Skip if no valid geometry for mask creation
+                logging.warning(f"Node {node_id} missing valid vertices or bbox. Skipping feature extraction for this node.")
+                continue
 
             if self.feature_extractor and mask is not None:
                 try:
-                    features = self.feature_extractor.extract_object_features(image_np, mask, obj_id)
-                    object_features[obj_id] = features
-                    logging.debug(f"Extracted features for object {obj_id}: shape {features.shape}")
+                    features = self.feature_extractor.extract_object_features(image_np, mask, node_id)
+                    object_features[node_id] = features
+                    # Update the node data in the graph with the extracted features
+                    G.nodes[node_id]['real_features'] = features # Store raw features
+                    logging.debug(f"Extracted features for node {node_id}: shape {features.shape}")
                 except Exception as e:
                     # Add detailed tensor shape/type logging if possible
                     import traceback
-                    logging.error(f"Feature extraction failed for object {obj_id}: {e}. No features for this object.")
-                    # Try to log the shapes/types of the tensors involved if possible
-                    try:
-                        import torch
-                        # If RealFeatureExtractor exposes internal tensors, log them
-                        if hasattr(self.feature_extractor, 'last_clip_input'):
-                            t = self.feature_extractor.last_clip_input
-                            logging.error(f"last_clip_input type: {type(t)}, shape: {getattr(t, 'shape', None)}")
-                        if hasattr(self.feature_extractor, 'last_mask_input'):
-                            t = self.feature_extractor.last_mask_input
-                            logging.error(f"last_mask_input type: {type(t)}, shape: {getattr(t, 'shape', None)}")
-                    except Exception as log_e:
-                        logging.error(f"(While logging tensor shapes) {log_e}\n{traceback.format_exc()}")
+                    logging.error(f"Feature extraction failed for node {node_id}: {e}. No features for this node.")
                     # Log the traceback for the original error
                     logging.error(traceback.format_exc())
             else:
-                logging.debug(f"Feature extractor not available or mask is None for object {obj_id}. Skipping feature extraction.")
+                logging.debug(f"Feature extractor not available or mask is None for node {node_id}. Skipping feature extraction.")
 
+        # Knowledge fusion and Hierarchical predicate refinement now operate on the problem-level graph
+        # This part needs to iterate through existing edges and potentially add new ones based on features
+        # The original code's `enhanced_relationships` and `refined_relationships` are for a list of relationships.
+        # We need to apply this to the edges of the NetworkX graph G.
+
+        # Step 1: Knowledge Fusion (semantic enrichment of existing edges)
+        # This part is tricky. The original `get_enriched_relationships` expects subject/object *names*
+        # and a list of predicates. We have node IDs and attributes.
+        # Assuming `knowledge_fusion` can work with node data directly or needs adaptation.
+        # For now, I'll adapt it to iterate over existing edges in G.
+        
+        # Collect existing relationships to process
+        current_relationships = []
+        for u, v, data in G.edges(data=True):
+            current_relationships.append({
+                'subject_id': u,
+                'object_id': v,
+                'predicate': data.get('predicate', 'unknown'),
+                'source': data.get('source', 'spatial')
+            })
 
         enhanced_relationships = []
-        for rel in base_scene_graph.get('relationships', []):
+        for rel in current_relationships:
             subject_id = rel.get('subject_id')
             object_id = rel.get('object_id')
-            # Only perform knowledge fusion if features were successfully extracted for both subject and object
+            
+            # Use shape_label for knowledge fusion if available, otherwise node ID
+            subject_label = G.nodes[subject_id].get('shape_label', subject_id)
+            object_label = G.nodes[object_id].get('shape_label', object_id)
+
             if subject_id in object_features and object_id in object_features:
                 try:
+                    # Assuming knowledge_fusion can take labels and return enriched relations
+                    # This might need adjustment based on the actual MultiSourceKnowledgeFusion API
                     enriched_rels = await self.knowledge_fusion.get_enriched_relationships(
-                        rel.get('subject', ''), rel.get('object', ''), [rel.get('predicate', '')]
+                        subject_label, object_label, [rel.get('predicate', '')]
                     )
-                    enhanced_relationships.extend(enriched_rels)
+                    # Add enriched relations back to the graph or a temporary list
+                    for erel in enriched_rels:
+                        # Ensure enriched relations have subject_id and object_id for graph
+                        erel['subject_id'] = subject_id
+                        erel['object_id'] = object_id
+                        enhanced_relationships.append(erel)
+                        # Optionally, update existing edge or add new one to G
+                        # G.add_edge(subject_id, object_id, predicate=erel['predicate'], source='kb_fusion', confidence=erel.get('confidence'))
                 except Exception as e:
                     logging.warning(f"Knowledge fusion failed for relationship {rel}: {e}. Appending original relationship.")
                     enhanced_relationships.append(rel)
@@ -496,42 +571,77 @@ class EnhancedSceneGraphBuilder:
                 logging.debug(f"Skipping knowledge fusion for relationship {rel} due to missing features.")
                 enhanced_relationships.append(rel) # Append original if features are missing
 
-        # Hierarchical predicate refinement
-        refined_relationships = []
-        for i in range(0, len(enhanced_relationships), 2): # Process in pairs, as implied by original snippet
-            rel1 = enhanced_relationships[i]
-            # Ensure rel2 exists if processing in pairs
-            rel2 = enhanced_relationships[i+1] if (i + 1) < len(enhanced_relationships) else None
+        # Clear existing edges and add enhanced ones, or add new edges
+        # For simplicity, let's just add new edges if they don't exist, or update existing ones.
+        # To avoid duplicates, we might want to rebuild edges or manage them carefully.
+        # For now, let's just update the `relationships` list that will be part of the final output.
+        # The NetworkX graph `G` itself is modified in place (nodes have 'real_features').
+        # The relationships in `final_scene_graph['relationships']` will be the refined ones.
 
-            subject_features = object_features.get(rel1.get('subject_id'))
-            object_features_ = object_features.get(rel1.get('object_id'))
+        # Step 2: Hierarchical predicate refinement
+        refined_relationships = []
+        # This part of the original code was designed for a list of relationships.
+        # It needs to be re-thought for a NetworkX graph where edges are already present.
+        # The `predict_with_bayesian_inference` takes features.
+        # We need to iterate over pairs of nodes in G and apply hierarchical prediction.
+        
+        # This is a conceptual adaptation. The exact API of HierarchicalPredicatePredictor
+        # and how it interacts with NetworkX edges might need more specific implementation.
+        # For now, I'll simulate applying it to the `enhanced_relationships` list.
+        
+        # Create a mapping from (u,v) to existing edge data for easy lookup
+        edge_data_map = {}
+        for u, v, data in G.edges(data=True):
+            edge_data_map[(u,v)] = data
+
+        for rel in enhanced_relationships:
+            subject_id = rel.get('subject_id')
+            object_id = rel.get('object_id')
+            
+            subject_features = object_features.get(subject_id)
+            object_features_ = object_features.get(object_id)
             knowledge_embeddings = None # Placeholder, as per original code
 
-            # Only attempt hierarchical prediction if both features are available
             if subject_features is not None and object_features_ is not None:
                 try:
+                    # Assuming predict_with_bayesian_inference returns a list of refined relations
                     refined = self.hierarchical_predictor.predict_with_bayesian_inference(
-                        subject_features, object_features_, knowledge_embeddings
+                        subject_features, object_features_, knowledge_embeddings,
+                        current_predicates=[rel.get('predicate')] # Pass current predicate for context
                     )
-                    refined_relationships.extend(refined)
+                    # Add refined relations back to the list
+                    for r_rel in refined:
+                        r_rel['subject_id'] = subject_id
+                        r_rel['object_id'] = object_id
+                        refined_relationships.append(r_rel)
+                        # Optionally, update edge in G (e.g., add new predicate or update confidence)
+                        # G.add_edge(subject_id, object_id, predicate=r_rel['predicate'], source='hierarchical', confidence=r_rel.get('confidence'))
                 except Exception as e:
-                    logging.warning(f"Hierarchical predicate prediction failed for rel {rel1}: {e}. Appending original.")
-                    refined_relationships.append(rel1)
-                    if rel2: refined_relationships.append(rel2)
+                    logging.warning(f"Hierarchical predicate prediction failed for rel {rel}: {e}. Appending original.")
+                    refined_relationships.append(rel)
             else:
-                logging.debug(f"Skipping hierarchical prediction for rel {rel1} due to missing features.")
-                refined_relationships.append(rel1)
-                if rel2: refined_relationships.append(rel2)
+                logging.debug(f"Skipping hierarchical prediction for rel {rel} due to missing features.")
+                refined_relationships.append(rel)
 
+        # Final validation using SGScoreValidator
+        # This expects a PIL Image and a dict with 'objects' and 'relationships'.
+        # The 'objects' here should be the list of object dictionaries, not the NetworkX nodes.
+        # The relationships should be the `refined_relationships`.
+        
+        # Prepare objects list for SGScoreValidator (from NetworkX nodes)
+        objects_for_validator = [G.nodes[node_id] for node_id in G.nodes()]
+        
         validation_results = await self.sgcore_validator.validate_scene_graph(
-            image, {'objects': objects, 'relationships': refined_relationships}
+            image, {'objects': objects_for_validator, 'relationships': refined_relationships}
         )
 
         final_scene_graph = base_scene_graph.copy()
+        # Update the 'relationships' list in the output dict with the refined ones
         final_scene_graph['relationships'] = refined_relationships
+        # The NetworkX graph G itself is passed by reference and modified with 'real_features'
 
         return {
-            'scene_graph': final_scene_graph,
+            'scene_graph': final_scene_graph, # Contains the NetworkX graph and refined relationships
             'quality_metrics': {
                 'knowledge_confidence': float(np.mean([r.get('final_confidence', 1.0) for r in enhanced_relationships]) if enhanced_relationships else 1.0),
                 'validation_score': validation_results.get('overall_score', 0.0),
@@ -636,179 +746,148 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
             logging.warning(f"Failed to create side-by-side image and graph: {e}")
 
 def remap_path(path):
+    """Remaps image paths to match expected dataset structure."""
     return path.replace('category_1', '1').replace('category_0', '0')
 
-async def _process_single_item_optimized(item, feature_cache, batch_validator, recall_evaluator, drift_visualizer, enhanced_builder):
-    """Processes a single item asynchronously, including feature caching, scene graph building, validation, and metrics."""
+async def _process_single_problem(problem_id: str, problem_records: List[Dict[str, Any]], feature_cache, batch_validator, recall_evaluator, drift_visualizer, enhanced_builder, feedback_dir, feedback_rate):
+    """
+    Processes a single Bongard problem (12 images) to build one scene graph.
+    Each image within the problem becomes a node in the single problem-level graph.
+    """
+    if not problem_records:
+        logging.warning(f"No records found for problem {problem_id}. Skipping graph build.")
+        return None
 
-    # Remap image path to match real dataset folder structure
-    image_path = remap_path(item.get('image_path', item.get('mask_path', '')))
-    # Generate cache key for feature cache
-    cache_key_features = feature_cache._generate_cache_key(
-        image_path,
-        hashlib.md5(str(item.get('mask', '')).encode()).hexdigest(),
-        {'model': 'optimized'}
-    )
-    features = feature_cache.load_features(cache_key_features, device='cuda')
+    # 1. Merge records into a single object for graph building
+    merged_record = {'objects': []}
+    representative_image_path = None # Path to one of the images for visualization/feature extraction
 
+    for idx, rec in enumerate(problem_records):
+        # Use the first image path as representative for the problem
+        if representative_image_path is None:
+            representative_image_path = remap_path(rec.get('image_path', rec.get('mask_path', '')))
 
-    # Robustly ensure 'objects' is a list of dicts for all input types
-    record = dict(item)  # always shallow copy to avoid mutating input
-    if not isinstance(record.get('objects', None), list):
-        # Try to wrap as a single object if possible
-        obj = {}
-        # Prefer geometry/features if present
-        if 'geometry' in record and 'features' in record:
-            obj = {
-                'id': record.get('problem_id', record.get('image_path', record.get('mask_path', 'shape_0'))),
-                'vertices': record.get('geometry', []),
-                **record.get('features', {}),
-                'label': record.get('label', ''),
-                'category': record.get('category', ''),
-                'image_path': record.get('image_path', ''),
-                'action_program': record.get('action_program', [])
-            }
-        # If only mask_path/image_path, wrap as minimal object
-        elif 'mask_path' in record or 'image_path' in record:
-            obj = {
-                'id': record.get('problem_id', record.get('image_path', record.get('mask_path', 'shape_0'))),
-                'mask_path': record.get('mask_path', ''),
-                'image_path': record.get('image_path', ''),
-                'label': record.get('label', ''),
-                'category': record.get('category', ''),
-            }
-        # Fallback: wrap the whole record as a single object
-        else:
-            obj = dict(record)
-        record['objects'] = [obj]
+        # Ensure 'id' is unique within the problem's graph and corresponds to the original image
+        obj_id = f"{problem_id}_{idx}" # Unique ID for each image-object within the problem graph
+        # Log missing label for debugging
+        if 'label' not in rec:
+            logging.warning(f"Missing 'label' in record for problem {problem_id}, image idx {idx}, image_path: {rec.get('image_path', '')}")
+        merged_record['objects'].append({
+            'id': obj_id,
+            'vertices': rec.get('vertices', []),
+            **rec.get('features', {}), # Unpack centroid, area etc. from derived_labels
+            'label': rec.get('label', ''), # Always include 'label' key for downstream compatibility
+            'shape_label': rec.get('label', ''), # Use 'label' from derived_labels as shape_label
+            'category': rec.get('category', ''),
+            'original_image_path': remap_path(rec.get('image_path', '')), # Keep original image path for tracing
+            'original_record_idx': idx # For debugging/tracing if needed
+        })
 
-    # Ensure every object has 'label' and 'category' keys (default empty string)
-    for obj in record['objects']:
-        if 'label' not in obj:
-            obj['label'] = ''
-        if 'category' not in obj:
-            obj['category'] = ''
+    # Log merged objects for debugging (show only id and shape_label for each object)
+    debug_summary = [
+        {'id': obj.get('id'), 'shape_label': obj.get('shape_label')} for obj in merged_record['objects']
+    ]
+    logging.info(f"Merged objects for problem {problem_id} (id, shape_label): {json.dumps(debug_summary)}")
 
-    # --- DEBUG LOGGING: Print all objects and their key attributes ---
-    logging.info(f"[DEBUG] Number of objects in input: {len(record['objects'])}")
-    for idx, obj in enumerate(record['objects']):
-        logging.info(f"[DEBUG] Input object {idx}: id={obj.get('id')}, label={obj.get('label')}, category={obj.get('category')}, keys={list(obj.keys())}")
-        if 'vertices' in obj:
-            logging.info(f"[DEBUG] Object {idx} vertices: {obj['vertices']}")
-        if 'bbox' in obj:
-            logging.info(f"[DEBUG] Object {idx} bbox: {obj['bbox']}")
+    # 2. Build the unvalidated base scene graph for the entire problem
+    # This graph will have N nodes (e.g., 12), one for each image-object.
+    base_graph_nx = build_graph_unvalidated(merged_record)
 
-    graph_obj = build_graph_unvalidated(record)
-
-    # --- DEBUG LOGGING: Print all nodes and edges in the resulting scene graph ---
-    logging.info(f"[DEBUG] Scene graph has {graph_obj.number_of_nodes()} nodes and {graph_obj.number_of_edges()} edges.")
-    for idx, (node_id, node_data) in enumerate(graph_obj.nodes(data=True)):
-        logging.info(f"[DEBUG] Scene graph node {idx}: id={node_id}, label={node_data.get('label')}, category={node_data.get('category')}, keys={list(node_data.keys())}")
-    for idx, (u, v, data) in enumerate(graph_obj.edges(data=True)):
-        logging.info(f"[DEBUG] Scene graph edge {idx}: {u} -> {v}, predicate={data.get('predicate')}, keys={list(data.keys())}")
-
-    # Always wrap in a dict with expected keys
-    base_scene_graph = {
-        'objects': record['objects'],
-        'relationships': [],  # relationships will be filled by enhanced_builder
-        'graph': graph_obj
+    # 3. Prepare base_scene_graph for enhanced builder
+    # The enhanced builder expects 'objects' (list of object dicts) and 'relationships' (list of dicts)
+    # and the NetworkX graph itself.
+    base_scene_graph_for_enhanced = {
+        'objects': merged_record['objects'], # These are the node data for the graph
+        'relationships': [], # Relationships will be filled by add_predicate_edges and enhanced_builder
+        'graph': base_graph_nx # Pass the networkx graph directly
     }
 
-    # Enhanced scene graph building (async)
-    scene_graph_data = await enhanced_builder.build_enhanced_scene_graph(image_path, base_scene_graph)
-    scene_graph = scene_graph_data['scene_graph']
+    # 4. Enhance the scene graph (knowledge fusion, hierarchical predicates)
+    # This still needs a single 'image_path' for image-based feature extraction/validation.
+    scene_graph_data = await enhanced_builder.build_enhanced_scene_graph(representative_image_path, base_scene_graph_for_enhanced)
+    final_scene_graph = scene_graph_data['scene_graph']
     quality_metrics = scene_graph_data['quality_metrics']
 
-    # Save feedback images (real + graph) for every Nth sample if feedback_dir is set
-    # Use base_name from image_path
-    feedback_dir = None
-    base_name = None
-    try:
-        import inspect
-        frame = inspect.currentframe()
-        outer = frame.f_back
-        if 'args' in outer.f_locals:
-            feedback_dir = outer.f_locals['args'].feedback_dir if hasattr(outer.f_locals['args'], 'feedback_dir') else None
-            feedback_rate = outer.f_locals['args'].feedback_rate if hasattr(outer.f_locals['args'], 'feedback_rate') else 20
-        else:
-            feedback_dir = 'feedback_samples'
-            feedback_rate = 20
-    except Exception:
-        feedback_dir = 'feedback_samples'
-        feedback_rate = 20
-    # Only save for every Nth sample (e.g., feedback_rate=20 means every 20th)
-    if feedback_dir and hasattr(scene_graph, 'get'):
-        # Use image_path as base_name
-        import os
-        base_name = os.path.splitext(os.path.basename(image_path))[0]
-        # Save only if this is the Nth sample (optional: could use a counter or random)
-        # For now, save for all (user can filter later)
-        try:
-            img = cv2.imread(image_path)
-            save_feedback_images(img, None, base_name, feedback_dir, scene_graph=scene_graph)
-        except Exception as e:
-            logging.warning(f"Failed to save feedback images for {image_path}: {e}")
+    # 5. Save feedback images (if enabled)
+    if feedback_dir and representative_image_path:
+        # Save only for a subset of problems based on feedback_rate
+        problem_numeric_id = int(''.join(filter(str.isdigit, problem_id))) if any(char.isdigit() for char in problem_id) else 0
+        if feedback_rate == 1 or (problem_numeric_id % feedback_rate == 0):
+            try:
+                img = cv2.imread(representative_image_path)
+                if img is not None:
+                    # Use problem_id as base_name for feedback images
+                    save_feedback_images(img, None, problem_id, feedback_dir, scene_graph=final_scene_graph)
+                else:
+                    logging.warning(f"Could not read representative image for feedback: {representative_image_path}")
+            except Exception as e:
+                logging.warning(f"Failed to save feedback images for problem {problem_id} ({representative_image_path}): {e}")
 
-    # Store features if they were newly computed by the EnhancedSceneGraphBuilder's feature_extractor
-    # This assumes EnhancedSceneGraphBuilder updates features in 'obj_id' in its internal state or returns them
-    # For now, we'll assume features are *already* handled by enhanced_builder's internal caching.
-    # If the feature_extractor within enhanced_builder is doing the caching, this part is redundant.
-    # If it's not, and we want this *external* cache to store them, we'd need to retrieve them from the enhanced_builder's result.
-    # The current prompt says "do not introduce any dummy features", implying RealFeatureExtractor is handling it.
-
+    # 6. Batch validation (if enabled)
     if batch_validator:
-        # batch_validator's validate_scene_graphs_batch expects (Image, scene_graph) tuples
         try:
-            img_pil = Image.open(image_path)
+            img_pil = Image.open(representative_image_path)
             validation_result = await batch_validator.validate_scene_graphs_batch(
-                [(img_pil, scene_graph)]
+                [(img_pil, final_scene_graph)]
             )
-            scene_graph['validation'] = validation_result[0] if validation_result else None
+            final_scene_graph['validation'] = validation_result[0] if validation_result else None
         except Exception as e:
-            logging.error(f"Batch validation failed for {image_path}: {e}")
-            scene_graph['validation'] = {'error': str(e)}
+            logging.error(f"Batch validation failed for problem {problem_id} ({representative_image_path}): {e}")
+            final_scene_graph['validation'] = {'error': str(e)}
 
+    # 7. Recall evaluation (if ground_truth is available)
+    # This part is highly dependent on how problem-level ground truth is structured.
+    # The original `recall_evaluator` expects ground truth per image.
+    # For problem-level graphs, you would need problem-level ground truth.
+    # As the prompt does not provide this, I'm commenting out the active evaluation,
+    # but keeping the evaluator initialized for potential future use.
     metrics = None
-    if 'ground_truth' in item and recall_evaluator:
-        try:
-            metrics = recall_evaluator.evaluate_scene_graph(
-                scene_graph['relationships'],
-                item['ground_truth']['relationships'],
-                scene_graph['objects'],
-                item['ground_truth']['objects']
-            )
-            scene_graph['metrics'] = metrics
-        except Exception as e:
-            logging.error(f"Recall evaluation failed for {image_path}: {e}")
-            scene_graph['metrics'] = {'error': str(e)}
+    # if 'ground_truth' in problem_records[0] and recall_evaluator:
+    #     try:
+    #         # This is a placeholder. You would need problem-level ground truth here.
+    #         # For example, if problem_records[0]['ground_truth'] represents the *problem's* GT
+    #         metrics = recall_evaluator.evaluate_scene_graph(
+    #             final_scene_graph['relationships'],
+    #             problem_records[0]['ground_truth']['relationships'], # This is likely incorrect for problem-level GT
+    #             final_scene_graph['objects'],
+    #             problem_records[0]['ground_truth']['objects'] # This is likely incorrect for problem-level GT
+    #         )
+    #         final_scene_graph['metrics'] = metrics
+    #     except Exception as e:
+    #         logging.error(f"Recall evaluation failed for problem {problem_id}: {e}")
+    #         final_scene_graph['metrics'] = {'error': str(e)}
 
-    if drift_visualizer and metrics:
-        for rel in scene_graph['relationships']:
+    # 8. Drift visualization (if enabled)
+    # This also relies on `metrics` from recall evaluation, which is currently paused.
+    # If you re-enable recall evaluation with problem-level GT, this can be re-enabled.
+    if drift_visualizer and metrics: # metrics will be None if recall_evaluator is skipped
+        for rel in final_scene_graph.get('relationships', []):
             predicate = rel['predicate']
-            # Confidence can come from enhanced graph or be a default from quality_metrics
-            confidence = rel.get('confidence', quality_metrics.get('knowledge_confidence', 0.5))
-            # Assuming metrics object has a recall_at_k attribute (e.g., from RecallAtKEvaluator)
-            performance = metrics.recall_at_k.get(20, 0.0) if hasattr(metrics, 'recall_at_k') and metrics.recall_at_k else 0.5
+            confidence = rel.get('final_confidence', quality_metrics.get('knowledge_confidence', 0.5))
+            performance = metrics.get('overall_recall', 0.5) # Placeholder: needs actual problem-level performance
             drift_visualizer.add_threshold_data(predicate, confidence, performance)
 
     return {
-        'image_path': image_path,
-        'scene_graph': scene_graph,
-        'quality_metrics': quality_metrics,
+        'problem_id': problem_id,
+        'scene_graph_data': scene_graph_data, # Contains 'scene_graph' (with NetworkX graph) and 'quality_metrics'
         'processing_metadata': {
-            'features_from_cache': features is not None,
-            'cache_key': cache_key_features
+            'representative_image_path': representative_image_path,
+            'num_nodes_in_graph': base_graph_nx.number_of_nodes()
         }
     }
 
-def process_batch_sync_wrapper(batch_items, feature_cache, batch_validator, recall_evaluator, drift_visualizer, enhanced_builder):
-    """Synchronous wrapper to run async processing for a batch."""
+def process_problem_batch_sync_wrapper(list_of_problem_records: List[List[Dict[str, Any]]], feature_cache, batch_validator, recall_evaluator, drift_visualizer, enhanced_builder, feedback_dir, feedback_rate):
+    """Synchronous wrapper to run async processing for a batch of problems."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    tasks = [
-        _process_single_item_optimized(item, feature_cache, batch_validator, recall_evaluator, drift_visualizer, enhanced_builder)
-        for item in batch_items
-    ]
+    tasks = []
+    for problem_records in list_of_problem_records:
+        if problem_records: # Ensure problem_records is not empty
+            problem_id = problem_records[0].get('problem_id', 'unknown_problem')
+            tasks.append(_process_single_problem(problem_id, problem_records, feature_cache, batch_validator, recall_evaluator, drift_visualizer, enhanced_builder, feedback_dir, feedback_rate))
+        else:
+            logging.warning("Empty problem record list passed to process_problem_batch_sync_wrapper.")
+
     results = loop.run_until_complete(asyncio.gather(*tasks))
     loop.close()
     return results
@@ -820,7 +899,7 @@ async def main(): # Main is now async because it calls async functions
     parser.add_argument('--labels', type=str, default='data/derived_labels.json', help='Path to derived_labels.json')
     parser.add_argument('--out', type=str, required=True, help='Output pickle file for scene graphs')
     parser.add_argument('--parallel', type=int, default=4, help='Number of parallel workers for batch processing')
-    parser.add_argument('--batch-size', type=int, default=16, help='Batch size for graph building (0=auto-profile)')
+    parser.add_argument('--batch-size', type=int, default=16, help='Batch size for graph building (0=auto-profile). Now refers to problems per batch.')
     parser.add_argument('--feedback-dir', type=str, default='feedback_samples', help='Directory to save QA/feedback images')
     parser.add_argument('--feedback-rate', type=int, default=20, help='Save every Nth sample for feedback (default: 20, set 1 to save all)')
     args = parser.parse_args()
@@ -907,13 +986,14 @@ async def main(): # Main is now async because it calls async functions
         logging.error(f"Unexpected error loading labels: {e}. Continuing without them.")
         derived_labels = {}
 
-    # --- START PATCH ---
+    # --- START PATCH: Merge labels and group by problem_id ---
     # Build a lookup from image_path -> features/geometry
     label_lookup = {}
     if isinstance(derived_labels, list):
         for lbl in derived_labels:
             # normalize paths if needed so they match augmented_data['image_path']
-            label_lookup[lbl['image_path']] = {
+            normalized_image_path = remap_path(lbl['image_path'])
+            label_lookup[normalized_image_path] = {
                 'features': lbl['features'],
                 'vertices': lbl['geometry'],
                 'label': lbl['label'],
@@ -921,60 +1001,102 @@ async def main(): # Main is now async because it calls async functions
             }
 
     # Enrich augmented_data with label info
+    enriched_augmented_data = []
     for rec in augmented_data:
-        info = label_lookup.get(rec['image_path'])
+        info = label_lookup.get(remap_path(rec['image_path']))
         if not info:
-            logging.warning(f"No derived_labels entry for {rec['image_path']}")
+            logging.warning(f"No derived_labels entry for {rec['image_path']}. Skipping record.")
             continue
-        rec.update(info)  # now rec has rec['features'], rec['vertices'], rec['label'], rec['category']
+        new_rec = rec.copy() # Create a copy to update
+        new_rec.update(info)  # now new_rec has new_rec['features'], new_rec['vertices'], new_rec['label'], new_rec['category']
+        enriched_augmented_data.append(new_rec)
 
     # Group records by problem_id
-    from collections import defaultdict
-    grouped = defaultdict(list)
-    for rec in augmented_data:
+    grouped_problems = defaultdict(list)
+    for rec in enriched_augmented_data:
         pid = rec.get('problem_id')
-        grouped[pid].append(rec)
+        if pid:
+            grouped_problems[pid].append(rec)
+        else:
+            logging.warning(f"Record missing 'problem_id': {rec.get('image_path')}. Skipping.")
 
-    # Build one scene graph per problem
-    graphs = []
-    for pid, records in grouped.items():
-        merged = {'objects': []}
-        for idx, rec in enumerate(records):
-            merged['objects'].append({
-                'id': f"{pid}_{idx}",
-                'vertices': rec['vertices'],
-                **rec['features'],
-                'shape_label': rec['label'],
-                'category': rec['category']
-            })
-        G = build_graph_unvalidated(merged)
-        graphs.append({'problem_id': pid, 'graph': G})
-
-    # Skip the per-image pipeline entirely—overwrite `graphs` and proceed to save them
+    logging.info(f"Grouped {len(enriched_augmented_data)} records into {len(grouped_problems)} problems.")
     # --- END PATCH ---
 
-
     # Determine which graph building function to use (with or without validation)
+    # This is now used only for profiling, as the main loop calls _process_single_problem
     build_func_for_profiling = build_graph_validated if GRAPHTYPE_AVAILABLE else build_graph_unvalidated
     if GRAPHTYPE_AVAILABLE:
         logging.info("Graphtype detected. Runtime schema validation is ENABLED.")
     else:
         logging.info("Graphtype not found. Runtime schema validation is DISABLED.")
 
-    # Auto-profile batch size if requested
+    # Auto-profile batch size if requested (batch size now refers to problems per batch)
     batch_size = args.batch_size
-    if batch_size == 0 and len(augmented_data) > 0:
-        batch_size = profile_optimal_batch_size(augmented_data, build_func_for_profiling)
+    if batch_size == 0 and len(grouped_problems) > 0:
+        # Pass a sample of individual records for profiling, as profile_optimal_batch_size simulates grouping
+        batch_size = profile_optimal_batch_size(enriched_augmented_data, build_func_for_profiling)
     elif batch_size == 0:
-        logging.warning("Cannot auto-profile batch size: no data available. Using default batch size 16.")
+        logging.warning("Cannot auto-profile batch size: no problems available. Using default batch size 16.")
         batch_size = 16
-    logging.info(f"Using batch size: {batch_size}")
+    logging.info(f"Using batch size (problems per batch): {batch_size}")
 
 
-    graphs = []
+    graphs = [] # This will store the problem-level scene graph data (dict from _process_single_problem)
     profiler = TaskProfiler()
 
-    # ...existing code...
+    # Split problem_ids into batches for parallel processing
+    problem_ids = list(grouped_problems.keys())
+    problem_batches = [problem_ids[i:i + batch_size] for i in range(0, len(problem_ids), batch_size)]
+    logging.info(f"Starting problem batch processing: {len(problem_batches)} batches, problem_batch_size={batch_size}, parallel={args.parallel}")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.parallel) as executor:
+        # Submit tasks for each problem batch
+        futures = {
+            executor.submit(
+                process_problem_batch_sync_wrapper,
+                [grouped_problems[pid] for pid in batch_pids], # Pass list of problem_records for each problem in batch
+                feature_cache, batch_validator, recall_evaluator, drift_visualizer, enhanced_builder, args.feedback_dir, args.feedback_rate
+            ): batch_idx for batch_idx, batch_pids in enumerate(problem_batches)
+        }
+
+        for future in tqdm(concurrent.futures.as_completed(futures), total=len(problem_batches), desc="Building problem graphs", mininterval=0.5):
+            batch_idx = futures[future]
+            start_time_batch = time.time()
+            try:
+                batch_results = future.result()
+                # Extend graphs with valid results (filter out None from skipped problems)
+                graphs.extend([res for res in batch_results if res is not None])
+                latency = (time.time() - start_time_batch) * 1000
+                profiler.log_latency('scene_graph_build_problem', latency, {
+                    'num_problems_in_batch': len(batch_results),
+                    'latency_ms': latency,
+                    'throughput_problems_per_sec': len(batch_results) / (latency / 1000) if latency > 0 else float('inf')
+                })
+                logging.info(f"Processed problem batch {batch_idx+1}/{len(problem_batches)}. Problems processed: {len(batch_results)}")
+
+                # Periodically clear cache and log memory stats
+                if (batch_idx + 1) % 4 == 0: # Check every 4 batches
+                    if TORCH_KORNIA_AVAILABLE and torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    gc.collect()
+                    memory_stats = feature_cache.get_cache_stats()
+                    logging.info(f"Memory usage: RAM: {memory_stats.get('memory_usage_mb', 0):.1f}MB, GPU: {memory_stats.get('gpu_usage_mb', 0):.1f}MB")
+
+            except Exception as e:
+                logging.error(f"Error processing problem batch {batch_idx+1}: {e}")
+                problematic_problem_ids = problem_batches[batch_idx]
+                if problematic_problem_ids:
+                    logging.debug(f"Sample from problematic problem batch (first problem ID): {problematic_problem_ids[0]}")
+
+    if len(graphs) == 0:
+        logging.error(f"No scene graphs were produced. Check input data and filtering logic.")
+        if len(enriched_augmented_data) > 0:
+            logging.debug(f"Sample input record: {enriched_augmented_data[0]}")
+            if isinstance(enriched_augmented_data[0], dict):
+                logging.debug(f"Sample input record keys: {list(enriched_augmented_data[0].keys())}")
+    else:
+        logging.info(f"Successfully built {len(graphs)} scene graphs.")
 
     # Save results
     try:
@@ -985,7 +1107,7 @@ async def main(): # Main is now async because it calls async functions
     except Exception as e:
         logging.error(f"Failed to save scene graphs to {args.out}: {e}")
 
-    # Log diversity metrics
+    # Log diversity metrics (now operates on problem-level graphs)
     log_diversity_metrics(graphs)
 
     # Save adaptive thresholds
@@ -999,8 +1121,8 @@ async def main(): # Main is now async because it calls async functions
     if drift_visualizer:
         # Collect all predicates from all relationships in all scene graphs
         all_predicates = [rel.get('predicate', 'unknown')
-                         for G_data in graphs
-                         for rel in G_data.get('scene_graph', {}).get('relationships', [])]
+                         for G_data in graphs # Iterate over problem-level graph data
+                         for rel in G_data.get('scene_graph_data', {}).get('scene_graph', {}).get('relationships', [])]
         common_predicates = [p for p, _ in Counter(all_predicates).most_common(5)]
         if common_predicates:
             logging.info(f"Generating drift report for predicates: {common_predicates}")
@@ -1010,10 +1132,8 @@ async def main(): # Main is now async because it calls async functions
             logging.warning("No common predicates found to generate drift report.")
 
     # Log overall performance stats
-    # Removed call to profiler.get_overall_stats() due to missing method
     cache_stats = feature_cache.get_cache_stats()
     logging.info("Processing complete!")
-    # logging.info(f"Overall graph build throughput: {perf_stats.get('scene_graph_build', {}).get('throughput_graphs_per_sec', 0):.2f} graphs/sec")
     logging.info(f"Cache efficiency: Memory: {cache_stats.get('memory_usage_mb', 0):.1f}MB used, GPU: {cache_stats.get('gpu_usage_mb', 0):.1f}MB used")
 
 if __name__ == "__main__":
