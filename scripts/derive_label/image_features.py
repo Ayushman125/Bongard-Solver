@@ -8,7 +8,7 @@ from skimage.draw import polygon as skpolygon
 from shapely.geometry import Polygon # For robust area/perimeter calculations
 
 # Ensure calculate_confidence is available
-from derive_label.confidence_scoring import calculate_confidence
+from .confidence_scoring import calculate_confidence
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
@@ -75,7 +75,9 @@ def _rasterize_vertices_to_image(vertices_np, img_size_px=64, thickness=2, is_cl
     img = np.zeros((target_img_h, target_img_w), dtype=np.uint8)
 
     if scaled_pts.shape[0] == 1:
-        cv2.circle(img, tuple(scaled_pts[0]), thickness, 255, -1) # Draw a filled circle for a point
+        # Ensure coordinates are integers for OpenCV
+        center = tuple(int(round(x)) for x in scaled_pts[0])
+        cv2.circle(img, center, thickness, 255, -1) # Draw a filled circle for a point
     else:
         # Ensure correct shape for OpenCV: (N, 1, 2)
         pts_for_cv = scaled_pts.reshape((-1, 1, 2)).astype(np.int32)
@@ -132,9 +134,13 @@ def image_processing_features(vertices_np):
     Combines various techniques for a comprehensive set of features.
     Returns a dictionary of features.
     """
+    import logging
     features = {}
 
+    logging.debug(f"[ImageFeatures] Input vertices_np: shape={getattr(vertices_np, 'shape', None)}, dtype={getattr(vertices_np, 'dtype', None)}, sample={vertices_np[:5] if hasattr(vertices_np, '__getitem__') else vertices_np}")
+
     if vertices_np.size == 0 or vertices_np.shape[0] < 1:
+        logging.debug("[ImageFeatures] Empty input vertices. Returning empty features.")
         return features
 
     # --- Robust mask extraction, skeletonization, QA ---
@@ -144,6 +150,7 @@ def image_processing_features(vertices_np):
     features['robust_fill_ratio'] = qa.get('fill_ratio', 0.0)
     if features['robust_mask_area'] == 0:
         features['rasterization_empty'] = True
+        logging.debug("[ImageFeatures] Rasterization produced empty mask. Returning early.")
         return features
 
     img_binary = mask
@@ -282,6 +289,7 @@ def image_processing_features(vertices_np):
         except Exception:
             features['otsu_threshold_value'] = 0.0 # Default if Otsu fails (e.g., all same pixel value)
         
+        logging.debug(f"[ImageFeatures] Extracted features: {features}")
         return features
     except Exception as e:
         features['image_processing_error'] = str(e)

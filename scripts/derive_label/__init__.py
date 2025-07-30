@@ -6,10 +6,36 @@ from .post_processing import crodlab_consensus, compute_kappa
 from .validation import validate_batch, select_uncertain_samples, self_training, co_training
 
 def derive_labels(batch, config, epoch):
-    # 1. Feature extraction + detection
+
+    # 1. Feature extraction + detection (robust pseudo-labeling and stacker logic)
+    # Pseudo-labeling: Use detector agreement, even if all outputs are the same (including all False)
+    stacker = StackingEnsemble(config['detectors'], default_label=0)
+    detector_outputs = []
+    for img in batch.images:
+        # Each detector returns (label, features), we want the label
+        detector_outputs.append([det(img)[0] for det in config['detectors']])
+
+    # Find images where all detectors agree (including all True or all False)
+    pseudo_labels = []
+    pseudo_images = []
+    for i, outs in enumerate(detector_outputs):
+        if all(o == outs[0] for o in outs):
+            pseudo_labels.append(outs[0])
+            pseudo_images.append(batch.images[i])
+
+    import logging
+    logging.info(f"[PseudoLabeling] {len(pseudo_labels)} pseudo-labeled images (agreement, including all-False)")
+
+    # Fit stacker if any pseudo-labels are available
+    if len(pseudo_labels) > 0:
+        stacker.fit(pseudo_images, pseudo_labels)
+    else:
+        logging.warning("[PseudoLabeling] No pseudo-labels available for stacker training. Stacker will use default label.")
+
+    # Predict for all images (robust to unfitted stacker)
     labels = []
     for img in batch.images:
-        label = StackingEnsemble(config['detectors']).predict(img)
+        label = stacker.predict(img)
         labels.append(label)
 
     # 2. Confidence calibration

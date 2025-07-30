@@ -3,22 +3,47 @@ import torch
 import torch.nn as nn
 
 class StackingEnsemble:
-    def __init__(self, base_detectors):
+    def __init__(self, base_detectors, default_label=0):
         self.detectors = base_detectors
         self.meta = RandomForestClassifier(n_estimators=50)
         self._fitted = False
+        self.default_label = default_label
 
     def fit(self, images, true_labels):
+        import logging
         X = []
         for img in images:
             feats = np.hstack([det(img)[1] for det in self.detectors])
             X.append(feats)
-        self.meta.fit(np.vstack(X), true_labels)
-        self._fitted = True
+        X = np.vstack(X)
+        if len(true_labels) == 0:
+            logging.warning("[StackingEnsemble] No training data provided to fit(). Skipping fit.")
+            self._fitted = False
+            return
+        # Always fit, even if all labels are the same (including all False)
+        try:
+            self.meta.fit(X, true_labels)
+            self._fitted = True
+            logging.info(f"[StackingEnsemble] Fitted on {len(true_labels)} samples. Labels: {set(true_labels)}")
+        except Exception as e:
+            logging.error(f"[StackingEnsemble] Error fitting meta-learner: {e}")
+            self._fitted = False
+
+    def is_fitted(self):
+        """Returns True if the meta-learner is fitted."""
+        return getattr(self, '_fitted', False)
 
     def predict(self, image):
+        import logging
         feats = np.hstack([det(image)[1] for det in self.detectors]).reshape(1,-1)
-        return self.meta.predict(feats)[0]
+        if not self.is_fitted():
+            logging.warning("[StackingEnsemble] Meta-learner not fitted. Returning default label.")
+            return self.default_label
+        try:
+            return self.meta.predict(feats)[0]
+        except Exception as e:
+            logging.error(f"[StackingEnsemble] Error in predict: {e}. Returning default label.")
+            return self.default_label
 
 class DetectorAttention(nn.Module):
     def __init__(self, embed_dim, num_heads=4):
@@ -103,7 +128,7 @@ from scipy.spatial.distance import cdist # For symmetry score
 from math import hypot
 
 # Ensure calculate_confidence is available
-from derive_label.confidence_scoring import calculate_confidence
+from .confidence_scoring import calculate_confidence
 
 # Global logger setup (can be configured externally)
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -160,51 +185,53 @@ def _safe_center_and_scale_points(points):
 
 
 def ransac_line(points, threshold=2.0, min_points_for_ransac=5):
-    """RANSAC for line detection. Returns (is_line, confidence, line_params)"""
+    import logging
+    logging.debug(f"[Detector] ransac_line input: {points}")
+    try:
+        points = [[float(x), float(y)] for x, y in points]
+    except Exception as e:
+        logging.error(f"[ransac_line] Failed to convert points to float: {points}, error: {e}")
+        return False, 0.0, {}
+    logging.debug(f"[ransac_line] float points: {points}")
+    # RANSAC for line detection. Returns (is_line, confidence, line_params)
     try:
         from sklearn.linear_model import RANSACRegressor
-        if len(points) < min_points_for_ransac: # Need enough points for a robust RANSAC fit
+        if len(points) < min_points_for_ransac:
+            logging.debug(f"[ransac_line] Not enough points for RANSAC: {len(points)} < {min_points_for_ransac}")
             return False, 0.0, {}
 
         # Scale points for numerical stability with RANSACRegressor
         scaled_points, scale_factor, _ = _safe_center_and_scale_points(points)
-
         X = scaled_points[:, 0].reshape(-1, 1)
         y = scaled_points[:, 1]
-        
+
         # Ensure enough unique points for RANSAC
-        if len(np.unique(X)) < 2: # Need at least two distinct X values for line fit
-             return False, 0.0, {}
+        if len(np.unique(X)) < 2:
+            logging.debug(f"[ransac_line] Not enough unique X values for line fit.")
+            return False, 0.0, {}
 
         # Adjust residual_threshold based on scaling
         scaled_threshold = threshold * scale_factor
-        
+
         # min_samples is typically 2 for a line, but a higher value provides more robustness
         model = RANSACRegressor(residual_threshold=scaled_threshold, min_samples=2, random_state=0)
-        
         try:
             model.fit(X, y)
-        except ValueError: # e.g., if all points are perfectly vertical
+        except ValueError:
             # Handle vertical line case: swap X and Y and refit
             X_vert = scaled_points[:, 1].reshape(-1, 1)
             y_vert = scaled_points[:, 0]
-            if len(np.unique(X_vert)) < 2: return False, 0.0, {} # Still not enough distinct points
+            if len(np.unique(X_vert)) < 2:
+                return False, 0.0, {}
             model.fit(X_vert, y_vert)
-            
-            # If fitting vertical line, inlier mask is based on y instead of x
             inlier_mask = np.abs(model.predict(X_vert) - y_vert) < scaled_threshold
-            
-            # Recalculate start/end points in original coordinates
             if inlier_mask.sum() > 0:
                 inlier_pts = scaled_points[inlier_mask]
                 mean_inlier = np.mean(inlier_pts, axis=0)
-                # For vertical lines, main axis will be close to [0, 1] or [0, -1]
                 start_pt = inlier_pts[np.argmin(inlier_pts[:, 1])]
                 end_pt = inlier_pts[np.argmax(inlier_pts[:, 1])]
-                
                 length = float(np.linalg.norm(end_pt - start_pt)) / scale_factor
-                orientation = 90.0 # vertical
-                
+                orientation = 90.0
                 line_params = {
                     'start': (start_pt / scale_factor + (_safe_center_and_scale_points(points)[2])).tolist(),
                     'end': (end_pt / scale_factor + (_safe_center_and_scale_points(points)[2])).tolist(),
@@ -216,18 +243,15 @@ def ransac_line(points, threshold=2.0, min_points_for_ransac=5):
             else:
                 return False, 0.0, {}
 
-
         inlier_mask = model.inlier_mask_
         confidence = inlier_mask.sum() / len(points)
-        
         line_params = {}
-        if confidence > 0.8: # High confidence for a strong line fit
+        if confidence > 0.8:
             inlier_pts = scaled_points[inlier_mask]
             if len(inlier_pts) >= 2:
                 mean_inlier = np.mean(inlier_pts, axis=0)
                 centered_inlier = inlier_pts - mean_inlier
-                
-                if np.allclose(centered_inlier, 0): # All inliers are identical
+                if np.allclose(centered_inlier, 0):
                     start_pt = inlier_pts[0]
                     end_pt = inlier_pts[0]
                     length = 0.0
@@ -236,17 +260,13 @@ def ransac_line(points, threshold=2.0, min_points_for_ransac=5):
                     cov_inlier = np.cov(centered_inlier, rowvar=False)
                     eigvals, eigvecs = np.linalg.eigh(cov_inlier)
                     main_axis = eigvecs[:, np.argmax(eigvals)]
-                    
                     proj = centered_inlier @ main_axis
                     start_proj_idx = np.argmin(proj)
                     end_proj_idx = np.argmax(proj)
                     start_pt = inlier_pts[start_proj_idx]
                     end_pt = inlier_pts[end_proj_idx]
-
                     length = float(np.linalg.norm(end_pt - start_pt)) / scale_factor
                     orientation = float(np.degrees(np.arctan2(end_pt[1] - start_pt[1], end_pt[0] - start_pt[0])))
-                
-                # Convert back to original coordinate system
                 line_params = {
                     'start': (start_pt / scale_factor + (_safe_center_and_scale_points(points)[2])).tolist(),
                     'end': (end_pt / scale_factor + (_safe_center_and_scale_points(points)[2])).tolist(),
@@ -254,6 +274,8 @@ def ransac_line(points, threshold=2.0, min_points_for_ransac=5):
                     'orientation': orientation
                 }
                 return True, confidence, line_params
+        if not (confidence > 0.8):
+            logging.debug(f"[ransac_line] Low confidence: {confidence}")
         return False, confidence, line_params
     except ImportError:
         logging.debug("[GeometricDetectors] sklearn not installed, skipping RANSAC Line.")
@@ -263,10 +285,29 @@ def ransac_line(points, threshold=2.0, min_points_for_ransac=5):
         return False, 0.0, {}
 
 def ransac_circle(points, threshold=2.0, min_points_for_ransac=5):
+    import logging
+    logging.debug(f"[Detector] ransac_circle input: {points}")
+    try:
+        points = [[float(x), float(y)] for x, y in points]
+    except Exception as e:
+        logging.error(f"[ransac_circle] Failed to convert points to float: {points}, error: {e}")
+        return False, 0.0, {}
+    logging.debug(f"[ransac_circle] float points: {points}")
+    import logging
+    logging.debug(f"[ellipse_fit] raw points: {points} (type: {type(points)})")
+    try:
+        points = [[float(x), float(y)] for x, y in points]
+    except Exception as e:
+        logging.error(f"[ellipse_fit] Failed to convert points to float: {points}, error: {e}")
+        return False, 0.0, {}
+    logging.debug(f"[ellipse_fit] float points: {points}")
+    import logging
+    # Defensive: if flat_commands is a list of [x, y] pairs, log float conversion for debugging
     """RANSAC for circle detection. Returns (is_circle, confidence, circle_params)"""
     try:
         from scipy.optimize import leastsq
-        if len(points) < min_points_for_ransac: # Need at least 5 points for robust circle fit
+        if len(points) < min_points_for_ransac:
+            logging.debug(f"[ransac_circle] Not enough points for RANSAC: {len(points)} < {min_points_for_ransac}")
             return False, 0.0, {}
 
         # Scale points for numerical stability
@@ -311,6 +352,8 @@ def ransac_circle(points, threshold=2.0, min_points_for_ransac=5):
                 'residual': float(residu) # Residual is in scaled units
             }
             return True, confidence, circle_params
+        if not (confidence > 0.8):
+            logging.debug(f"[ransac_circle] Low confidence: {confidence}")
         return False, confidence, circle_params
     except ImportError:
         logging.debug("[GeometricDetectors] scipy not installed, skipping RANSAC Circle.")
@@ -322,40 +365,68 @@ def ransac_circle(points, threshold=2.0, min_points_for_ransac=5):
 def ellipse_fit(points, min_points_for_ellipse=7): # Increased from 5 for better robustness
     """Fits an ellipse to a set of points using skimage's EllipseModel. Returns (is_ellipse, confidence, ellipse_params)"""
     try:
+        logging.debug(f"[ellipse_fit] input: {points} (type: {type(points)})")
         from skimage.measure import EllipseModel
-        if len(points) < min_points_for_ellipse: 
+        if len(points) < min_points_for_ellipse:
+            logging.debug(f"[ellipse_fit] Not enough points for ellipse fit: {len(points)} < {min_points_for_ellipse}")
             return False, 0.0, {}
 
         # Scale points for numerical stability
         scaled_points, scale_factor, original_center_offset = _safe_center_and_scale_points(points)
+        logging.debug(f"[ellipse_fit] scaled_points: {scaled_points}, scale_factor: {scale_factor}, original_center_offset: {original_center_offset}")
 
         model = EllipseModel()
         if model.estimate(scaled_points):
             xc, yc, a, b, theta = model.params
-            
+            logging.debug(f"[ellipse_fit] params: xc={xc}, yc={yc}, a={a}, b={b}, theta={theta}")
             # Heuristics for a good ellipse fit: positive axes, reasonable aspect ratio
-            # Use a slightly stricter aspect ratio for "excellent" detection
-            if a > 0 and b > 0 and 0.1 < b / a < 10: # Allow more elongated shapes
+            if a > 0 and b > 0 and 0.05 < b / a < 20: # Allow even more elongated shapes for debugging
                 # Sample points on the ellipse and check distance to original points for confidence
                 t = np.linspace(0, 2*np.pi, len(scaled_points), endpoint=False)
                 ellipse_x = xc + a * np.cos(t) * np.cos(theta) - b * np.sin(t) * np.sin(theta)
                 ellipse_y = yc + a * np.cos(t) * np.sin(theta) + b * np.sin(t) * np.cos(theta)
                 fitted_points = np.column_stack([ellipse_x, ellipse_y])
-                
+
+                # Relax inlier distance threshold for debugging (from 5 to 8)
                 distances = np.min(cdist(scaled_points, fitted_points), axis=1)
-                inlier_count = np.sum(distances < 5) # Threshold for "on the ellipse" in scaled units
+                inlier_count = np.sum(distances < 8)
                 confidence = inlier_count / len(points)
-                
+                logging.debug(f"[ellipse_fit] distances: {distances}, inlier_count: {inlier_count}, confidence: {confidence}")
                 # Adjust confidence based on how "circular" or "elliptical" it really is
                 aspect_ratio = min(a, b) / max(a, b)
                 confidence *= (1 + aspect_ratio) / 2 # Reward closer to circular
-                
+
                 # Convert params back to original coordinates
                 original_center = (np.array([xc, yc]) / scale_factor + original_center_offset).tolist()
                 original_axes = (float(a / scale_factor), float(b / scale_factor))
-                
+
                 ellipse_params = {'center': original_center, 'axes': original_axes, 'angle': float(theta)}
-                return True, confidence, ellipse_params
+
+                # --- Debug visualization: plot input points and fitted ellipse if matplotlib is available ---
+                try:
+                    import matplotlib.pyplot as plt
+                    fig, ax = plt.subplots()
+                    ax.scatter(scaled_points[:,0], scaled_points[:,1], color='blue', label='Input Points')
+                    ax.plot(ellipse_x, ellipse_y, color='red', label='Fitted Ellipse')
+                    ax.set_aspect('equal')
+                    ax.legend()
+                    ax.set_title(f"Ellipse Fit (conf={confidence:.2f})")
+                    plt.show()
+                except ImportError:
+                    pass
+                except Exception as e:
+                    logging.debug(f"[ellipse_fit] Visualization error: {e}")
+
+                # Lower threshold for debugging: accept anything with confidence > 0.1
+                if confidence > 0.1:
+                    logging.info(f"[ellipse_fit] DETECTED: True, confidence: {confidence}, params: {ellipse_params}")
+                    return True, confidence, ellipse_params
+                else:
+                    logging.debug(f"[ellipse_fit] Low confidence: {confidence}, params: {ellipse_params}")
+                    logging.info(f"[ellipse_fit] DETECTED: False, confidence: {confidence}, params: {ellipse_params}")
+                    return False, confidence, ellipse_params
+        logging.debug(f"[ellipse_fit] Fit failed or low confidence.")
+        logging.info(f"[ellipse_fit] DETECTED: False, confidence: 0.0, params: {{}}")
         return False, 0.0, {}
     except ImportError:
         logging.debug("[GeometricDetectors] skimage not installed, skipping ellipse fitting.")
@@ -365,12 +436,15 @@ def ellipse_fit(points, min_points_for_ellipse=7): # Increased from 5 for better
         return False, 0.0, {}
 
 def hough_lines_detector(points, min_vote_threshold=30, min_line_length=15, max_line_gap=10):
+    import logging
+    logging.debug(f"[Detector] hough_lines_detector input: {points}")
     """
     Detects lines in a set of points using Hough Transform (OpenCV's HoughLinesP).
     Returns (is_line, confidence, line_params) based on the longest dominant line.
     """
     try:
         if hasattr(points, 'shape') and points.shape[0] < 2:
+            logging.debug(f"[hough_lines_detector] Not enough points for Hough: {points}")
             return False, 0.0, None
 
         # Determine optimal image size for Hough Transform based on point spread
@@ -384,9 +458,10 @@ def hough_lines_detector(points, min_vote_threshold=30, min_line_length=15, max_
 
         # Handle cases where points are very clustered (e.g., single point)
         if img_width < 1 or img_height < 1:
-            if hasattr(points, 'shape') and points.shape[0] > 1 and np.linalg.norm(points[-1] - points[0]) < 5: # Small cluster, not a line
+            if hasattr(points, 'shape') and points.shape[0] > 1 and np.linalg.norm(points[-1] - points[0]) < 5:
+                logging.debug(f"[hough_lines_detector] Small cluster, not a line.")
                 return False, 0.0, None
-            img_width = img_height = 50 # Minimum size for very small objects
+            img_width = img_height = 50
 
         img = np.zeros((img_height, img_width), dtype=np.uint8)
 
@@ -450,12 +525,15 @@ def hough_lines_detector(points, min_vote_threshold=30, min_line_length=15, max_
                 if confidence > 0.5: # Only return true if confidence is reasonable
                     return True, confidence, line_params
 
+        logging.debug(f"[hough_lines_detector] No strong line found.")
         return False, 0.0, None
     except Exception as e:
         logging.error(f"[GeometricDetectors] Error in HoughLinesP: {e}")
         return False, 0.0, None
 
 def convexity_defects_detector(points):
+    import logging
+    logging.debug(f"[Detector] convexity_defects_detector input: {points}")
     """
     Analyzes convexity defects of a shape using OpenCV.
     Includes robust fallback for self-intersecting polygons using Shapely.
@@ -463,6 +541,7 @@ def convexity_defects_detector(points):
     """
     try:
         if hasattr(points, 'shape') and points.shape[0] < 3:
+            logging.debug(f"[convexity_defects_detector] Not enough points for convexity analysis.")
             return 0, 'degenerate_shape', 0.0, {}
 
         # Round and convert to int for OpenCV, but keep original for Shapely
@@ -484,6 +563,7 @@ def convexity_defects_detector(points):
             is_simple_poly = False
 
         if not is_valid_poly:
+            logging.debug(f"[convexity_defects_detector] Invalid polygon for convexity analysis.")
             # If not a simple, valid polygon, try to decompose or flag as complex/self-intersecting
             if poly_shapely is not None and not is_simple_poly:
                 try:
@@ -525,6 +605,8 @@ def convexity_defects_detector(points):
 
         # If it's a valid simple polygon (either originally or after buffer fix)
         hull = cv2.convexHull(pts_cv, returnPoints=False)
+        if hull is None or len(hull) < 3:
+            logging.debug(f"[convexity_defects_detector] Degenerate hull for convexity analysis.")
 
         if hull is not None and len(hull) >= 3:
             try:
@@ -547,6 +629,7 @@ def convexity_defects_detector(points):
                 return num_defects, label_type, confidence, {'num_convexity_defects': num_defects}
             except cv2.error as e:
                 logging.warning(f"[ConvexityDefects] OpenCV error on defects: {e}. Degenerate hull points or data.")
+                logging.debug(f"[convexity_defects_detector] OpenCV error on defects: {e}")
                 return 0, 'polygon_defects_cv_error', 0.4, {'error': str(e)}
         else:
             return 0, 'degenerate_hull_polygon', 0.2, {}
@@ -556,10 +639,13 @@ def convexity_defects_detector(points):
 
 
 def fourier_descriptors(points, n_descriptors=10):
+    import logging
+    logging.debug(f"[Detector] fourier_descriptors input: {points}")
     """Computes Fourier descriptors for shape analysis. Returns (descriptors, confidence)"""
     pts = np.array(points)
     if hasattr(pts, 'shape') and pts.shape[0] < n_descriptors:
-        return np.array([]).tolist(), 0.0 # Return list for JSON serialization
+        logging.debug(f"[fourier_descriptors] Not enough points for descriptors.")
+        return np.array([]).tolist(), 0.0
     complex_pts = pts[:, 0] + 1j * pts[:, 1]
     coeffs = np.fft.fft(complex_pts)
     
@@ -584,10 +670,12 @@ def fourier_descriptors(points, n_descriptors=10):
     return desc.tolist(), confidence
 
 def cluster_points_detector(points, eps=5, min_samples=5):
+    import logging
+    logging.debug(f"[Detector] cluster_points_detector input: {points}")
     """Clusters points using DBSCAN. Returns (labels, n_clusters, confidence)"""
     try:
-        from sklearn.cluster import DBSCAN
-        if len(points) < min_samples: 
+        if len(points) < min_samples:
+            logging.debug(f"[cluster_points_detector] Not enough points for clustering.")
             return np.zeros(len(points), dtype=int).tolist(), 0, 0.0
         
         # Scale points for DBSCAN if coordinates are very large or small
@@ -634,7 +722,9 @@ def is_roughly_circular_detector(points, tolerance=0.10): # Stricter tolerance
     Returns (is_circular, confidence)
     """
     points_np = np.array(points)
-    if points_np.shape[0] < 3: return False, 0.0 
+    if points_np.shape[0] < 3:
+        logging.debug(f"[is_roughly_circular_detector] Not enough points for circularity.")
+        return False, 0.0
 
     centroid = np.mean(points_np, axis=0)
     radii = np.linalg.norm(points_np - centroid, axis=1)
@@ -680,11 +770,14 @@ def is_roughly_circular_detector(points, tolerance=0.10): # Stricter tolerance
 
 
 def is_rectangle_detector(vertices_np, angle_tolerance=10, length_tolerance_ratio=0.1):
+    import logging
+    logging.debug(f"[Detector] is_rectangle_detector input: {vertices_np}")
     """
     Checks if a shape is a rectangle based on angles, side lengths, AND compares with min_bounding_rectangle.
     Returns (is_rectangle, confidence, properties).
     """
-    if len(vertices_np) < 4: # A rectangle has at least 4 distinct vertices
+    if len(vertices_np) < 4:
+        logging.debug(f"[is_rectangle_detector] Not enough vertices for rectangle.")
         return False, 0.0, {}
 
     pts = np.array(vertices_np)
@@ -768,11 +861,14 @@ def is_rectangle_detector(vertices_np, angle_tolerance=10, length_tolerance_rati
 
 
 def is_point_cloud_detector(vertices_np, min_spread=10.0, max_spread=200.0, min_points=10, max_coherence_score=0.2):
+    import logging
+    logging.debug(f"[Detector] is_point_cloud_detector input: {vertices_np}")
     """
     Detects if the vertices form a scattered point cloud rather than a cohesive shape.
     Confidence is higher for more points and larger spread, but lower if features suggest a shape.
     """
     if len(vertices_np) < min_points:
+        logging.debug(f"[is_point_cloud_detector] Not enough points for point cloud.")
         return False, 0.0, {}
 
     # Calculate spread
@@ -1192,4 +1288,3 @@ def min_bounding_circle(points):
     except Exception as e:
         logging.error(f"[GeometricDetectors] Error in min_bounding_circle: {e}")
         return False, 0.0, {}
-

@@ -1,4 +1,4 @@
-from derive_label.confidence_scoring import consensus_vote, DETECTOR_RELIABILITY
+from .confidence_scoring import consensus_vote, DETECTOR_RELIABILITY
 
 def analyze_detector_consensus(obj, scene_context=None):
     """
@@ -6,13 +6,16 @@ def analyze_detector_consensus(obj, scene_context=None):
     applies confidence-weighted voting and context-aware arbitration.
     Modifies obj in place to add 'detector_consensus' property.
     """
+    import logging
     candidate_labels = obj.get('possible_labels', {})
     detector_confidences = obj.get('detector_confidences', {})
     context = {}
+    logging.debug(f"[SemanticRefinement] analyze_detector_consensus: candidate_labels={candidate_labels}, detector_confidences={detector_confidences}")
     if scene_context and scene_context.get('grid_pattern', {}).get('is_grid'):
         context['is_grid'] = scene_context['grid_pattern']['is_grid']
     final_label, label_ranking, label_sources = consensus_vote(
         candidate_labels, detector_confidences, DETECTOR_RELIABILITY, context)
+    logging.debug(f"[SemanticRefinement] consensus_vote: final_label={final_label}, label_ranking={label_ranking}, label_sources={label_sources}")
     obj['detector_consensus'] = {
         'final_label': final_label,
         'label_ranking': label_ranking,
@@ -218,15 +221,16 @@ def infer_shape_type_ensemble(vertices_np, problem_id, candidate_labels, calcula
                             is_rectangle_detector, is_roughly_circular_detector,
                             detect_connected_line_segments, is_quadrilateral_like, is_smooth_curve,
                             is_composite_shape, convexity_defects_detector, is_point_cloud_detector):
+    import logging
     best_label_info = {'label': 'unknown', 'confidence': 0.0, 'type': 'fallback', 'props': {}}
 
     best_overall_score = -1.0
+    logging.debug(f"[SemanticRefinement] infer_shape_type_ensemble: candidate_labels={candidate_labels}")
     for candidate in candidate_labels:
         label_score = label_specificity_score.get(candidate['label'], 0)
         type_weight = type_weights.get(candidate.get('type', 'fallback'), 0.1)
-        
         current_overall_score = candidate['confidence'] * 1000 + label_score * 10 + type_weight
-        
+        logging.debug(f"[SemanticRefinement] Candidate: {candidate}, score={current_overall_score}")
         if current_overall_score > best_overall_score:
             best_overall_score = current_overall_score
             best_label_info = candidate
@@ -240,6 +244,7 @@ def infer_shape_type_ensemble(vertices_np, problem_id, candidate_labels, calcula
         is_roughly_circular_detector=is_roughly_circular_detector,
         convexity_defects_detector=convexity_defects_detector
     )
+    logging.debug(f"[SemanticRefinement] Refined label: {refined_label}")
 
     if refined_label != best_label_info['label']:
         best_label_info['label'] = refined_label
@@ -251,6 +256,7 @@ def infer_shape_type_ensemble(vertices_np, problem_id, candidate_labels, calcula
         best_label_info['confidence'] = 0.1
         best_label_info['props'] = {} # Changed from 'properties' to 'props' to match candidate structure
 
+    logging.debug(f"[SemanticRefinement] Final label info: {best_label_info}")
     # Return props from the best candidate as the ensemble's properties
     # Note: `props` from candidate is already being added to main `properties` in logo_processing.py
     # This return simply makes it explicit which properties were chosen for the best label.

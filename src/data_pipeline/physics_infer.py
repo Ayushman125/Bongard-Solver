@@ -116,48 +116,50 @@ class PhysicsInference:
         if key in _POLY_CACHE:
             return _POLY_CACHE[key]
 
-        # raw polygon
+    @staticmethod
+    def polygon_from_vertices(vertices):
+        # Remove duplicate points and ensure at least 3 unique points
+        unique_vertices = []
+        seen = set()
+        for v in vertices:
+            tup = tuple(map(float, v))
+            if tup not in seen:
+                unique_vertices.append(tup)
+                seen.add(tup)
+        if len(unique_vertices) < 3:
+            logging.warning(f"[Physics Inference] Not enough unique vertices to form a polygon: {unique_vertices}")
+            return Polygon()
+        # Try to order vertices (optional: use convex hull if needed)
+        verts_tuple = tuple(unique_vertices)
+        key = f"{len(verts_tuple)}-{hash(verts_tuple)}"
+        if key in _POLY_CACHE:
+            return _POLY_CACHE[key]
         t0 = time.time()
         try:
-            poly = Polygon(vertices)
+            poly = Polygon(unique_vertices)
         except Exception as e:
-            logging.warning(f"Polygon creation from vertices failed: {e}. Attempting repair.")
-            # Fallback for invalid polygons: try to buffer or simplify
-            if len(vertices) >= 3:
-                try:
-                    # Attempt to create a LineString and then buffer/polygonize
-                    line = LineString(vertices)
-                    if not line.is_empty:
-                        # Buffer by a small amount and then take convex hull if buffering makes it multipolygon
-                        buffered_line = line.buffer(1.0) # Small buffer
-                        if isinstance(buffered_line, MultiPolygon):
-                            poly = buffered_line.convex_hull # Take convex hull of buffered line
-                        else:
-                            poly = buffered_line
-                    else:
-                        poly = Polygon() # Empty polygon if line is empty
-                except Exception as e_repair:
-                    logging.warning(f"Polygon repair failed: {e_repair}. Returning empty polygon.")
-                    poly = Polygon()
-            else:
-                poly = Polygon() # Default to empty polygon for less than 3 vertices
-
-        # small-polygon repair (fix: use n < 20 for fallback, as in snippet)
-        # This part seems to be an old repair mechanism, if polygon() fails, the above try-except should handle.
-        # Keeping it for consistency but the buffer logic should be more robust.
-        if not poly.is_valid and len(vertices) < 20 and len(vertices) >= 3: # Only attempt if not already valid and enough points
+            logging.warning(f"[Physics Inference] Polygon creation from vertices failed: {e}. Returning empty polygon.")
+            return Polygon()
+        if not poly.is_valid:
             try:
-                # Attempt to create a valid polygon from a simplified version of vertices
-                from shapely.validation import make_valid
-                poly = make_valid(Polygon(vertices))
-            except Exception as e_mv:
-                logging.warning(f"make_valid failed for polygon from {len(vertices)} verts: {e_mv}. Trying convex hull.")
-                try:
-                    poly = Polygon(vertices).convex_hull # Fallback to convex hull
-                except Exception as e_ch:
-                    logging.warning(f"convex_hull failed: {e_ch}. Returning empty polygon.")
-                    poly = Polygon()
-            
+                poly = poly.buffer(0)
+                if not poly.is_valid:
+                    logging.warning(f"[Physics Inference] Polygon for vertices still invalid after buffer(0): {unique_vertices}")
+                    return Polygon()
+            except Exception as e:
+                logging.warning(f"[Physics Inference] Polygon repair with buffer(0) failed: {e}")
+                return Polygon()
+        poly = PhysicsInference._ensure_polygon(poly)
+        _POLY_CACHE[key] = poly
+        logging.debug("polygon: build %d verts (valid: %s) in %.3fs", len(unique_vertices), poly.is_valid, time.time()-t0)
+        return poly
+        logging.warning(f"make_valid failed for polygon from {len(vertices)} verts: {e_mv}. Trying convex hull.")
+        try:
+            poly = Polygon(vertices).convex_hull # Fallback to convex hull
+        except Exception as e_ch:
+            logging.warning(f"convex_hull failed: {e_ch}. Returning empty polygon.")
+            poly = Polygon()
+    
             if not poly.is_valid: # If still not valid, default to a small square
                 logging.warning(f"Polygon still invalid after repair. Defaulting to unit square.")
                 poly = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])

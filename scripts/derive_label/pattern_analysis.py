@@ -68,7 +68,7 @@ from itertools import combinations
 import math
 
 # Ensure calculate_confidence is available
-from derive_label.confidence_scoring import calculate_confidence
+from .confidence_scoring import calculate_confidence
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 

@@ -19,9 +19,9 @@ import numpy as np
 import logging
 
 # MCTS specific helper functions (from image_features)
-from derive_label.geometric_detectors import detect_vertices
-from derive_label.confidence_scoring import consensus_vote, DETECTOR_RELIABILITY
-from derive_label.image_features import extract_clean_mask_and_skeleton
+from .geometric_detectors import detect_vertices
+from .confidence_scoring import consensus_vote, DETECTOR_RELIABILITY
+from .image_features import extract_clean_mask_and_skeleton
 
 # --- Bayesian Uncertainty via Monte Carlo Dropout ---
 def mc_dropout_predict(model, inputs, n_samples=10):

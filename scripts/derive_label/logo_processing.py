@@ -1,36 +1,100 @@
-import torch
-import torch.nn as nn
+# """
+# --- Automation: Periodic Retraining and Batch Scheduling ---
+# This section adds:
+#   - Periodic retraining using APScheduler (time-based, e.g., every N hours)
+#   - Batch scheduling for new data using Watchdog (directory monitoring)
+#   - Professional logging, error handling, and clean shutdown
+#   - Integration hooks for retraining and batch processing
+# """
 
-class ContextEncoder(nn.Module):
-    def __init__(self, feature_dim, hidden_dim):
-        super().__init__()
-        self.query = nn.Linear(feature_dim, hidden_dim)
-        self.key   = nn.Linear(feature_dim, hidden_dim)
-        self.value = nn.Linear(feature_dim, hidden_dim)
-        self.softmax = nn.Softmax(dim=-1)
+# # --- Imports for Automation ---
+# from apscheduler.schedulers.background import BackgroundScheduler
+# from apscheduler.triggers.interval import IntervalTrigger
+# from watchdog.observers import Observer
+# from watchdog.events import FileSystemEventHandler
+# import threading
+# import time
 
-    def forward(self, features):
-        # features: Tensor of shape (N, feature_dim)
-        Q = self.query(features)
-        K = self.key(features)
-        V = self.value(features)
-        attn = self.softmax(Q @ K.T / (K.shape[-1]**0.5))
-        context = attn @ V
-        return context
+# # --- Configuration for Automation ---
+# AUTOMATION_CONFIG = {
+#     'retrain_interval_hours': 6,  # Retrain every 6 hours
+#     'watch_dir': './incoming_batches',  # Directory to watch for new data
+#     'file_pattern': '*.json',  # Pattern for new batch files
+#     'max_retries': 3,  # Max retries for failed batch processing
+# }
 
-def extract_batch_features(batch_flat_commands, shape_creation_dependencies, D=32):
-    # Dummy batch feature extraction for demo
-    import numpy as np
-    batch_features = []
-    for flat_commands in batch_flat_commands:
-        # Use LOGO parser to get shape objects, then extract features
-        objects, _ = create_shape_from_stroke_pipeline(flat_commands, **shape_creation_dependencies)
-        if objects and 'coords' in objects[0]:
-            feat = image_processing_features(objects[0]['coords'])
-        else:
-            feat = np.zeros(D)
-        batch_features.append(feat)
-    return np.stack(batch_features)
+# # --- Retraining Logic (to be customized for your pipeline) ---
+# def retrain_models():
+#     logging.info('[Automation] Starting periodic retraining of models...')
+#     try:
+#         # Insert your retraining logic here (e.g., reload pseudo-labeled data, refit stacker, etc.)
+#         # Example: retrain_stacker(), retrain_attention(), etc.
+#         # This is a placeholder for integration with your main pipeline.
+#         # You may want to call a function in your main pipeline that handles retraining.
+#         # For demonstration, just log:
+#         logging.info('[Automation] Retraining completed successfully.')
+#     except Exception as e:
+#         logging.error(f'[Automation] Retraining failed: {e}')
+
+# # --- Batch Processing Logic (to be customized for your pipeline) ---
+# def process_new_batch(file_path):
+#     logging.info(f'[Automation] Detected new batch file: {file_path}')
+#     for attempt in range(AUTOMATION_CONFIG['max_retries']):
+#         try:
+#             # Insert your batch processing logic here (e.g., run main pipeline on new file)
+#             # Example: process_batch(file_path)
+#             # For demonstration, just log:
+#             logging.info(f'[Automation] Processing batch: {file_path} (attempt {attempt+1})')
+#             # Simulate processing
+#             time.sleep(1)
+#             logging.info(f'[Automation] Batch processed successfully: {file_path}')
+#             break
+#         except Exception as e:
+#             logging.error(f'[Automation] Error processing batch {file_path} (attempt {attempt+1}): {e}')
+#             if attempt == AUTOMATION_CONFIG['max_retries'] - 1:
+#                 logging.error(f'[Automation] Max retries reached for {file_path}. Skipping.')
+
+# # --- Watchdog Event Handler ---
+# class BatchFileHandler(FileSystemEventHandler):
+#     def on_created(self, event):
+#         if not event.is_directory and event.src_path.endswith('.json'):
+#             process_new_batch(event.src_path)
+
+# # --- Automation Runner ---
+# def start_automation():
+#     # Start periodic retraining
+#     scheduler = BackgroundScheduler()
+#     scheduler.add_job(
+#         retrain_models,
+#         trigger=IntervalTrigger(hours=AUTOMATION_CONFIG['retrain_interval_hours']),
+#         name='periodic_retraining',
+#         replace_existing=True
+#     )
+#     scheduler.start()
+#     logging.info(f'[Automation] Periodic retraining scheduled every {AUTOMATION_CONFIG["retrain_interval_hours"]} hours.')
+
+#     # Start directory watcher for new batches
+#     event_handler = BatchFileHandler()
+#     observer = Observer()
+#     observer.schedule(event_handler, path=AUTOMATION_CONFIG['watch_dir'], recursive=False)
+#     observer.start()
+#     logging.info(f'[Automation] Watching directory for new batches: {AUTOMATION_CONFIG["watch_dir"]}')
+
+#     try:
+#         while True:
+#             time.sleep(1)
+#     except KeyboardInterrupt:
+#         logging.info('[Automation] Shutting down automation...')
+#         observer.stop()
+#         scheduler.shutdown()
+#     observer.join()
+
+# # --- Entry Point for Automation (optional) ---
+# if __name__ == '__main__':
+#     # Uncomment the following line to enable automation when running this script directly
+#     # start_automation()
+#     pass
+
 import torch
 import torch.nn as nn
 import logging
@@ -41,24 +105,26 @@ from shapely.ops import polygonize, linemerge
 import copy
 
 # Import PhysicsInference for physics-based features
-from src.data_pipeline.physics_infer import PhysicsInference
+import sys, os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../src/data_pipeline')))
+from physics_infer import PhysicsInference
 
 
 
 # Import internal modularized functions
-from derive_label.confidence_scoring import calculate_confidence
-from derive_label.geometric_detectors import (
+from .confidence_scoring import calculate_confidence
+from .geometric_detectors import (
     ransac_line, ransac_circle, ellipse_fit, hough_lines_detector,
     convexity_defects_detector, fourier_descriptors, cluster_points_detector,
     is_roughly_circular_detector, is_rectangle_detector, is_point_cloud_detector,
     compute_symmetry_axis, compute_orientation, compute_symmetry_score as compute_geom_symmetry_score,
     detect_vertices, min_bounding_rectangle, min_bounding_circle # NEW: Added min_bounding functions
 )
-from derive_label.image_features import (
+from .image_features import (
     image_processing_features, compute_euler_characteristic, persistent_homology_features
     # Removed count_holes_shapely, contour_hierarchy_holes, canny_edge_density - now inside image_processing_features
 )
-from derive_label.semantic_refinement import (
+from .semantic_refinement import (
     detect_connected_line_segments, is_quadrilateral_like, is_smooth_curve,
     is_composite_shape, generate_semantic_label, infer_shape_type_ensemble,
     analyze_detector_consensus
@@ -82,10 +148,28 @@ class ContextEncoder(nn.Module):
         attn = self.softmax(Q @ K.T / (K.shape[-1]**0.5))
         context = attn @ V
         return context
-
-# Example usage in pipeline:
-# features = extract_image_features(batch_images)   # (N, D)
-# context_feats = ContextEncoder(D, H)(torch.Tensor(features))
+def extract_batch_features(batch_flat_commands, shape_creation_dependencies, D=32):
+    # Robust batch feature extraction with debug logging
+    import numpy as np
+    batch_features = []
+    for idx, flat_commands in enumerate(batch_flat_commands):
+        # Use LOGO parser to get shape objects, then extract features
+        objects, _ = create_shape_from_stroke_pipeline(flat_commands, **shape_creation_dependencies)
+        if objects and 'coords' in objects[0]:
+            try:
+                feat = image_processing_features(objects[0]['coords'])
+            except Exception as e:
+                logging.error(f"[FeatureExtraction] Error extracting features for batch item {idx}: {e}")
+                feat = np.zeros(D)
+        else:
+            logging.warning(f"[FeatureExtraction] No valid objects or coords for batch item {idx}.")
+            feat = np.zeros(D)
+        batch_features.append(feat)
+    try:
+        return np.stack(batch_features)
+    except Exception as e:
+        logging.error(f"[FeatureExtraction] Error stacking batch features: {e}")
+        return np.zeros((len(batch_flat_commands), D))
 
 def flatten_action_program(action_program):
     """Recursively flattens nested lists in an action program."""
@@ -129,6 +213,9 @@ def create_shape_from_stroke_pipeline(flat_commands, problem_id=None, **kwargs):
         if vertices_np is None or vertices_np.size == 0 or vertices_np.shape[0] < 1:
             logging.warning(f"Skipping object {object_id}: Empty vertices array.")
             continue
+
+        # Debug: Log the input to detectors
+        logging.debug(f"[DetectorInput] Object {object_id} vertices: {vertices_np}")
 
         # Initialize object dictionary
         obj = {
@@ -174,88 +261,94 @@ def create_shape_from_stroke_pipeline(flat_commands, problem_id=None, **kwargs):
             logging.error(f"Error computing initial geometric properties for object {object_id}: {e}")
             obj['flags'].append('initial_geom_prop_error')
 
-        # --- Apply Cutting-Edge Geometric Detectors ---
-        
-        # RANSAC Line
-        is_line, line_conf, line_props = ransac_line(vertices_np)
-        if is_line:
-            obj['possible_labels'].append({'label': 'line_segment', 'confidence': line_conf, 'type': 'geometric_fit', 'props': line_props})
-        if line_props: obj['properties'].update({'line_fit': line_props})
 
-        # RANSAC Circle
-        is_circle, circle_conf, circle_props = ransac_circle(vertices_np)
-        if is_circle:
-            obj['possible_labels'].append({'label': 'circle', 'confidence': circle_conf, 'type': 'geometric_fit', 'props': circle_props})
-        if circle_props: obj['properties'].update({'circle_fit': circle_props})
+        # --- Apply Cutting-Edge Geometric Detectors with debug logging ---
+        try:
+            is_line, line_conf, line_props = ransac_line(vertices_np)
+            logging.debug(f"[DetectorOutput] ransac_line: {is_line}, conf={line_conf}, props={line_props}")
+            if is_line:
+                obj['possible_labels'].append({'label': 'line_segment', 'confidence': line_conf, 'type': 'geometric_fit', 'props': line_props})
+            if line_props: obj['properties'].update({'line_fit': line_props})
 
-        # Ellipse Fit
-        is_ellipse, ellipse_conf, ellipse_props = ellipse_fit(vertices_np)
-        if is_ellipse:
-            obj['possible_labels'].append({'label': 'ellipse', 'confidence': ellipse_conf, 'type': 'geometric_fit', 'props': ellipse_props})
-        if ellipse_props: obj['properties'].update({'ellipse_fit': ellipse_props})
-        
-        # Hough Lines
-        is_hough_line, hough_line_conf, hough_line_props = hough_lines_detector(vertices_np)
-        if is_hough_line:
-            obj['possible_labels'].append({'label': 'hough_line', 'confidence': hough_line_conf, 'type': 'image_geometric_detector', 'props': hough_line_props})
-        if hough_line_props: obj['properties'].update({'hough_line_detection': hough_line_props})
+            is_circle, circle_conf, circle_props = ransac_circle(vertices_np)
+            logging.debug(f"[DetectorOutput] ransac_circle: {is_circle}, conf={circle_conf}, props={circle_props}")
+            if is_circle:
+                obj['possible_labels'].append({'label': 'circle', 'confidence': circle_conf, 'type': 'geometric_fit', 'props': circle_props})
+            if circle_props: obj['properties'].update({'circle_fit': circle_props})
 
+            is_ellipse, ellipse_conf, ellipse_props = ellipse_fit(vertices_np)
+            logging.debug(f"[DetectorOutput] ellipse_fit: {is_ellipse}, conf={ellipse_conf}, props={ellipse_props}")
+            if is_ellipse:
+                obj['possible_labels'].append({'label': 'ellipse', 'confidence': ellipse_conf, 'type': 'geometric_fit', 'props': ellipse_props})
+            if ellipse_props: obj['properties'].update({'ellipse_fit': ellipse_props})
 
-        # Minimum Bounding Geometries (NEW in geometric_detectors)
-        is_mbr, mbr_conf, mbr_props = min_bounding_rectangle(vertices_np)
-        if is_mbr:
-            obj['possible_labels'].append({'label': 'min_bounding_rectangle_fit', 'confidence': mbr_conf, 'type': 'geometric_bounding', 'props': mbr_props})
-        if mbr_props: obj['properties'].update({'min_bounding_rectangle': mbr_props})
+            is_hough_line, hough_line_conf, hough_line_props = hough_lines_detector(vertices_np)
+            logging.debug(f"[DetectorOutput] hough_lines_detector: {is_hough_line}, conf={hough_line_conf}, props={hough_line_props}")
+            if is_hough_line:
+                obj['possible_labels'].append({'label': 'hough_line', 'confidence': hough_line_conf, 'type': 'image_geometric_detector', 'props': hough_line_props})
+            if hough_line_props: obj['properties'].update({'hough_line_detection': hough_line_props})
 
-        is_mbc, mbc_conf, mbc_props = min_bounding_circle(vertices_np)
-        if is_mbc:
-            obj['possible_labels'].append({'label': 'min_bounding_circle_fit', 'confidence': mbc_conf, 'type': 'geometric_bounding', 'props': mbc_props})
-        if mbc_props: obj['properties'].update({'min_bounding_circle': mbc_props})
+            is_mbr, mbr_conf, mbr_props = min_bounding_rectangle(vertices_np)
+            logging.debug(f"[DetectorOutput] min_bounding_rectangle: {is_mbr}, conf={mbr_conf}, props={mbr_props}")
+            if is_mbr:
+                obj['possible_labels'].append({'label': 'min_bounding_rectangle_fit', 'confidence': mbr_conf, 'type': 'geometric_bounding', 'props': mbr_props})
+            if mbr_props: obj['properties'].update({'min_bounding_rectangle': mbr_props})
 
+            is_mbc, mbc_conf, mbc_props = min_bounding_circle(vertices_np)
+            logging.debug(f"[DetectorOutput] min_bounding_circle: {is_mbc}, conf={mbc_conf}, props={mbc_props}")
+            if is_mbc:
+                obj['possible_labels'].append({'label': 'min_bounding_circle_fit', 'confidence': mbc_conf, 'type': 'geometric_bounding', 'props': mbc_props})
+            if mbc_props: obj['properties'].update({'min_bounding_circle': mbc_props})
 
-        # Geometric Properties & General Shape Types
-        is_roughly_circular, r_circ_conf = is_roughly_circular_detector(vertices_np)
-        if is_roughly_circular:
-            obj['possible_labels'].append({'label': 'roughly_circular_geom', 'confidence': r_circ_conf, 'type': 'geometric_general'})
-        
-        is_rectangle_geom, rect_geom_conf, rect_geom_props = is_rectangle_detector(vertices_np) # Now returns props too
-        if is_rectangle_geom:
-            obj['possible_labels'].append({'label': 'rectangle_geom', 'confidence': rect_geom_conf, 'type': 'geometric_general', 'props': rect_geom_props})
-        if rect_geom_props: obj['properties'].update({'rectangle_geom_props': rect_geom_props})
+            is_roughly_circular, r_circ_conf = is_roughly_circular_detector(vertices_np)
+            logging.debug(f"[DetectorOutput] is_roughly_circular_detector: {is_roughly_circular}, conf={r_circ_conf}")
+            if is_roughly_circular:
+                obj['possible_labels'].append({'label': 'roughly_circular_geom', 'confidence': r_circ_conf, 'type': 'geometric_general'})
 
-        is_point_cloud, pc_conf, pc_props = is_point_cloud_detector(vertices_np)
-        if is_point_cloud:
-            obj['possible_labels'].append({'label': 'point_cloud_geom', 'confidence': pc_conf, 'type': 'geometric_general', 'props': pc_props})
-        if pc_props: obj['properties'].update({'point_cloud_props': pc_props})
-        
-        num_defects, defect_label, defects_conf, defects_extra_props = convexity_defects_detector(vertices_np) # Returns extra props
-        obj['possible_labels'].append({'label': defect_label, 'confidence': defects_conf, 'type': 'morphological_geom', 'props': {'num_convexity_defects': num_defects}})
-        if defects_extra_props: obj['properties'].update({'convexity_defects_analysis': defects_extra_props})
+            is_rectangle_geom, rect_geom_conf, rect_geom_props = is_rectangle_detector(vertices_np)
+            logging.debug(f"[DetectorOutput] is_rectangle_detector: {is_rectangle_geom}, conf={rect_geom_conf}, props={rect_geom_props}")
+            if is_rectangle_geom:
+                obj['possible_labels'].append({'label': 'rectangle_geom', 'confidence': rect_geom_conf, 'type': 'geometric_general', 'props': rect_geom_props})
+            if rect_geom_props: obj['properties'].update({'rectangle_geom_props': rect_geom_props})
 
+            is_point_cloud, pc_conf, pc_props = is_point_cloud_detector(vertices_np)
+            logging.debug(f"[DetectorOutput] is_point_cloud_detector: {is_point_cloud}, conf={pc_conf}, props={pc_props}")
+            if is_point_cloud:
+                obj['possible_labels'].append({'label': 'point_cloud_geom', 'confidence': pc_conf, 'type': 'geometric_general', 'props': pc_props})
+            if pc_props: obj['properties'].update({'point_cloud_props': pc_props})
 
-        num_vertices, vertices_conf, vertices_coords = detect_vertices(vertices_np) # Now returns coords
-        obj['properties']['num_detected_vertices'] = num_vertices
-        obj['properties']['detected_vertices_coords'] = vertices_coords
-        if num_vertices is not None and num_vertices > 0:
-             obj['possible_labels'].append({'label': f'polygon_vertices_{num_vertices}', 'confidence': vertices_conf, 'type': 'geometric_structure'})
+            num_defects, defect_label, defects_conf, defects_extra_props = convexity_defects_detector(vertices_np)
+            logging.debug(f"[DetectorOutput] convexity_defects_detector: {defect_label}, conf={defects_conf}, num_defects={num_defects}")
+            obj['possible_labels'].append({'label': defect_label, 'confidence': defects_conf, 'type': 'morphological_geom', 'props': {'num_convexity_defects': num_defects}})
+            if defects_extra_props: obj['properties'].update({'convexity_defects_analysis': defects_extra_props})
 
-        # Fourier Descriptors
-        fourier_desc, fd_conf = fourier_descriptors(vertices_np)
-        obj['properties']['fourier_descriptors'] = fourier_desc
-        if fd_conf > 0.6: # If descriptors are meaningful
-             obj['possible_labels'].append({'label': 'fourier_described', 'confidence': fd_conf, 'type': 'shape_descriptor'})
+            num_vertices, vertices_conf, vertices_coords = detect_vertices(vertices_np)
+            logging.debug(f"[DetectorOutput] detect_vertices: num_vertices={num_vertices}, conf={vertices_conf}")
+            obj['properties']['num_detected_vertices'] = num_vertices
+            obj['properties']['detected_vertices_coords'] = vertices_coords
+            if num_vertices is not None and num_vertices > 0:
+                obj['possible_labels'].append({'label': f'polygon_vertices_{num_vertices}', 'confidence': vertices_conf, 'type': 'geometric_structure'})
 
-        # Symmetry & Orientation
-        sym_score, sym_type, sym_conf = compute_geom_symmetry_score(vertices_np)
-        obj['properties']['geometric_symmetry_score'] = sym_score
-        obj['properties']['geometric_symmetry_type'] = sym_type
-        if sym_type != 'none' and sym_conf > 0.6:
-            obj['possible_labels'].append({'label': f'geometric_symmetric_{sym_type}', 'confidence': sym_conf, 'type': 'geometric_property'})
+            fourier_desc, fd_conf = fourier_descriptors(vertices_np)
+            logging.debug(f"[DetectorOutput] fourier_descriptors: conf={fd_conf}")
+            obj['properties']['fourier_descriptors'] = fourier_desc
+            if fd_conf > 0.6:
+                obj['possible_labels'].append({'label': 'fourier_described', 'confidence': fd_conf, 'type': 'shape_descriptor'})
 
-        orientation_deg, orient_conf = compute_orientation(vertices_np)
-        obj['properties']['geometric_orientation_deg'] = orientation_deg
-        if orient_conf > 0.5:
-            obj['possible_labels'].append({'label': 'oriented_shape', 'confidence': orient_conf, 'type': 'geometric_property'})
+            sym_score, sym_type, sym_conf = compute_geom_symmetry_score(vertices_np)
+            logging.debug(f"[DetectorOutput] compute_geom_symmetry_score: type={sym_type}, conf={sym_conf}")
+            obj['properties']['geometric_symmetry_score'] = sym_score
+            obj['properties']['geometric_symmetry_type'] = sym_type
+            if sym_type != 'none' and sym_conf > 0.6:
+                obj['possible_labels'].append({'label': f'geometric_symmetric_{sym_type}', 'confidence': sym_conf, 'type': 'geometric_property'})
+
+            orientation_deg, orient_conf = compute_orientation(vertices_np)
+            logging.debug(f"[DetectorOutput] compute_orientation: deg={orientation_deg}, conf={orient_conf}")
+            obj['properties']['geometric_orientation_deg'] = orientation_deg
+            if orient_conf > 0.5:
+                obj['possible_labels'].append({'label': 'oriented_shape', 'confidence': orient_conf, 'type': 'geometric_property'})
+        except Exception as e:
+            logging.error(f"[DetectorOutput] Error in geometric detectors for object {object_id}: {e}")
 
 
         # --- Cutting-Edge Image Processing Features ---

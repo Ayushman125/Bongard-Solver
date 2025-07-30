@@ -1,32 +1,85 @@
-from sklearn.metrics import cohen_kappa_score
-import statsmodels.stats.inter_rater as irr
+def ensure_list_of_lists(detector_outputs):
+    import logging
+    logging.info(f"[ensure_list_of_lists] type: {type(detector_outputs)}, len: {len(detector_outputs) if hasattr(detector_outputs, '__len__') else 'N/A'}")
+    if isinstance(detector_outputs, (list, tuple)) and len(detector_outputs) > 0:
+        logging.info(f"[ensure_list_of_lists] First element type: {type(detector_outputs[0])}, sample: {str(detector_outputs[0])[:200]}")
+    """
+    Utility to ensure detector_outputs is always a list of lists (detectors x items).
+    If only a single detector, wraps it. If already correct, returns as is.
+    """
+    if not isinstance(detector_outputs, (list, tuple)):
+        raise ValueError("detector_outputs must be a list or tuple")
+    if len(detector_outputs) == 0:
+        return detector_outputs
+    # If first element is not a list/tuple, wrap whole thing
+    if not isinstance(detector_outputs[0], (list, tuple)):
+        return [list(detector_outputs)]
+    return detector_outputs
+# Professional inter-rater reliability module (no statsmodels dependency)
+from .professional_inter_rater import cohen_kappa_score, fleiss_kappa
+
+# Try to import Cleanlab's CROWDLAB consensus
 try:
-    from crowd_lab import CrowdlabAggregator
-    CROWD_LAB_AVAILABLE = True
+    from cleanlab.multiannotator import get_label_quality_multiannotator
+    CLEANLAB_CROWDLAB_AVAILABLE = True
 except ImportError:
-    CROWD_LAB_AVAILABLE = False
+    CLEANLAB_CROWDLAB_AVAILABLE = False
+
+import logging
+import numpy as np
+from shapely.geometry import Polygon
 
 def crodlab_consensus(detector_outputs):
-    if not CROWD_LAB_AVAILABLE:
-        raise ImportError('crowd-lab not installed')
-    matrix = list(zip(*detector_outputs))
-    agg = CrowdlabAggregator(matrix)
-    return agg.get_consensus_labels()
+    if not CLEANLAB_CROWDLAB_AVAILABLE:
+        raise ImportError('cleanlab.multiannotator (CROWDLAB) not installed')
+    # detector_outputs: list of lists (detectors x samples)
+    detector_outputs = ensure_list_of_lists(detector_outputs)
+    logging.info(f"[CROWDLAB] Input type: {type(detector_outputs)}, len={len(detector_outputs)}")
+    if len(detector_outputs) > 0:
+        logging.info(f"  First sublist type: {type(detector_outputs[0])}, len={len(detector_outputs[0])}")
+    # Cleanlab expects (n_examples, n_annotators)
+    multiannotator_labels = np.array(detector_outputs).T
+    n_examples, n_annotators = multiannotator_labels.shape
+    n_classes = len(np.unique(multiannotator_labels[~np.isnan(multiannotator_labels)]))
+    pred_probs = np.ones((n_examples, n_classes)) / n_classes
+    consensus_labels, consensus_confidence, annotator_quality = \
+        get_label_quality_multiannotator(multiannotator_labels, pred_probs)
+    logging.info(f"[CROWDLAB] Output labels: {consensus_labels.tolist()} (len={len(consensus_labels)})")
+    return consensus_labels.tolist()
 
 def compute_kappa(detector_outputs):
     kappas = []
     for i in range(len(detector_outputs)):
         for j in range(i+1, len(detector_outputs)):
             kappas.append(cohen_kappa_score(detector_outputs[i], detector_outputs[j]))
-    fleiss = irr.fleiss_kappa(detector_outputs)
+    # Convert to 2D array (subjects x raters) for fleiss_kappa
+    ratings = np.array(detector_outputs).T
+    fleiss = fleiss_kappa(ratings)
     return sum(kappas)/len(kappas) if kappas else 0.0, fleiss
-import numpy as np
-
 def dawid_skene(annotations, max_iter=10):
-    # annotations: list of lists, each inner list are labels from different detectors
-    annotators = len(annotations)
+    """
+    Dawid-Skene multi-annotator consensus with robust string label normalization and debug logging.
+    annotations: list of lists, each inner list are labels from different detectors
+    returns aggregated labels (always as strings)
+    """
+    # --- Robust input shape/type logging ---
+    annotations = ensure_list_of_lists(annotations)
+    logging.info(f"[DAWID-SKENE] Input type: {type(annotations)}, len={len(annotations)}")
+    if len(annotations) > 0:
+        logging.info(f"  First sublist type: {type(annotations[0])}, len={len(annotations[0])}")
+    # Assert input is list of lists and all sublists have same length
+    assert isinstance(annotations, (list, tuple)), "Input to dawid_skene must be a list of lists."
+    assert all(isinstance(sub, (list, tuple)) for sub in annotations), "Each annotator's labels must be a list."
     items = len(annotations[0])
-    label_set = set(sum(annotations, []))
+    assert all(len(sub) == items for sub in annotations), "All annotator label lists must have the same length."
+    annotators = len(annotations)
+# --- GeometricDetectors/Ellipse Fit Robustness ---
+# In your geometric detector code (not shown here), before any numpy operation like np.minimum/maximum:
+# if arr.dtype.kind not in {'f', 'i'}:
+#     logging.error(f"Expected numeric array, got {arr.dtype} with values: {arr}")
+#     arr = arr.astype(float)
+    # Use a sorted label set for consistent mapping, and always return string labels
+    label_set = sorted(set(sum(annotations, [])), key=str)
     label_idx = {l:i for i,l in enumerate(label_set)}
     C = len(label_set)
     pi = np.full((annotators, C, C), 1/C)
@@ -46,10 +99,13 @@ def dawid_skene(annotations, max_iter=10):
                     mask = [label_idx[annotations[a][i]]==o for i in range(items)]
                     pi[a,t,o] = (p_true[:,t][mask].sum() + 1e-6)
                 pi[a,t] /= pi[a,t].sum()
-    true_labels = [list(label_set)[np.argmax(p)] for p in p_true]
+    # Always return string labels
+    true_labels = [label_set[np.argmax(p)] for p in p_true]
+    logging.info(f'[DAWID-SKENE] Output labels: {true_labels} (len={len(true_labels)})')
+    for idx, l in enumerate(true_labels):
+        logging.info(f"  true_labels[{idx}] = {l} (type: {type(l)})")
     return true_labels
 import logging
-import numpy as np
 from shapely.geometry import Polygon
 
 # Define a hierarchy for specific labels (higher value means more specific/preferred)
