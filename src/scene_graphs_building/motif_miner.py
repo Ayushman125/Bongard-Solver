@@ -11,6 +11,13 @@ class MotifMiner:
         # Dummy: return input as one motif
         return [vertices]
 
+    MOTIF_LABELS = {
+        0: "cluster",
+        1: "ring",
+        2: "chain",
+        3: "grid"
+    }
+
     def cluster_motifs(self, objects):
         # Log type and keys of each object for debugging
         for i, o in enumerate(objects):
@@ -25,6 +32,7 @@ class MotifMiner:
         motif_dict = {}
         for obj, label in zip(objects, clustering.labels_):
             obj['motif_label'] = int(label)
+            obj['shape_label'] = self.MOTIF_LABELS.get(int(label), f"motif_{label}")
             motif_dict.setdefault(int(label), []).append(obj['id'])
         logging.info(f"MotifMiner.cluster_motifs: motif_dict keys={list(motif_dict.keys())}")
         return motif_dict
@@ -44,10 +52,17 @@ class MotifMiner:
         import logging
         from scipy.spatial import ConvexHull
 
-        # Log full input
+        # Log full input and member node geometry for diagnosis
         logging.info(f"MotifMiner.aggregate_motif_vertices: Called with {len(member_nodes)} member_nodes.")
         for i, n in enumerate(member_nodes):
-            logging.info(f"MotifMiner.aggregate_motif_vertices: member[{i}] keys={list(n.keys())}, mask_shape={getattr(n.get('mask'), 'shape', None)}, vertices_shape={np.array(n.get('vertices')).shape if 'vertices' in n and n['vertices'] is not None else None}")
+            v = n.get('vertices')
+            m = n.get('mask')
+            c = n.get('centroid')
+            logging.info(f"MotifMiner.aggregate_motif_vertices: member[{i}] id={n.get('id', None)} shape_label={n.get('shape_label', None)} centroid={c} vertices_shape={np.array(v).shape if v is not None else None} mask_shape={getattr(m, 'shape', None)}")
+            if v is not None:
+                logging.info(f"MotifMiner.aggregate_motif_vertices: member[{i}] vertices sample={v[:5] if len(v) > 5 else v}")
+            if m is not None:
+                logging.info(f"MotifMiner.aggregate_motif_vertices: member[{i}] mask sample={m[:5,:5] if hasattr(m, 'shape') and m.shape[0] > 5 and m.shape[1] > 5 else m}")
 
         # 1. Multi-method mask aggregation
         member_masks = [n.get('mask') for n in member_nodes if 'mask' in n and n['mask'] is not None]
@@ -128,6 +143,10 @@ class MotifMiner:
                             return coords
                 except Exception as e:
                     logging.warning(f"MotifMiner.aggregate_motif_vertices: Alpha shape failed: {e}")
+            # Fallback: if all points are collinear or degenerate, return all points as motif geometry
+            if len(all_vertices) >= 2:
+                logging.warning("MotifMiner.aggregate_motif_vertices: All points are collinear or degenerate, returning all points as motif geometry.")
+                return all_vertices
         # 5. PCA envelope (rectangle/ellipse)
         if valid_members and len(all_vertices) >= 3:
             try:
