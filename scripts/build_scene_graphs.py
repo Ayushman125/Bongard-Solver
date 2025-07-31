@@ -630,6 +630,7 @@ async def _process_single_problem(
             'vertices': verts,
             'category': rec.get('category'),
             'shape_label': rec.get('label'),
+            'label': rec.get('label'),
             # Add more fields as needed
         }
         compute_physics_attributes(obj)
@@ -661,6 +662,8 @@ async def _process_single_problem(
         canvas_dims = (thresholds.get('canvas_width', 128), thresholds.get('canvas_height', 128))
         PREDICATES = load_predicates(adaptive_thresholds, canvas_dims=canvas_dims)
 
+        # Ensure geometry is set for graph building
+        merged_record['geometry'] = merged_record['objects']
 
         # 3. Build base scene graph
         base_graph_nx = build_graph_unvalidated(merged_record, PREDICATES, TOP_K)

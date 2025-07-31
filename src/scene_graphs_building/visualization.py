@@ -45,8 +45,21 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
             plt.figure(figsize=(5, 5))
             if is_nx_graph and len(G.nodes) > 0:
                 pos = nx.spring_layout(G, seed=42) if len(G.nodes) > 1 else None
-                # Node labels: use shape_label if present, else id
-                node_labels = {n: (G.nodes[n].get('shape_label', n)) for n in G.nodes()}
+                # Node labels: show shape_label and image name (from original_image_path or image_path)
+                def get_img_name(node):
+                    path = node.get('original_image_path') or node.get('image_path')
+                    if path:
+                        return os.path.basename(path)
+                    return ''
+                node_labels = {}
+                for n in G.nodes():
+                    node = G.nodes[n]
+                    label = str(node.get('shape_label', n))
+                    img_name = get_img_name(node)
+                    if img_name:
+                        node_labels[n] = f"{label}\n{img_name}"
+                    else:
+                        node_labels[n] = label
                 # --- Predicate Filtering ---
                 allowed_predicates = set(['left_of', 'right_of', 'above', 'below', 'contains'])
                 edges_to_draw = [(u, v, d) for u, v, d in G.edges(data=True) if d.get('predicate') in allowed_predicates]
