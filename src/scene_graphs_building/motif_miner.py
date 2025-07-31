@@ -83,27 +83,35 @@ class MotifMiner:
         """
         Create a motif super-node with valid geometry and semantic labels.
         Assigns 'vertices', 'shape_label', 'motif_label', and aggregates features.
+        Merges all computed physics attributes for full predicate support.
         """
-        # Aggregate geometry
+        # 1. Aggregate geometry
         vertices = self.aggregate_motif_vertices(member_nodes)
-        shape_label = self.MOTIF_LABELS.get(motif_label, f"motif_{motif_label}")
-        # Aggregate area, score, and embeddings if available
+        # 2. Compute physics attributes on aggregated vertices
+        physics_attrs = {}
+        physics_attrs['vertices'] = vertices
+        try:
+            from src.scene_graphs_building.feature_extraction import compute_physics_attributes
+            compute_physics_attributes(physics_attrs)
+        except Exception as e:
+            logging.warning(f"MotifMiner.create_motif_supernode: compute_physics_attributes failed for motif {motif_id}: {e}")
+        # 3. Aggregate semantic cues
         area = sum([n.get('area', 0) for n in member_nodes])
         motif_score = sum([n.get('motif_score', 0) for n in member_nodes]) / max(1, len(member_nodes))
         vl_embed = np.mean([n.get('vl_embed', np.zeros(512)) for n in member_nodes], axis=0)
-        # Compose super-node
+        # 4. Compose supernode, merging all physics attributes
         supernode = {
             'id': motif_id,
             'is_motif': True,
-            'vertices': vertices,
-            'shape_label': shape_label,
+            'shape_label': self.MOTIF_LABELS.get(motif_label, f"motif_{motif_label}"),
             'motif_label': motif_label,
+            'members': [n['id'] for n in member_nodes],
             'area': area,
             'motif_score': motif_score,
             'vl_embed': vl_embed,
-            'members': [n['id'] for n in member_nodes],
+            **physics_attrs
         }
-        logging.info(f"MotifMiner.create_motif_supernode: Created motif supernode {motif_id} with shape_label={shape_label} and {len(vertices)} vertices.")
+        logging.info(f"MotifMiner.create_motif_supernode: Created motif supernode {motif_id} with shape_label={supernode['shape_label']} and {len(vertices)} vertices. Physics keys: {list(physics_attrs.keys())}")
         return supernode
 
     @staticmethod
