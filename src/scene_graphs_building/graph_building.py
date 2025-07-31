@@ -7,6 +7,7 @@ from src.scene_graphs_building.feature_extraction import compute_physics_attribu
 def add_predicate_edges(G, predicates):
     """Iterates through all node pairs and adds edges based on the predicate registry."""
     node_list = list(G.nodes(data=True))
+    edge_count = 0
     for i, (u, data_u) in enumerate(node_list):
         for j, (v, data_v) in enumerate(node_list):
             if i == j:
@@ -16,14 +17,16 @@ def add_predicate_edges(G, predicates):
                 continue
             for pred, fn in predicates.items():
                 try:
-                    # Pass node data (data_u, data_v) to predicate function
-                    # If predicate function expects only a, b, pass them
-                    # If it expects params, it should be handled in the registry
-                    if fn(data_u, data_v):
+                    result = fn(data_u, data_v)
+                    logging.debug(f"[add_predicate_edges] Predicate '{pred}' between {u} and {v}: {result}")
+                    if result:
                         G.add_edge(u, v, predicate=pred, source='spatial')
+                        edge_count += 1
+                        logging.debug(f"[add_predicate_edges] Added edge: {u}->{v} predicate={pred}")
                 except Exception as e:
-                    logging.debug(f"Predicate function '{pred}' failed for ({u}, {v}): {e}")
+                    logging.error(f"[add_predicate_edges] Exception for predicate '{pred}' between {u} and {v}: {e}")
                     continue
+    logging.info(f"[add_predicate_edges] Finished: edges added={edge_count}")
 
     # Add global graph features
     G.graph['node_count'] = G.number_of_nodes()
@@ -46,8 +49,10 @@ def add_commonsense_edges(G, top_k):
     """Adds semantic edges by querying the commonsense knowledge base."""
     global kb
     if 'kb' not in globals() or kb is None:
+        logging.info("[add_commonsense_edges] KB not available, skipping.")
         return
     nodes_with_data = list(G.nodes(data=True))
+    edge_count = 0
     for u, data_u in nodes_with_data:
         label = data_u.get('shape_label')
         if not label:
@@ -60,14 +65,18 @@ def add_commonsense_edges(G, top_k):
                 for v, data_v in nodes_with_data:
                     if u != v and data_v.get('shape_label') == other_concept:
                         G.add_edge(u, v, predicate=rel, source='kb')
+                        edge_count += 1
+                        logging.debug(f"[add_commonsense_edges] Added KB edge: {u}->{v} predicate={rel}")
                         break
         except Exception as e:
             logging.warning(f"Commonsense KB query failed for label '{label}': {e}")
+    logging.info(f"[add_commonsense_edges] Finished: KB edges added={edge_count}")
 
 def build_graph_unvalidated(record, predicates, top_k):
     """Builds a single scene graph without runtime schema validation."""
     G = nx.MultiDiGraph()
     geometry = record.get('geometry', [])
+    logging.info(f"[build_graph_unvalidated] Called with {len(geometry)} objects, {len(predicates)} predicates, top_k={top_k}")
     for idx, node in enumerate(geometry):
         if not isinstance(node, dict):
             logging.error(f"build_graph_unvalidated: Skipping non-dict node at index {idx}: type={type(node)}, value={repr(node)}")
@@ -80,12 +89,14 @@ def build_graph_unvalidated(record, predicates, top_k):
             continue
         try:
             G.add_node(node['id'], **node)
+            logging.debug(f"[build_graph_unvalidated] Added node: id={node.get('id')}, shape_label={node.get('shape_label')}, category={node.get('category')}, vertices_len={len(node.get('vertices', []) if 'vertices' in node else [])}")
         except Exception as e:
             import traceback
             logging.error(f"build_graph_unvalidated: Exception adding node at index {idx}: {e}\n{traceback.format_exc()}")
             continue
     add_predicate_edges(G, predicates)
     add_commonsense_edges(G, top_k)
+    logging.info(f"[build_graph_unvalidated] Finished: nodes={G.number_of_nodes()}, edges={G.number_of_edges()}")
     return G
 
 def compute_clustering_coefficient_multidigraph(G):
