@@ -45,34 +45,48 @@ def add_predicate_edges(G, predicates):
         logging.warning(f"Could not compute clustering coefficient: {e}. Setting to 0.0")
         G.graph['clustering_coeff'] = 0.0
 
-def add_commonsense_edges(G, top_k):
+def add_commonsense_edges(G, top_k, kb=None):
     """Adds semantic edges by querying the commonsense knowledge base."""
-    global kb
-    if 'kb' not in globals() or kb is None:
+    logging.info(f"[add_commonsense_edges] Called with kb type: {type(kb)}, value: {kb}")
+    if kb is None:
         logging.info("[add_commonsense_edges] KB not available, skipping.")
         return
     nodes_with_data = list(G.nodes(data=True))
+    all_shape_labels = [d.get('shape_label') for _, d in nodes_with_data]
+    logging.info(f"[add_commonsense_edges] All node shape_labels: {all_shape_labels}")
     edge_count = 0
     for u, data_u in nodes_with_data:
-        label = data_u.get('shape_label')
+        # Try label, then category, then shape_label
+        label = data_u.get('label') or data_u.get('category') or data_u.get('shape_label')
+        label_source = None
+        if data_u.get('label'):
+            label_source = 'label'
+        elif data_u.get('category'):
+            label_source = 'category'
+        elif data_u.get('shape_label'):
+            label_source = 'shape_label'
         if not label:
             continue
         try:
-            # Query the KB for related concepts
-            # Ensure the kb.related method exists and returns (relation, concept) tuples
             related_concepts = kb.related(label) if hasattr(kb, 'related') else []
+            logging.info(f"[add_commonsense_edges] Node {u} ({label_source}={label}): kb.related -> {related_concepts}")
             for rel, other_concept in related_concepts[:top_k]:
+                found_match = False
                 for v, data_v in nodes_with_data:
-                    if u != v and data_v.get('shape_label') == other_concept:
+                    v_label = data_v.get('label') or data_v.get('category') or data_v.get('shape_label')
+                    if u != v and v_label == other_concept:
                         G.add_edge(u, v, predicate=rel, source='kb')
                         edge_count += 1
+                        found_match = True
                         logging.debug(f"[add_commonsense_edges] Added KB edge: {u}->{v} predicate={rel}")
                         break
+                if not found_match:
+                    logging.info(f"[add_commonsense_edges] Related concept '{other_concept}' (relation '{rel}') for node {u} ({label_source} '{label}') did not match any node's label/category/shape_label.")
         except Exception as e:
             logging.warning(f"Commonsense KB query failed for label '{label}': {e}")
     logging.info(f"[add_commonsense_edges] Finished: KB edges added={edge_count}")
 
-def build_graph_unvalidated(record, predicates, top_k, extra_edges=None):
+def build_graph_unvalidated(record, predicates, top_k, extra_edges=None, kb=None):
     """Builds a single scene graph without runtime schema validation. Optionally adds extra edges (e.g., CLIP/vision-language)."""
     G = nx.MultiDiGraph()
     geometry = record.get('geometry', [])
@@ -95,7 +109,7 @@ def build_graph_unvalidated(record, predicates, top_k, extra_edges=None):
             logging.error(f"build_graph_unvalidated: Exception adding node at index {idx}: {e}\n{traceback.format_exc()}")
             continue
     add_predicate_edges(G, predicates)
-    add_commonsense_edges(G, top_k)
+    add_commonsense_edges(G, top_k, kb=kb)
     # Add extra edges if provided (e.g., CLIP/vision-language edges)
     if extra_edges is not None:
         for edge in extra_edges:

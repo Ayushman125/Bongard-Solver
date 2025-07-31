@@ -80,7 +80,7 @@ from src.scene_graphs_building.feature_extractors import RealFeatureExtractor
 from src.scene_graphs_building.feature_extraction import get_real_feature_extractor, compute_physics_attributes, extract_line_segments
 from src.scene_graphs_building.data_loading import remap_path, load_data
 from src.scene_graphs_building.predicate_induction import induce_predicate_for_problem
-from src.scene_graphs_building.graph_building import build_graph_unvalidated
+from src.scene_graphs_building.graph_building import build_graph_unvalidated, add_commonsense_edges
 from src.scene_graphs_building.visualization import save_feedback_images
 from src.scene_graphs_building.recall_metrics import log_diversity_metrics
 from src.scene_graphs_building.adaptive_predicates import AdaptivePredicateThresholds, create_adaptive_predicate_functions
@@ -116,14 +116,17 @@ def get_conceptnet_api():
     if _CONCEPTNET_API_INSTANCE is None:
         try:
             from src.commonsense_kb_api import ConceptNetAPI
+            logging.info("Attempting to initialize ConceptNetAPI client...")
             _CONCEPTNET_API_INSTANCE = ConceptNetAPI()
+            logging.info("ConceptNetAPI client initialized. Running test query...")
             test_result = _CONCEPTNET_API_INSTANCE.query_relations_for_concept("dog")
             if test_result:
                 logging.info(f"ConceptNet API connected successfully. Found {len(test_result)} relations for 'dog'")
             else:
-                logging.warning("ConceptNet API test query returned no results")
+                logging.warning("ConceptNet API test query returned no results. test_result=%s", test_result)
         except Exception as e:
-            logging.error(f"ConceptNet API connection failed: {e}")
+            import traceback
+            logging.error(f"ConceptNet API connection failed: {e}\n{traceback.format_exc()}")
             logging.info("Continuing without ConceptNet knowledge base")
             _CONCEPTNET_API_INSTANCE = None
     return _CONCEPTNET_API_INSTANCE
@@ -707,7 +710,7 @@ async def _process_single_problem(
 
         # 3. Build base scene graph with dynamic predicates
         # (You must update build_graph_unvalidated to accept dynamic_predicates)
-        base_graph_nx = build_graph_unvalidated(merged_record, dynamic_predicates, TOP_K, extra_edges=vl_edges)
+        base_graph_nx = build_graph_unvalidated(merged_record, dynamic_predicates, TOP_K, extra_edges=vl_edges, kb=kb)
         # Log produced scene graph summary
         if base_graph_nx is not None:
             logging.info(f"Problem {problem_id}: base_graph_nx nodes={base_graph_nx.number_of_nodes()}, edges={base_graph_nx.number_of_edges()}")

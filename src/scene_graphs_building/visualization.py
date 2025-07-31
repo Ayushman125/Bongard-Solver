@@ -64,12 +64,18 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
                         node_labels[n] = f"{label}\n{img_name}"
                     else:
                         node_labels[n] = label
-                # Draw all edges and label with predicate
+                # Draw all edges and group all predicates for each (u,v) as comma-separated string
                 edges_to_draw = list(G.edges(data=True))
                 nx.draw_networkx_nodes(G, pos, node_color='skyblue', node_size=700)
                 nx.draw_networkx_edges(G, pos, edgelist=[(u, v) for u, v, d in edges_to_draw], arrows=True, arrowstyle='-|>', width=1.5, alpha=0.7)
                 nx.draw_networkx_labels(G, pos, labels=node_labels, font_size=10, font_color='black')
-                edge_labels = {(u, v): d.get('predicate', '') for u, v, d in edges_to_draw}
+                from collections import defaultdict
+                combined = defaultdict(list)
+                for u, v, d in edges_to_draw:
+                    pred = d.get('predicate', '')
+                    if pred:
+                        combined[(u, v)].append(pred)
+                edge_labels = { (u, v): ", ".join(sorted(set(preds))) for (u, v), preds in combined.items() }
                 nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_color='gray', font_size=9)
                 plt.title(f"Scene Graph: {base_name}")
                 plt.axis('off')

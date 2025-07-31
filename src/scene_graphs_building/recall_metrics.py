@@ -5,6 +5,10 @@ from collections import defaultdict, Counter
 import logging
 from dataclasses import dataclass
 import json
+import os
+from shapely.geometry import Polygon
+from scipy import stats
+import cv2
 
 @dataclass
 class SceneGraphMetrics:
