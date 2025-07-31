@@ -614,7 +614,8 @@ async def _process_single_problem(
 
     logging.info(f"Starting _process_single_problem for {problem_id}. problem_records type: {type(problem_records)}")
 
-    # 1. Merge all records into a single list of one-object nodes
+
+    # 1. Merge all image records into one list of objects
     merged_record = {'objects': []}
     representative_image_path = None
 
@@ -622,28 +623,26 @@ async def _process_single_problem(
         if representative_image_path is None:
             representative_image_path = remap_path(rec.get('image_path', rec.get('mask_path', '')))
 
-        # Normalize action program
-        raw_ap = rec.get('action_program', [])
-        normalized_ap = [parse_action_command(cmd) for cmd in raw_ap if parse_action_command(cmd)]
-        rec['action_program'] = normalized_ap
-
-        # Build a single node per image
-        obj_data = {
+        # Use the geometry from derived_labels (rec['vertices'] or rec['geometry'])
+        verts = rec.get('vertices') or rec.get('geometry') or []
+        obj = {
             'id': f"{problem_id}_{idx}",
-            'vertices': rec.get('vertices', rec.get('geometry', [])),
-            **rec.get('features', {}),
-            'label': rec.get('label', ''),
-            'shape_label': rec.get('label', ''),
-            'category': rec.get('category', ''),
-            'original_image_path': remap_path(rec.get('image_path', '')),
-            'original_record_idx': idx,
-            'action_program': normalized_ap
+            'vertices': verts,
+            'category': rec.get('category'),
+            'shape_label': rec.get('label'),
+            # Add more fields as needed
         }
-        compute_physics_attributes(obj_data)
-        merged_record['objects'].append(obj_data)
+        compute_physics_attributes(obj)
+        merged_record['objects'].append(obj)
+
+
+    # Debug: log merged object count and details
+    logging.info(f"Problem {problem_id}: merged {len(merged_record['objects'])} objects")
+    for i, obj in enumerate(merged_record['objects']):
+        logging.info(f"Problem {problem_id}: object {i}: id={obj.get('id')}, shape_label={obj.get('shape_label')}, category={obj.get('category')}, vertices={obj.get('vertices')[:5]}... (total {len(obj.get('vertices', []))} vertices)")
 
     if not merged_record['objects']:
-        logging.error(f"Problem {problem_id}: No valid objects to build graph. Skipping.")
+        logging.error(f"No objects for problem {problem_id}; skipping.")
         return None
 
     # 2. Predicate induction and load predicates
@@ -662,8 +661,21 @@ async def _process_single_problem(
         canvas_dims = (thresholds.get('canvas_width', 128), thresholds.get('canvas_height', 128))
         PREDICATES = load_predicates(adaptive_thresholds, canvas_dims=canvas_dims)
 
+
         # 3. Build base scene graph
         base_graph_nx = build_graph_unvalidated(merged_record, PREDICATES, TOP_K)
+        # Log produced scene graph summary
+        if base_graph_nx is not None:
+            logging.info(f"Problem {problem_id}: base_graph_nx nodes={base_graph_nx.number_of_nodes()}, edges={base_graph_nx.number_of_edges()}")
+            # Log a sample of node and edge data
+            node_list = list(base_graph_nx.nodes(data=True))
+            edge_list = list(base_graph_nx.edges(data=True))
+            for i, (nid, ndata) in enumerate(node_list[:3]):
+                logging.info(f"Problem {problem_id}: node {i}: id={nid}, data_keys={list(ndata.keys())}, shape_label={ndata.get('shape_label')}, category={ndata.get('category')}, vertices={ndata.get('vertices')[:5]}... (total {len(ndata.get('vertices', []))} vertices)")
+            for i, (u, v, edata) in enumerate(edge_list[:3]):
+                logging.info(f"Problem {problem_id}: edge {i}: {u}->{v}, predicate={edata.get('predicate')}, source={edata.get('source')}, data_keys={list(edata.keys())}")
+        else:
+            logging.warning(f"Problem {problem_id}: base_graph_nx is None after build_graph_unvalidated.")
 
     except Exception as e:
         logging.error(f"Problem {problem_id}: Exception during graph building phase: {e}\n{traceback.format_exc()}")
