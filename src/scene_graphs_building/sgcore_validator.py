@@ -20,8 +20,9 @@ class SGScoreValidator:
                  model_name: str = "microsoft/git-base-coco",
                  api_endpoint: Optional[str] = None):
         
-        self.processor = AutoProcessor.from_pretrained(model_name)
-        self.model = AutoModel.from_pretrained(model_name)
+        cache_dir = os.environ.get("HF_HOME", "./model_cache")
+        self.processor = AutoProcessor.from_pretrained(model_name, cache_dir=cache_dir)
+        self.model = AutoModel.from_pretrained(model_name, cache_dir=cache_dir)
         self.api_endpoint = api_endpoint
         
         # Chain-of-thought validation templates

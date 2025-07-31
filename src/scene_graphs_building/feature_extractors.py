@@ -21,8 +21,9 @@ class RealFeatureExtractor:
         self.device = device
         self.cache_features = cache_features
         self.feature_cache = {}
-        self.clip_processor = CLIPImageProcessor.from_pretrained(clip_model_name)
-        self.clip_model = CLIPVisionModel.from_pretrained(clip_model_name).to(device)
+        cache_dir = os.environ.get("HF_HOME", "./model_cache")
+        self.clip_processor = CLIPImageProcessor.from_pretrained(clip_model_name, cache_dir=cache_dir)
+        self.clip_model = CLIPVisionModel.from_pretrained(clip_model_name, cache_dir=cache_dir).to(device)
         self.clip_model.eval()
         self.sam_encoder = None
         if sam_encoder_path and Path(sam_encoder_path).exists():

@@ -15,6 +15,18 @@ def load_data(input_path):
     else:
         raise ValueError(f"Unsupported input file type: {input_path}")
 
+
 def remap_path(path):
     """Remaps image paths to match expected dataset structure."""
     return path.replace('category_1', '1').replace('category_0', '0')
+
+def robust_image_open(path, *args, **kwargs):
+    """
+    Open an image file after remapping the path. Use this everywhere in the pipeline for image loading.
+    Example: img = robust_image_open(image_path)
+    """
+    from PIL import Image
+    remapped = remap_path(path)
+    if not os.path.exists(remapped):
+        raise FileNotFoundError(f"Image file not found after remapping: {remapped}")
+    return Image.open(remapped, *args, **kwargs)

@@ -50,6 +50,7 @@ qa_outliers/
 sam-hq/
 visualizations/
 feedback_samples/
+model_cache/
 
 
 

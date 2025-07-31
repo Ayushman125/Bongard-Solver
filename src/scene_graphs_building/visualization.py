@@ -16,6 +16,10 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
     img_graph_side_by_side_path = os.path.join(feedback_dir, f"{base_name}_img_graph.png")
     actmap_path = os.path.join(feedback_dir, f"{base_name}_actmap.png") # For visualization of edges on image
 
+    # Convert PIL image to numpy if needed (robust)
+    import numpy as np
+    if not hasattr(image, 'ndim') or not isinstance(image, np.ndarray):
+        image = np.array(image)
     # Save real image
     if image.ndim == 3:
         img_bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
@@ -60,15 +64,11 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
                         node_labels[n] = f"{label}\n{img_name}"
                     else:
                         node_labels[n] = label
-                # --- Predicate Filtering ---
-                allowed_predicates = set(['left_of', 'right_of', 'above', 'below', 'contains'])
-                edges_to_draw = [(u, v, d) for u, v, d in G.edges(data=True) if d.get('predicate') in allowed_predicates]
-                # Draw nodes
+                # Draw all edges and label with predicate
+                edges_to_draw = list(G.edges(data=True))
                 nx.draw_networkx_nodes(G, pos, node_color='skyblue', node_size=700)
-                # Draw only filtered edges
                 nx.draw_networkx_edges(G, pos, edgelist=[(u, v) for u, v, d in edges_to_draw], arrows=True, arrowstyle='-|>', width=1.5, alpha=0.7)
                 nx.draw_networkx_labels(G, pos, labels=node_labels, font_size=10, font_color='black')
-                # Edge labels: use 'predicate' if present, but only for filtered edges
                 edge_labels = {(u, v): d.get('predicate', '') for u, v, d in edges_to_draw}
                 nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_color='gray', font_size=9)
                 plt.title(f"Scene Graph: {base_name}")

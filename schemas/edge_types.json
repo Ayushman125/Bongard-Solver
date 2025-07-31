@@ -5,6 +5,30 @@
     "source": "spatial"
   },
   {
+    "predicate": "larger_than",
+    "description": "True if area(a) > α * area(b), α learned per-problem.",
+    "source": "dynamic",
+    "dynamic": true
+  },
+  {
+    "predicate": "aspect_sim",
+    "description": "True if |aspect(a) - aspect(b)| < τ, τ learned per-problem.",
+    "source": "dynamic",
+    "dynamic": true
+  },
+  {
+    "predicate": "near",
+    "description": "True if distance(a, b) < d, d learned per-problem.",
+    "source": "dynamic",
+    "dynamic": true
+  },
+  {
+    "predicate": "para",
+    "description": "True if |orientation(a) - orientation(b)| < θ, θ learned per-problem.",
+    "source": "dynamic",
+    "dynamic": true
+  },
+  {
     "predicate": "right_of",
     "description": "True if the centroid x-coordinate of subject is EPS greater than that of object (a.cx > b.cx + EPS).",
     "source": "spatial"

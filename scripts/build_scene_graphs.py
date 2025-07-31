@@ -1,3 +1,8 @@
+# --- Set model cache directories to avoid repeated downloads ---
+import os
+os.environ["HF_HOME"] = os.path.abspath("model_cache")
+os.environ["TRANSFORMERS_CACHE"] = os.path.abspath("model_cache")
+os.environ["TORCH_HOME"] = os.path.abspath("model_cache")
 import os
 # --- Standard Library Imports ---
 from typing import Tuple, Dict, Any, List
@@ -79,6 +84,12 @@ from src.scene_graphs_building.graph_building import build_graph_unvalidated
 from src.scene_graphs_building.visualization import save_feedback_images
 from src.scene_graphs_building.recall_metrics import log_diversity_metrics
 from src.scene_graphs_building.adaptive_predicates import AdaptivePredicateThresholds, create_adaptive_predicate_functions
+# --- Research-grade modules ---
+from src.scene_graph.predicate_miner import PredicateMiner
+from src.scene_graph.motif_miner import MotifMiner
+from src.scene_graph.vl_features import CLIPEmbedder
+from src.reasoner.gnn_reasoner import BongardGNN
+from src.data_pipeline.adaptive_thresholds import AdaptiveThresholds
 from src.commonsense_kb_api import ConceptNetAPI
 from integration.task_profiler import TaskProfiler
 
@@ -163,6 +174,10 @@ def load_predicates(adaptive_thresholds: AdaptivePredicateThresholds, canvas_dim
     # Define all predicates, prioritizing those from file if they exist
     # Each lambda now receives 'a', 'b' (node data) and 'params' (learned thresholds)
     all_candidate_predicates = {
+        # aspect_sim: True if aspect ratios are similar within a threshold
+        'aspect_sim': lambda a, b, params: abs(a.get('aspect_ratio', 1.0) - b.get('aspect_ratio', 1.0)) < params.get('aspect_tol', 0.2),
+        # para: True if orientations are similar within a threshold (parallel)
+        'para': lambda a, b, params: abs(a.get('orientation', 0) - b.get('orientation', 0)) < params.get('orient_tol', 7),
         'left_of':     lambda a, b, params: a.get('cx', 0) + EPS < b.get('cx', 0),
         'right_of':    lambda a, b, params: a.get('cx', 0) > b.get('cx', 0) + EPS,
         'above':       lambda a, b, params: a.get('cy', 0) + EPS < b.get('cy', 0),
@@ -434,7 +449,8 @@ class EnhancedSceneGraphBuilder:
         except Exception as e:
             logging.error(f"Failed to load or process representative image {image_path} with OpenCV: {e}. Trying PIL fallback.")
             try:
-                image = Image.open(image_path).convert("RGB")
+                from src.scene_graphs_building.data_loading import robust_image_open
+                image = robust_image_open(image_path).convert("RGB")
                 image_np = np.array(image)
             except Exception as e2:
                 logging.error(f"Failed to load image with PIL fallback: {e2}. Skipping enhanced graph build.")
@@ -631,10 +647,24 @@ async def _process_single_problem(
             'category': rec.get('category'),
             'shape_label': rec.get('label'),
             'label': rec.get('label'),
+            'image_path': rec.get('image_path'),
+            'centroid': rec.get('centroid', [0,0]),
+            'area': rec.get('area', 1.0),
+            'aspect_ratio': rec.get('aspect_ratio', 1.0),
+            'orientation': rec.get('orientation', 0.0),
             # Add more fields as needed
         }
         compute_physics_attributes(obj)
         merged_record['objects'].append(obj)
+
+    # 1b. Motif mining (add motif labels)
+    motif_miner = MotifMiner()
+    merged_record['objects'] = motif_miner.cluster_motifs(merged_record['objects'])
+
+    # 1c. Dynamic predicate mining
+    pred_miner = PredicateMiner()
+    learned_thresholds = pred_miner.fit(merged_record['objects'])
+    dynamic_predicates = pred_miner.build_edge_fn()
 
 
     # Debug: log merged object count and details
@@ -648,25 +678,36 @@ async def _process_single_problem(
 
     # 2. Predicate induction and load predicates
     try:
-        chosen_predicate, _ = induce_predicate_for_problem(
-            merged_record['objects'],
-            adaptive_thresholds=adaptive_thresholds
-        )
-        logging.info(f"Problem {problem_id}: Induced predicate: {chosen_predicate}")
+        # Use dynamic predicates
+        chosen_predicate = 'dynamic'  # Placeholder
+        logging.info(f"Problem {problem_id}: Learned dynamic thresholds: {learned_thresholds}")
 
-        # Load adaptive thresholds into global predicate registry
-        if hasattr(adaptive_thresholds, 'get_current_thresholds'):
-            thresholds = adaptive_thresholds.get_current_thresholds()
-        else:
-            thresholds = getattr(adaptive_thresholds, 'thresholds', {})
-        canvas_dims = (thresholds.get('canvas_width', 128), thresholds.get('canvas_height', 128))
-        PREDICATES = load_predicates(adaptive_thresholds, canvas_dims=canvas_dims)
+        # Save learned thresholds to adaptive cache
+        if adaptive_thresholds:
+            adaptive_thresholds.update(problem_id, learned_thresholds)
 
         # Ensure geometry is set for graph building
         merged_record['geometry'] = merged_record['objects']
 
-        # 3. Build base scene graph
-        base_graph_nx = build_graph_unvalidated(merged_record, PREDICATES, TOP_K)
+        # 2b. Add motif/super-node edges (not shown, but could be added to edge list)
+
+        # 2c. Add vision-language (CLIP) edges if enabled
+        vl_edges = []
+        if getattr(args, 'use_vl', False):
+            # Always use CUDA for CLIP if available, fallback to CPU
+            import torch
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            if device == 'cuda':
+                logging.info('Using CUDA for CLIP vision-language embedding.')
+            else:
+                logging.warning('CUDA not available, using CPU for CLIP vision-language embedding.')
+            clip_embedder = CLIPEmbedder(device=device)
+            vl_edges = clip_embedder.contrastive_edges(merged_record['objects'])
+            logging.info(f"Problem {problem_id}: Added {len(vl_edges)} CLIP edges.")
+
+        # 3. Build base scene graph with dynamic predicates
+        # (You must update build_graph_unvalidated to accept dynamic_predicates)
+        base_graph_nx = build_graph_unvalidated(merged_record, dynamic_predicates, TOP_K, extra_edges=vl_edges)
         # Log produced scene graph summary
         if base_graph_nx is not None:
             logging.info(f"Problem {problem_id}: base_graph_nx nodes={base_graph_nx.number_of_nodes()}, edges={base_graph_nx.number_of_edges()}")
@@ -676,7 +717,7 @@ async def _process_single_problem(
             for i, (nid, ndata) in enumerate(node_list[:3]):
                 logging.info(f"Problem {problem_id}: node {i}: id={nid}, data_keys={list(ndata.keys())}, shape_label={ndata.get('shape_label')}, category={ndata.get('category')}, vertices={ndata.get('vertices')[:5]}... (total {len(ndata.get('vertices', []))} vertices)")
             for i, (u, v, edata) in enumerate(edge_list[:3]):
-                logging.info(f"Problem {problem_id}: edge {i}: {u}->{v}, predicate={edata.get('predicate')}, source={edata.get('source')}, data_keys={list(edata.keys())}")
+                logging.info(f"Problem {problem_id}: edge {i}: {u}->{v}, predicate={edata.get('predicate')}, source={edata.get('source', '')}, data_keys={list(edata.keys())}")
         else:
             logging.warning(f"Problem {problem_id}: base_graph_nx is None after build_graph_unvalidated.")
 
@@ -723,8 +764,9 @@ async def _process_single_problem(
     # 5. Save feedback images (always, if enabled)
     if feedback_dir and representative_image_path:
         try:
-            img = cv2.imread(representative_image_path)
-            logging.info(f"[Feedback Save] Problem {problem_id}: representative_image_path={representative_image_path}, img type={type(img)}, img shape={getattr(img, 'shape', None)}")
+            from src.scene_graphs_building.data_loading import robust_image_open
+            img = robust_image_open(representative_image_path)
+            logging.info(f"[Feedback Save] Problem {problem_id}: representative_image_path={representative_image_path}, img type={type(img)}, img shape={getattr(img, 'size', None)}")
             # Log scene graph summary
             if final_scene_graph is not None and 'graph' in final_scene_graph:
                 G = final_scene_graph['graph']
@@ -742,7 +784,8 @@ async def _process_single_problem(
     # 6. Batch validation (if enabled)
     if batch_validator:
         try:
-            img_pil = Image.open(representative_image_path)
+            from src.scene_graphs_building.data_loading import robust_image_open
+            img_pil = robust_image_open(representative_image_path)
             validation_result = await batch_validator.validate_scene_graph_batch(
                 [(img_pil, final_scene_graph)]
             )
@@ -830,9 +873,12 @@ async def main(): # Main is now async because it calls async functions
     parser.add_argument('--decompose-polygons', action='store_true', help='Enable decomposition of complex polygons into sub-polygons.')
     parser.add_argument('--tpot-max-time', type=int, default=5, help='Max time in minutes for TPOT AutoML (default: 5)')
     parser.add_argument('--tpot-generations', type=int, default=5, help='Number of generations for TPOT AutoML (default: 5)')
+    parser.add_argument('--use-vl', action='store_true', help='Enable vision-language (CLIP) edges in scene graph')
     args = parser.parse_args()
     global kb
     kb = ConceptNetClient.get()
+    if kb is None:
+        logging.warning("ConceptNet KB client could not be initialized. Commonsense edges will be skipped.")
 
     # Initialize components
     feature_cache = MemoryEfficientFeatureCache(
@@ -860,16 +906,9 @@ async def main(): # Main is now async because it calls async functions
     ) if args.feedback_rate > 0 else None # Only enable if feedback_rate allows visualization
     enhanced_builder = EnhancedSceneGraphBuilder()
 
-    # Adaptive predicate threshold learning
-    adaptive_thresholds = AdaptivePredicateThresholds(
-        history_size=1000,
-        confidence_level=0.95,
-        adaptation_rate=0.1,
-        min_samples=50
-    )
+    # Adaptive predicate threshold learning (now uses SQLite)
+    adaptive_thresholds = AdaptiveThresholds()
     threshold_cache_path = args.out.replace('.pkl', '_adaptive_thresholds.json')
-    adaptive_thresholds.load_learned_thresholds(threshold_cache_path)
-    logging.info(f"Loaded adaptive thresholds from {threshold_cache_path}")
 
     # Initialize PREDICATES after adaptive_thresholds are loaded
     global PREDICATES
@@ -984,9 +1023,9 @@ async def main(): # Main is now async because it calls async functions
     
     # --- END Merge labels and group by problem_id ---
     use_dask = args.batch_size > 2
+    graphs = []  # Always define graphs before branching
     if not use_dask:
         logging.info("Batch size is small; using asyncio for processing instead of Dask.")
-        graphs = []
         for problem_id, problem_records in tqdm(grouped_problems.items(), desc="Processing problems", mininterval=0.5):
             result = await _process_single_problem(
                 problem_id,
@@ -1004,24 +1043,24 @@ async def main(): # Main is now async because it calls async functions
             )
             if result is not None:
                 graphs.append(result)
-    elif use_dask:
+    else:
         logging.info("Using Dask for parallel processing.")
         # Only import and initialize Dask if needed for large batches
         try:
-            import dask
             from dask.distributed import Client, LocalCluster
             # Guard Dask cluster initialization
             cluster = LocalCluster(n_workers=args.parallel, threads_per_worker=1)
             client = Client(cluster)
             # ...Dask-based batch processing if implemented...
             # (Your Dask logic here)
-            # Don't forget to close the client/cluster if you use them
+            # For now, leave graphs empty or implement Dask logic as needed
             client.close()
             cluster.close()
         except ImportError:
             logging.error("Dask is not installed but required for large batch processing.")
         except Exception as e:
             logging.error(f"Dask-based processing failed: {e}")
+        # If Dask fails, graphs remains as the empty list
 
     if len(graphs) == 0:
         logging.error(f"No scene graphs were produced. Check input data and filtering logic.")
@@ -1031,6 +1070,8 @@ async def main(): # Main is now async because it calls async functions
                 logging.debug(f"Sample input record keys: {list(enriched_augmented_data[0].keys())}")
     else:
         logging.info(f"Successfully built {len(graphs)} scene graphs.")
+        # Optionally re-rank with GNN
+        BongardGNN.train(graphs)
 
     # Save results
     try:
@@ -1071,18 +1112,7 @@ async def main(): # Main is now async because it calls async functions
     logging.info("Processing complete!")
     logging.info(f"Cache efficiency: Memory: {cache_stats.get('memory_usage_mb', 0):.1f}MB used, GPU: {cache_stats.get('gpu_usage_mb', 0):.1f}MB used")
 
-    # --- Relational GNN Training Integration ---
-    try:
-        if TORCH_KORNIA_AVAILABLE:
-            from train_relation_gnn import train_relational_gnn
-            logging.info("Attempting to call train_relational_gnn...")
-            train_relational_gnn(graphs, device='cuda' if torch.cuda.is_available() else 'cpu', epochs=10, batch_size=8)
-        else:
-            logging.warning("PyTorch or Torchvision not available. Skipping Relational GNN training.")
-    except ImportError:
-        logging.warning("train_relation_gnn module not found. Skipping Relational GNN training.")
-    except Exception as e:
-        logging.error(f"Relational GNN training failed: {e}")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

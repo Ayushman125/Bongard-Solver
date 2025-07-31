@@ -72,8 +72,8 @@ def add_commonsense_edges(G, top_k):
             logging.warning(f"Commonsense KB query failed for label '{label}': {e}")
     logging.info(f"[add_commonsense_edges] Finished: KB edges added={edge_count}")
 
-def build_graph_unvalidated(record, predicates, top_k):
-    """Builds a single scene graph without runtime schema validation."""
+def build_graph_unvalidated(record, predicates, top_k, extra_edges=None):
+    """Builds a single scene graph without runtime schema validation. Optionally adds extra edges (e.g., CLIP/vision-language)."""
     G = nx.MultiDiGraph()
     geometry = record.get('geometry', [])
     logging.info(f"[build_graph_unvalidated] Called with {len(geometry)} objects, {len(predicates)} predicates, top_k={top_k}")
@@ -96,6 +96,15 @@ def build_graph_unvalidated(record, predicates, top_k):
             continue
     add_predicate_edges(G, predicates)
     add_commonsense_edges(G, top_k)
+    # Add extra edges if provided (e.g., CLIP/vision-language edges)
+    if extra_edges is not None:
+        for edge in extra_edges:
+            if len(edge) == 3:
+                u, v, data = edge
+                G.add_edge(u, v, **data)
+            elif len(edge) == 2:
+                u, v = edge
+                G.add_edge(u, v)
     logging.info(f"[build_graph_unvalidated] Finished: nodes={G.number_of_nodes()}, edges={G.number_of_edges()}")
     return G
 
