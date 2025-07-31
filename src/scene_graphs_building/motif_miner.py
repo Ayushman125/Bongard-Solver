@@ -30,20 +30,21 @@ class MotifMiner:
             return {}
         clustering = DBSCAN(eps=20, min_samples=1).fit(centroids)
         motif_dict = {}
-        # Group objects by cluster label
         clusters = {}
+        # Record cluster membership and assign string labels
         for obj, label in zip(objects, clustering.labels_):
             obj['motif_label'] = int(label)
-            # Always assign string shape_label for KB lookups and semantic logic
             obj['shape_label'] = self.MOTIF_LABELS.get(int(label), f"motif_{label}")
             clusters.setdefault(int(label), []).append(obj)
             motif_dict.setdefault(int(label), []).append(obj['id'])
-        # For each motif, compute and assign geometry
+        # For each motif, create motif node with member list and geometry
+        motif_nodes = []
         for label, members in clusters.items():
-            # Only create motif node if more than one member
             if len(members) < 2:
                 continue
-            # Compute convex hull over all member vertices
+            motif_id = f"motif_{label}"
+            member_ids = [m['id'] for m in members]
+            # Aggregate geometry from member vertices
             all_vertices = [v for m in members for v in (m.get('vertices') or [])]
             if len(all_vertices) >= 3:
                 try:
@@ -55,11 +56,24 @@ class MotifMiner:
                     motif_vertices = all_vertices
             else:
                 motif_vertices = all_vertices
-            # Assign geometry to each motif node (or create a supernode if needed)
-            for m in members:
-                m['motif_vertices'] = motif_vertices
+            motif_node = {
+                'id': motif_id,
+                'is_motif': True,
+                'vertices': motif_vertices,
+                'shape_label': self.MOTIF_LABELS.get(label, f"motif_{label}"),
+                'motif_label': label,
+                'member_nodes': member_ids,
+            }
+            motif_nodes.append(motif_node)
         logging.info(f"MotifMiner.cluster_motifs: motif_dict keys={list(motif_dict.keys())}")
-        return motif_dict
+        # If caller expects only motif_dict, return motif_dict
+        import inspect
+        stack = inspect.stack()
+        # If called from build_scene_graphs or similar, return motif_dict only
+        if len(stack) > 1 and 'build_scene_graphs' in stack[1].filename:
+            return motif_dict
+        # Otherwise, return both motif_dict and motif_nodes
+        return motif_dict, motif_nodes
 
     def create_motif_supernode(self, member_nodes, motif_label, motif_id):
         """
@@ -107,24 +121,40 @@ class MotifMiner:
                 G.add_edge(motif_id, other_id, predicate='motif_similarity', source='motif')
 
     @staticmethod
-    def normalize_features(nodes):
+    def normalize_features(nodes, feature_list=None):
         """
-        Normalize motif and regular node features separately to avoid scale mismatch.
+        Robust normalization for motif and regular node features. Avoids nan by using epsilon and fallback.
         """
+        eps = 1e-6
+        if feature_list is None:
+            feature_list = ['area', 'motif_score']
         motif_nodes = [n for n in nodes if n.get('is_motif')]
         regular_nodes = [n for n in nodes if not n.get('is_motif')]
-        # Example normalization: area
-        if motif_nodes:
-            motif_areas = np.array([n.get('area', 0) for n in motif_nodes])
-            motif_area_mean = motif_areas.mean() if len(motif_areas) else 1.0
+        for feat in feature_list:
+            # Motif normalization
+            motif_vals = np.array([n.get(feat, 0) for n in motif_nodes])
+            motif_mean = motif_vals.mean() if len(motif_vals) else 0.0
+            motif_std = motif_vals.std() if len(motif_vals) else 0.0
             for n in motif_nodes:
-                n['area_norm'] = n.get('area', 0) / motif_area_mean
-        if regular_nodes:
-            reg_areas = np.array([n.get('area', 0) for n in regular_nodes])
-            reg_area_mean = reg_areas.mean() if len(reg_areas) else 1.0
+                val = n.get(feat, 0)
+                if motif_std > eps:
+                    n[feat+'_norm'] = (val - motif_mean) / (motif_std + eps)
+                elif motif_mean > eps:
+                    n[feat+'_norm'] = val / (motif_mean + eps)
+                else:
+                    n[feat+'_norm'] = 0.0
+            # Regular normalization
+            reg_vals = np.array([n.get(feat, 0) for n in regular_nodes])
+            reg_mean = reg_vals.mean() if len(reg_vals) else 0.0
+            reg_std = reg_vals.std() if len(reg_vals) else 0.0
             for n in regular_nodes:
-                n['area_norm'] = n.get('area', 0) / reg_area_mean
-        # Add more normalization as needed (motif_score, vl_embed, etc.)
+                val = n.get(feat, 0)
+                if reg_std > eps:
+                    n[feat+'_norm'] = (val - reg_mean) / (reg_std + eps)
+                elif reg_mean > eps:
+                    n[feat+'_norm'] = val / (reg_mean + eps)
+                else:
+                    n[feat+'_norm'] = 0.0
 
     def aggregate_motif_vertices(self, member_nodes):
         """
