@@ -56,20 +56,24 @@ class MotifMiner:
                     motif_vertices = all_vertices
             else:
                 motif_vertices = all_vertices
+            # Compute physics attributes and merge all into motif_node
+            physics_attrs = {}
+            try:
+                from src.scene_graphs_building.feature_extraction import compute_physics_attributes
+                compute_physics_attributes(physics_attrs)
+                # Use motif geometry for attribute computation
+                physics_attrs['vertices'] = motif_vertices
+                compute_physics_attributes(physics_attrs)
+            except Exception as e:
+                logging.warning(f"MotifMiner.cluster_motifs: compute_physics_attributes failed for motif {motif_id}: {e}")
             motif_node = {
                 'id': motif_id,
                 'is_motif': True,
-                'vertices': motif_vertices,
+                'member_nodes': member_ids,
                 'shape_label': self.MOTIF_LABELS.get(label, f"motif_{label}"),
                 'motif_label': label,
-                'member_nodes': member_ids,
+                **physics_attrs
             }
-            # Compute and attach physics attributes to motif node
-            try:
-                from src.scene_graphs_building.feature_extraction import compute_physics_attributes
-                compute_physics_attributes(motif_node)
-            except Exception as e:
-                logging.warning(f"MotifMiner.cluster_motifs: compute_physics_attributes failed for motif {motif_id}: {e}")
             motif_nodes.append(motif_node)
         logging.info(f"MotifMiner.cluster_motifs: motif_dict keys={list(motif_dict.keys())}")
         # Always return both motif_dict and motif_nodes for downstream motif construction
