@@ -1,9 +1,11 @@
+import logging
+
 def euclidean_embed(x, *args, **kwargs):
     """
     Embed a feature dict (or compatible structure) into Euclidean space as a flat vector.
     Accepts dicts or lists of dicts. Returns 1D numpy array.
     """
-    import logging
+    # import logging removed; use global logging
     if isinstance(x, dict):
         return feature_dict_to_vector(x)
     elif isinstance(x, (list, tuple)) and len(x) > 0 and isinstance(x[0], dict):

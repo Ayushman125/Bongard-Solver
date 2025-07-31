@@ -1,4 +1,5 @@
 import random
+import logging
 
 
 def add_stroke(program):
@@ -11,7 +12,7 @@ def add_stroke(program):
 
 def reflect_shape(program):
     # Reflect sequence of turtle commands (mirroring effect) on a list of (cmd, param) tuples or LOGO strings
-    import logging
+    # import logging removed; use global logging
     import re
     reflected = []
     for i, item in enumerate(program):

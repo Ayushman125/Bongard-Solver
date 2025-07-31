@@ -1,9 +1,8 @@
-# --- Set model cache directories to avoid repeated downloads ---
 import os
+import logging
 os.environ["HF_HOME"] = os.path.abspath("model_cache")
 os.environ["TRANSFORMERS_CACHE"] = os.path.abspath("model_cache")
 os.environ["TORCH_HOME"] = os.path.abspath("model_cache")
-import os
 # --- Standard Library Imports ---
 from typing import Tuple, Dict, Any, List
 import torch
@@ -13,12 +12,12 @@ import concurrent.futures
 import gc
 import hashlib
 import json
-import logging
 import pickle
 import sys
 import threading
 import time
 import torch
+import logging
 import math
 from collections import Counter, defaultdict
 from itertools import combinations # For global graph features
@@ -42,11 +41,11 @@ from sklearn.tree import DecisionTreeClassifier
 from scipy.stats import ttest_ind
 
 # Conditional imports for torch/kornia/torchvision
-TORCH_KORNIA_AVAILABLE = True
+TORCH_KORNIA_AVAILABLE = False
 try:
     import torch
-    import kornia
     import torchvision
+    import kornia
     TORCH_KORNIA_AVAILABLE = True
 except ImportError:
     logging.warning("PyTorch, Kornia, or Torchvision not found. Real feature extraction will be disabled.")
@@ -85,9 +84,9 @@ from src.scene_graphs_building.visualization import save_feedback_images
 from src.scene_graphs_building.recall_metrics import log_diversity_metrics
 from src.scene_graphs_building.adaptive_predicates import AdaptivePredicateThresholds, create_adaptive_predicate_functions
 # --- Research-grade modules ---
-from src.scene_graph.predicate_miner import PredicateMiner
-from src.scene_graph.motif_miner import MotifMiner
-from src.scene_graph.vl_features import CLIPEmbedder
+from src.scene_graphs_building.predicate_miner import PredicateMiner
+from src.scene_graphs_building.motif_miner import MotifMiner
+from src.scene_graphs_building.vl_features import CLIPEmbedder
 from src.reasoner.gnn_reasoner import BongardGNN
 from src.data_pipeline.adaptive_thresholds import AdaptiveThresholds
 from src.commonsense_kb_api import ConceptNetAPI
@@ -663,8 +662,50 @@ async def _process_single_problem(
             'aspect_ratio': rec.get('aspect_ratio', 1.0),
             'orientation': rec.get('orientation', 0.0),
         }
+        # symmetry_axis: estimate from geometry if possible
+        if verts and len(verts) > 2:
+            try:
+                from sklearn.decomposition import PCA
+                verts_arr = np.array(verts)
+                pca = PCA(n_components=2)
+                pca.fit(verts_arr)
+                axis_angle = np.arctan2(pca.components_[0][1], pca.components_[0][0])
+                obj['symmetry_axis'] = float(np.degrees(axis_angle))
+            except Exception:
+                obj['symmetry_axis'] = 0.0
+        else:
+            obj['symmetry_axis'] = 0.0
+
+        # clip_sim / vl_sim: will be set after all nodes are built
+        obj['clip_sim'] = 0.0
+        obj['vl_sim'] = 0.0
+
+        # motif_score: not applicable for regular nodes
+        obj['motif_score'] = 0.0
+        # --- Node Feature Augmentation: curvature and skeleton metrics ---
         compute_physics_attributes(obj)
-        # Add CLIP embedding
+        # Ensure curvature and skeleton_length are present
+        if 'curvature' not in obj:
+            # Dummy curvature: mean of angle changes between consecutive vertices
+            verts_arr = np.array(verts)
+            if len(verts_arr) > 2:
+                diffs = np.diff(verts_arr, axis=0)
+                angles = np.arctan2(diffs[:,1], diffs[:,0])
+                curvatures = np.abs(np.diff(angles))
+                obj['curvature'] = float(np.mean(curvatures))
+            else:
+                obj['curvature'] = 0.0
+        if 'skeleton_length' not in obj:
+            # Dummy skeleton: use perimeter as proxy
+            verts_arr = np.array(verts)
+            if len(verts_arr) > 1:
+                dists = np.linalg.norm(np.diff(verts_arr, axis=0), axis=1)
+                obj['skeleton_length'] = float(np.sum(dists))
+            else:
+                obj['skeleton_length'] = 0.0
+        # Ensure gnn_score is present for GNN input
+        obj['gnn_score'] = 0.0
+        # --- CLIP embedding saved directly into node data ---
         if getattr(args, 'use_vl', False) and obj.get('image_path'):
             try:
                 from src.scene_graphs_building.data_loading import robust_image_open
@@ -681,32 +722,143 @@ async def _process_single_problem(
         motifs = MotifMiner().cluster_motifs(objects)
         for motif_type, node_ids in motifs.items():
             supernode_id = f"motif_{motif_type}_{problem_id}"
-            motif_nodes.append({'id': supernode_id, 'shape_label': motif_type, 'is_motif': True})
+            member_nodes = [obj for obj in objects if obj['id'] in node_ids]
+            member_centroids = [obj.get('centroid') for obj in member_nodes if 'centroid' in obj]
+            logging.info(f"Motif supernode {supernode_id}: member node ids={node_ids}, member centroids={member_centroids}")
+            # Log which attributes are present in member nodes
+            for i, obj in enumerate(member_nodes):
+                logging.info(f"Motif supernode {supernode_id}: member {i} id={obj['id']} keys={list(obj.keys())}")
+            # Log which attributes are present in the supernode
+            # Compute and assign geometry attributes from member nodes
+            motif_node = {'id': supernode_id, 'shape_label': motif_type, 'is_motif': True}
+            # Aggregate centroids
+            centroids = [obj.get('centroid') for obj in member_nodes if 'centroid' in obj and obj.get('centroid') is not None]
+            if centroids:
+                motif_node['centroid'] = list(np.mean(np.array(centroids), axis=0))
+            # Aggregate area
+            areas = [obj.get('area', 0.0) for obj in member_nodes if 'area' in obj]
+            motif_node['area'] = float(np.sum(areas)) if areas else 0.0
+            # Aggregate aspect_ratio (mean)
+            aspects = [obj.get('aspect_ratio', 1.0) for obj in member_nodes if 'aspect_ratio' in obj]
+            motif_node['aspect_ratio'] = float(np.mean(aspects)) if aspects else 1.0
+            # Aggregate orientation (mean)
+            orientations = [obj.get('orientation', 0.0) for obj in member_nodes if 'orientation' in obj]
+            motif_node['orientation'] = float(np.mean(orientations)) if orientations else 0.0
+            # Aggregate perimeter (sum)
+            perimeters = [obj.get('perimeter', 0.0) for obj in member_nodes if 'perimeter' in obj]
+            motif_node['perimeter'] = float(np.sum(perimeters)) if perimeters else 0.0
+            # Aggregate bbox (mean of corners)
+            bboxes = [obj.get('bbox') for obj in member_nodes if 'bbox' in obj and obj.get('bbox') is not None]
+            if bboxes:
+                motif_node['bbox'] = list(np.mean(np.array(bboxes), axis=0))
+            # Aggregate inertia (mean)
+            inertias = [obj.get('inertia', 0.0) for obj in member_nodes if 'inertia' in obj]
+            motif_node['inertia'] = float(np.mean(inertias)) if inertias else 0.0
+            # Aggregate convexity (mean)
+            convexities = [obj.get('convexity', 0.0) for obj in member_nodes if 'convexity' in obj]
+            motif_node['convexity'] = float(np.mean(convexities)) if convexities else 0.0
+            # Aggregate compactness (mean)
+            compactnesses = [obj.get('compactness', 0.0) for obj in member_nodes if 'compactness' in obj]
+            motif_node['compactness'] = float(np.mean(compactnesses)) if compactnesses else 0.0
+            # Aggregate num_segments (sum)
+            num_segments = [obj.get('num_segments', 0) for obj in member_nodes if 'num_segments' in obj]
+            motif_node['num_segments'] = int(np.sum(num_segments)) if num_segments else 0
+            # Aggregate num_junctions (sum)
+            num_junctions = [obj.get('num_junctions', 0) for obj in member_nodes if 'num_junctions' in obj]
+            motif_node['num_junctions'] = int(np.sum(num_junctions)) if num_junctions else 0
+            # Aggregate curvature (mean)
+            curvatures = [obj.get('curvature', 0.0) for obj in member_nodes if 'curvature' in obj]
+            motif_node['curvature'] = float(np.mean(curvatures)) if curvatures else 0.0
+            # Aggregate skeleton_length (sum)
+            skeleton_lengths = [obj.get('skeleton_length', 0.0) for obj in member_nodes if 'skeleton_length' in obj]
+            motif_node['skeleton_length'] = float(np.sum(skeleton_lengths)) if skeleton_lengths else 0.0
+            # Aggregate vl_embed (mean)
+            vl_embeds = [obj.get('vl_embed') for obj in member_nodes if 'vl_embed' in obj and obj.get('vl_embed') is not None]
+            if vl_embeds:
+                motif_node['vl_embed'] = list(np.mean(np.array(vl_embeds), axis=0))
+            # symmetry_axis: aggregate from member nodes
+            symmetry_axes = [obj.get('symmetry_axis', 0.0) for obj in member_nodes]
+            motif_node['symmetry_axis'] = float(np.mean(symmetry_axes)) if symmetry_axes else 0.0
+
+            # motif_score: use number of members as proxy for confidence
+            motif_node['motif_score'] = float(len(member_nodes))
+            # Ensure gnn_score is present for GNN input
+            motif_node['gnn_score'] = 0.0
+
+            logging.info(f"Motif supernode {supernode_id}: initial keys={list(motif_node.keys())}")
+            motif_nodes.append(motif_node)
             for nid in node_ids:
                 motif_edges.append((nid, supernode_id, {'predicate': 'part_of', 'source': 'motif'}))
     merged_record['geometry'] = objects + motif_nodes
+    # Compute mean VL embedding and assign clip_sim/vl_sim for all nodes
+    all_embeds = [obj.get('vl_embed') for obj in objects + motif_nodes if obj.get('vl_embed') is not None]
+    if all_embeds:
+        mean_embed = np.mean(np.array(all_embeds), axis=0)
+        def cosine_sim(a, b):
+            a = np.array(a)
+            b = np.array(b)
+            if np.linalg.norm(a) == 0 or np.linalg.norm(b) == 0:
+                return 0.0
+            return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+        for obj in objects + motif_nodes:
+            if obj.get('vl_embed') is not None:
+                obj['clip_sim'] = cosine_sim(obj['vl_embed'], mean_embed)
+                obj['vl_sim'] = cosine_sim(obj['vl_embed'], mean_embed)
     # 3. Adaptive predicate mining
     pred_miner = PredicateMiner()
     learned_thresholds = pred_miner.fit(objects)
-    dynamic_predicates = pred_miner.fit(objects)
+    dynamic_predicates = pred_miner.build_edge_fn()  # Use lambdas, not raw thresholds
+    for k, v in dynamic_predicates.items():
+        logging.info(f"Predicate '{k}' type: {type(v)}")
     # 4. VLM edges
     vl_edges = []
     if getattr(args, 'use_vl', False):
         vl_edges = clip_embedder.contrastive_edges(objects)
     # 5. Build graph
     base_graph_nx = build_graph_unvalidated(merged_record, dynamic_predicates, TOP_K, extra_edges=vl_edges+motif_edges, kb=kb)
-    # 6. GNN refinement
-    if getattr(args, 'use_gnn', False):
-        gnn = GNNReasoner(in_dim=10)
-        base_graph_nx = gnn.predict(base_graph_nx)
-    # 7. Rule induction
-    rules = RuleInducer().induce(base_graph_nx)
-    # 8. Global graph metrics
+    logging.info(f"[DEBUG] After build_graph_unvalidated: type={type(base_graph_nx)}, nodes={getattr(base_graph_nx, 'number_of_nodes', lambda: 'NA')()}, edges={getattr(base_graph_nx, 'number_of_edges', lambda: 'NA')()}")
+    if base_graph_nx is None:
+        logging.error(f"[ERROR] build_graph_unvalidated returned None for problem {problem_id}. Skipping.")
+        return {'scene_graph': None, 'rules': None}
+    # --- Global Graph Statistics ---
+    node_centroids = [d.get('centroid', [0,0]) for n, d in base_graph_nx.nodes(data=True)]
+    if node_centroids:
+        arr = np.array(node_centroids)
+        center = np.mean(arr, axis=0)
+        sym_pairs = 0
+        total_pairs = 0
+        for i in range(len(arr)):
+            for j in range(i+1, len(arr)):
+                refl = 2*center - arr[i]
+                if np.linalg.norm(refl - arr[j]) < 5.0:
+                    sym_pairs += 1
+                total_pairs += 1
+        base_graph_nx.graph['symmetry_score'] = sym_pairs/total_pairs if total_pairs else 0.0
+    else:
+        base_graph_nx.graph['symmetry_score'] = 0.0
     base_graph_nx.graph['motif_diversity'] = len(set([d.get('shape_label') for n, d in base_graph_nx.nodes(data=True) if d.get('is_motif')]))
     from scipy.stats import entropy
     pred_counts = [edata.get('predicate') for _,_,edata in base_graph_nx.edges(data=True)]
     _, counts = np.unique(pred_counts, return_counts=True)
     base_graph_nx.graph['pred_entropy'] = float(entropy(counts)) if len(counts)>0 else 0.0
+    # --- GNN/Transformer Reasoner ---
+    if getattr(args, 'use_gnn', False):
+        from src.reasoner.gnn_reasoner import GNNReasoner
+        gnn = GNNReasoner(in_dim=10)
+        try:
+            base_graph_nx = gnn.predict(base_graph_nx)
+            logging.info(f"[DEBUG] After GNN: type={type(base_graph_nx)}, nodes={getattr(base_graph_nx, 'number_of_nodes', lambda: 'NA')()}, edges={getattr(base_graph_nx, 'number_of_edges', lambda: 'NA')()}")
+        except Exception as e:
+            logging.error(f"[ERROR] GNNReasoner failed for problem {problem_id}: {e}")
+            return {'scene_graph': None, 'rules': None}
+    # --- Symbolic Rule Inducer ---
+    from integration.rule_inducer import RuleInducer
+    try:
+        rules = RuleInducer().induce(base_graph_nx)
+        logging.info(f"[DEBUG] After RuleInducer: rules type={type(rules)}, rules={rules}")
+    except Exception as e:
+        logging.error(f"[ERROR] RuleInducer failed for problem {problem_id}: {e}")
+        return {'scene_graph': base_graph_nx, 'rules': None}
     # 9. Save feedback images with all features visualized
     if feedback_dir and representative_image_path:
         try:
@@ -926,6 +1078,8 @@ async def main(): # Main is now async because it calls async functions
     parser.add_argument('--tpot-max-time', type=int, default=5, help='Max time in minutes for TPOT AutoML (default: 5)')
     parser.add_argument('--tpot-generations', type=int, default=5, help='Number of generations for TPOT AutoML (default: 5)')
     parser.add_argument('--use-vl', action='store_true', help='Enable vision-language (CLIP) edges in scene graph')
+    parser.add_argument('--use-gnn', action='store_true', help='Enable GNN/Transformer reasoning in scene graph')
+    parser.add_argument('--use-motifs', action='store_true', help='Enable motif mining and super-nodes in scene graph')
     args = parser.parse_args()
     global kb
     kb = ConceptNetClient.get()
@@ -1071,11 +1225,12 @@ async def main(): # Main is now async because it calls async functions
         else:
             logging.warning(f"Record missing 'problem_id': {rec.get('image_path')}. Skipping.")
 
-    logging.info(f"Grouped {len(enriched_augmented_data)} records into {len(grouped_problems)} problems.")
+    logging.info(f"Grouped records into {len(grouped_problems)} problems.")
     
     # --- END Merge labels and group by problem_id ---
     use_dask = args.batch_size > 2
     graphs = []  # Always define graphs before branching
+    gnn_model = None
     if not use_dask:
         logging.info("Batch size is small; using asyncio for processing instead of Dask.")
         for problem_id, problem_records in tqdm(grouped_problems.items(), desc="Processing problems", mininterval=0.5):
@@ -1095,6 +1250,28 @@ async def main(): # Main is now async because it calls async functions
             )
             if result is not None:
                 graphs.append(result)
+        # Cutting-edge GNN training block (after all graphs are built)
+        if getattr(args, 'use_gnn', False) and len(graphs) > 0:
+            try:
+                from src.reasoner.gnn_reasoner import GNNReasoner
+                # Prepare torch_geometric Data objects and labels
+                graph_data_list = []
+                graph_labels = []
+                for g_result in graphs:
+                    scene_graph = g_result.get('scene_graph')
+                    if scene_graph is not None and hasattr(scene_graph, 'nodes'):
+                        gnn = GNNReasoner(in_dim=10)
+                        data, _ = gnn.nx_to_pyg(scene_graph)
+                        graph_data_list.append(data)
+                        # Use a placeholder label (e.g., 1.0) or extract from your data
+                        graph_labels.append(1.0)
+                if len(graph_data_list) > 0:
+                    gnn_model = GNNReasoner.train(graph_data_list, graph_labels, epochs=50, batch_size=8, val_split=0.2, patience=5, lr=1e-3, weight_decay=1e-4)
+                    # Save model weights for reproducibility
+                    torch.save(gnn_model.state_dict(), "gnn_model_best.pt")
+                    logging.info("[GNN] Model trained and saved as gnn_model_best.pt")
+            except Exception as e:
+                logging.error(f"[GNN] Training failed: {e}")
     else:
         logging.info("Using Dask for parallel processing.")
         # Only import and initialize Dask if needed for large batches
@@ -1122,8 +1299,7 @@ async def main(): # Main is now async because it calls async functions
                 logging.debug(f"Sample input record keys: {list(enriched_augmented_data[0].keys())}")
     else:
         logging.info(f"Successfully built {len(graphs)} scene graphs.")
-        # Optionally re-rank with GNN
-        BongardGNN.train(graphs)
+        # Optionally re-rank with GNN (now handled above)
 
     # Save results
     try:

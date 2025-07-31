@@ -1,12 +1,30 @@
+# Example: Model caching pattern for HuggingFace/torch models
+# import os
+# from transformers import CLIPModel, CLIPProcessor
+# class CLIPEmbedder:
+#     def __init__(self, model_name="openai/clip-vit-base-patch16", cache_dir="model_cache", device="cpu"):
+#         self.cache_dir = cache_dir
+#         os.makedirs(self.cache_dir, exist_ok=True)
+#         self.model_name = model_name
+#         self.device = device
+#         self.model, self.processor = self._load_model()
+#     def _load_model(self):
+#         model = CLIPModel.from_pretrained(self.model_name, cache_dir=self.cache_dir)
+#         processor = CLIPProcessor.from_pretrained(self.model_name, cache_dir=self.cache_dir)
+#         return model.to(self.device), processor
 import torch
 from transformers import CLIPProcessor, CLIPModel
 import numpy as np
 
 class CLIPEmbedder:
-    def __init__(self, device='cuda' if torch.cuda.is_available() else 'cpu'):
-        self.device = device
-        self.model = CLIPModel.from_pretrained('openai/clip-vit-base-patch16').to(self.device)
-        self.processor = CLIPProcessor.from_pretrained('openai/clip-vit-base-patch16')
+    def __init__(self, device=None, model_name='openai/clip-vit-base-patch16', cache_dir='model_cache'):
+        import os
+        self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model_name = model_name
+        self.cache_dir = cache_dir
+        os.makedirs(self.cache_dir, exist_ok=True)
+        self.model = CLIPModel.from_pretrained(self.model_name, cache_dir=self.cache_dir).to(self.device)
+        self.processor = CLIPProcessor.from_pretrained(self.model_name, cache_dir=self.cache_dir)
 
     def embed_image(self, image):
         inputs = self.processor(images=image, return_tensors="pt").to(self.device)

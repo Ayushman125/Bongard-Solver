@@ -1,6 +1,7 @@
 import random
 import copy
 import numpy as np
+import logging
 
 class EvoPerturber:
 
@@ -24,7 +25,7 @@ class EvoPerturber:
             np.random.seed(seed)
     
     def search(self, base_cmds):
-        import logging
+        # import logging removed; use global logging
         best_prog, best_score, stagnation = None, float('-inf'), 0
         for i in range(self.max_iter):
             cand = self.perturb(base_cmds)

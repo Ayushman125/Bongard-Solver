@@ -1,17 +1,64 @@
 import numpy as np
+from itertools import combinations
+from sklearn.metrics import mutual_info_score
+
+DEFAULT_CANDIDATES = {
+    "larger_than": 1.15,
+    "aspect_sim": 0.20,
+    "near": 32.0,
+    "para": 12.0,
+}
 
 class PredicateMiner:
+    def __init__(self, search_grid=None):
+        self.grid = search_grid or DEFAULT_CANDIDATES.copy()
+
     def fit(self, objects):
-        # Fit thresholds for area, aspect, curvature, etc. using contrastive stats
-        areas = np.array([o.get('area', 0) for o in objects])
-        aspects = np.array([o.get('aspect_ratio', 1) for o in objects])
-        curvs = np.array([o.get('mean_curvature', 0) for o in objects])
-        # Use percentiles for thresholds
-        area_thr = np.percentile(areas, 70) if len(areas) else 1
-        aspect_thr = np.percentile(np.abs(aspects[:,None]-aspects), 30) if len(aspects) else 0.1
-        curv_thr = np.percentile(curvs, 70) if len(curvs) else 0.1
-        preds = {}
-        preds['larger_than'] = lambda a,b: a.get('area',0) > area_thr and b.get('area',0) < area_thr
-        preds['aspect_sim'] = lambda a,b: abs(a.get('aspect_ratio',1)-b.get('aspect_ratio',1)) < aspect_thr
-        preds['curvature_sim'] = lambda a,b: abs(a.get('mean_curvature',0)-b.get('mean_curvature',0)) < curv_thr
-        return preds
+        """Pick thresholds that maximise Δ = support_pos – support_neg."""
+        pos = [o for o in objects if o["shape_label"] == "positive"]
+        neg = [o for o in objects if o["shape_label"] == "negative"]
+        best = {}
+        for name, base in self.grid.items():
+            best_val, best_gain = base, -1
+            # scan 10 multipliers around base
+            for mul in np.linspace(0.5, 1.8, 10):
+                th = mul * base
+                supp_p = self._support(name, th, pos)
+                supp_n = self._support(name, th, neg)
+                gain = supp_p - supp_n
+                if gain > best_gain:
+                    best_gain, best_val = gain, th
+            best[name] = best_val
+        self.learned = best
+        return best
+
+    # ---------- helpers ----------
+    def _support(self, pred, th, group):
+        cnt = 0
+        fn = self._edge_fn(pred, th)
+        for a, b in combinations(group, 2):
+            cnt += fn(a, b)
+        total = len(group) * (len(group) - 1) / 2
+        return cnt / (total or 1)
+
+    def _edge_fn(self, pred, th):
+        if pred == "larger_than":
+            return lambda a, b: a["area"] > th * b["area"]
+        if pred == "aspect_sim":
+            return lambda a, b: abs(a["aspect_ratio"] - b["aspect_ratio"]) < th
+        if pred == "near":
+            return lambda a, b: np.linalg.norm(np.array(a["centroid"]) - np.array(b["centroid"])) < th
+        if pred == "para":
+            return lambda a, b: abs(a["orientation"] - b["orientation"]) < th
+        return lambda a, b: False
+
+    def build_edge_fn(self):
+        """Return a dict of edge lambdas using learned thresholds."""
+        assert hasattr(self, "learned"), "Call fit() first."
+        learned = self.learned
+        return {
+            "larger_than": lambda a, b: a["area"] > learned["larger_than"] * b["area"],
+            "aspect_sim": lambda a, b: abs(a["aspect_ratio"] - b["aspect_ratio"]) < learned["aspect_sim"],
+            "near": lambda a, b: np.linalg.norm(np.array(a["centroid"]) - np.array(b["centroid"])) < learned["near"],
+            "para": lambda a, b: abs(a["orientation"] - b["orientation"]) < learned["para"],
+        }
