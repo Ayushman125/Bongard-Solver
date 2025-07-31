@@ -2,6 +2,7 @@ import networkx as nx
 import logging
 import numpy as np
 from src.scene_graphs_building.feature_extraction import compute_physics_attributes
+from src.scene_graphs_building.config import CONCEPTNET_KEEP_RELS, SHAPE_MAP
 
 
 def add_predicate_edges(G, predicates):
@@ -45,8 +46,17 @@ def add_predicate_edges(G, predicates):
         logging.warning(f"Could not compute clustering coefficient: {e}. Setting to 0.0")
         G.graph['clustering_coeff'] = 0.0
 
+def normalize_shape_label(lbl):
+    if not lbl:
+        return None
+    lbl = lbl.lower().replace("_", " ").replace("-", " ").strip()
+    # Remove generic or non-shape labels
+    if lbl in ("positive", "negative", "pos", "neg"):
+        return None
+    return SHAPE_MAP.get(lbl, lbl)
+
 def add_commonsense_edges(G, top_k, kb=None):
-    """Adds semantic edges by querying the commonsense knowledge base."""
+    """Adds semantic edges by querying the commonsense knowledge base with normalized shape labels and pruned relations."""
     logging.info(f"[add_commonsense_edges] Called with kb type: {type(kb)}, value: {kb}")
     if kb is None:
         logging.info("[add_commonsense_edges] KB not available, skipping.")
@@ -56,34 +66,31 @@ def add_commonsense_edges(G, top_k, kb=None):
     logging.info(f"[add_commonsense_edges] All node shape_labels: {all_shape_labels}")
     edge_count = 0
     for u, data_u in nodes_with_data:
-        # Try label, then category, then shape_label
-        label = data_u.get('label') or data_u.get('category') or data_u.get('shape_label')
-        label_source = None
-        if data_u.get('label'):
-            label_source = 'label'
-        elif data_u.get('category'):
-            label_source = 'category'
-        elif data_u.get('shape_label'):
-            label_source = 'shape_label'
-        if not label:
+        raw = data_u.get('shape_label', '')
+        concept = normalize_shape_label(raw)
+        if not concept:
             continue
         try:
-            related_concepts = kb.related(label) if hasattr(kb, 'related') else []
-            logging.info(f"[add_commonsense_edges] Node {u} ({label_source}={label}): kb.related -> {related_concepts}")
-            for rel, other_concept in related_concepts[:top_k]:
-                found_match = False
-                for v, data_v in nodes_with_data:
-                    v_label = data_v.get('label') or data_v.get('category') or data_v.get('shape_label')
-                    if u != v and v_label == other_concept:
-                        G.add_edge(u, v, predicate=rel, source='kb')
-                        edge_count += 1
-                        found_match = True
-                        logging.debug(f"[add_commonsense_edges] Added KB edge: {u}->{v} predicate={rel}")
-                        break
-                if not found_match:
-                    logging.info(f"[add_commonsense_edges] Related concept '{other_concept}' (relation '{rel}') for node {u} ({label_source} '{label}') did not match any node's label/category/shape_label.")
+            related = kb.related(concept) if hasattr(kb, 'related') else []
         except Exception as e:
-            logging.warning(f"Commonsense KB query failed for label '{label}': {e}")
+            logging.warning(f"Commonsense KB query failed for label '{concept}': {e}")
+            continue
+        # Prune to allowed relations and top_k
+        added = 0
+        for rel, other in related:
+            if rel not in CONCEPTNET_KEEP_RELS:
+                continue
+            if added >= top_k:
+                break
+            # Find matching node v
+            for v, data_v in nodes_with_data:
+                v_concept = normalize_shape_label(data_v.get('shape_label', ''))
+                if u != v and v_concept == other:
+                    G.add_edge(u, v, predicate=rel, source='kb')
+                    edge_count += 1
+                    added += 1
+                    logging.debug(f"[add_commonsense_edges] Added KB edge: {u}->{v} predicate={rel}")
+                    break
     logging.info(f"[add_commonsense_edges] Finished: KB edges added={edge_count}")
 
 def build_graph_unvalidated(record, predicates, top_k, extra_edges=None, kb=None):

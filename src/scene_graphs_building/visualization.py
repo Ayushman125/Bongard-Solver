@@ -55,10 +55,20 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
                     if path:
                         return os.path.basename(path)
                     return ''
+                from src.scene_graphs_building.config import SHAPE_MAP
+                def normalize_shape_label(lbl):
+                    if not lbl:
+                        return None
+                    lbl = lbl.lower().replace("_", " ").replace("-", " ").strip()
+                    if lbl in ("positive", "negative", "pos", "neg"):
+                        return None
+                    return SHAPE_MAP.get(lbl, lbl)
                 node_labels = {}
                 for n in G.nodes():
                     node = G.nodes[n]
-                    label = str(node.get('shape_label', n))
+                    raw = node.get('shape_label', n)
+                    norm = normalize_shape_label(raw)
+                    label = norm if norm else str(raw)
                     img_name = get_img_name(node)
                     if img_name:
                         node_labels[n] = f"{label}\n{img_name}"
