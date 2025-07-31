@@ -30,11 +30,34 @@ class MotifMiner:
             return {}
         clustering = DBSCAN(eps=20, min_samples=1).fit(centroids)
         motif_dict = {}
+        # Group objects by cluster label
+        clusters = {}
         for obj, label in zip(objects, clustering.labels_):
             obj['motif_label'] = int(label)
             # Always assign string shape_label for KB lookups and semantic logic
             obj['shape_label'] = self.MOTIF_LABELS.get(int(label), f"motif_{label}")
+            clusters.setdefault(int(label), []).append(obj)
             motif_dict.setdefault(int(label), []).append(obj['id'])
+        # For each motif, compute and assign geometry
+        for label, members in clusters.items():
+            # Only create motif node if more than one member
+            if len(members) < 2:
+                continue
+            # Compute convex hull over all member vertices
+            all_vertices = [v for m in members for v in (m.get('vertices') or [])]
+            if len(all_vertices) >= 3:
+                try:
+                    arr = np.array(all_vertices)
+                    hull = ConvexHull(arr)
+                    motif_vertices = arr[hull.vertices].tolist()
+                except Exception as e:
+                    logging.warning(f"MotifMiner.cluster_motifs: Convex hull failed for motif {label}: {e}")
+                    motif_vertices = all_vertices
+            else:
+                motif_vertices = all_vertices
+            # Assign geometry to each motif node (or create a supernode if needed)
+            for m in members:
+                m['motif_vertices'] = motif_vertices
         logging.info(f"MotifMiner.cluster_motifs: motif_dict keys={list(motif_dict.keys())}")
         return motif_dict
 

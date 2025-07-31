@@ -63,17 +63,32 @@ class GNNReasoner:
         node_feats = []
         node_ids = list(G.nodes())
         diagnostics = []
+        # Separate motif and regular nodes for normalization
+        motif_nodes = [n for n in node_ids if G.nodes[n].get('is_motif')]
+        regular_nodes = [n for n in node_ids if not G.nodes[n].get('is_motif')]
+        # Compute means for normalization
+        def get_feat(n, f):
+            return float(G.nodes[n].get(f, 0))
+        for f in required_features:
+            motif_vals = [get_feat(n, f) for n in motif_nodes]
+            reg_vals = [get_feat(n, f) for n in regular_nodes]
+            motif_mean = np.mean(motif_vals) if motif_vals else 1.0
+            reg_mean = np.mean(reg_vals) if reg_vals else 1.0
+            for n in motif_nodes:
+                G.nodes[n][f+'_norm'] = get_feat(n, f) / motif_mean
+            for n in regular_nodes:
+                G.nodes[n][f+'_norm'] = get_feat(n, f) / reg_mean
+        # Build feature vectors
         for n in node_ids:
             d = G.nodes[n]
             missing = [f for f in required_features if f not in d]
-            # Impute missing features with zeros and log
             for f in missing:
                 d[f] = 0.0
             if missing:
                 diagnostics.append(f"Node {n} missing features: {missing}. Node keys: {list(d.keys())}")
                 logging.warning(f"GNNReasoner.nx_to_pyg: Node {n} missing features: {missing}. Node keys: {list(d.keys())}")
-            feats = [float(d.get(f, 0)) for f in required_features]
-            logging.info(f"GNNReasoner.nx_to_pyg: Node {n} feature vector: {feats}")
+            feats = [float(d.get(f+'_norm', 0)) for f in required_features]
+            logging.info(f"GNNReasoner.nx_to_pyg: Node {n} normalized feature vector: {feats}")
             node_feats.append(feats)
         if not node_feats:
             diagnostics.append("No node features found. Graph may be empty.")

@@ -62,6 +62,12 @@ def add_commonsense_edges(G, top_k, kb=None):
         logging.info("[add_commonsense_edges] KB not available, skipping.")
         return
     nodes_with_data = list(G.nodes(data=True))
+    # Normalize all shape_label values (motifs and shapes)
+    for _, d in nodes_with_data:
+        if d.get('shape_label') is not None:
+            from src.scene_graphs_building.config import SHAPE_MAP
+            lbl = str(d['shape_label']).lower().replace('_',' ').replace('-',' ').strip()
+            d['shape_label'] = SHAPE_MAP.get(lbl, lbl)
     all_shape_labels = [d.get('shape_label') for _, d in nodes_with_data]
     logging.info(f"[add_commonsense_edges] All node shape_labels: {all_shape_labels}")
     edge_count = 0
