@@ -66,13 +66,7 @@ class MotifMiner:
             }
             motif_nodes.append(motif_node)
         logging.info(f"MotifMiner.cluster_motifs: motif_dict keys={list(motif_dict.keys())}")
-        # If caller expects only motif_dict, return motif_dict
-        import inspect
-        stack = inspect.stack()
-        # If called from build_scene_graphs or similar, return motif_dict only
-        if len(stack) > 1 and 'build_scene_graphs' in stack[1].filename:
-            return motif_dict
-        # Otherwise, return both motif_dict and motif_nodes
+        # Always return both motif_dict and motif_nodes for downstream motif construction
         return motif_dict, motif_nodes
 
     def create_motif_supernode(self, member_nodes, motif_label, motif_id):

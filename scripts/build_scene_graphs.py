@@ -719,75 +719,13 @@ async def _process_single_problem(
     motif_nodes = []
     motif_edges = []
     if getattr(args, 'use_motifs', False):
-        motifs = MotifMiner().cluster_motifs(objects)
-        for motif_type, node_ids in motifs.items():
-            supernode_id = f"motif_{motif_type}_{problem_id}"
-            member_nodes = [obj for obj in objects if obj['id'] in node_ids]
-            member_centroids = [obj.get('centroid') for obj in member_nodes if 'centroid' in obj]
-            logging.info(f"Motif supernode {supernode_id}: member node ids={node_ids}, member centroids={member_centroids}")
-            # Log which attributes are present in member nodes
-            for i, obj in enumerate(member_nodes):
-                logging.info(f"Motif supernode {supernode_id}: member {i} id={obj['id']} keys={list(obj.keys())}")
-            # Log which attributes are present in the supernode
-            # Compute and assign geometry attributes from member nodes
-            motif_node = {'id': supernode_id, 'shape_label': motif_type, 'is_motif': True}
-            # Aggregate centroids
-            centroids = [obj.get('centroid') for obj in member_nodes if 'centroid' in obj and obj.get('centroid') is not None]
-            if centroids:
-                motif_node['centroid'] = list(np.mean(np.array(centroids), axis=0))
-            # Aggregate area
-            areas = [obj.get('area', 0.0) for obj in member_nodes if 'area' in obj]
-            motif_node['area'] = float(np.sum(areas)) if areas else 0.0
-            # Aggregate aspect_ratio (mean)
-            aspects = [obj.get('aspect_ratio', 1.0) for obj in member_nodes if 'aspect_ratio' in obj]
-            motif_node['aspect_ratio'] = float(np.mean(aspects)) if aspects else 1.0
-            # Aggregate orientation (mean)
-            orientations = [obj.get('orientation', 0.0) for obj in member_nodes if 'orientation' in obj]
-            motif_node['orientation'] = float(np.mean(orientations)) if orientations else 0.0
-            # Aggregate perimeter (sum)
-            perimeters = [obj.get('perimeter', 0.0) for obj in member_nodes if 'perimeter' in obj]
-            motif_node['perimeter'] = float(np.sum(perimeters)) if perimeters else 0.0
-            # Aggregate bbox (mean of corners)
-            bboxes = [obj.get('bbox') for obj in member_nodes if 'bbox' in obj and obj.get('bbox') is not None]
-            if bboxes:
-                motif_node['bbox'] = list(np.mean(np.array(bboxes), axis=0))
-            # Aggregate inertia (mean)
-            inertias = [obj.get('inertia', 0.0) for obj in member_nodes if 'inertia' in obj]
-            motif_node['inertia'] = float(np.mean(inertias)) if inertias else 0.0
-            # Aggregate convexity (mean)
-            convexities = [obj.get('convexity', 0.0) for obj in member_nodes if 'convexity' in obj]
-            motif_node['convexity'] = float(np.mean(convexities)) if convexities else 0.0
-            # Aggregate compactness (mean)
-            compactnesses = [obj.get('compactness', 0.0) for obj in member_nodes if 'compactness' in obj]
-            motif_node['compactness'] = float(np.mean(compactnesses)) if compactnesses else 0.0
-            # Aggregate num_segments (sum)
-            num_segments = [obj.get('num_segments', 0) for obj in member_nodes if 'num_segments' in obj]
-            motif_node['num_segments'] = int(np.sum(num_segments)) if num_segments else 0
-            # Aggregate num_junctions (sum)
-            num_junctions = [obj.get('num_junctions', 0) for obj in member_nodes if 'num_junctions' in obj]
-            motif_node['num_junctions'] = int(np.sum(num_junctions)) if num_junctions else 0
-            # Aggregate curvature (mean)
-            curvatures = [obj.get('curvature', 0.0) for obj in member_nodes if 'curvature' in obj]
-            motif_node['curvature'] = float(np.mean(curvatures)) if curvatures else 0.0
-            # Aggregate skeleton_length (sum)
-            skeleton_lengths = [obj.get('skeleton_length', 0.0) for obj in member_nodes if 'skeleton_length' in obj]
-            motif_node['skeleton_length'] = float(np.sum(skeleton_lengths)) if skeleton_lengths else 0.0
-            # Aggregate vl_embed (mean)
-            vl_embeds = [obj.get('vl_embed') for obj in member_nodes if 'vl_embed' in obj and obj.get('vl_embed') is not None]
-            if vl_embeds:
-                motif_node['vl_embed'] = list(np.mean(np.array(vl_embeds), axis=0))
-            # symmetry_axis: aggregate from member nodes
-            symmetry_axes = [obj.get('symmetry_axis', 0.0) for obj in member_nodes]
-            motif_node['symmetry_axis'] = float(np.mean(symmetry_axes)) if symmetry_axes else 0.0
-
-            # motif_score: use number of members as proxy for confidence
-            motif_node['motif_score'] = float(len(member_nodes))
-            # Ensure gnn_score is present for GNN input
-            motif_node['gnn_score'] = 0.0
-
-            logging.info(f"Motif supernode {supernode_id}: initial keys={list(motif_node.keys())}")
-            motif_nodes.append(motif_node)
-            for nid in node_ids:
+        motif_dict, motif_nodes = MotifMiner().cluster_motifs(objects)
+        for motif_node in motif_nodes:
+            supernode_id = motif_node['id']
+            member_nodes = [obj for obj in objects if obj['id'] in motif_node['member_nodes']]
+            # Optionally, update motif_node with aggregated features if needed
+            # Add part_of_motif edges
+            for nid in motif_node['member_nodes']:
                 motif_edges.append((nid, supernode_id, {'predicate': 'part_of', 'source': 'motif'}))
     merged_record['geometry'] = objects + motif_nodes
     # Compute mean VL embedding and assign clip_sim/vl_sim for all nodes
