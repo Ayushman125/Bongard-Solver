@@ -102,8 +102,22 @@ def build_graph_unvalidated(record, predicates, top_k, extra_edges=None, kb=None
         if not isinstance(node, dict):
             logging.error(f"build_graph_unvalidated: Skipping non-dict node at index {idx}: type={type(node)}, value={repr(node)}")
             continue
+        # Motif handling: assign geometry and string label if missing
+        if node.get('is_motif'):
+            if node.get('vertices') is None or len(node.get('vertices')) < 3:
+                # Try to aggregate geometry from members
+                from src.scene_graphs_building.motif_miner import MotifMiner
+                member_nodes = [n for n in geometry if n['id'] in node.get('members', [])]
+                node['vertices'] = MotifMiner().aggregate_motif_vertices(member_nodes)
+            if isinstance(node.get('shape_label'), int):
+                from src.scene_graphs_building.motif_miner import MotifMiner
+                node['shape_label'] = MotifMiner.MOTIF_LABELS.get(node['shape_label'], f"motif_{node['shape_label']}")
         try:
-            compute_physics_attributes(node)
+            # Bypass strict repair for motifs
+            if node.get('is_motif'):
+                pass
+            else:
+                compute_physics_attributes(node)
         except Exception as e:
             import traceback
             logging.error(f"build_graph_unvalidated: Exception in compute_physics_attributes for node at index {idx}: {e}\n{traceback.format_exc()}")
@@ -115,6 +129,12 @@ def build_graph_unvalidated(record, predicates, top_k, extra_edges=None, kb=None
             import traceback
             logging.error(f"build_graph_unvalidated: Exception adding node at index {idx}: {e}\n{traceback.format_exc()}")
             continue
+    # Normalize features for motif and regular nodes separately
+    try:
+        from src.scene_graphs_building.motif_miner import MotifMiner
+        MotifMiner.normalize_features([d for _, d in G.nodes(data=True)])
+    except Exception as e:
+        logging.warning(f"Motif feature normalization failed: {e}")
     add_predicate_edges(G, predicates)
     add_commonsense_edges(G, top_k, kb=kb)
     # Add extra edges if provided (e.g., CLIP/vision-language edges)

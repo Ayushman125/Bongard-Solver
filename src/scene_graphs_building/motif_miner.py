@@ -32,10 +32,76 @@ class MotifMiner:
         motif_dict = {}
         for obj, label in zip(objects, clustering.labels_):
             obj['motif_label'] = int(label)
+            # Always assign string shape_label for KB lookups and semantic logic
             obj['shape_label'] = self.MOTIF_LABELS.get(int(label), f"motif_{label}")
             motif_dict.setdefault(int(label), []).append(obj['id'])
         logging.info(f"MotifMiner.cluster_motifs: motif_dict keys={list(motif_dict.keys())}")
         return motif_dict
+
+    def create_motif_supernode(self, member_nodes, motif_label, motif_id):
+        """
+        Create a motif super-node with valid geometry and semantic labels.
+        Assigns 'vertices', 'shape_label', 'motif_label', and aggregates features.
+        """
+        # Aggregate geometry
+        vertices = self.aggregate_motif_vertices(member_nodes)
+        shape_label = self.MOTIF_LABELS.get(motif_label, f"motif_{motif_label}")
+        # Aggregate area, score, and embeddings if available
+        area = sum([n.get('area', 0) for n in member_nodes])
+        motif_score = sum([n.get('motif_score', 0) for n in member_nodes]) / max(1, len(member_nodes))
+        vl_embed = np.mean([n.get('vl_embed', np.zeros(512)) for n in member_nodes], axis=0)
+        # Compose super-node
+        supernode = {
+            'id': motif_id,
+            'is_motif': True,
+            'vertices': vertices,
+            'shape_label': shape_label,
+            'motif_label': motif_label,
+            'area': area,
+            'motif_score': motif_score,
+            'vl_embed': vl_embed,
+            'members': [n['id'] for n in member_nodes],
+        }
+        logging.info(f"MotifMiner.create_motif_supernode: Created motif supernode {motif_id} with shape_label={shape_label} and {len(vertices)} vertices.")
+        return supernode
+
+    @staticmethod
+    def add_motif_edges(G, motif_supernode, member_nodes):
+        """
+        Add motif-aware edges to the graph:
+        - part_of_motif: from member to motif supernode
+        - motif_similarity: between motifs of same type
+        """
+        motif_id = motif_supernode['id']
+        # part_of_motif edges
+        for n in member_nodes:
+            G.add_edge(n['id'], motif_id, predicate='part_of_motif', source='motif')
+        # motif_similarity edges (between motifs of same type)
+        for other_id, other_data in G.nodes(data=True):
+            if other_id == motif_id:
+                continue
+            if other_data.get('is_motif') and other_data.get('shape_label') == motif_supernode['shape_label']:
+                G.add_edge(motif_id, other_id, predicate='motif_similarity', source='motif')
+
+    @staticmethod
+    def normalize_features(nodes):
+        """
+        Normalize motif and regular node features separately to avoid scale mismatch.
+        """
+        motif_nodes = [n for n in nodes if n.get('is_motif')]
+        regular_nodes = [n for n in nodes if not n.get('is_motif')]
+        # Example normalization: area
+        if motif_nodes:
+            motif_areas = np.array([n.get('area', 0) for n in motif_nodes])
+            motif_area_mean = motif_areas.mean() if len(motif_areas) else 1.0
+            for n in motif_nodes:
+                n['area_norm'] = n.get('area', 0) / motif_area_mean
+        if regular_nodes:
+            reg_areas = np.array([n.get('area', 0) for n in regular_nodes])
+            reg_area_mean = reg_areas.mean() if len(reg_areas) else 1.0
+            for n in regular_nodes:
+                n['area_norm'] = n.get('area', 0) / reg_area_mean
+        # Add more normalization as needed (motif_score, vl_embed, etc.)
 
     def aggregate_motif_vertices(self, member_nodes):
         """
