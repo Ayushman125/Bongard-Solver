@@ -64,20 +64,35 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
                         return None
                     return SHAPE_MAP.get(lbl, lbl)
                 node_labels = {}
+                node_colors = []
                 for n in G.nodes():
                     node = G.nodes[n]
                     raw = node.get('shape_label', n)
                     norm = normalize_shape_label(raw)
                     label = norm if norm else str(raw)
                     img_name = get_img_name(node)
+                    gnn_score = node.get('gnn_score')
+                    if node.get('is_motif'):
+                        label = f"[motif]\n{label}"
+                        node_colors.append('gold')
+                    elif gnn_score is not None:
+                        label = f"{label}\nGNN:{gnn_score:.2f}"
+                        node_colors.append('lightgreen')
+                    else:
+                        node_colors.append('skyblue')
                     if img_name:
                         node_labels[n] = f"{label}\n{img_name}"
                     else:
                         node_labels[n] = label
-                # Draw all edges and group all predicates for each (u,v) as comma-separated string
+                # Draw edges: color VLM edges red, motif edges orange, others gray
                 edges_to_draw = list(G.edges(data=True))
-                nx.draw_networkx_nodes(G, pos, node_color='skyblue', node_size=700)
-                nx.draw_networkx_edges(G, pos, edgelist=[(u, v) for u, v, d in edges_to_draw], arrows=True, arrowstyle='-|>', width=1.5, alpha=0.7)
+                vl_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate')=='vl_sim']
+                motif_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate')=='part_of']
+                other_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate') not in ('vl_sim','part_of')]
+                nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=700)
+                nx.draw_networkx_edges(G, pos, edgelist=other_edges, arrows=True, arrowstyle='-|>', width=1.5, alpha=0.7, edge_color='gray')
+                nx.draw_networkx_edges(G, pos, edgelist=vl_edges, arrows=True, arrowstyle='-|>', width=2.5, alpha=0.8, edge_color='red')
+                nx.draw_networkx_edges(G, pos, edgelist=motif_edges, arrows=True, arrowstyle='-|>', width=2.5, alpha=0.8, edge_color='orange')
                 nx.draw_networkx_labels(G, pos, labels=node_labels, font_size=10, font_color='black')
                 from collections import defaultdict
                 combined = defaultdict(list)
@@ -87,6 +102,10 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
                         combined[(u, v)].append(pred)
                 edge_labels = { (u, v): ", ".join(sorted(set(preds))) for (u, v), preds in combined.items() }
                 nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_color='gray', font_size=9)
+                # Annotate rules if present
+                rules = scene_graph.get('rules') if scene_graph else None
+                if rules is not None:
+                    plt.gcf().text(0.01, 0.01, f"Rules: {getattr(rules, 'tree_', None)}", fontsize=8, color='purple', ha='left', va='bottom')
                 plt.title(f"Scene Graph: {base_name}")
                 plt.axis('off')
             else:

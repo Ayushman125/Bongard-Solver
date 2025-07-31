@@ -638,11 +638,18 @@ async def _process_single_problem(
     merged_record = {'objects': []}
     representative_image_path = None
 
+    from src.scene_graphs_building.clip_embedder import CLIPEmbedder
+    from src.scene_graphs_building.predicate_miner import PredicateMiner
+    from src.scene_graphs_building.motif_miner import MotifMiner
+    from src.reasoner.gnn_reasoner import GNNReasoner
+    from integration.rule_inducer import RuleInducer
+    import numpy as np
+    # 1. Build objects with enriched features
+    clip_embedder = CLIPEmbedder()
+    objects = []
     for idx, rec in enumerate(problem_records):
         if representative_image_path is None:
             representative_image_path = remap_path(rec.get('image_path', rec.get('mask_path', '')))
-
-        # Use the geometry from derived_labels (rec['vertices'] or rec['geometry'])
         verts = rec.get('vertices') or rec.get('geometry') or []
         obj = {
             'id': f"{problem_id}_{idx}",
@@ -655,19 +662,61 @@ async def _process_single_problem(
             'area': rec.get('area', 1.0),
             'aspect_ratio': rec.get('aspect_ratio', 1.0),
             'orientation': rec.get('orientation', 0.0),
-            # Add more fields as needed
         }
         compute_physics_attributes(obj)
-        merged_record['objects'].append(obj)
-
-    # 1b. Motif mining (add motif labels)
-    motif_miner = MotifMiner()
-    merged_record['objects'] = motif_miner.cluster_motifs(merged_record['objects'])
-
-    # 1c. Dynamic predicate mining
+        # Add CLIP embedding
+        if getattr(args, 'use_vl', False) and obj.get('image_path'):
+            try:
+                from src.scene_graphs_building.data_loading import robust_image_open
+                img = robust_image_open(obj['image_path'])
+                obj['vl_embed'] = clip_embedder.embed_image(img)
+            except Exception as e:
+                obj['vl_embed'] = np.zeros(512)
+        objects.append(obj)
+    merged_record['objects'] = objects
+    # 2. Motif mining and super-nodes
+    motif_nodes = []
+    motif_edges = []
+    if getattr(args, 'use_motifs', False):
+        motifs = MotifMiner().cluster_motifs(objects)
+        for motif_type, node_ids in motifs.items():
+            supernode_id = f"motif_{motif_type}_{problem_id}"
+            motif_nodes.append({'id': supernode_id, 'shape_label': motif_type, 'is_motif': True})
+            for nid in node_ids:
+                motif_edges.append((nid, supernode_id, {'predicate': 'part_of', 'source': 'motif'}))
+    merged_record['geometry'] = objects + motif_nodes
+    # 3. Adaptive predicate mining
     pred_miner = PredicateMiner()
-    learned_thresholds = pred_miner.fit(merged_record['objects'])
-    dynamic_predicates = pred_miner.build_edge_fn()
+    learned_thresholds = pred_miner.fit(objects)
+    dynamic_predicates = pred_miner.fit(objects)
+    # 4. VLM edges
+    vl_edges = []
+    if getattr(args, 'use_vl', False):
+        vl_edges = clip_embedder.contrastive_edges(objects)
+    # 5. Build graph
+    base_graph_nx = build_graph_unvalidated(merged_record, dynamic_predicates, TOP_K, extra_edges=vl_edges+motif_edges, kb=kb)
+    # 6. GNN refinement
+    if getattr(args, 'use_gnn', False):
+        gnn = GNNReasoner(in_dim=10)
+        base_graph_nx = gnn.predict(base_graph_nx)
+    # 7. Rule induction
+    rules = RuleInducer().induce(base_graph_nx)
+    # 8. Global graph metrics
+    base_graph_nx.graph['motif_diversity'] = len(set([d.get('shape_label') for n, d in base_graph_nx.nodes(data=True) if d.get('is_motif')]))
+    from scipy.stats import entropy
+    pred_counts = [edata.get('predicate') for _,_,edata in base_graph_nx.edges(data=True)]
+    _, counts = np.unique(pred_counts, return_counts=True)
+    base_graph_nx.graph['pred_entropy'] = float(entropy(counts)) if len(counts)>0 else 0.0
+    # 9. Save feedback images with all features visualized
+    if feedback_dir and representative_image_path:
+        try:
+            from src.scene_graphs_building.data_loading import robust_image_open
+            img = robust_image_open(representative_image_path)
+            from src.scene_graphs_building.visualization import save_feedback_images
+            save_feedback_images(img, None, problem_id, feedback_dir, scene_graph={'graph': base_graph_nx, 'rules': rules})
+        except Exception as e:
+            logging.warning(f"Failed to save feedback images for problem {problem_id} ({representative_image_path}): {e}")
+    return {'scene_graph': base_graph_nx, 'rules': rules}
 
 
     # Debug: log merged object count and details
