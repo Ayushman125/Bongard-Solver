@@ -312,3 +312,102 @@ class RecallAtKEvaluator:
             predicate_recall=agg_predicate_recall,
             overall_statistics=agg_stats
         )
+# --- Diversity KPI Logger ---
+def compute_pc_error(graphs):
+    """Computes Physical Consistency error (e.g., overlapping solids)."""
+    error_count = 0
+    total_graphs = len(graphs)
+    if total_graphs == 0: return 0.0
+
+    for G_data in graphs: # G_data is now a dict containing 'scene_graph' and other info
+        # Extract the NetworkX graph from the scene_graph dict
+        G = G_data.get('scene_graph', {}).get('graph')
+        if not G:
+            logging.warning(f"No NetworkX graph found for problem {G_data.get('problem_id')}. Skipping PC error calculation.")
+            continue
+
+        nodes = list(G.nodes(data=True))
+        polygons = []
+        for _, data in nodes:
+            if data.get('vertices') and len(data['vertices']) >= 3:
+                try:
+                    polygons.append(Polygon(data['vertices']))
+                except Exception as e:
+                    logging.warning(f"Invalid polygon vertices for node {data.get('id')}: {e}")
+                    continue
+
+        has_overlap = False
+        for i in range(len(polygons)):
+            for j in range(i + 1, len(polygons)):
+                try:
+                    # Check for actual intersection, not just touching
+                    if polygons[i].intersects(polygons[j]) and not polygons[i].touches(polygons[j]):
+                        has_overlap = True
+                        break
+                except Exception as e:
+                    logging.warning(f"Error checking polygon overlap: {e}")
+            if has_overlap:
+                break
+        if has_overlap:
+            error_count += 1
+
+    return error_count / total_graphs
+
+def log_diversity_metrics(graphs, out_path='logs/graph_diversity.jsonl'):
+    """Computes and logs coverage, entropy, and physical consistency."""
+    if not graphs: return
+
+    # Collect unique triples (subject, predicate, object) from problem-level graphs
+    unique_triples = set()
+    predicate_counts = Counter()
+    total_possible_triples = 0
+
+    for G_data in graphs:
+        G = G_data.get('scene_graph', {}).get('graph')
+        if not G:
+            continue
+
+        # Only count for graphs with more than one node to avoid division by zero
+        if len(G.nodes) > 1:
+            total_possible_triples += len(G.nodes) * (len(G.nodes) - 1) # N*(N-1) for directed pairs
+
+        for u, v, data in G.edges(data=True):
+            unique_triples.add((u, data.get('predicate', 'unknown'), v))
+            predicate_counts[data.get('predicate', 'unknown')] += 1
+
+    C = len(unique_triples) / total_possible_triples if total_possible_triples > 0 else 0
+    H = stats.entropy(list(predicate_counts.values()), base=2) if predicate_counts else 0
+    pc_error = compute_pc_error(graphs) # This function already updated to handle new graph structure
+
+    metrics = {'coverage': C, 'entropy': H, 'pc_error': pc_error}
+
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    with open(out_path, 'a') as f:
+        f.write(json.dumps(metrics) + "\n")
+
+    logging.info(f"Diversity Metrics: Coverage={C:.3f}, Entropy={H:.3f} bits, PC-Error={pc_error:.3f}")
+
+def mask_quality_stats(image, mask):
+    """Calculates mask quality statistics like Edge IoU, precision, and recall."""
+    if image.ndim == 3:
+        image_gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    else:
+        image_gray = image
+    mask_bin = (mask > 0).astype(np.uint8)
+    edges_img = cv2.Canny(image_gray.astype(np.uint8), 50, 150)
+    edges_mask = cv2.Canny(mask.astype(np.uint8), 50, 150)
+    edges_img_flat = (edges_img > 0).flatten()
+    edges_mask_flat = (edges_mask > 0).flatten()
+    intersection = np.logical_and(edges_img_flat, edges_mask_flat).sum()
+    union = np.logical_or(edges_img_flat, edges_mask_flat).sum()
+    edge_iou = intersection / (union + 1e-6) if union > 0 else 1.0
+    precision = intersection / (edges_mask_flat.sum() + 1e-6) if edges_mask_flat.sum() > 0 else 1.0
+    recall = intersection / (edges_img_flat.sum() + 1e-6) if edges_img_flat.sum() > 0 else 1.0
+    clinically_acceptable = (edge_iou > 0.5) or (precision > 0.7 and recall > 0.7)
+    stats = {
+        'edge_iou': edge_iou,
+        'edge_precision': precision,
+        'edge_recall': recall,
+        'clinically_acceptable': clinically_acceptable
+    }
+    return stats

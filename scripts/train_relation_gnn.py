@@ -5,6 +5,8 @@ import numpy as np
 from torch_geometric.nn import GCNConv
 from torch_geometric.data import Data, DataLoader
 import torch.nn as nn
+import matplotlib
+matplotlib.use('Agg')
 
 # Fallback for TORCH_GEOMETRIC_AVAILABLE if not defined elsewhere
 try:
