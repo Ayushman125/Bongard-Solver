@@ -77,6 +77,7 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
             if node.get('is_motif'):
                 label = f"[motif]\n{label}"
                 node_colors.append('gold')
+                logging.info(f"Motif node {n} attributes: {sorted(node.keys())}")
             elif gnn_score is not None:
                 label = f"{label}\nGNN:{gnn_score:.2f}"
                 node_colors.append('lightgreen')
@@ -90,12 +91,14 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
         edges_to_draw = list(G.edges(data=True))
         vl_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate')=='vl_sim']
         motif_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate')=='part_of']
-        other_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate') not in ('vl_sim','part_of')]
+        spatial_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate') in ('near','para','aspect_sim')]
+        other_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate') not in ('vl_sim','part_of','near','para','aspect_sim')]
         import networkx as nx
         nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=700)
         nx.draw_networkx_edges(G, pos, edgelist=other_edges, arrows=True, arrowstyle='-|>', width=1.5, alpha=0.7, edge_color='gray')
         nx.draw_networkx_edges(G, pos, edgelist=vl_edges, arrows=True, arrowstyle='-|>', width=2.5, alpha=0.8, edge_color='red')
         nx.draw_networkx_edges(G, pos, edgelist=motif_edges, arrows=True, arrowstyle='-|>', width=2.5, alpha=0.8, edge_color='orange')
+        nx.draw_networkx_edges(G, pos, edgelist=spatial_edges, arrows=True, arrowstyle='-|>', width=2.5, alpha=0.8, edge_color='green')
         nx.draw_networkx_labels(G, pos, labels=node_labels, font_size=10, font_color='black')
         from collections import defaultdict
         combined = defaultdict(list)

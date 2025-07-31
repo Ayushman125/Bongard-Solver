@@ -109,8 +109,9 @@ class MotifMiner:
             'area': area,
             'motif_score': motif_score,
             'vl_embed': vl_embed,
-            **physics_attrs
         }
+        # Merge all computed physics attributes into supernode
+        supernode.update(physics_attrs)
         logging.debug(f"MotifMiner.create_motif_supernode: Supernode {motif_id} keys: {list(supernode.keys())}")
         logging.info(f"MotifMiner.create_motif_supernode: Created motif supernode {motif_id} with shape_label={supernode['shape_label']} and {len(vertices)} vertices. Physics keys: {list(physics_attrs.keys())}")
         return supernode
