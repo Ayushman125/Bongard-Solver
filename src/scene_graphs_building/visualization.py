@@ -77,6 +77,10 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
             if node.get('is_motif'):
                 label = f"[motif]\n{label}"
                 node_colors.append('gold')
+                missing = [k for k in ['centroid','curvature','skeleton_length','symmetry_axis','gnn_score','clip_sim','motif_score','vl_sim'] if k not in node or node[k] is None]
+                if missing:
+                    logging.warning(f"Motif node {n} missing attributes: {missing}")
+                    label += "\n[MISSING]"
                 logging.info(f"Motif node {n} attributes: {sorted(node.keys())}")
             elif gnn_score is not None:
                 label = f"{label}\nGNN:{gnn_score:.2f}"
