@@ -16,22 +16,21 @@ def add_predicate_edges(G, predicates):
     node_list = list(G.nodes(data=True))
     edge_count = 0
     # --- 1. Programmatic semantics: next_action, turns_toward ---
-    # Group nodes by OneStrokeShape if available (assume 'action_index' and 'stroke_type' present)
-    nodes_by_action = {}
+    # Add programmatic edges for LOGO action programs (if present)
+    # For each parent shape, connect strokes in action order
+    parent_strokes = {}
     for u, data_u in node_list:
-        idx = data_u.get('action_index', None)
-        if 'action_index' in data_u and idx is not None:
-            nodes_by_action[(data_u.get('parent_shape_id', None), idx)] = (u, data_u)
-    # Add next_action and turns_toward edges
-    for (parent_id, idx), (u, data_u) in nodes_by_action.items():
-        if idx is None:
-            continue
-        next_key = (parent_id, idx+1)
-        if next_key in nodes_by_action:
-            v, data_v = nodes_by_action[next_key]
-            G.add_edge(u, v, predicate='next_action', source='program')
-            if data_v.get('turn_direction') is not None:
-                G.add_edge(u, v, predicate=f'turns_{data_v["turn_direction"]}', angle=data_v.get('turn_angle'), source='program')
+        parent_id = data_u.get('parent_shape_id', None)
+        if parent_id is not None:
+            parent_strokes.setdefault(parent_id, []).append((data_u.get('action_index', 0), u, data_u))
+    for parent_id, strokes in parent_strokes.items():
+        strokes_sorted = sorted(strokes, key=lambda x: x[0])
+        for i in range(len(strokes_sorted) - 1):
+            idx1, u1, data1 = strokes_sorted[i]
+            idx2, u2, data2 = strokes_sorted[i+1]
+            G.add_edge(u1, u2, predicate='next_action', source='program')
+            if data2.get('turn_direction') is not None:
+                G.add_edge(u1, u2, predicate=f'turns_{data2["turn_direction"]}', angle=data2.get('turn_angle'), source='program')
 
     # --- 2. Topological & connectivity relations ---
     # Endpoint adjacency and intersection
@@ -81,26 +80,26 @@ def add_predicate_edges(G, predicates):
                 if count > 0:
                     G.add_edge(u, v, predicate='intersects', count=count, source='topology')
 
-    # --- 3. Stroke-level geometric predicates ---
+    # --- 3. Line-specific geometry predicates ---
     for i, (u, data_u) in enumerate(node_list):
         for j, (v, data_v) in enumerate(node_list):
             if i == j:
                 continue
-            # Only for lines/polylines
+            # Only for lines
             if data_u.get('object_type') == 'line' and data_v.get('object_type') == 'line':
-                # longer_than
-                if data_u.get('length') is not None and data_v.get('length') is not None:
-                    if data_u['length'] > data_v['length']:
-                        G.add_edge(u, v, predicate='longer_than', source='geometry')
                 # parallel
                 if data_u.get('orientation') is not None and data_v.get('orientation') is not None:
                     if abs(data_u['orientation'] - data_v['orientation']) < 12.0:
                         G.add_edge(u, v, predicate='parallel', source='geometry')
-                # collinear (endpoints nearly aligned)
+                # longer_than
+                if data_u.get('length') is not None and data_v.get('length') is not None:
+                    if data_u['length'] > data_v['length']:
+                        G.add_edge(u, v, predicate='longer_than', source='geometry')
+                # near (centroid distance)
                 if data_u.get('centroid') is not None and data_v.get('centroid') is not None:
                     c1, c2 = np.array(data_u['centroid']), np.array(data_v['centroid'])
-                    if np.linalg.norm(c1 - c2) < 6.0:
-                        G.add_edge(u, v, predicate='collinear', source='geometry')
+                    if np.linalg.norm(c1 - c2) < 32.0:
+                        G.add_edge(u, v, predicate='near', source='geometry')
                 # angle_between
                 if data_u.get('orientation') is not None and data_v.get('orientation') is not None:
                     angle = abs(data_u['orientation'] - data_v['orientation'])
@@ -129,7 +128,8 @@ def add_predicate_edges(G, predicates):
                         continue
                 # Near/para require centroid/orientation
                 if pred in ['near', 'para']:
-                    if not (data_u.get('feature_valid', {}).get('centroid_valid', False) and data_v.get('feature_valid', {}).get('centroid_valid', False)):
+                    # Allow lines and points to participate if geometry_valid is True
+                    if not (data_u.get('geometry_valid', False) and data_v.get('geometry_valid', False)):
                         continue
                     c1 = safe_get(data_u, 'centroid')
                     c2 = safe_get(data_v, 'centroid')
@@ -175,9 +175,17 @@ def add_predicate_edges(G, predicates):
         logging.warning(f"Could not compute clustering coefficient: {e}. Setting to 0.0")
         G.graph['clustering_coeff'] = 0.0
 
-    # --- Add global predicates for rule induction ---
+    # --- Map kb_concept for all nodes using COMMONSENSE_LABEL_MAP ---
+    for _, data in G.nodes(data=True):
+        shape_label = data.get('shape_label')
+        if shape_label:
+            data['kb_concept'] = COMMONSENSE_LABEL_MAP.get(shape_label, shape_label)
+
+    # --- Add global predicates for rule induction (restore nodes/num_lines logic) ---
     nodes = [d for _, d in G.nodes(data=True)]
     num_lines = len([n for n in nodes if n.get('curvature_type') == 'line'])
+    G.graph['count_lines'] = num_lines
+    num_junctions = sum(1 for n in nodes if n.get('junction_degree', 0) >= 3)
     G.graph['count_lines'] = num_lines
     num_junctions = sum(1 for n in nodes if n.get('junction_degree', 0) >= 3)
     G.graph['junction_count'] = num_junctions

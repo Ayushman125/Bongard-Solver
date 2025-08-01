@@ -48,10 +48,8 @@ def extract_clean_contours(mask, min_area=10, simplify_epsilon=2.0):
 
 # --- Geometry validity logic update ---
 def set_geometry_valid(obj):
-    # Loosen geometry_valid: allow lines as valid geometry
-    if obj.get('object_type') == 'polygon' and obj.get('is_closed', False):
-        obj['geometry_valid'] = True
-    elif obj.get('object_type') == 'line':
+    # Broaden geometry_valid: allow polygons, lines, and points as valid geometry
+    if obj.get('object_type') in ('polygon', 'line', 'point'):
         obj['geometry_valid'] = True
     else:
         obj['geometry_valid'] = False
@@ -142,21 +140,26 @@ def compute_physics_attributes(node_data):
         node_data['curvature_type'] = 'arc'
     else:
         node_data['curvature_type'] = None
-    # --- Length and orientation for all strokes ---
+    # --- Length, orientation, centroid for all strokes (lines, polygons, etc.) ---
     if vertices and len(vertices) >= 2:
         arr = np.array(vertices)
         node_data['length'] = float(np.sum(np.linalg.norm(arr[1:] - arr[:-1], axis=1)))
-        # Principal direction via PCA for orientation
-        try:
-            cov_matrix = np.cov(arr.T)
-            if cov_matrix.shape == (2, 2):
-                eigenvalues, eigenvectors = np.linalg.eig(cov_matrix)
-                major_axis_idx = np.argmax(eigenvalues)
-                principal_axis = eigenvectors[:, major_axis_idx]
-                orientation = float(np.degrees(np.arctan2(principal_axis[1], principal_axis[0]))) % 360
-                node_data['orientation'] = orientation
-        except Exception as e:
-            node_data['orientation'] = None
+        # For lines, orientation is from first to last point
+        if node_data.get('object_type') == 'line':
+            node_data['orientation'] = float(np.degrees(np.arctan2(arr[-1][1] - arr[0][1], arr[-1][0] - arr[0][0])))
+            node_data['centroid'] = arr.mean(axis=0).tolist()
+        else:
+            # Principal direction via PCA for orientation
+            try:
+                cov_matrix = np.cov(arr.T)
+                if cov_matrix.shape == (2, 2):
+                    eigenvalues, eigenvectors = np.linalg.eig(cov_matrix)
+                    major_axis_idx = np.argmax(eigenvalues)
+                    principal_axis = eigenvectors[:, major_axis_idx]
+                    orientation = float(np.degrees(np.arctan2(principal_axis[1], principal_axis[0]))) % 360
+                    node_data['orientation'] = orientation
+            except Exception as e:
+                node_data['orientation'] = None
     else:
         node_data['length'] = None
         node_data['orientation'] = None

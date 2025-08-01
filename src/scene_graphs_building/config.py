@@ -45,6 +45,13 @@ SHAPE_MAP = {
 
 # Commonsense label mapping for KB edge creation
 COMMONSENSE_LABEL_MAP = {
+    "line": "line",
+    "circle": "circle",
+    "arc": "arc",
+    "triangle": "triangle",
+    "point": "point",
+    "dot": "point",
+    "quad": "quadrilateral",
     "cluster": "group",
     "ring": "circle",
     "chain": "sequence",
@@ -52,13 +59,8 @@ COMMONSENSE_LABEL_MAP = {
     "star": "star",
     "rectangle": "rectangle",
     "arrow": "arrow",
-    "arc": "arc",
-    "triangle": "triangle",
     "polygon": "polygon",
     "curve": "curve",
-    "point": "point",
-    "line": "line",
-    "circle": "circle",
     # Extend as you add more motif/shape computing
 }
 
