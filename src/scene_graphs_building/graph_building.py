@@ -1,6 +1,8 @@
+
 import networkx as nx
 import logging
 import numpy as np
+from itertools import combinations
 from src.scene_graphs_building.feature_extraction import compute_physics_attributes
 from src.scene_graphs_building.config import CONCEPTNET_KEEP_RELS, SHAPE_MAP, COMMONSENSE_LABEL_MAP
 
@@ -13,6 +15,95 @@ def add_predicate_edges(G, predicates):
 
     node_list = list(G.nodes(data=True))
     edge_count = 0
+    # --- 1. Programmatic semantics: next_action, turns_toward ---
+    # Group nodes by OneStrokeShape if available (assume 'action_index' and 'stroke_type' present)
+    nodes_by_action = {}
+    for u, data_u in node_list:
+        if 'action_index' in data_u:
+            nodes_by_action[(data_u.get('parent_shape_id', None), data_u['action_index'])] = (u, data_u)
+    # Add next_action and turns_toward edges
+    for (parent_id, idx), (u, data_u) in nodes_by_action.items():
+        next_key = (parent_id, idx+1)
+        if next_key in nodes_by_action:
+            v, data_v = nodes_by_action[next_key]
+            G.add_edge(u, v, predicate='next_action', source='program')
+            if data_v.get('turn_direction') is not None:
+                G.add_edge(u, v, predicate=f'turns_{data_v["turn_direction"]}', angle=data_v.get('turn_angle'), source='program')
+
+    # --- 2. Topological & connectivity relations ---
+    # Endpoint adjacency and intersection
+    from collections import defaultdict
+    endpoints = defaultdict(list)
+    for u, data_u in node_list:
+        verts = data_u.get('vertices', [])
+        if verts and len(verts) >= 2:
+            endpoints[tuple(np.round(verts[0], 2))].append(u)
+            endpoints[tuple(np.round(verts[-1], 2))].append(u)
+    # Add adjacent_endpoints edges
+    for coord, stroke_ids in endpoints.items():
+        for i, j in combinations(stroke_ids, 2):
+            G.add_edge(i, j, predicate='adjacent_endpoints', source='topology')
+    # Compute junction_degree
+    for coord, stroke_ids in endpoints.items():
+        if len(stroke_ids) >= 3:
+            for sid in stroke_ids:
+                if 'junction_degree' not in G.nodes[sid]:
+                    G.nodes[sid]['junction_degree'] = 0
+                G.nodes[sid]['junction_degree'] = max(G.nodes[sid]['junction_degree'], len(stroke_ids))
+    # Intersection count (segment-segment)
+    def count_segment_intersections(verts1, verts2):
+        # Discretize both polylines into segments
+        def segments(verts):
+            return list(zip(verts[:-1], verts[1:]))
+        segs1 = segments(verts1)
+        segs2 = segments(verts2)
+        def seg_intersect(a, b, c, d):
+            # Return True if segments ab and cd intersect
+            from shapely.geometry import LineString
+            return LineString([a, b]).intersects(LineString([c, d]))
+        count = 0
+        for a, b in segs1:
+            for c, d in segs2:
+                if seg_intersect(a, b, c, d):
+                    count += 1
+        return count
+    for i, (u, data_u) in enumerate(node_list):
+        for j, (v, data_v) in enumerate(node_list):
+            if i >= j:
+                continue
+            verts1 = data_u.get('vertices', [])
+            verts2 = data_v.get('vertices', [])
+            if verts1 and verts2 and len(verts1) >= 2 and len(verts2) >= 2:
+                count = count_segment_intersections(verts1, verts2)
+                if count > 0:
+                    G.add_edge(u, v, predicate='intersects', count=count, source='topology')
+
+    # --- 3. Stroke-level geometric predicates ---
+    for i, (u, data_u) in enumerate(node_list):
+        for j, (v, data_v) in enumerate(node_list):
+            if i == j:
+                continue
+            # Only for lines/polylines
+            if data_u.get('object_type') == 'line' and data_v.get('object_type') == 'line':
+                # longer_than
+                if data_u.get('length') is not None and data_v.get('length') is not None:
+                    if data_u['length'] > data_v['length']:
+                        G.add_edge(u, v, predicate='longer_than', source='geometry')
+                # parallel
+                if data_u.get('orientation') is not None and data_v.get('orientation') is not None:
+                    if abs(data_u['orientation'] - data_v['orientation']) < 12.0:
+                        G.add_edge(u, v, predicate='parallel', source='geometry')
+                # collinear (endpoints nearly aligned)
+                if data_u.get('centroid') is not None and data_v.get('centroid') is not None:
+                    c1, c2 = np.array(data_u['centroid']), np.array(data_v['centroid'])
+                    if np.linalg.norm(c1 - c2) < 6.0:
+                        G.add_edge(u, v, predicate='collinear', source='geometry')
+                # angle_between
+                if data_u.get('orientation') is not None and data_v.get('orientation') is not None:
+                    angle = abs(data_u['orientation'] - data_v['orientation'])
+                    G.add_edge(u, v, predicate='angle_between', angle=angle, source='geometry')
+
+    # --- 4. Existing logic for polygons and valid geometry ---
     for i, (u, data_u) in enumerate(node_list):
         for j, (v, data_v) in enumerate(node_list):
             if i == j:
@@ -24,23 +115,6 @@ def add_predicate_edges(G, predicates):
                 # For line-based predicates, allow if both are lines
                 if not (data_u.get('object_type') == 'line' and data_v.get('object_type') == 'line'):
                     continue
-            # Line-specific proxies for 'near' and 'para'
-            if data_u.get('object_type') == 'line' and data_v.get('object_type') == 'line':
-                mid1, mid2 = safe_get(data_u, 'centroid'), safe_get(data_v, 'centroid')
-                orient1, orient2 = safe_get(data_u, 'orientation'), safe_get(data_v, 'orientation')
-                near_thresh = 32.0  # or from config
-                para_thresh = 12.0  # or from config
-                if mid1 and mid2 and all(isinstance(x, (int, float)) for x in mid1+mid2):
-                    dist = np.linalg.norm(np.array(mid1) - np.array(mid2))
-                    if dist < near_thresh:
-                        G.add_edge(u, v, predicate='near', source='spatial')
-                        edge_count += 1
-                if orient1 is not None and orient2 is not None:
-                    if abs(orient1 - orient2) < para_thresh:
-                        G.add_edge(u, v, predicate='para', source='spatial')
-                        edge_count += 1
-                continue  # skip other predicates for lines
-            # For polygons and valid geometry
             for pred, fn in predicates.items():
                 # Area-based predicates
                 if pred in ['larger_than', 'aspect_sim']:
@@ -97,6 +171,13 @@ def add_predicate_edges(G, predicates):
     except Exception as e:
         logging.warning(f"Could not compute clustering coefficient: {e}. Setting to 0.0")
         G.graph['clustering_coeff'] = 0.0
+
+    # --- Add global predicates for rule induction ---
+    nodes = [d for _, d in G.nodes(data=True)]
+    num_lines = len([n for n in nodes if n.get('curvature_type') == 'line'])
+    G.graph['count_lines'] = num_lines
+    num_junctions = sum(1 for n in nodes if n.get('junction_degree', 0) >= 3)
+    G.graph['junction_count'] = num_junctions
 
 def normalize_shape_label(lbl):
     if not lbl:

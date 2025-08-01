@@ -62,12 +62,8 @@ import numpy as np
 import logging
 import math
 from collections import Counter
-# TODO: Update these imports with the correct module paths if needed
-try:
-    from .real_feature_extractor import RealFeatureExtractor, TORCH_KORNIA_AVAILABLE
-except ImportError:
-    RealFeatureExtractor = None
-    TORCH_KORNIA_AVAILABLE = False
+RealFeatureExtractor = None
+TORCH_KORNIA_AVAILABLE = False
 try:
     import torch
 except ImportError:
@@ -124,6 +120,46 @@ def compute_physics_attributes(node_data):
     vertices = node_data.get('vertices', [])
     object_type = node_data.get('object_type', None)
     is_closed = node_data.get('is_closed', False)
+    action_program = node_data.get('action_program', [])
+    # --- Extract stroke-level programmatic metadata ---
+    # If action_program is a list of dicts, extract per-stroke fields
+    if isinstance(action_program, list) and all(isinstance(cmd, dict) for cmd in action_program):
+        node_data['stroke_type'] = action_program[0].get('stroke_type', None) if action_program else None
+        node_data['turn_direction'] = action_program[0].get('turn_direction', None) if action_program else None
+        node_data['turn_angle'] = action_program[0].get('turn_angle', None) if action_program else None
+        node_data['action_index'] = action_program[0].get('action_index', None) if action_program else None
+        node_data['repetition_count'] = action_program[0].get('repetition_count', None) if action_program else None
+    else:
+        node_data['stroke_type'] = None
+        node_data['turn_direction'] = None
+        node_data['turn_angle'] = None
+        node_data['action_index'] = None
+        node_data['repetition_count'] = None
+    # --- Curvature type: classify as line or arc ---
+    if object_type == 'line':
+        node_data['curvature_type'] = 'line'
+    elif object_type == 'arc':
+        node_data['curvature_type'] = 'arc'
+    else:
+        node_data['curvature_type'] = None
+    # --- Length and orientation for all strokes ---
+    if vertices and len(vertices) >= 2:
+        arr = np.array(vertices)
+        node_data['length'] = float(np.sum(np.linalg.norm(arr[1:] - arr[:-1], axis=1)))
+        # Principal direction via PCA for orientation
+        try:
+            cov_matrix = np.cov(arr.T)
+            if cov_matrix.shape == (2, 2):
+                eigenvalues, eigenvectors = np.linalg.eig(cov_matrix)
+                major_axis_idx = np.argmax(eigenvalues)
+                principal_axis = eigenvectors[:, major_axis_idx]
+                orientation = float(np.degrees(np.arctan2(principal_axis[1], principal_axis[0]))) % 360
+                node_data['orientation'] = orientation
+        except Exception as e:
+            node_data['orientation'] = None
+    else:
+        node_data['length'] = None
+        node_data['orientation'] = None
     # Geometry valid if polygon and closed
     geometry_valid = object_type == 'polygon' and is_closed and vertices and len(vertices) >= 3
     node_data['geometry_valid'] = geometry_valid
