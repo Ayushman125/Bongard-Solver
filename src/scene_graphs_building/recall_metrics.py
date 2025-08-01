@@ -1,3 +1,23 @@
+def _robust_edge_unpack(edges):
+    """Yield (u, v, k, data) for all edge tuples, handling 2, 3, 4-item cases and non-dict data."""
+    for edge in edges:
+        if len(edge) == 4:
+            u, v, k, data = edge
+        elif len(edge) == 3:
+            u, v, data = edge
+            k = None
+        elif len(edge) == 2:
+            u, v = edge
+            k = None
+            data = {}
+        else:
+            logging.warning(f"[recall_metrics] Skipping unexpectedly short/long edge tuple: {edge}")
+            continue
+        if not isinstance(data, dict):
+            logging.warning(f"[recall_metrics] Edge data not dict: {repr(data)} for edge {edge}; using empty dict.")
+            data = {}
+        yield u, v, k, data
+import networkx as nx
 import numpy as np
 import torch
 from typing import List, Dict, Tuple, Set, Optional, Any
@@ -366,9 +386,16 @@ def compute_pc_error(graphs):
     total_graphs = len(graphs)
     if total_graphs == 0: return 0.0
 
+
     for G_data in graphs: # G_data is now a dict containing 'scene_graph' and other info
         # Extract the NetworkX graph from the scene_graph dict
-        G = G_data.get('scene_graph', {}).get('graph')
+        # G_data may be a dict or a networkx graph object
+        if isinstance(G_data, dict):
+            G = G_data.get('scene_graph', {}).get('graph')
+        elif isinstance(G_data, (nx.Graph, nx.DiGraph, nx.MultiGraph, nx.MultiDiGraph)):
+            G = G_data
+        else:
+            G = None
         if not G:
             logging.warning(f"No NetworkX graph found for problem {G_data.get('problem_id')}. Skipping PC error calculation.")
             continue
@@ -426,11 +453,18 @@ def log_diversity_metrics(graphs, out_path='logs/graph_diversity.jsonl'):
             total_possible_triples += len(G.nodes) * (len(G.nodes) - 1) # N*(N-1) for directed pairs
 
         graph_predicates = set()
-        for u, v, data in G.edges(data=True):
-            pred = data.get('predicate', 'unknown')
-            unique_triples.add((u, pred, v))
-            predicate_counts[pred] += 1
-            graph_predicates.add(pred)
+        if isinstance(G, (nx.MultiDiGraph, nx.MultiGraph)):
+            for u, v, k, data in _robust_edge_unpack(G.edges(keys=True, data=True)):
+                pred = data.get('predicate', 'unknown')
+                unique_triples.add((u, pred, v))
+                predicate_counts[pred] += 1
+                graph_predicates.add(pred)
+        else:
+            for u, v, k, data in _robust_edge_unpack(G.edges(data=True)):
+                pred = data.get('predicate', 'unknown')
+                unique_triples.add((u, pred, v))
+                predicate_counts[pred] += 1
+                graph_predicates.add(pred)
         if len(G.nodes) > 0:
             per_graph_predicate_diversity.append(len(graph_predicates) / len(G.nodes))
 

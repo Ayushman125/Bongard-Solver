@@ -334,7 +334,18 @@ def build_graph_unvalidated(record, predicates, top_k, extra_edges=None, kb=None
             objects.append(obj)
         if objects and objects[0]['image_path'] is not None:
             clip_edges = clip_embedder.contrastive_edges(objects, threshold=0.2)
-            for u, v, data in clip_edges:
+            for edge in clip_edges:
+                if len(edge) == 3:
+                    u, v, data = edge
+                elif len(edge) == 2:
+                    u, v = edge
+                    data = {}
+                else:
+                    logging.warning(f"[graph_building] Skipping unexpectedly short/long edge tuple: {edge}")
+                    continue
+                if not isinstance(data, dict):
+                    logging.warning(f"[graph_building] Edge data not dict: {repr(data)} for edge {edge}; using empty dict.")
+                    data = {}
                 G.add_edge(u, v, **data)
     except Exception as e:
         logging.warning(f"CLIPEmbedder contrastive_edges failed: {e}")

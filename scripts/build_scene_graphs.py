@@ -21,6 +21,28 @@ import logging
 import math
 from collections import Counter, defaultdict
 from itertools import combinations # For global graph features
+
+# --- Robust edge unpacking helper (copied from scene_graph_visualization.py) ---
+def _robust_edge_unpack(edges):
+    """Yield (u, v, k, data) for all edge tuples, handling 2, 3, 4-item cases and non-dict data."""
+    import logging
+    for edge in edges:
+        if len(edge) == 4:
+            u, v, k, data = edge
+        elif len(edge) == 3:
+            u, v, data = edge
+            k = None
+        elif len(edge) == 2:
+            u, v = edge
+            k = None
+            data = {}
+        else:
+            logging.warning(f"[build_scene_graphs] Skipping unexpectedly short/long edge tuple: {edge}")
+            continue
+        if not isinstance(data, dict):
+            logging.warning(f"[build_scene_graphs] Edge data not dict: {repr(data)} for edge {edge}; using empty dict.")
+            data = {}
+        yield u, v, k, data
 from typing import Tuple
 
 # Global predicate registry (must be defined before any global usage)
@@ -176,7 +198,27 @@ def load_predicates(adaptive_thresholds: AdaptivePredicateThresholds, canvas_dim
     # Define all predicates, prioritizing those from file if they exist
     # Each lambda now receives 'a', 'b' (node data) and 'params' (learned thresholds)
     # SOTA: add new feature predicates for programmatic, KB, global stats, stroke, curvature
-    all_candidate_predicates = {
+    import sys
+    args = None
+    # Try to get args from main if available (for mode)
+    if 'args' in globals():
+        args = globals()['args']
+    elif hasattr(sys.modules['__main__'], 'args'):
+        args = getattr(sys.modules['__main__'], 'args')
+
+    # LOGO mode: restrict to LOGO semantics only
+    if args is not None and hasattr(args, 'mode') and args.mode == 'logo':
+        all_candidate_predicates = {
+            'next_action': lambda a, b, params: a.get('action_index', -1) + 1 == b.get('action_index', -1) and a.get('parent_shape_id') == b.get('parent_shape_id'),
+            'turn_left': lambda a, b, params: a.get('turn_direction') == 'left' and a.get('parent_shape_id') == b.get('parent_shape_id'),
+            'turn_right': lambda a, b, params: a.get('turn_direction') == 'right' and a.get('parent_shape_id') == b.get('parent_shape_id'),
+            'length_sim': lambda a, b, params: abs(a.get('length', 0.0) - b.get('length', 0.0)) < params.get('length_tol', 5.0),
+            'angle_sim': lambda a, b, params: abs(a.get('orientation', 0.0) - b.get('orientation', 0.0)) < params.get('angle_tol', 10.0),
+            'adjacent_endpoints': lambda a, b, params: False,  # handled in add_predicate_edges
+            'intersects': lambda a, b, params: False,  # handled in add_predicate_edges
+        }
+    else:
+        all_candidate_predicates = {
         # SOTA: new feature predicates
         'curvature_sim': lambda a, b, params: abs(a.get('curvature', 0.0) - b.get('curvature', 0.0)) < params.get('curvature_tol', 0.2),
         'stroke_count_sim': lambda a, b, params: abs(a.get('stroke_count', 0) - b.get('stroke_count', 0)) < params.get('stroke_count_tol', 1),
@@ -501,13 +543,22 @@ class EnhancedSceneGraphBuilder:
         # Step 1: Knowledge Fusion (semantic enrichment of existing edges)
         # Collect existing relationships to process
         current_relationships = []
-        for u, v, data in G.edges(data=True):
-            current_relationships.append({
-                'subject_id': u,
-                'object_id': v,
-                'predicate': data.get('predicate', 'unknown'),
-                'source': data.get('source', 'spatial')
-            })
+        if isinstance(G, (nx.MultiDiGraph, nx.MultiGraph)):
+            for u, v, k, data in _robust_edge_unpack(G.edges(keys=True, data=True)):
+                current_relationships.append({
+                    'subject_id': u,
+                    'object_id': v,
+                    'predicate': data.get('predicate', 'unknown'),
+                    'source': data.get('source', 'spatial')
+                })
+        else:
+            for u, v, k, data in _robust_edge_unpack(G.edges(data=True)):
+                current_relationships.append({
+                    'subject_id': u,
+                    'object_id': v,
+                    'predicate': data.get('predicate', 'unknown'),
+                    'source': data.get('source', 'spatial')
+                })
 
         enhanced_relationships = []
         for rel in current_relationships:
@@ -673,7 +724,75 @@ async def _process_single_problem(
 
     logging.info(f"Starting _process_single_problem for {problem_id}. problem_records type: {type(problem_records)}")
 
+    # [LOGO] Log all input records for this problem
+    if args is not None and hasattr(args, 'mode') and args.mode == 'logo':
+        import json
+        logging.info(f"[LOGO] All input records for problem_id={problem_id}: {json.dumps(problem_records, indent=2, ensure_ascii=False)[:2000]}{'...TRUNCATED...' if len(json.dumps(problem_records))>2000 else ''}")
 
+    # LOGO mode: strictly minimal program graph (NVLabs baseline, all advanced features disabled)
+    if args is not None and hasattr(args, 'mode') and args.mode == 'logo':
+        import networkx as nx
+        objects = []
+        for idx, rec in enumerate(problem_records):
+            verts = rec.get('vertices') or rec.get('geometry') or []
+            obj = {
+                'object_id': f"{problem_id}_{idx}",
+                'vertices': verts,
+                'object_type': assign_object_type(verts),
+                'action_index': rec.get('action_index', idx),
+                'parent_shape_id': rec.get('parent_shape_id', None),
+                'length': rec.get('length', 0.0),
+                'orientation': rec.get('orientation', 0.0),
+                'label': rec.get('label', ''),
+                'shape_label': rec.get('label', ''),
+            }
+            objects.append(obj)
+        G = nx.MultiDiGraph()
+        for obj in objects:
+            G.add_node(obj['object_id'], **obj)
+        # Only add next_action and geometric edges (length_sim, angle_sim)
+        for a in objects:
+            for b in objects:
+                if a['parent_shape_id'] == b['parent_shape_id'] and a['action_index'] + 1 == b['action_index']:
+                    G.add_edge(a['object_id'], b['object_id'], predicate='next_action', source='program')
+                if abs(a.get('length', 0.0) - b.get('length', 0.0)) < 5.0:
+                    G.add_edge(a['object_id'], b['object_id'], predicate='length_sim', source='geometry')
+                if abs(a.get('orientation', 0.0) - b.get('orientation', 0.0)) < 10.0:
+                    G.add_edge(a['object_id'], b['object_id'], predicate='angle_sim', source='geometry')
+        # Visualization and CSV saving for LOGO mode (no advanced features)
+        try:
+            import importlib
+            import sys
+            import glob
+            # Clear all __pycache__ folders to avoid stale .pyc issues
+            for pycache in glob.glob(os.path.join(os.path.dirname(__file__), '..', '**', '__pycache__'), recursive=True):
+                import shutil
+                try:
+                    shutil.rmtree(pycache)
+                except Exception as e:
+                    print(f"[DEBUG] Could not remove {pycache}: {e}")
+            from scripts.scene_graph_visualization import save_scene_graph_visualization, save_scene_graph_csv
+            print(f"[DEBUG] Using scene_graph_visualization from: {importlib.util.find_spec('scripts.scene_graph_visualization').origin}")
+            from src.scene_graphs_building.data_loading import remap_path
+            # Try to get a real image path from the first record, remap it for logo mode
+            image_path = None
+            for rec in problem_records:
+                if 'image_path' in rec and rec['image_path']:
+                    image_path = remap_path(rec['image_path'])
+                    break
+            feedback_vis_dir = os.path.join('feedback', 'visualizations_logo')
+            if image_path:
+                save_scene_graph_visualization(G, image_path, feedback_vis_dir, problem_id)
+            save_scene_graph_csv(G, feedback_vis_dir, problem_id)
+        except Exception as e:
+            import traceback
+            logging.warning(f"[LOGO Visualization] Failed to save visualization or CSV for {problem_id}: {e}")
+            logging.warning(traceback.format_exc())
+        # Always wrap in dict with 'graph' key for feedback/visualization compatibility
+        # Add 'mode': 'logo' for downstream visualization/diagnostics
+        return {'scene_graph': {'graph': G, 'objects': objects, 'relationships': [], 'mode': 'logo'}, 'rules': None}
+
+    # --- SOTA mode below ---
     # 1. Merge all image records into one list of objects
     merged_record = {'objects': []}
     representative_image_path = None
@@ -877,7 +996,10 @@ async def _process_single_problem(
         logging.error(f"[ERROR] build_graph_unvalidated returned None for problem {problem_id}. Skipping.")
         return {'scene_graph': None, 'rules': None}
     # SOTA: log edge predicate type mix
-    pred_types = [edata.get('predicate') for _,_,edata in base_graph_nx.edges(data=True)]
+    if isinstance(base_graph_nx, (nx.MultiDiGraph, nx.MultiGraph)):
+        pred_types = [data.get('predicate') for _,_,_,data in _robust_edge_unpack(base_graph_nx.edges(keys=True, data=True))]
+    else:
+        pred_types = [data.get('predicate') for _,_,_,data in _robust_edge_unpack(base_graph_nx.edges(data=True))]
     from collections import Counter
     pred_counter = Counter(pred_types)
     logging.info(f"Predicate type counts: {dict(pred_counter)}")
@@ -910,7 +1032,10 @@ async def _process_single_problem(
         base_graph_nx.graph['symmetry_score'] = 0.0
     base_graph_nx.graph['motif_diversity'] = len(set([d.get('motif_type','') for n, d in base_graph_nx.nodes(data=True) if d.get('is_motif')]))
     from scipy.stats import entropy
-    pred_counts = [edata.get('predicate') for _,_,edata in base_graph_nx.edges(data=True)]
+    if isinstance(base_graph_nx, (nx.MultiDiGraph, nx.MultiGraph)):
+        pred_counts = [data.get('predicate') for _,_,_,data in _robust_edge_unpack(base_graph_nx.edges(keys=True, data=True))]
+    else:
+        pred_counts = [data.get('predicate') for _,_,_,data in _robust_edge_unpack(base_graph_nx.edges(data=True))]
     _, counts = np.unique(pred_counts, return_counts=True)
     base_graph_nx.graph['pred_entropy'] = float(entropy(counts)) if len(counts)>0 else 0.0
     # --- GNN/Transformer Reasoner ---
@@ -1102,14 +1227,16 @@ async def _process_single_problem(
             confidence = rel.get('final_confidence', quality_metrics.get('knowledge_confidence', 0.5))
             drift_visualizer.add_threshold_data(predicate, confidence, perf_val)
 
-    return {
-        'problem_id': problem_id,
-        'scene_graph_data': scene_graph_data, # Contains 'scene_graph' (with NetworkX graph) and 'quality_metrics'
-        'processing_metadata': {
-            'representative_image_path': representative_image_path,
-            'num_nodes_in_graph': base_graph_nx.number_of_nodes()
-        }
-    }
+    # [LOGO] Log all output objects and edges for this problem
+    if args is not None and hasattr(args, 'mode') and args.mode == 'logo':
+        import json
+        # Output objects
+        if 'objects' in output:
+            logging.info(f"[LOGO] Output objects for problem_id={problem_id}: {json.dumps(output['objects'], indent=2, ensure_ascii=False)[:2000]}{'...TRUNCATED...' if len(json.dumps(output['objects']))>2000 else ''}")
+        # Output edges
+        if 'edges' in output:
+            logging.info(f"[LOGO] Output edges for problem_id={problem_id}: {json.dumps(output['edges'], indent=2, ensure_ascii=False)[:2000]}{'...TRUNCATED...' if len(json.dumps(output['edges']))>2000 else ''}")
+    return output
 
 def process_problem_batch_sync_wrapper(list_of_problem_records: List[List[Dict[str, Any]]], feature_cache, batch_validator, recall_evaluator, drift_visualizer, enhanced_builder, feedback_dir, feedback_rate, decompose_polygons: bool, adaptive_thresholds: AdaptivePredicateThresholds, args=None):
     # Synchronous wrapper to run async processing for a batch of problems.
@@ -1153,11 +1280,31 @@ async def main(): # Main is now async because it calls async functions
     parser.add_argument('--use-gnn', action='store_true', help='Enable GNN/Transformer reasoning in scene graph')
     parser.add_argument('--use-motifs', action='store_true', help='Enable motif mining and super-nodes in scene graph')
     parser.add_argument('--use-roi', action='store_true', help='Use ROI (bounding box/mask) for CLIP vision-language edges (SOTA)')
+    parser.add_argument('--mode', type=str, default='sota', choices=['sota', 'logo'], help='Pipeline mode: "sota" (default, all features) or "logo" (LOGO-only, NVLabs baseline)')
     args = parser.parse_args()
+    # [LOGO] Log all input arguments and label values at the start
+    if hasattr(args, 'mode') and args.mode == 'logo':
+        import logging
+        logging.info(f"[LOGO] All input arguments: {vars(args)}")
+        # Print all label values loaded
+        try:
+            import json
+            with open(args.labels, 'r', encoding='utf-8') as f:
+                label_data = json.load(f)
+            logging.info(f"[LOGO] All label values from {args.labels}: {json.dumps(label_data, indent=2, ensure_ascii=False)[:2000]}{'...TRUNCATED...' if len(json.dumps(label_data))>2000 else ''}")
+        except Exception as e:
+            logging.warning(f"[LOGO] Could not load or print all label values: {e}")
     global kb
     kb = ConceptNetClient.get()
     if kb is None:
         logging.warning("ConceptNet KB client could not be initialized. Commonsense edges will be skipped.")
+    # LOGO mode disables VL, GNN, motifs, KB
+    if args.mode == 'logo':
+        args.use_vl = False
+        args.use_gnn = False
+        args.use_motifs = False
+        kb = None
+        logging.info("LOGO mode: VL, GNN, motifs, and KB edges are disabled. Only programmatic and minimal geometry predicates will be used.")
 
     # Initialize components
     feature_cache = MemoryEfficientFeatureCache(
@@ -1174,15 +1321,20 @@ async def main(): # Main is now async because it calls async functions
             enable_gpu_batching=True
         )
     # Define PREDICATES globally or load from config (already done above)
-    recall_evaluator = RecallAtKEvaluator(
-        predicate_classes=[], # Will be populated after PREDICATES are loaded
-        k_values=[10, 20, 50],
-        iou_threshold=0.5
-    )
-    drift_visualizer = ConceptDriftVisualizer(
-        window_size=50,
-        visualization_dir="visualizations/drift"
-    ) if args.feedback_rate > 0 else None # Only enable if feedback_rate allows visualization
+    if args.mode == 'logo':
+        recall_evaluator = None
+        drift_visualizer = None
+        logging.info("LOGO mode: Using simple accuracy metric for validation. SGScore/RecallAtK/DriftVisualizer are disabled.")
+    else:
+        recall_evaluator = RecallAtKEvaluator(
+            predicate_classes=[], # Will be populated after PREDICATES are loaded
+            k_values=[10, 20, 50],
+            iou_threshold=0.5
+        )
+        drift_visualizer = ConceptDriftVisualizer(
+            window_size=50,
+            visualization_dir="visualizations/drift"
+        ) if args.feedback_rate > 0 else None # Only enable if feedback_rate allows visualization
 
     # Track all feedback images saved for summary
     saved_feedback_images = []
@@ -1205,7 +1357,8 @@ async def main(): # Main is now async because it calls async functions
     canvas_width = thresholds.get('canvas_width', 128)
     canvas_height = thresholds.get('canvas_height', 128)
     PREDICATES = load_predicates(adaptive_thresholds, canvas_dims=(canvas_width, canvas_height))
-    recall_evaluator.predicate_classes = list(PREDICATES.keys()) # Update recall_evaluator with all predicates
+    if recall_evaluator:
+        recall_evaluator.predicate_classes = list(PREDICATES.keys()) # Update recall_evaluator with all predicates
 
     # Compute hash for cache validation
     # Get adaptive thresholds for hashing

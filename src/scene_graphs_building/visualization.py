@@ -1,3 +1,22 @@
+def _robust_edge_unpack(edges):
+    """Yield (u, v, k, data) for all edge tuples, handling 2, 3, 4-item cases and non-dict data."""
+    for edge in edges:
+        if len(edge) == 4:
+            u, v, k, data = edge
+        elif len(edge) == 3:
+            u, v, data = edge
+            k = None
+        elif len(edge) == 2:
+            u, v = edge
+            k = None
+            data = {}
+        else:
+            logging.warning(f"[scene_graphs_building.visualization] Skipping unexpectedly short/long edge tuple: {edge}")
+            continue
+        if not isinstance(data, dict):
+            logging.warning(f"[scene_graphs_building.visualization] Edge data not dict: {repr(data)} for edge {edge}; using empty dict.")
+            data = {}
+        yield u, v, k, data
 import logging
 import os
 import matplotlib.pyplot as plt
@@ -99,173 +118,64 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
 
         # Save scene graph visualization if provided
     import networkx as nx
-    if scene_graph is not None and 'graph' in scene_graph:
-        G = scene_graph['graph']
-    else:
-        G = None
-
-    if not isinstance(G, nx.Graph):
+    G = None
+    # Accept both MultiDiGraph and DiGraph, and handle direct graph input
+    if scene_graph is not None:
+        if isinstance(scene_graph, dict) and 'graph' in scene_graph:
+            G = scene_graph['graph']
+        elif isinstance(scene_graph, (nx.Graph, nx.DiGraph, nx.MultiGraph, nx.MultiDiGraph)):
+            G = scene_graph
+    if G is None or not isinstance(G, (nx.Graph, nx.DiGraph, nx.MultiGraph, nx.MultiDiGraph)):
         logging.error(f"Scene graph for {base_name} is not a valid NetworkX graph object: {type(G)}. Skipping visualization for this problem.")
         return
 
     import matplotlib.pyplot as plt
     plt.figure(figsize=(5, 5))
-    if len(G.nodes) > 0:
-        pos = nx.spring_layout(G, seed=42) if len(G.nodes) > 1 else None
-        # Node labels: show shape_label and image name (from original_image_path or image_path)
-        def get_img_name(node):
-            path = node.get('original_image_path') or node.get('image_path')
-            if path:
-                return os.path.basename(path)
-            return ''
-        from src.scene_graphs_building.config import SHAPE_MAP
-        def normalize_shape_label(lbl):
-            if not lbl:
-                return None
-            lbl = lbl.lower().replace("_", " ").replace("-", " ").strip()
-            if lbl in ("positive", "negative", "pos", "neg"):
-                return None
-            return SHAPE_MAP.get(lbl, lbl)
-        import csv
-        node_labels = {}
-        node_border_colors = []
-        node_colors = []
-        from src.scene_graphs_building.config import SEMANTIC_FIELDS
-        # Prepare CSV table for all node metadata
-    # SOTA: add new features to CSV and visualization
-    csv_fields = [
-        'node_id', 'object_id', 'shape_label', 'semantic_label', 'kb_concept', 'motif_label', 'motif_type', 'pattern_role', 'action_program_type', 'function_label',
-        'object_type', 'is_closed', 'fallback_geometry', 'bounding_box', 'centroid', 'orientation', 'aspect_ratio', 'curvature', 'skeleton_length', 'symmetry_axis', 'component_index', 'is_valid', 'geometry_reason', 'object_color',
-        'gnn_score', 'clip_sim', 'motif_score', 'vl_sim', 'warnings', 'label', 'img',
-        'stroke_count', 'programmatic_label', 'global_stat'
-    ]
-    csv_rows = []
-    for n in G.nodes():
-        node = G.nodes[n]
-        # Color degenerate nodes red, lines orange, motifs gold, valid polygons green, others blue
-        if node.get('is_motif'):
-            node_colors.append('gold')
-            node_border_colors.append('goldenrod')
-        elif not node.get('geometry_valid', False):
-            node_colors.append('red')
-            node_border_colors.append('black')
-        elif node.get('object_type') == 'line':
-            node_colors.append('orange')
-            node_border_colors.append('black')
-        elif node.get('object_type') in ('arc', 'point'):
-            node_colors.append('purple')
-            node_border_colors.append('black')
-        elif node.get('gnn_score') is not None:
-            node_colors.append('lightgreen')
-            node_border_colors.append('green')
+    # --- LOGO mode detection ---
+    is_logo_mode = False
+    # Try to detect LOGO mode from scene_graph or base_name
+    if scene_graph and scene_graph.get('mode', None) == 'logo':
+        is_logo_mode = True
+    elif 'logo' in str(base_name).lower():
+        is_logo_mode = True
+
+    # Only show program-graph and minimal geometric edges in LOGO mode
+    # Robust edge unpacking for MultiDiGraph/DiGraph
+    if isinstance(G, (nx.MultiDiGraph, nx.MultiGraph)):
+        all_edges = list(_robust_edge_unpack(G.edges(keys=True, data=True)))
+        if is_logo_mode:
+            allowed_predicates = {'next_action', 'turn_left', 'turn_right', 'length_sim', 'angle_sim', 'adjacent_endpoints', 'intersects'}
+            edges_to_draw = [(u, v, d) for u, v, k, d in all_edges if d.get('predicate') in allowed_predicates]
         else:
-            node_colors.append('skyblue')
-            node_border_colors.append('blue')
+            edges_to_draw = [(u, v, d) for u, v, k, d in all_edges]
+    else:
+        all_edges = list(_robust_edge_unpack(G.edges(data=True)))
+        if is_logo_mode:
+            allowed_predicates = {'next_action', 'turn_left', 'turn_right', 'length_sim', 'angle_sim', 'adjacent_endpoints', 'intersects'}
+            edges_to_draw = [(u, v, d) for u, v, k, d in all_edges if d.get('predicate') in allowed_predicates]
+        else:
+            edges_to_draw = [(u, v, d) for u, v, k, d in all_edges]
 
-        # Minimal label: node id or shape label, plus degenerate tag if not valid
-        raw = node.get('shape_label', n)
-        norm = normalize_shape_label(raw)
-        label = norm if norm else str(n)
-        if not node.get('geometry_valid', False):
-            label = f"{label}\n[degenerate]"
-        elif node.get('object_type') == 'line':
-            label = f"{label}\n[line]"
-        elif node.get('object_type') == 'arc':
-            label = f"{label}\n[arc]"
-        elif node.get('object_type') == 'point':
-            label = f"{label}\n[point]"
-        # Optionally, append feature_valid summary
-        fv = node.get('feature_valid', {})
-        if fv:
-            valid_feats = [k for k, v in fv.items() if v]
-            invalid_feats = [k for k, v in fv.items() if not v]
-            if invalid_feats:
-                label += f"\n[invalid: {', '.join(invalid_feats)}]"
-        node_labels[n] = label
-
-        # Prepare row for CSV
-        row = {'node_id': n}
-        for field in csv_fields:
-            if field == 'node_id':
-                continue
-            if field == 'label':
-                row['label'] = label
-            elif field == 'img':
-                row['img'] = get_img_name(node)
-            else:
-                val = node.get(field)
-                if val is None or val == 'not_applicable':
-                    val_str = 'N/A'
-                elif field in ['bounding_box', 'centroid', 'symmetry_axis'] and isinstance(val, (list, tuple)):
-                    val_str = ','.join([f'{v:.2f}' if isinstance(v, float) else str(v) for v in val])
-                elif isinstance(val, (list, tuple)):
-                    val_str = ';'.join([str(v) for v in val])
-                else:
-                    val_str = str(val)
-                row[field] = val_str
-        # Optionally add feature_valid flags to CSV
-        for k, v in fv.items():
-            row[k] = v
-        csv_rows.append(row)
-    # Save CSV table
-    csv_path = os.path.join(feedback_dir, f"{base_name}_node_metadata.csv")
-    with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=csv_fields, extrasaction='ignore')
-        writer.writeheader()
-        for row in csv_rows:
-            writer.writerow(row)
-        # Draw edges: color VLM edges red, motif edges orange, spatial green, programmatic blue, KB purple, global stats brown, others gray
-        edges_to_draw = list(G.edges(data=True))
-        vl_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate')=='vl_sim']
-        motif_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate')=='part_of']
-        spatial_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate') in ('near','para','aspect_sim')]
-        programmatic_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate') == 'programmatic_sim']
-        kb_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate') == 'kb_sim']
-        global_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate') == 'global_stat_sim']
-        other_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate') not in ('vl_sim','part_of','near','para','aspect_sim','programmatic_sim','kb_sim','global_stat_sim')]
-        import networkx as nx
-        # Draw nodes with colored borders for degenerate/invalid/valid
-        nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=700, edgecolors=node_border_colors, linewidths=2)
-        nx.draw_networkx_edges(G, pos, edgelist=other_edges, arrows=True, arrowstyle='-|>', width=1.5, alpha=0.7, edge_color='gray')
-        nx.draw_networkx_edges(G, pos, edgelist=vl_edges, arrows=True, arrowstyle='-|>', width=2.5, alpha=0.8, edge_color='red')
-        nx.draw_networkx_edges(G, pos, edgelist=motif_edges, arrows=True, arrowstyle='-|>', width=2.5, alpha=0.8, edge_color='orange')
-        nx.draw_networkx_edges(G, pos, edgelist=spatial_edges, arrows=True, arrowstyle='-|>', width=2.5, alpha=0.8, edge_color='green')
-        nx.draw_networkx_edges(G, pos, edgelist=programmatic_edges, arrows=True, arrowstyle='-|>', width=2.5, alpha=0.8, edge_color='blue')
-        nx.draw_networkx_edges(G, pos, edgelist=kb_edges, arrows=True, arrowstyle='-|>', width=2.5, alpha=0.8, edge_color='purple')
-        nx.draw_networkx_edges(G, pos, edgelist=global_edges, arrows=True, arrowstyle='-|>', width=2.5, alpha=0.8, edge_color='brown')
-        # Draw only minimal node labels (ID or shape label, plus degenerate/feature info)
-        nx.draw_networkx_labels(G, pos, labels=node_labels, font_size=9, font_family='sans-serif', font_color='black')
-        # Add a legend for node color meanings
-        import matplotlib.patches as mpatches
-        legend_handles = [
-            mpatches.Patch(color='gold', label='Motif'),
-            mpatches.Patch(color='red', label='Degenerate'),
-            mpatches.Patch(color='orange', label='Line'),
-            mpatches.Patch(color='purple', label='Arc/Point'),
-            mpatches.Patch(color='lightgreen', label='Valid Polygon'),
-            mpatches.Patch(color='skyblue', label='Other'),
-            mpatches.Patch(color='blue', label='Programmatic Edge'),
-            mpatches.Patch(color='purple', label='KB Edge'),
-            mpatches.Patch(color='brown', label='Global Stat Edge'),
-        ]
-        plt.legend(handles=legend_handles, loc='upper right', fontsize=8)
-        from collections import defaultdict
-        combined = defaultdict(list)
-        for u, v, d in edges_to_draw:
-            pred = d.get('predicate', '')
-            if pred:
-                combined[(u, v)].append(pred)
-        edge_labels = { (u, v): ", ".join(sorted(set(preds))) for (u, v), preds in combined.items() }
-        nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_color='gray', font_size=8)
-        # Annotate rules if present
-        rules = scene_graph.get('rules') if scene_graph else None
+    # Draw nodes and edges
+    pos = nx.spring_layout(G, seed=42) if len(G.nodes) > 1 else None
+    node_labels = {n: G.nodes[n].get('shape_label', n) for n in G.nodes()}
+    node_colors = ['skyblue' for _ in G.nodes()]
+    node_border_colors = ['blue' for _ in G.nodes()]
+    nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=700, edgecolors=node_border_colors, linewidths=2)
+    nx.draw_networkx_edges(G, pos, edgelist=[(u, v) for u, v, _ in edges_to_draw], arrows=True, arrowstyle='-|>', width=2.0, alpha=0.8, edge_color='blue')
+    nx.draw_networkx_labels(G, pos, labels=node_labels, font_size=9, font_family='sans-serif', font_color='black')
+    # Add LOGO mode banner if active
+    if is_logo_mode:
+        plt.gcf().text(0.5, 0.95, 'LOGO MODE: Program Graph Only', fontsize=12, color='navy', ha='center', va='top', bbox=dict(facecolor='lightyellow', alpha=0.7, edgecolor='navy'))
+        # No advanced logic, no edge labels, no advanced features
+        rules = scene_graph.get('rules') if scene_graph and isinstance(scene_graph, dict) else None
         if rules is not None:
             plt.gcf().text(0.01, 0.01, f"Rules: {getattr(rules, 'tree_', None)}", fontsize=8, color='purple', ha='left', va='bottom')
-            plt.title(f"Scene Graph: {base_name}")
-            plt.axis('off')
-        else:
-            plt.text(0.5, 0.5, 'No graph', ha='center', va='center', fontsize=12)
-            plt.axis('off')
+        plt.title(f"Scene Graph: {base_name}")
+        plt.axis('off')
+    else:
+        plt.title(f"Scene Graph: {base_name}")
+        plt.axis('off')
     plt.tight_layout()
     plt.savefig(graph_img_path, bbox_inches='tight')
     plt.close()
@@ -291,21 +201,50 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
         from PIL import Image, ImageDraw
         pil_image = Image.open(os.path.join(feedback_dir, f"{base_name}_input.png")).convert('RGBA')
         draw = ImageDraw.Draw(pil_image)
-        # Robust check for NetworkX graph type
         import networkx as nx
-        is_nx_graph = isinstance(G, nx.Graph)
+        is_nx_graph = isinstance(G, (nx.Graph, nx.DiGraph, nx.MultiGraph, nx.MultiDiGraph))
         if is_nx_graph and len(G.nodes) > 0:
             pos = nx.spring_layout(G, seed=42) if len(G.nodes) > 1 else {n: (0.5, 0.5) for n in G.nodes()}
-            # Draw edges as lines
             width, height = pil_image.size
-            for u, v in G.edges():
+            # Only draw minimal edges in LOGO mode
+            if is_logo_mode:
+                if isinstance(G, (nx.MultiDiGraph, nx.MultiGraph)):
+                    all_edges = list(_robust_edge_unpack(G.edges(keys=True, data=True)))
+                    allowed_predicates = {'next_action', 'turn_left', 'turn_right', 'length_sim', 'angle_sim', 'adjacent_endpoints', 'intersects'}
+                    edges_to_draw = [(u, v) for u, v, k, d in all_edges if d.get('predicate') in allowed_predicates]
+                else:
+                    all_edges = list(_robust_edge_unpack(G.edges(data=True)))
+                    allowed_predicates = {'next_action', 'turn_left', 'turn_right', 'length_sim', 'angle_sim', 'adjacent_endpoints', 'intersects'}
+                    edges_to_draw = [(u, v) for u, v, k, d in all_edges if d.get('predicate') in allowed_predicates]
+            else:
+                if isinstance(G, (nx.MultiDiGraph, nx.MultiGraph)):
+                    edges_to_draw = []
+                    for edge in G.edges(keys=True, data=True):
+                        if len(edge) == 4:
+                            u, v, k, d = edge
+                            edges_to_draw.append((u, v))
+                        elif len(edge) == 3:
+                            u, v, d = edge
+                            edges_to_draw.append((u, v))
+                        else:
+                            logging.warning(f"[scene_graphs_building.visualization] Edge tuple malformed (length={len(edge)}): {edge}")
+                            continue
+                else:
+                    edges_to_draw = []
+                    for edge in G.edges(data=True):
+                        if len(edge) == 3:
+                            u, v, d = edge
+                            edges_to_draw.append((u, v))
+                        else:
+                            logging.warning(f"[scene_graphs_building.visualization] Edge tuple malformed (length={len(edge)}): {edge}")
+                            continue
+            for u, v in edges_to_draw:
                 x1, y1 = pos[u]
                 x2, y2 = pos[v]
                 draw.line([
                     int(x1 * width), int(y1 * height),
                     int(x2 * width), int(y2 * height)
                 ], fill=(255, 0, 0, 128), width=2)
-            # Draw nodes as circles
             for n in G.nodes():
                 x, y = pos[n]
                 r = 8

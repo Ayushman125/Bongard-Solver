@@ -111,9 +111,14 @@ class GNNReasoner:
         # --- Robust edge mapping ---
         edge_index = []
         node_id_map = {nid: i for i, nid in enumerate(node_ids)}
-        for u, v in G.edges():
-            if u in node_id_map and v in node_id_map:
-                edge_index.append([node_id_map[u], node_id_map[v]])
+        if isinstance(G, (nx.MultiDiGraph, nx.MultiGraph)):
+            for u, v, k in G.edges(keys=True):
+                if u in node_id_map and v in node_id_map:
+                    edge_index.append([node_id_map[u], node_id_map[v]])
+        else:
+            for u, v in G.edges():
+                if u in node_id_map and v in node_id_map:
+                    edge_index.append([node_id_map[u], node_id_map[v]])
         if edge_index:
             edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
         else:

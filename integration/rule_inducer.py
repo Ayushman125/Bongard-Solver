@@ -44,7 +44,10 @@ class RuleInducer:
         if not isinstance(G, nx.MultiDiGraph):
             return None
         # Consider all predicates, including programmatic, KB, global, etc.
-        pred_counts = Counter([edata.get('predicate') for _,_,edata in G.edges(data=True)])
+        if isinstance(G, (nx.MultiDiGraph, nx.MultiGraph)):
+            pred_counts = Counter([edata.get('predicate') for _,_,_,edata in G.edges(keys=True, data=True)])
+        else:
+            pred_counts = Counter([edata.get('predicate') for _,_,edata in G.edges(data=True)])
         if not pred_counts:
             return None
         most_common_pred, count = pred_counts.most_common(1)[0]

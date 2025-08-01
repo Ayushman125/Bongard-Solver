@@ -1,136 +1,26 @@
 [
-  {
-    "predicate": "left_of",
-    "description": "True if the centroid x-coordinate of subject is at least EPS less than that of object (a.cx + EPS  b.cx + EPS).",
-    "source": "spatial"
-  },
-  {
-    "predicate": "larger_than",
-    "description": "True if area(a) > α * area(b), α learned per-problem.",
-    "source": "dynamic",
-    "dynamic": true
-  },
-  {
-    "predicate": "aspect_sim",
-    "description": "True if |aspect(a) - aspect(b)| < τ, τ learned per-problem.",
-    "source": "dynamic",
-    "dynamic": true
-  },
-  {
-    "predicate": "near",
-    "description": "True if distance(a, b) < d, d learned per-problem.",
-    "source": "dynamic",
-    "dynamic": true
-  },
-  {
-    "predicate": "para",
-    "description": "True if |orientation(a) - orientation(b)| < θ, θ learned per-problem.",
-    "source": "dynamic",
-    "dynamic": true
-  },
-  {
-    "predicate": "right_of",
-    "description": "True if the centroid x-coordinate of subject is EPS greater than that of object (a.cx > b.cx + EPS).",
-    "source": "spatial"
-  },
-  {
-    "predicate": "above",
-    "description": "True if the centroid y-coordinate of subject is at least EPS less than that of object (a.cy + EPS  b.cy + EPS).",
-    "source": "spatial"
-  },
-  {
-    "predicate": "touches",
-    "description": "True if bounding boxes intersect exactly at edges but neither box fully contains the other.",
-    "source": "spatial"
-  },
-  {
-    "predicate": "overlaps",
-    "description": "True if Intersection-over-Union of bounding boxes exceeds 0.15.",
-    "source": "spatial"
-  },
-  {
-    "predicate": "contains",
-    "description": "True if the subject’s mask fully contains the object’s mask (a.mask.contains(b.mask)).",
-    "source": "spatial"
-  },
-  {
-    "predicate": "inside",
-    "description": "Inverse of contains: True if the object’s mask is fully inside the subject’s mask.",
-    "source": "spatial"
-  },
-  {
-    "predicate": "parallel_to",
-    "description": "True if orientations of subject and object differ by ≤7°, indicating parallel alignment.",
-    "source": "spatial"
-  },
-  {
-    "predicate": "perpendicular_to",
-    "description": "True if orientations of subject and object differ by approximately 90° ± tol, indicating perpendicular alignment.",
-    "source": "spatial"
-  },
-  {
-    "predicate": "aligned_left",
-    "description": "True if left edges of subject and object bounding boxes are within EPS horizontally.",
-    "source": "spatial"
-  },
-  {
-    "predicate": "aligned_right",
-    "description": "True if right edges of subject and object bounding boxes are within EPS horizontally.",
-    "source": "spatial"
-  },
-  {
-    "predicate": "aligned_top",
-    "description": "True if top edges of subject and object bounding boxes are within EPS vertically.",
-    "source": "spatial"
-  },
-  {
-    "predicate": "aligned_bottom",
-    "description": "True if bottom edges of subject and object bounding boxes are within EPS vertically.",
-    "source": "spatial"
-  },
-  {
-    "predicate": "proximal_to",
-    "description": "True if Euclidean distance between centroids of subject and object is below a configurable threshold.",
-    "source": "spatial"
-  },
-  {
-    "predicate": "supports",
-    "description": "True if physics.contact(object, subject) returns true and object.cy > subject.cy, indicating stable support.",
-    "source": "physics"
-  },
-  {
-    "predicate": "supported_by",
-    "description": "Inverse of supports: True if subject is supported by object (supports(object, subject)).",
-    "source": "physics"
-  },
-  {
-    "predicate": "contains_text",
-    "description": "True if CommonsenseKB reports a “has_text” relation from subject’s shape label to a text literal.",
-    "source": "kb"
-  },
-  {
-    "predicate": "is_arrow_for",
-    "description": "True if CommonsenseKB reports an “is_arrow_for” semantic relation between subject and object labels.",
-    "source": "kb"
-  },
-  {
-    "predicate": "has_sides",
-    "description": "True if CommonsenseKB “has_side_count” relation matches the numeric side-count attribute of the node.",
-    "source": "kb"
-  },
-  {
-    "predicate": "same_shape",
-    "description": "True if the shape label (circle, triangle, rectangle, etc.) of subject and object are identical.",
-    "source": "geometry"
-  },
-  {
-    "predicate": "symmetry_axis",
-    "description": "True if the subject’s symmetry axis orientation aligns (within tol°) with the object’s orientation.",
-    "source": "geometry"
-  },
-  {
-    "predicate": "same_color",
-    "description": "True if average RGB colors of subject and object differ by less than Δ in each channel.",
-    "source": "appearance"
-  }
+  {"predicate": "next_action", "description": "a's action_index + 1 == b's action_index and both have same parent_shape_id.", "source": "program"},
+  {"predicate": "turn_left", "description": "a.turn_direction == 'left' and same parent_shape_id.", "source": "program"},
+  {"predicate": "turn_right", "description": "a.turn_direction == 'right' and same parent_shape_id.", "source": "program"},
+  {"predicate": "repeat_action", "description": "Both strokes have the same action_command and same parent_shape_id.", "source": "program"},
+  {"predicate": "same_program_type", "description": "Both strokes share programmatic_label or command pattern (e.g., same sequence of LOGO primitives).", "source": "program"},
+  {"predicate": "stroke_type_sim", "description": "Both have the same stroke_type field (e.g., both 'line', both 'arc').", "source": "program"},
+  {"predicate": "adjacent_endpoints", "description": "Endpoints of a and b are the same or within a threshold distance.", "source": "topology"},
+  {"predicate": "junction", "description": "a and b share an endpoint and the junction degree ≥ 3.", "source": "topology"},
+  {"predicate": "intersects", "description": "a and b cross at any point (can use segment-segment intersection).", "source": "topology"},
+  {"predicate": "forms_loop", "description": "a and b connected together, forming a cycle of length ≥ 3 (motif-level).", "source": "topology"},
+  {"predicate": "length_sim", "description": "abs(a.length - b.length) < T (threshold).", "source": "geometry"},
+  {"predicate": "near", "description": "Euclidean distance between centroids < threshold.", "source": "geometry"},
+  {"predicate": "angle_sim", "description": "abs(a.orientation - b.orientation) < T (threshold).", "source": "geometry"},
+  {"predicate": "angle_between", "description": "Stores the angle difference as an edge attribute.", "source": "geometry"},
+  {"predicate": "part_of_motif", "description": "a is a member of motif/group node b.", "source": "motif"},
+  {"predicate": "motif_similarity", "description": "Both motifs are of the same discovered type or cluster.", "source": "motif"},
+  {"predicate": "symmetric_with", "description": "a and b are symmetric under detected graph symmetry axis.", "source": "motif"},
+  {"predicate": "vl_sim", "description": "Visual/CLIP embedding cosine similarity > threshold (applies if features available).", "source": "visual"},
+  {"predicate": "clip_sim", "description": "Alternative or versioned VL similarity, depending on feature pipeline.", "source": "visual"},
+  {"predicate": "related_to", "description": "a.kb_concept is related to b.kb_concept in ConceptNet.", "source": "commonsense"},
+  {"predicate": "type_of", "description": "KB 'is a type of' relation between concepts.", "source": "commonsense"},
+  {"predicate": "larger_than", "description": "a.area > b.area.", "source": "geometry"},
+  {"predicate": "aspect_sim", "description": "abs(a.aspect_ratio - b.aspect_ratio) < T.", "source": "geometry"},
+  {"predicate": "contains", "description": "a contains b (for polygons).", "source": "geometry"}
 ]
