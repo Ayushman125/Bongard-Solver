@@ -1,3 +1,29 @@
+def save_fallback_centroid_visualizations(samples, output_dir):
+    """
+    Save visualizations of fallback centroid cases to output_dir.
+    Each sample should have 'vertices' and either 'cx'/'cy' or 'centroid'.
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    os.makedirs(output_dir, exist_ok=True)
+    for i, sample in enumerate(samples):
+        vertices = np.array(sample['vertices'])
+        # Use computed centroid if available, else fallback to original
+        if 'cx' in sample and 'cy' in sample:
+            centroid = [sample['cx'], sample['cy']]
+        else:
+            centroid = sample.get('centroid', [0, 0])
+        node_id = sample.get('id', f'sample_{i}')
+        save_path = os.path.join(output_dir, f"physics_fallback_{node_id}.png")
+        plt.figure(figsize=(6, 6))
+        plt.plot(vertices[:,0], vertices[:,1], 'b-', lw=2, label='Shape')
+        plt.scatter([centroid[0]], [centroid[1]], c='r', s=80, label='Centroid')
+        plt.title(f"Node {node_id} Fallback Centroid")
+        plt.axis('equal')
+        plt.legend()
+        plt.savefig(save_path, bbox_inches='tight')
+        plt.close()
+        print(f"Saved physics fallback visualization for node {node_id} to {save_path}")
 import os
 import cv2
 import logging

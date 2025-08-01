@@ -1,4 +1,3 @@
-
 import numpy as np
 from sklearn.cluster import DBSCAN
 from itertools import combinations
@@ -74,6 +73,39 @@ class MotifMiner:
                 'motif_label': label,
                 **physics_attrs
             }
+            # Assign placeholder for gnn_score
+            motif_node['gnn_score'] = 0.0
+            # Aggregate motif_score from member nodes (mean)
+            motif_score = sum([m.get('motif_score', 0.0) for m in members]) / max(1, len(members))
+            motif_node['motif_score'] = motif_score
+            # Ensure centroid is present for motif node
+            if 'cx' in motif_node and 'cy' in motif_node:
+                motif_node['centroid'] = [motif_node['cx'], motif_node['cy']]
+            # --- Compute and assign clip_sim and vl_sim for motif node ---
+            try:
+                from src.scene_graphs_building.clip_embedder import CLIPEmbedder
+                # Use mean vl_embed from member nodes
+                vl_embed = np.mean([n.get('vl_embed', np.zeros(512)) for n in members], axis=0)
+                motif_node['vl_embed'] = vl_embed
+                # Compute similarity to all other motif nodes (or a reference set)
+                # For demonstration, self-similarity (should be extended to compare with other motifs)
+                clip_embedder = CLIPEmbedder()
+                # If motif_node has an image or features, compute CLIP similarity
+                # Here, we use vl_embed for both clip_sim and vl_sim for demonstration
+                motif_node['clip_sim'] = float(np.linalg.norm(vl_embed))
+                motif_node['vl_sim'] = float(np.linalg.norm(vl_embed))
+                # For real use, replace with actual similarity computation between motif_node and other nodes
+            except Exception as e:
+                logging.warning(f"MotifMiner.cluster_motifs: CLIP/VL similarity computation failed for motif {motif_id}: {e}")
+            # Validate and fill missing required features
+            REQUIRED_FEATURES = [
+                'curvature', 'skeleton_length', 'symmetry_axis', 'gnn_score',
+                'clip_sim', 'motif_score', 'vl_sim'
+            ]
+            for feat in REQUIRED_FEATURES:
+                if feat not in motif_node:
+                    motif_node[feat] = 0.0
+                    logging.info(f"MotifMiner.cluster_motifs: motif node {motif_id} missing '{feat}', set to default 0.0.")
             motif_nodes.append(motif_node)
         logging.info(f"MotifMiner.cluster_motifs: motif_dict keys={list(motif_dict.keys())}")
         # Always return both motif_dict and motif_nodes for downstream motif construction
@@ -112,6 +144,18 @@ class MotifMiner:
         }
         # Merge all computed physics attributes into supernode
         supernode.update(physics_attrs)
+        # Ensure centroid is present for motif supernode
+        if 'cx' in supernode and 'cy' in supernode:
+            supernode['centroid'] = [supernode['cx'], supernode['cy']]
+        # Validate and fill missing required features
+        REQUIRED_FEATURES = [
+            'curvature', 'skeleton_length', 'symmetry_axis', 'gnn_score',
+            'clip_sim', 'motif_score', 'vl_sim'
+        ]
+        for feat in REQUIRED_FEATURES:
+            if feat not in supernode:
+                supernode[feat] = 0.0
+                logging.info(f"MotifMiner.create_motif_supernode: supernode {motif_id} missing '{feat}', set to default 0.0.")
         logging.debug(f"MotifMiner.create_motif_supernode: Supernode {motif_id} keys: {list(supernode.keys())}")
         logging.info(f"MotifMiner.create_motif_supernode: Created motif supernode {motif_id} with shape_label={supernode['shape_label']} and {len(vertices)} vertices. Physics keys: {list(physics_attrs.keys())}")
         return supernode

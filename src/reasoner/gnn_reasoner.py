@@ -68,16 +68,40 @@ class GNNReasoner:
         regular_nodes = [n for n in node_ids if not G.nodes[n].get('is_motif')]
         # Compute means for normalization
         def get_feat(n, f):
-            return float(G.nodes[n].get(f, 0))
+            val = G.nodes[n].get(f, 0)
+            # Robustly handle dicts, lists, None, etc.
+            if isinstance(val, (int, float, np.integer, np.floating)):
+                return float(val)
+            elif isinstance(val, str):
+                try:
+                    return float(val)
+                except Exception:
+                    return 0.0
+            else:
+                # If dict, list, None, or other type, treat as 0.0
+                return 0.0
         for f in required_features:
             motif_vals = [get_feat(n, f) for n in motif_nodes]
             reg_vals = [get_feat(n, f) for n in regular_nodes]
             motif_mean = np.mean(motif_vals) if motif_vals else 1.0
             reg_mean = np.mean(reg_vals) if reg_vals else 1.0
+            # Robust normalization: avoid division by zero or NaN
+            if motif_mean is None or motif_mean == 0 or (hasattr(motif_mean, 'item') and motif_mean.item() == 0) or np.isnan(motif_mean):
+                motif_mean = 1.0
+            if reg_mean is None or reg_mean == 0 or (hasattr(reg_mean, 'item') and reg_mean.item() == 0) or np.isnan(reg_mean):
+                reg_mean = 1.0
             for n in motif_nodes:
-                G.nodes[n][f+'_norm'] = get_feat(n, f) / motif_mean
+                val = get_feat(n, f)
+                if motif_mean == 0 or np.isnan(motif_mean):
+                    G.nodes[n][f+'_norm'] = 0.0
+                else:
+                    G.nodes[n][f+'_norm'] = val / motif_mean
             for n in regular_nodes:
-                G.nodes[n][f+'_norm'] = get_feat(n, f) / reg_mean
+                val = get_feat(n, f)
+                if reg_mean == 0 or np.isnan(reg_mean):
+                    G.nodes[n][f+'_norm'] = 0.0
+                else:
+                    G.nodes[n][f+'_norm'] = val / reg_mean
         # Build feature vectors
         for n in node_ids:
             d = G.nodes[n]
@@ -126,8 +150,9 @@ class GNNReasoner:
             with torch.no_grad():
                 out = self.model(data)
             # Save GNN score to each node
-            for i, n in enumerate(node_ids):
+            for i, n in enumerate(G.nodes):
                 G.nodes[n]['gnn_score'] = float(out[i].item())
+                logging.info(f"GNNReasoner.predict: Updated node {n} with gnn_score={G.nodes[n]['gnn_score']}")
             G.graph['gnn_status'] = 'success'
             return G
         except Exception as e:
