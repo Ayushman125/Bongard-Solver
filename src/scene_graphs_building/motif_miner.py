@@ -5,17 +5,16 @@ import logging
 from scipy.spatial import ConvexHull
 
 
+from src.scene_graphs_building.config import SHAPE_MAP, COMMONSENSE_LABEL_MAP, MOTIF_CATEGORIES, CONCEPTNET_KEEP_RELS
+
 class MotifMiner:
     def decompose(self, vertices):
         # Dummy: return input as one motif
         return [vertices]
 
-    MOTIF_LABELS = {
-        0: "cluster",
-        1: "ring",
-        2: "chain",
-        3: "grid"
-    }
+    # Use all shape/categorical concepts from config
+    from src.scene_graphs_building.config import SHAPE_MAP, COMMONSENSE_LABEL_MAP, MOTIF_CATEGORIES, CONCEPTNET_KEEP_RELS
+    MOTIF_LABELS = {i: k for i, k in enumerate(SHAPE_MAP.keys())}
 
     def cluster_motifs(self, objects):
         # Log type and keys of each object for debugging
@@ -33,9 +32,12 @@ class MotifMiner:
         # Record cluster membership and assign string labels
         for obj, label in zip(objects, clustering.labels_):
             obj['motif_label'] = int(label)
-            obj['shape_label'] = self.MOTIF_LABELS.get(int(label), f"motif_{label}")
+            # Use config for shape_label and semantic_label
+            shape_label = self.MOTIF_LABELS.get(int(label), f"motif_{label}")
+            obj['shape_label'] = shape_label
+            obj['semantic_label'] = COMMONSENSE_LABEL_MAP.get(shape_label, shape_label)
+            obj['kb_concept'] = obj['semantic_label']
             clusters.setdefault(int(label), []).append(obj)
-            # Use 'object_id' for membership
             motif_dict.setdefault(int(label), []).append(obj.get('object_id', obj.get('id')))
         # For each motif, create motif node with member list and geometry
         motif_nodes = []
@@ -58,20 +60,42 @@ class MotifMiner:
                 motif_vertices = all_vertices
             # Compute physics attributes and merge all into motif_node
             physics_attrs = {}
-            try:
-                from src.scene_graphs_building.feature_extraction import compute_physics_attributes
-                compute_physics_attributes(physics_attrs)
-                # Use motif geometry for attribute computation
-                physics_attrs['vertices'] = motif_vertices
-                compute_physics_attributes(physics_attrs)
-            except Exception as e:
-                logging.warning(f"MotifMiner.cluster_motifs: compute_physics_attributes failed for motif {motif_id}: {e}")
+            motif_vertices_arr = np.array(motif_vertices)
+            is_valid_polygon = False
+            if motif_vertices_arr.shape[0] >= 3:
+                v = motif_vertices_arr
+                if np.linalg.matrix_rank(v - v[0]) >= 2:
+                    is_valid_polygon = True
+            if is_valid_polygon:
+                try:
+                    from src.scene_graphs_building.feature_extraction import compute_physics_attributes
+                    physics_attrs['vertices'] = motif_vertices
+                    compute_physics_attributes(physics_attrs)
+                except Exception as e:
+                    logging.warning(f"MotifMiner.cluster_motifs: compute_physics_attributes failed for motif {motif_id}: {e}")
+            else:
+                logging.warning(f"MotifMiner.cluster_motifs: Skipping physics attribute computation for motif {motif_id} due to degenerate or invalid geometry. Vertices: {motif_vertices}")
+            # Use config for all motif node fields
+            shape_label = self.MOTIF_LABELS.get(label, f"motif_{label}")
+            kb_concept = COMMONSENSE_LABEL_MAP.get(shape_label, shape_label)
+            motif_type = None
+            for cat in MOTIF_CATEGORIES:
+                if cat in shape_label.lower():
+                    motif_type = cat
+                    break
             motif_node = {
                 'id': motif_id,
                 'is_motif': True,
                 'member_nodes': member_ids,
-                'shape_label': self.MOTIF_LABELS.get(label, f"motif_{label}"),
+                'shape_label': shape_label,
                 'motif_label': label,
+                'semantic_label': kb_concept,
+                'kb_concept': kb_concept,
+                'motif_type': motif_type or 'group',
+                'pattern_role': None,
+                'action_program_type': None,
+                'function_label': None,
+                'conceptnet_rels': list(CONCEPTNET_KEEP_RELS),
                 **physics_attrs
             }
             # Assign placeholder for gnn_score
@@ -122,12 +146,21 @@ class MotifMiner:
         vertices = self.aggregate_motif_vertices(member_nodes)
         # 2. Compute physics attributes on aggregated vertices
         physics_attrs = {}
-        physics_attrs['vertices'] = vertices
-        try:
-            from src.scene_graphs_building.feature_extraction import compute_physics_attributes
-            compute_physics_attributes(physics_attrs)
-        except Exception as e:
-            logging.warning(f"MotifMiner.create_motif_supernode: compute_physics_attributes failed for motif {motif_id}: {e}")
+        vertices_arr = np.array(vertices)
+        is_valid_polygon = False
+        if vertices_arr.shape[0] >= 3:
+            v = vertices_arr
+            if np.linalg.matrix_rank(v - v[0]) >= 2:
+                is_valid_polygon = True
+        if is_valid_polygon:
+            physics_attrs['vertices'] = vertices
+            try:
+                from src.scene_graphs_building.feature_extraction import compute_physics_attributes
+                compute_physics_attributes(physics_attrs)
+            except Exception as e:
+                logging.warning(f"MotifMiner.create_motif_supernode: compute_physics_attributes failed for motif {motif_id}: {e}")
+        else:
+            logging.warning(f"MotifMiner.create_motif_supernode: Skipping physics attribute computation for motif {motif_id} due to degenerate or invalid geometry. Vertices: {vertices}")
         # 3. Aggregate semantic cues
         area = sum([n.get('area', 0) for n in member_nodes])
         motif_score = sum([n.get('motif_score', 0) for n in member_nodes]) / max(1, len(member_nodes))

@@ -93,12 +93,8 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
             return SHAPE_MAP.get(lbl, lbl)
         node_labels = {}
         node_colors = []
-        # List of metadata fields to display
-        metadata_fields = [
-            'id', 'object_type', 'shape_label', 'component_index', 'is_valid', 'geometry_reason', 'fallback_geometry',
-            'bounding_box', 'orientation', 'aspect_ratio', 'curvature', 'skeleton_length', 'symmetry_axis',
-            'action_program', 'stroke_type', 'object_color', 'centroid', 'gnn_score', 'clip_sim', 'motif_score', 'vl_sim', 'warnings'
-        ]
+        # List of semantic fields to display (from config)
+        from src.scene_graphs_building.config import SEMANTIC_FIELDS
         for n in G.nodes():
             node = G.nodes[n]
             label_lines = []
@@ -110,16 +106,46 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
                 node_colors.append('lightgreen')
             else:
                 node_colors.append('skyblue')
-            # Metadata fields
-            for field in metadata_fields:
+            # Structure label: group by semantic, geometry, and scores
+            # Semantic block
+            semantic_block = []
+            for field in ['object_id', 'shape_label', 'semantic_label', 'kb_concept', 'motif_label', 'motif_type', 'pattern_role', 'action_program_type', 'function_label']:
                 val = node.get(field)
                 if val is not None:
-                    # Format bounding_box, centroid, symmetry_axis, warnings, etc. for readability
+                    semantic_block.append(f'{field}: {val}')
+            if semantic_block:
+                label_lines.append('[semantic]')
+                label_lines.extend(semantic_block)
+            # Geometry block
+            geometry_block = []
+            for field in ['object_type', 'is_closed', 'fallback_geometry', 'bounding_box', 'centroid', 'orientation', 'aspect_ratio', 'curvature', 'skeleton_length', 'symmetry_axis', 'component_index', 'is_valid', 'geometry_reason', 'object_color']:
+                val = node.get(field)
+                if val is not None:
                     if field in ['bounding_box', 'centroid', 'symmetry_axis'] and isinstance(val, (list, tuple)):
                         val = ','.join([f'{v:.2f}' if isinstance(v, float) else str(v) for v in val])
-                    if field == 'warnings' and isinstance(val, (list, tuple)):
-                        val = '; '.join([str(w) for w in val])
-                    label_lines.append(f'{field}: {val}')
+                    geometry_block.append(f'{field}: {val}')
+            if geometry_block:
+                label_lines.append('[geometry]')
+                label_lines.extend(geometry_block)
+            # Scores block
+            scores_block = []
+            for field in ['gnn_score', 'clip_sim', 'motif_score', 'vl_sim']:
+                val = node.get(field)
+                if val is not None:
+                    scores_block.append(f'{field}: {val}')
+            if scores_block:
+                label_lines.append('[scores]')
+                label_lines.extend(scores_block)
+            # Warnings block
+            warnings_block = []
+            val = node.get('warnings')
+            if val:
+                if isinstance(val, (list, tuple)):
+                    val = '; '.join([str(w) for w in val])
+                warnings_block.append(f'warnings: {val}')
+            if warnings_block:
+                label_lines.append('[warnings]')
+                label_lines.extend(warnings_block)
             # Add normalized shape label and image name for context
             raw = node.get('shape_label', n)
             norm = normalize_shape_label(raw)
@@ -128,6 +154,7 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
                 label_lines.append(f'label: {norm}')
             if img_name:
                 label_lines.append(f'img: {img_name}')
+            # Final label: structured, readable
             node_labels[n] = '\n'.join(label_lines)
         # Draw edges: color VLM edges red, motif edges orange, others gray
         edges_to_draw = list(G.edges(data=True))
