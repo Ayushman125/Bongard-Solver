@@ -42,5 +42,7 @@ class CLIPEmbedder:
         for i, row in enumerate(sim):
             top_idx = np.argsort(row)[-top_k:][::-1]
             for j in top_idx:
-                edges.append((objects[i]['id'], objects[j]['id'], {'predicate': 'vl_sim', 'weight': float(row[j]), 'source': 'vl'}))
+                src_id = objects[i].get('object_id', objects[i].get('id'))
+                tgt_id = objects[j].get('object_id', objects[j].get('id'))
+                edges.append((src_id, tgt_id, {'predicate': 'vl_sim', 'weight': float(row[j]), 'source': 'vl'}))
         return edges

@@ -113,7 +113,7 @@ def build_graph_unvalidated(record, predicates, top_k, extra_edges=None, kb=None
             if node.get('vertices') is None or len(node.get('vertices')) < 3:
                 # Try to aggregate geometry from members
                 from src.scene_graphs_building.motif_miner import MotifMiner
-                member_nodes = [n for n in geometry if n['id'] in node.get('members', [])]
+                member_nodes = [n for n in geometry if n.get('object_id', n.get('id')) in node.get('members', [])]
                 node['vertices'] = MotifMiner().aggregate_motif_vertices(member_nodes)
             if isinstance(node.get('shape_label'), int):
                 from src.scene_graphs_building.motif_miner import MotifMiner
@@ -129,8 +129,9 @@ def build_graph_unvalidated(record, predicates, top_k, extra_edges=None, kb=None
             logging.error(f"build_graph_unvalidated: Exception in compute_physics_attributes for node at index {idx}: {e}\n{traceback.format_exc()}")
             continue
         try:
-            G.add_node(node['id'], **node)
-            logging.debug(f"[build_graph_unvalidated] Added node: id={node.get('id')}, shape_label={node.get('shape_label')}, category={node.get('category')}, vertices_len={len(node.get('vertices', []) if 'vertices' in node else [])}")
+            node_id = node.get('object_id', node.get('id'))
+            G.add_node(node_id, **node)
+            logging.debug(f"[build_graph_unvalidated] Added node: id={node_id}, shape_label={node.get('shape_label')}, category={node.get('category')}, vertices_len={len(node.get('vertices', []) if 'vertices' in node else [])}")
         except Exception as e:
             import traceback
             logging.error(f"build_graph_unvalidated: Exception adding node at index {idx}: {e}\n{traceback.format_exc()}")

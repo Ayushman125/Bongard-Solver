@@ -184,8 +184,8 @@ def load_predicates(adaptive_thresholds: AdaptivePredicateThresholds, canvas_dim
         'right_of':    lambda a, b, params: a.get('cx', 0) > b.get('cx', 0) + EPS,
         'above':       lambda a, b, params: a.get('cy', 0) + EPS < b.get('cy', 0),
         'below':       lambda a, b, params: a.get('cy', 0) > b.get('cy', 0) + EPS,
-        'contains':    lambda a, b, params: Polygon(a['vertices']).contains(Polygon(b['vertices'])) if 'vertices' in a and 'vertices' in b else False,
-        'inside':      lambda a, b, params: Polygon(b['vertices']).contains(Polygon(a['vertices'])) if 'vertices' in a and 'vertices' in b else False,
+        'contains':    lambda a, b, params: a.get('object_type') == 'polygon' and b.get('object_type') == 'polygon' and Polygon(a['vertices']).contains(Polygon(b['vertices'])) if 'vertices' in a and 'vertices' in b else False,
+        'inside':      lambda a, b, params: a.get('object_type') == 'polygon' and b.get('object_type') == 'polygon' and Polygon(b['vertices']).contains(Polygon(a['vertices'])) if 'vertices' in a and 'vertices' in b else False,
         'supports':    lambda a, b, params: (physics_contact(Polygon(a['vertices']), Polygon(b['vertices'])) and a.get('cy', 0) > b.get('cy', 0)) if 'vertices' in a and 'vertices' in b else False,
         'supported_by':lambda a, b, params: (physics_contact(Polygon(b['vertices']), Polygon(a['vertices'])) and b.get('cy', 0) > a.get('cy', 0)) if 'vertices' in a and 'vertices' in b else False,
         'touches':     lambda a, b, params: Polygon(a['vertices']).touches(Polygon(b['vertices'])) if 'vertices' in a and 'vertices' in b else False,
@@ -611,7 +611,38 @@ def parse_action_command(cmd: Any) -> Optional[Dict[str,Any]]:
     # Extend for 'arc', 'curve', etc. as needed
     return None
 
+import numpy as np
+from shapely.geometry import Polygon, LineString
 
+def are_points_collinear(verts, tol=1e-6):
+    arr = np.asarray(verts)
+    if len(arr) < 3:
+        return True
+    v0 = arr[0]
+    v1 = arr[1]
+    direction = v1 - v0
+    norm = np.linalg.norm(direction)
+    if norm < tol:
+        return True
+    direction = direction / norm
+    for v in arr[2:]:
+        rel = v - v0
+        proj = np.dot(rel, direction)
+        perp = rel - proj * direction
+        if np.linalg.norm(perp) > tol:
+            return False
+    return True
+
+def assign_object_type(verts):
+    arr = np.asarray(verts)
+    if len(arr) == 1 or np.allclose(np.std(arr, axis=0), 0, atol=1e-8):
+        return "point"
+    elif len(arr) == 2 or are_points_collinear(arr):
+        return "line"
+    elif len(arr) >= 3 and not are_points_collinear(arr):
+        return "polygon"
+    else:
+        return "unknown"
 
 async def _process_single_problem(
     problem_id: str,
@@ -649,58 +680,107 @@ async def _process_single_problem(
     for idx, rec in enumerate(problem_records):
         if representative_image_path is None:
             representative_image_path = remap_path(rec.get('image_path', ''))
-        # Always use LOGO/action file vertices for geometry. No mask/contour fallback.
         verts = rec.get('vertices') or rec.get('geometry') or []
         obj = {
-            'id': f"{problem_id}_{idx}",
+            'object_id': f"{problem_id}_{idx}",
             'vertices': verts,
+            'object_type': assign_object_type(verts),
+            'is_closed': (len(verts) > 2 and np.allclose(verts[0], verts[-1], atol=1e-6)),
+            'fallback_geometry': False, # will update below
+            'bounding_box': [float(np.min(np.array(verts)[:,0])) if verts else 0.0,
+                             float(np.min(np.array(verts)[:,1])) if verts else 0.0,
+                             float(np.max(np.array(verts)[:,0])) if verts else 0.0,
+                             float(np.max(np.array(verts)[:,1])) if verts else 0.0],
+            'centroid': [0.0, 0.0], # will update below
+            'area': 0.0,
+            'perimeter': 0.0,
+            'orientation': 0.0,
+            'aspect_ratio': 1.0,
+            'curvature': 0.0,
+            'skeleton_length': 0.0,
+            'shape_label': rec.get('label', ''),
+            'action_program': rec.get('action_program', []),
+            'stroke_type': rec.get('stroke_type', ''),
+            'symmetry_axis': 0.0,
+            'component_index': idx,
+            'is_valid': True,
+            'geometry_reason': '',
+            'object_color': rec.get('object_color', ''),
             'category': rec.get('category'),
-            'shape_label': rec.get('label'),
             'label': rec.get('label'),
             'image_path': rec.get('image_path'),
         }
-        # Compute all geometry and physics attributes ONLY from vertices
-        compute_physics_attributes(obj)
-        # symmetry_axis: estimate from geometry if possible
-        if verts and len(verts) > 2:
+        arr = np.array(verts)
+        # Geometry and feature extraction by type
+        if obj['object_type'] == "polygon":
             try:
-                from sklearn.decomposition import PCA
-                verts_arr = np.array(verts)
-                pca = PCA(n_components=2)
-                pca.fit(verts_arr)
-                axis_angle = np.arctan2(pca.components_[0][1], pca.components_[0][0])
-                obj['symmetry_axis'] = float(np.degrees(axis_angle))
-            except Exception:
-                obj['symmetry_axis'] = 0.0
-        else:
+                poly = Polygon(arr)
+                obj['centroid'] = list(poly.centroid.coords[0])
+                obj['area'] = float(poly.area)
+                obj['perimeter'] = float(poly.length)
+                obj['orientation'] = float(np.degrees(np.arctan2(arr[-1][1]-arr[0][1], arr[-1][0]-arr[0][0])))
+                obj['aspect_ratio'] = (obj['bounding_box'][2] - obj['bounding_box'][0]) / max(obj['bounding_box'][3] - obj['bounding_box'][1], 1e-6)
+                obj['curvature'] = 0.0 # can be updated with more logic
+                obj['skeleton_length'] = 0.0 # can be updated with more logic
+                obj['symmetry_axis'] = obj['orientation']
+                obj['is_valid'] = poly.is_valid and obj['area'] > 1e-6
+                obj['geometry_reason'] = "polygon" if obj['is_valid'] else "degenerate"
+                obj['fallback_geometry'] = not obj['is_valid']
+            except Exception as e:
+                obj['is_valid'] = False
+                obj['geometry_reason'] = f"polygon_error: {e}"
+                obj['fallback_geometry'] = True
+        elif obj['object_type'] == "line":
+            centroid = np.mean(arr, axis=0)
+            obj['centroid'] = centroid.tolist()
+            obj['area'] = 0.0
+            obj['perimeter'] = float(np.sum(np.linalg.norm(arr[1:] - arr[:-1], axis=1))) if arr.shape[0] > 1 else 0.0
+            obj['orientation'] = float(np.degrees(np.arctan2(arr[-1][1]-arr[0][1], arr[-1][0]-arr[0][0]))) if arr.shape[0] > 1 else 0.0
+            obj['aspect_ratio'] = (obj['bounding_box'][2] - obj['bounding_box'][0]) / max(obj['bounding_box'][3] - obj['bounding_box'][1], 1e-6)
+            obj['curvature'] = 0.0
+            obj['skeleton_length'] = obj['perimeter']
+            obj['symmetry_axis'] = obj['orientation']
+            obj['is_valid'] = True
+            obj['geometry_reason'] = "line"
+            obj['fallback_geometry'] = True
+        elif obj['object_type'] == "point":
+            obj['centroid'] = arr[0].tolist() if len(arr) == 1 else [0.0, 0.0]
+            obj['area'] = 0.0
+            obj['perimeter'] = 0.0
+            obj['orientation'] = 0.0
+            obj['aspect_ratio'] = 1.0
+            obj['curvature'] = 0.0
+            obj['skeleton_length'] = 0.0
             obj['symmetry_axis'] = 0.0
-
-        # clip_sim / vl_sim: will be set after all nodes are built
+            obj['is_valid'] = True
+            obj['geometry_reason'] = "point"
+            obj['fallback_geometry'] = True
+        else:
+            obj['is_valid'] = False
+            obj['geometry_reason'] = "unknown"
+            obj['fallback_geometry'] = True
+        # Logging for interpretability
+        logging.info(f"Object {obj['object_id']}: type={obj['object_type']}, valid={obj['is_valid']}, fallback={obj['fallback_geometry']}, reason={obj['geometry_reason']}")
+        # ...existing feature extraction (curvature, skeleton_length, etc.)...
+        # Vision-language and motif fields
         obj['clip_sim'] = 0.0
         obj['vl_sim'] = 0.0
-
-        # motif_score: not applicable for regular nodes
         obj['motif_score'] = 0.0
-        # Ensure curvature and skeleton_length are present
         if 'curvature' not in obj:
-            verts_arr = np.array(verts)
-            if len(verts_arr) > 2:
-                diffs = np.diff(verts_arr, axis=0)
+            if arr.shape[0] > 2:
+                diffs = np.diff(arr, axis=0)
                 angles = np.arctan2(diffs[:,1], diffs[:,0])
                 curvatures = np.abs(np.diff(angles))
                 obj['curvature'] = float(np.mean(curvatures))
             else:
                 obj['curvature'] = 0.0
         if 'skeleton_length' not in obj:
-            verts_arr = np.array(verts)
-            if len(verts_arr) > 1:
-                dists = np.linalg.norm(np.diff(verts_arr, axis=0), axis=1)
+            if arr.shape[0] > 1:
+                dists = np.linalg.norm(np.diff(arr, axis=0), axis=1)
                 obj['skeleton_length'] = float(np.sum(dists))
             else:
                 obj['skeleton_length'] = 0.0
-        # Ensure gnn_score is present for GNN input
         obj['gnn_score'] = 0.0
-        # --- CLIP embedding saved directly into node data ---
         if getattr(args, 'use_vl', False) and obj.get('image_path'):
             try:
                 from src.scene_graphs_building.data_loading import robust_image_open
@@ -708,6 +788,9 @@ async def _process_single_problem(
                 obj['vl_embed'] = clip_embedder.embed_image(img)
             except Exception as e:
                 obj['vl_embed'] = np.zeros(512)
+        # Log non-polygon objects for feedback
+        if obj['object_type'] != "polygon":
+            logging.warning(f"Inserted non-polygon object: id={obj['object_id']}, type={obj['object_type']}, vertices={verts}")
         objects.append(obj)
     merged_record['objects'] = objects
     # 2. Motif mining and super-nodes
@@ -717,7 +800,7 @@ async def _process_single_problem(
         motif_dict, motif_nodes = MotifMiner().cluster_motifs(objects)
         for motif_node in motif_nodes:
             supernode_id = motif_node['id']
-            member_nodes = [obj for obj in objects if obj['id'] in motif_node['member_nodes']]
+            member_nodes = [obj for obj in objects if obj.get('object_id', obj.get('id')) in motif_node['member_nodes']]
             # Optionally, update motif_node with aggregated features if needed
             # Add part_of_motif edges
             for nid in motif_node['member_nodes']:
@@ -979,7 +1062,7 @@ def process_problem_batch_sync_wrapper(list_of_problem_records: List[List[Dict[s
     tasks = []
     for problem_records in list_of_problem_records:
         if problem_records: # Ensure problem_records is not empty
-            problem_id = problem_records[0].get('problem_id', 'unknown_problem')
+            problem_id = problem_records[0].get('problem_id', 'unknown')
             tasks.append(_process_single_problem(problem_id, problem_records, feature_cache, batch_validator, recall_evaluator, drift_visualizer, enhanced_builder, feedback_dir, feedback_rate, decompose_polygons, adaptive_thresholds, args=args))
         else:
             # logging.warning("Empty problem record list passed to process_problem_batch_sync_wrapper.")

@@ -93,30 +93,42 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
             return SHAPE_MAP.get(lbl, lbl)
         node_labels = {}
         node_colors = []
+        # List of metadata fields to display
+        metadata_fields = [
+            'id', 'object_type', 'shape_label', 'component_index', 'is_valid', 'geometry_reason', 'fallback_geometry',
+            'bounding_box', 'orientation', 'aspect_ratio', 'curvature', 'skeleton_length', 'symmetry_axis',
+            'action_program', 'stroke_type', 'object_color', 'centroid', 'gnn_score', 'clip_sim', 'motif_score', 'vl_sim', 'warnings'
+        ]
         for n in G.nodes():
             node = G.nodes[n]
-            raw = node.get('shape_label', n)
-            norm = normalize_shape_label(raw)
-            label = norm if norm else str(raw)
-            img_name = get_img_name(node)
-            gnn_score = node.get('gnn_score')
+            label_lines = []
+            # Motif cluster highlight
             if node.get('is_motif'):
-                label = f"[motif]\n{label}"
+                label_lines.append('[motif]')
                 node_colors.append('gold')
-                missing = [k for k in ['centroid','curvature','skeleton_length','symmetry_axis','gnn_score','clip_sim','motif_score','vl_sim'] if k not in node or node[k] is None]
-                if missing:
-                    logging.warning(f"Motif node {n} missing attributes: {missing}")
-                    label += "\n[MISSING]"
-                logging.info(f"Motif node {n} attributes: {sorted(node.keys())}")
-            elif gnn_score is not None:
-                label = f"{label}\nGNN:{gnn_score:.2f}"
+            elif node.get('gnn_score') is not None:
                 node_colors.append('lightgreen')
             else:
                 node_colors.append('skyblue')
+            # Metadata fields
+            for field in metadata_fields:
+                val = node.get(field)
+                if val is not None:
+                    # Format bounding_box, centroid, symmetry_axis, warnings, etc. for readability
+                    if field in ['bounding_box', 'centroid', 'symmetry_axis'] and isinstance(val, (list, tuple)):
+                        val = ','.join([f'{v:.2f}' if isinstance(v, float) else str(v) for v in val])
+                    if field == 'warnings' and isinstance(val, (list, tuple)):
+                        val = '; '.join([str(w) for w in val])
+                    label_lines.append(f'{field}: {val}')
+            # Add normalized shape label and image name for context
+            raw = node.get('shape_label', n)
+            norm = normalize_shape_label(raw)
+            img_name = get_img_name(node)
+            if norm:
+                label_lines.append(f'label: {norm}')
             if img_name:
-                node_labels[n] = f"{label}\n{img_name}"
-            else:
-                node_labels[n] = label
+                label_lines.append(f'img: {img_name}')
+            node_labels[n] = '\n'.join(label_lines)
         # Draw edges: color VLM edges red, motif edges orange, others gray
         edges_to_draw = list(G.edges(data=True))
         vl_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate')=='vl_sim']
@@ -129,7 +141,8 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
         nx.draw_networkx_edges(G, pos, edgelist=vl_edges, arrows=True, arrowstyle='-|>', width=2.5, alpha=0.8, edge_color='red')
         nx.draw_networkx_edges(G, pos, edgelist=motif_edges, arrows=True, arrowstyle='-|>', width=2.5, alpha=0.8, edge_color='orange')
         nx.draw_networkx_edges(G, pos, edgelist=spatial_edges, arrows=True, arrowstyle='-|>', width=2.5, alpha=0.8, edge_color='green')
-        nx.draw_networkx_labels(G, pos, labels=node_labels, font_size=10, font_color='black')
+        # Use smaller font for large metadata overlays
+        nx.draw_networkx_labels(G, pos, labels=node_labels, font_size=8, font_color='black')
         from collections import defaultdict
         combined = defaultdict(list)
         for u, v, d in edges_to_draw:
@@ -137,7 +150,7 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
             if pred:
                 combined[(u, v)].append(pred)
         edge_labels = { (u, v): ", ".join(sorted(set(preds))) for (u, v), preds in combined.items() }
-        nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_color='gray', font_size=9)
+        nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_color='gray', font_size=8)
         # Annotate rules if present
         rules = scene_graph.get('rules') if scene_graph else None
         if rules is not None:

@@ -35,14 +35,15 @@ class MotifMiner:
             obj['motif_label'] = int(label)
             obj['shape_label'] = self.MOTIF_LABELS.get(int(label), f"motif_{label}")
             clusters.setdefault(int(label), []).append(obj)
-            motif_dict.setdefault(int(label), []).append(obj['id'])
+            # Use 'object_id' for membership
+            motif_dict.setdefault(int(label), []).append(obj.get('object_id', obj.get('id')))
         # For each motif, create motif node with member list and geometry
         motif_nodes = []
         for label, members in clusters.items():
             if len(members) < 2:
                 continue
             motif_id = f"motif_{label}"
-            member_ids = [m['id'] for m in members]
+            member_ids = [m.get('object_id', m.get('id')) for m in members]
             # Aggregate geometry from member vertices
             all_vertices = [v for m in members for v in (m.get('vertices') or [])]
             if len(all_vertices) >= 3:
