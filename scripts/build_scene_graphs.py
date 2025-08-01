@@ -648,7 +648,8 @@ async def _process_single_problem(
     objects = []
     for idx, rec in enumerate(problem_records):
         if representative_image_path is None:
-            representative_image_path = remap_path(rec.get('image_path', rec.get('mask_path', '')))
+            representative_image_path = remap_path(rec.get('image_path', ''))
+        # Always use LOGO/action file vertices for geometry. No mask/contour fallback.
         verts = rec.get('vertices') or rec.get('geometry') or []
         obj = {
             'id': f"{problem_id}_{idx}",
@@ -657,11 +658,9 @@ async def _process_single_problem(
             'shape_label': rec.get('label'),
             'label': rec.get('label'),
             'image_path': rec.get('image_path'),
-            'centroid': rec.get('centroid', [0,0]),
-            'area': rec.get('area', 1.0),
-            'aspect_ratio': rec.get('aspect_ratio', 1.0),
-            'orientation': rec.get('orientation', 0.0),
         }
+        # Compute all geometry and physics attributes ONLY from vertices
+        compute_physics_attributes(obj)
         # symmetry_axis: estimate from geometry if possible
         if verts and len(verts) > 2:
             try:
@@ -682,11 +681,8 @@ async def _process_single_problem(
 
         # motif_score: not applicable for regular nodes
         obj['motif_score'] = 0.0
-        # --- Node Feature Augmentation: curvature and skeleton metrics ---
-        compute_physics_attributes(obj)
         # Ensure curvature and skeleton_length are present
         if 'curvature' not in obj:
-            # Dummy curvature: mean of angle changes between consecutive vertices
             verts_arr = np.array(verts)
             if len(verts_arr) > 2:
                 diffs = np.diff(verts_arr, axis=0)
@@ -696,7 +692,6 @@ async def _process_single_problem(
             else:
                 obj['curvature'] = 0.0
         if 'skeleton_length' not in obj:
-            # Dummy skeleton: use perimeter as proxy
             verts_arr = np.array(verts)
             if len(verts_arr) > 1:
                 dists = np.linalg.norm(np.diff(verts_arr, axis=0), axis=1)
