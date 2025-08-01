@@ -2,7 +2,7 @@ import networkx as nx
 import logging
 import numpy as np
 from src.scene_graphs_building.feature_extraction import compute_physics_attributes
-from src.scene_graphs_building.config import CONCEPTNET_KEEP_RELS, SHAPE_MAP
+from src.scene_graphs_building.config import CONCEPTNET_KEEP_RELS, SHAPE_MAP, COMMONSENSE_LABEL_MAP
 
 
 def add_predicate_edges(G, predicates):
@@ -120,8 +120,17 @@ def add_commonsense_edges(G, top_k, kb=None):
             from src.scene_graphs_building.config import SHAPE_MAP
             lbl = str(d['shape_label']).lower().replace('_',' ').replace('-',' ').strip()
             d['shape_label'] = SHAPE_MAP.get(lbl, lbl)
-    all_shape_labels = [d.get('shape_label') for _, d in nodes_with_data]
-    logging.info(f"[add_commonsense_edges] All node shape_labels: {all_shape_labels}")
+    all_shape_labels = [d.get('kb_concept') for _, d in nodes_with_data]
+    logging.info(f"[add_commonsense_edges] All node kb_concepts: {all_shape_labels}")
+    for _, d in nodes_with_data:
+        # Use shape semantics, not just positive/negative
+        raw_label = d.get('shape_label')
+        if raw_label in (None, '', 'positive', 'negative'):
+            # Try to use object_type or other semantic field
+            raw_label = d.get('object_type', None)
+        # Map to commonsense concept
+        kb_concept = COMMONSENSE_LABEL_MAP.get(raw_label, raw_label)
+        d['kb_concept'] = kb_concept
     edge_count = 0
     for u, data_u in nodes_with_data:
         raw = data_u.get('shape_label', '')

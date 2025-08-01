@@ -38,12 +38,23 @@ class MotifMiner:
         # Log type and keys of each object for debugging
         for i, o in enumerate(objects):
             logging.info(f"MotifMiner.cluster_motifs: object[{i}] type={type(o)}, keys={list(o.keys())}")
-        # Cluster by centroid proximity, return dict: motif_label -> [node_ids]
+        # Cluster by centroid proximity, fallback to line centroids if polygons fail
         try:
-            valid_objects = [o for o in objects if o.get('geometry_valid', False) and o.get('feature_valid', {}).get('centroid_valid', False) and o.get('centroid') is not None]
-            centroids = np.array([o['centroid'] for o in valid_objects])
+            valid_objects = []
+            centroids = []
+            for o in objects:
+                if o.get('geometry_valid', False):
+                    if o.get('centroid') is not None:
+                        valid_objects.append(o)
+                        centroids.append(o['centroid'])
+                    elif o.get('object_type') == 'line' and o.get('vertices') is not None:
+                        # Fallback: use midpoint of line vertices
+                        midpoint = np.mean(o['vertices'], axis=0).tolist()
+                        valid_objects.append(o)
+                        centroids.append(midpoint)
+            centroids = np.array(centroids)
             if len(centroids) == 0:
-                logging.error("MotifMiner.cluster_motifs: No valid centroids for clustering.")
+                logging.error("MotifMiner.cluster_motifs: No valid centroids for clustering (including lines).")
                 return {}, []
         except Exception as e:
             logging.error(f"MotifMiner.cluster_motifs: Error extracting centroids: {e}")

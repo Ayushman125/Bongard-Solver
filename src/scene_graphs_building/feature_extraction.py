@@ -45,6 +45,17 @@ def extract_clean_contours(mask, min_area=10, simplify_epsilon=2.0):
     # Step 8: Filter out degenerate polygons
     polygons = [poly for poly in polygons if len(poly) >= 3]
     return polygons
+
+# --- Geometry validity logic update ---
+def set_geometry_valid(obj):
+    # Loosen geometry_valid: allow lines as valid geometry
+    if obj.get('object_type') == 'polygon' and obj.get('is_closed', False):
+        obj['geometry_valid'] = True
+    elif obj.get('object_type') == 'line':
+        obj['geometry_valid'] = True
+    else:
+        obj['geometry_valid'] = False
+    return obj
 from shapely.geometry import Polygon
 from typing import Dict, Any
 import numpy as np
