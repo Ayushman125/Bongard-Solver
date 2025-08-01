@@ -59,18 +59,16 @@ class GNNReasoner:
 
     def nx_to_pyg(self, G):
         import logging
-        required_features = ['area', 'aspect_ratio', 'orientation', 'curvature', 'skeleton_length', 'symmetry_axis', 'gnn_score', 'clip_sim', 'motif_score', 'vl_sim']
-        # Only use nodes with valid geometry and all required features
-        node_ids = [n for n in G.nodes() if G.nodes[n].get('geometry_valid', False) and all(G.nodes[n].get('feature_valid', {}).get(f+'_valid', False) for f in required_features)]
+        # Use a broader set of features for all valid geometry (lines, arcs, polygons, points)
+        required_features = ['area', 'aspect_ratio', 'orientation', 'curvature', 'skeleton_length', 'length', 'centroid', 'gnn_score', 'clip_sim', 'motif_score', 'vl_sim']
+        node_ids = [n for n in G.nodes() if G.nodes[n].get('geometry_valid', False)]
         node_feats = []
         diagnostics = []
         # Separate motif and regular nodes for normalization
         motif_nodes = [n for n in node_ids if G.nodes[n].get('is_motif')]
         regular_nodes = [n for n in node_ids if not G.nodes[n].get('is_motif')]
-        # Compute means for normalization
         def get_feat(n, f):
             val = G.nodes[n].get(f, 0)
-            # Robustly handle dicts, lists, None, etc.
             if isinstance(val, (int, float, np.integer, np.floating)):
                 return float(val)
             elif isinstance(val, str):
@@ -78,32 +76,27 @@ class GNNReasoner:
                     return float(val)
                 except Exception:
                     return 0.0
+            elif isinstance(val, (list, tuple, np.ndarray)):
+                # Use mean for centroid or vector features
+                arr = np.array(val)
+                return float(np.mean(arr)) if arr.size > 0 else 0.0
             else:
-                # If dict, list, None, or other type, treat as 0.0
                 return 0.0
         for f in required_features:
             motif_vals = [get_feat(n, f) for n in motif_nodes]
             reg_vals = [get_feat(n, f) for n in regular_nodes]
             motif_mean = np.mean(motif_vals) if motif_vals else 1.0
             reg_mean = np.mean(reg_vals) if reg_vals else 1.0
-            # Robust normalization: avoid division by zero or NaN
             if motif_mean is None or motif_mean == 0 or (hasattr(motif_mean, 'item') and motif_mean.item() == 0) or np.isnan(motif_mean):
                 motif_mean = 1.0
             if reg_mean is None or reg_mean == 0 or (hasattr(reg_mean, 'item') and reg_mean.item() == 0) or np.isnan(reg_mean):
                 reg_mean = 1.0
             for n in motif_nodes:
                 val = get_feat(n, f)
-                if motif_mean == 0 or np.isnan(motif_mean):
-                    G.nodes[n][f+'_norm'] = 0.0
-                else:
-                    G.nodes[n][f+'_norm'] = val / motif_mean
+                G.nodes[n][f+'_norm'] = val / motif_mean if motif_mean else 0.0
             for n in regular_nodes:
                 val = get_feat(n, f)
-                if reg_mean == 0 or np.isnan(reg_mean):
-                    G.nodes[n][f+'_norm'] = 0.0
-                else:
-                    G.nodes[n][f+'_norm'] = val / reg_mean
-        # Build feature vectors
+                G.nodes[n][f+'_norm'] = val / reg_mean if reg_mean else 0.0
         for n in node_ids:
             d = G.nodes[n]
             missing = [f for f in required_features if f not in d]
@@ -118,12 +111,10 @@ class GNNReasoner:
         if not node_feats:
             diagnostics.append("No node features found. Graph may be empty.")
             logging.error("GNNReasoner.nx_to_pyg: No node features found. Graph may be empty.")
-        # Validate graph structure
         if len(node_feats) == 0 or len(node_ids) == 0:
             diagnostics.append("Graph is empty or has no nodes. Skipping GNN.")
             logging.error("GNNReasoner.nx_to_pyg: Graph is empty or has no nodes. Skipping GNN.")
         x = torch.tensor(node_feats, dtype=torch.float) if node_feats else torch.empty((0, len(required_features)), dtype=torch.float)
-        # Edges
         edge_index = []
         for u, v in G.edges():
             edge_index.append([node_ids.index(u), node_ids.index(v)])

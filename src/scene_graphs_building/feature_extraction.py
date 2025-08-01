@@ -48,8 +48,8 @@ def extract_clean_contours(mask, min_area=10, simplify_epsilon=2.0):
 
 # --- Geometry validity logic update ---
 def set_geometry_valid(obj):
-    # Broaden geometry_valid: allow polygons, lines, and points as valid geometry
-    if obj.get('object_type') in ('polygon', 'line', 'point'):
+    # Broaden geometry_valid: allow polygons, lines, arcs, and points as valid geometry
+    if obj.get('object_type') in ('polygon', 'line', 'arc', 'point'):
         obj['geometry_valid'] = True
     else:
         obj['geometry_valid'] = False
@@ -140,12 +140,12 @@ def compute_physics_attributes(node_data):
         node_data['curvature_type'] = 'arc'
     else:
         node_data['curvature_type'] = None
-    # --- Length, orientation, centroid for all strokes (lines, polygons, etc.) ---
+    # --- Length, orientation, centroid for all strokes (lines, polygons, arcs, etc.) ---
     if vertices and len(vertices) >= 2:
         arr = np.array(vertices)
         node_data['length'] = float(np.sum(np.linalg.norm(arr[1:] - arr[:-1], axis=1)))
-        # For lines, orientation is from first to last point
-        if node_data.get('object_type') == 'line':
+        # For lines/arcs, orientation is from first to last point
+        if node_data.get('object_type') in ('line', 'arc'):
             node_data['orientation'] = float(np.degrees(np.arctan2(arr[-1][1] - arr[0][1], arr[-1][0] - arr[0][0])))
             node_data['centroid'] = arr.mean(axis=0).tolist()
         else:

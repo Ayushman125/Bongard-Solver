@@ -80,13 +80,15 @@ def add_predicate_edges(G, predicates):
                 if count > 0:
                     G.add_edge(u, v, predicate='intersects', count=count, source='topology')
 
-    # --- 3. Line-specific geometry predicates ---
+    # --- 3. Geometry predicates split by stroke type ---
     for i, (u, data_u) in enumerate(node_list):
         for j, (v, data_v) in enumerate(node_list):
             if i == j:
                 continue
-            # Only for lines
-            if data_u.get('object_type') == 'line' and data_v.get('object_type') == 'line':
+            ot1 = data_u.get('object_type')
+            ot2 = data_v.get('object_type')
+            # For lines/arcs: parallel, longer_than, near, angle_between
+            if ot1 in ('line', 'arc') and ot2 in ('line', 'arc'):
                 # parallel
                 if data_u.get('orientation') is not None and data_v.get('orientation') is not None:
                     if abs(data_u['orientation'] - data_v['orientation']) < 12.0:
@@ -104,6 +106,10 @@ def add_predicate_edges(G, predicates):
                 if data_u.get('orientation') is not None and data_v.get('orientation') is not None:
                     angle = abs(data_u['orientation'] - data_v['orientation'])
                     G.add_edge(u, v, predicate='angle_between', angle=angle, source='geometry')
+            # For polygons: area, aspect_sim, etc. (existing logic)
+            elif ot1 in ('polygon',) and ot2 in ('polygon',):
+                # Area-based predicates, aspect_sim, etc. handled below
+                pass
 
     # --- 4. Existing logic for polygons and valid geometry ---
     for i, (u, data_u) in enumerate(node_list):
