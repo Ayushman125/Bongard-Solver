@@ -12,12 +12,16 @@ def save_fallback_centroid_visualizations(samples, output_dir):
         if 'cx' in sample and 'cy' in sample:
             centroid = [sample['cx'], sample['cy']]
         else:
-            centroid = sample.get('centroid', [0, 0])
+            centroid = sample.get('centroid', None)
         node_id = sample.get('id', f'sample_{i}')
         save_path = os.path.join(output_dir, f"physics_fallback_{node_id}.png")
         plt.figure(figsize=(6, 6))
         plt.plot(vertices[:,0], vertices[:,1], 'b-', lw=2, label='Shape')
-        plt.scatter([centroid[0]], [centroid[1]], c='r', s=80, label='Centroid')
+        # Only plot centroid if valid (not None, not [None, None])
+        if centroid is not None and all(c is not None for c in centroid):
+            plt.scatter([centroid[0]], [centroid[1]], c='r', s=80, label='Centroid')
+        else:
+            plt.text(0.5, 0.5, 'Centroid: N/A', ha='center', va='center', fontsize=10, color='red', transform=plt.gca().transAxes)
         plt.title(f"Node {node_id} Fallback Centroid")
         plt.axis('equal')
         plt.legend()
@@ -91,71 +95,61 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
             if lbl in ("positive", "negative", "pos", "neg"):
                 return None
             return SHAPE_MAP.get(lbl, lbl)
+        import csv
         node_labels = {}
         node_colors = []
-        # List of semantic fields to display (from config)
         from src.scene_graphs_building.config import SEMANTIC_FIELDS
+        # Prepare CSV table for all node metadata
+        csv_fields = [
+            'node_id', 'object_id', 'shape_label', 'semantic_label', 'kb_concept', 'motif_label', 'motif_type', 'pattern_role', 'action_program_type', 'function_label',
+            'object_type', 'is_closed', 'fallback_geometry', 'bounding_box', 'centroid', 'orientation', 'aspect_ratio', 'curvature', 'skeleton_length', 'symmetry_axis', 'component_index', 'is_valid', 'geometry_reason', 'object_color',
+            'gnn_score', 'clip_sim', 'motif_score', 'vl_sim', 'warnings', 'label', 'img'
+        ]
+        csv_rows = []
         for n in G.nodes():
             node = G.nodes[n]
-            label_lines = []
-            # Motif cluster highlight
+            # Color logic unchanged
             if node.get('is_motif'):
-                label_lines.append('[motif]')
                 node_colors.append('gold')
             elif node.get('gnn_score') is not None:
                 node_colors.append('lightgreen')
             else:
                 node_colors.append('skyblue')
-            # Structure label: group by semantic, geometry, and scores
-            # Semantic block
-            semantic_block = []
-            for field in ['object_id', 'shape_label', 'semantic_label', 'kb_concept', 'motif_label', 'motif_type', 'pattern_role', 'action_program_type', 'function_label']:
-                val = node.get(field)
-                if val is not None:
-                    semantic_block.append(f'{field}: {val}')
-            if semantic_block:
-                label_lines.append('[semantic]')
-                label_lines.extend(semantic_block)
-            # Geometry block
-            geometry_block = []
-            for field in ['object_type', 'is_closed', 'fallback_geometry', 'bounding_box', 'centroid', 'orientation', 'aspect_ratio', 'curvature', 'skeleton_length', 'symmetry_axis', 'component_index', 'is_valid', 'geometry_reason', 'object_color']:
-                val = node.get(field)
-                if val is not None:
-                    if field in ['bounding_box', 'centroid', 'symmetry_axis'] and isinstance(val, (list, tuple)):
-                        val = ','.join([f'{v:.2f}' if isinstance(v, float) else str(v) for v in val])
-                    geometry_block.append(f'{field}: {val}')
-            if geometry_block:
-                label_lines.append('[geometry]')
-                label_lines.extend(geometry_block)
-            # Scores block
-            scores_block = []
-            for field in ['gnn_score', 'clip_sim', 'motif_score', 'vl_sim']:
-                val = node.get(field)
-                if val is not None:
-                    scores_block.append(f'{field}: {val}')
-            if scores_block:
-                label_lines.append('[scores]')
-                label_lines.extend(scores_block)
-            # Warnings block
-            warnings_block = []
-            val = node.get('warnings')
-            if val:
-                if isinstance(val, (list, tuple)):
-                    val = '; '.join([str(w) for w in val])
-                warnings_block.append(f'warnings: {val}')
-            if warnings_block:
-                label_lines.append('[warnings]')
-                label_lines.extend(warnings_block)
-            # Add normalized shape label and image name for context
+
+            # Minimal label: node id or shape label
             raw = node.get('shape_label', n)
             norm = normalize_shape_label(raw)
-            img_name = get_img_name(node)
-            if norm:
-                label_lines.append(f'label: {norm}')
-            if img_name:
-                label_lines.append(f'img: {img_name}')
-            # Final label: structured, readable
-            node_labels[n] = '\n'.join(label_lines)
+            label = norm if norm else str(n)
+            node_labels[n] = label
+
+            # Prepare row for CSV
+            row = {'node_id': n}
+            for field in csv_fields:
+                if field == 'node_id':
+                    continue
+                if field == 'label':
+                    row['label'] = label
+                elif field == 'img':
+                    row['img'] = get_img_name(node)
+                else:
+                    val = node.get(field)
+                    if val is None or val == 'not_applicable':
+                        val_str = 'N/A'
+                    elif field in ['bounding_box', 'centroid', 'symmetry_axis'] and isinstance(val, (list, tuple)):
+                        val_str = ','.join([f'{v:.2f}' if isinstance(v, float) else str(v) for v in val])
+                    elif isinstance(val, (list, tuple)):
+                        val_str = ';'.join([str(v) for v in val])
+                    else:
+                        val_str = str(val)
+                    row[field] = val_str
+            csv_rows.append(row)
+        # Save CSV table
+        csv_path = os.path.join(feedback_dir, f"{base_name}_node_metadata.csv")
+        with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=csv_fields)
+            writer.writeheader()
+            for row in csv_rows:
+                writer.writerow(row)
         # Draw edges: color VLM edges red, motif edges orange, others gray
         edges_to_draw = list(G.edges(data=True))
         vl_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate')=='vl_sim']
@@ -168,8 +162,8 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
         nx.draw_networkx_edges(G, pos, edgelist=vl_edges, arrows=True, arrowstyle='-|>', width=2.5, alpha=0.8, edge_color='red')
         nx.draw_networkx_edges(G, pos, edgelist=motif_edges, arrows=True, arrowstyle='-|>', width=2.5, alpha=0.8, edge_color='orange')
         nx.draw_networkx_edges(G, pos, edgelist=spatial_edges, arrows=True, arrowstyle='-|>', width=2.5, alpha=0.8, edge_color='green')
-        # Use smaller font for large metadata overlays
-        nx.draw_networkx_labels(G, pos, labels=node_labels, font_size=8, font_color='black')
+        # Draw only minimal node labels (ID or shape label)
+        nx.draw_networkx_labels(G, pos, labels=node_labels, font_size=9, font_family='sans-serif', font_color='black')
         from collections import defaultdict
         combined = defaultdict(list)
         for u, v, d in edges_to_draw:

@@ -712,6 +712,7 @@ async def _process_single_problem(
         }
         arr = np.array(verts)
         # Geometry and feature extraction by type
+        obj['attribute_validity'] = {}
         if obj['object_type'] == "polygon":
             try:
                 poly = Polygon(arr)
@@ -726,10 +727,15 @@ async def _process_single_problem(
                 obj['is_valid'] = poly.is_valid and obj['area'] > 1e-6
                 obj['geometry_reason'] = "polygon" if obj['is_valid'] else "degenerate"
                 obj['fallback_geometry'] = not obj['is_valid']
+                # Mark attribute validity
+                for feat in ['curvature', 'skeleton_length', 'symmetry_axis']:
+                    obj['attribute_validity'][feat] = 'valid' if obj['is_valid'] else 'not_applicable'
             except Exception as e:
                 obj['is_valid'] = False
                 obj['geometry_reason'] = f"polygon_error: {e}"
                 obj['fallback_geometry'] = True
+                for feat in ['curvature', 'skeleton_length', 'symmetry_axis']:
+                    obj['attribute_validity'][feat] = 'not_applicable'
         elif obj['object_type'] == "line":
             centroid = np.mean(arr, axis=0)
             obj['centroid'] = centroid.tolist()
@@ -737,50 +743,61 @@ async def _process_single_problem(
             obj['perimeter'] = float(np.sum(np.linalg.norm(arr[1:] - arr[:-1], axis=1))) if arr.shape[0] > 1 else 0.0
             obj['orientation'] = float(np.degrees(np.arctan2(arr[-1][1]-arr[0][1], arr[-1][0]-arr[0][0]))) if arr.shape[0] > 1 else 0.0
             obj['aspect_ratio'] = (obj['bounding_box'][2] - obj['bounding_box'][0]) / max(obj['bounding_box'][3] - obj['bounding_box'][1], 1e-6)
-            obj['curvature'] = 0.0
+            obj['curvature'] = None
             obj['skeleton_length'] = obj['perimeter']
-            obj['symmetry_axis'] = obj['orientation']
+            obj['symmetry_axis'] = None
             obj['is_valid'] = True
             obj['geometry_reason'] = "line"
             obj['fallback_geometry'] = True
+            obj['attribute_validity']['curvature'] = 'not_applicable'
+            obj['attribute_validity']['symmetry_axis'] = 'not_applicable'
+            obj['attribute_validity']['skeleton_length'] = 'valid'
         elif obj['object_type'] == "point":
             obj['centroid'] = arr[0].tolist() if len(arr) == 1 else [0.0, 0.0]
             obj['area'] = 0.0
             obj['perimeter'] = 0.0
             obj['orientation'] = 0.0
             obj['aspect_ratio'] = 1.0
-            obj['curvature'] = 0.0
-            obj['skeleton_length'] = 0.0
-            obj['symmetry_axis'] = 0.0
+            obj['curvature'] = None
+            obj['skeleton_length'] = None
+            obj['symmetry_axis'] = None
             obj['is_valid'] = True
             obj['geometry_reason'] = "point"
             obj['fallback_geometry'] = True
+            for feat in ['curvature', 'skeleton_length', 'symmetry_axis']:
+                obj['attribute_validity'][feat] = 'not_applicable'
         else:
             obj['is_valid'] = False
             obj['geometry_reason'] = "unknown"
             obj['fallback_geometry'] = True
+            for feat in ['curvature', 'skeleton_length', 'symmetry_axis']:
+                obj['attribute_validity'][feat] = 'not_applicable'
         # Logging for interpretability
-        logging.info(f"Object {obj['object_id']}: type={obj['object_type']}, valid={obj['is_valid']}, fallback={obj['fallback_geometry']}, reason={obj['geometry_reason']}")
+        logging.info(f"Object {obj['object_id']}: type={obj['object_type']}, valid={obj['is_valid']}, fallback={obj['fallback_geometry']}, reason={obj['geometry_reason']}, attribute_validity={obj['attribute_validity']}")
         # ...existing feature extraction (curvature, skeleton_length, etc.)...
         # Vision-language and motif fields
-        obj['clip_sim'] = 0.0
-        obj['vl_sim'] = 0.0
-        obj['motif_score'] = 0.0
+        obj['clip_sim'] = None
+        obj['vl_sim'] = None
+        obj['motif_score'] = None
         if 'curvature' not in obj:
-            if arr.shape[0] > 2:
+            if arr.shape[0] > 2 and obj['object_type'] == 'polygon' and obj['is_valid']:
                 diffs = np.diff(arr, axis=0)
                 angles = np.arctan2(diffs[:,1], diffs[:,0])
                 curvatures = np.abs(np.diff(angles))
                 obj['curvature'] = float(np.mean(curvatures))
+                obj['attribute_validity']['curvature'] = 'valid'
             else:
-                obj['curvature'] = 0.0
+                obj['curvature'] = None
+                obj['attribute_validity']['curvature'] = 'not_applicable'
         if 'skeleton_length' not in obj:
-            if arr.shape[0] > 1:
+            if arr.shape[0] > 1 and obj['object_type'] in ['polygon', 'line'] and obj['is_valid']:
                 dists = np.linalg.norm(np.diff(arr, axis=0), axis=1)
                 obj['skeleton_length'] = float(np.sum(dists))
+                obj['attribute_validity']['skeleton_length'] = 'valid'
             else:
-                obj['skeleton_length'] = 0.0
-        obj['gnn_score'] = 0.0
+                obj['skeleton_length'] = None
+                obj['attribute_validity']['skeleton_length'] = 'not_applicable'
+        obj['gnn_score'] = None
         if getattr(args, 'use_vl', False) and obj.get('image_path'):
             try:
                 from src.scene_graphs_building.data_loading import robust_image_open
@@ -838,9 +855,20 @@ async def _process_single_problem(
         return {'scene_graph': None, 'rules': None}
     # --- Global Graph Statistics ---
     node_centroids = [d.get('centroid', [0,0]) for n, d in base_graph_nx.nodes(data=True)]
+    import numpy as np
+    def is_valid_centroid(c):
+        return (
+            isinstance(c, (list, tuple, np.ndarray)) and
+            len(c) == 2 and
+            all(isinstance(v, (int, float, np.floating, np.integer)) and not np.isnan(v) for v in c)
+        )
     if node_centroids:
-        arr = np.array(node_centroids)
-        center = np.mean(arr, axis=0)
+        node_centroids_clean = [
+            c if is_valid_centroid(c) else [np.nan, np.nan]
+            for c in node_centroids
+        ]
+        arr = np.array(node_centroids_clean)
+        center = np.nanmean(arr, axis=0)
         sym_pairs = 0
         total_pairs = 0
         for i in range(len(arr)):

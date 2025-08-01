@@ -131,7 +131,14 @@ def compute_physics_attributes(node_data):
             perimeter = node_data['perimeter']
             compactness = perimeter**2 / (4 * math.pi * area) if area > 0 else 0.0
             action_program = node_data.get('action_program', [])
-            num_segments = len(extract_line_segments(action_program))
+            # Robust type check: only extract segments if action_program is a list of dicts
+            if (
+                isinstance(action_program, list)
+                and all(isinstance(cmd, dict) for cmd in action_program)
+            ):
+                num_segments = len(extract_line_segments(action_program))
+            else:
+                num_segments = None  # or 'not_applicable' if you prefer string
             # Junction counting
             coords_counter = Counter(tuple(c) for c in poly.exterior.coords)
             num_junctions = sum(1 for count in coords_counter.values() if count > 1)
@@ -179,44 +186,44 @@ def compute_physics_attributes(node_data):
                 logging.warning(f"Symmetry axis computation failed: {e}")
             node_data['symmetry_axis'] = symmetry_axis
             # Skeleton length: not needed for LOGO data, set to 0.0
-            node_data['skeleton_length'] = 0.0
+            node_data['skeleton_length'] = None
             logging.info(f"compute_physics_attributes: Node {node_data.get('id', 'unknown')} features computed from LOGO vertices.")
         else:
-            node_data['centroid'] = [0.0, 0.0]
-            node_data['cx'] = 0.0
-            node_data['cy'] = 0.0
+            node_data['centroid'] = None
+            node_data['cx'] = None
+            node_data['cy'] = None
             node_data['fallback_geometry'] = True
-            node_data['area'] = 0.0
-            node_data['perimeter'] = 0.0
-            node_data['bbox'] = [0.0, 0.0, 0.0, 0.0]
-            node_data['aspect_ratio'] = 1.0
-            node_data['orientation'] = 0.0
-            node_data['compactness'] = 0.0
-            node_data['inertia'] = 0.0
-            node_data['convexity'] = 0.0
-            node_data['num_segments'] = 0
-            node_data['num_junctions'] = 0
-            node_data['curvature'] = 0.0
-            node_data['skeleton_length'] = 0.0
+            node_data['area'] = None
+            node_data['perimeter'] = None
+            node_data['bbox'] = None
+            node_data['aspect_ratio'] = None
+            node_data['orientation'] = None
+            node_data['compactness'] = None
+            node_data['inertia'] = None
+            node_data['convexity'] = None
+            node_data['num_segments'] = None
+            node_data['num_junctions'] = None
+            node_data['curvature'] = None
+            node_data['skeleton_length'] = None
             node_data['symmetry_axis'] = None
             logging.warning(f"Invalid LOGO polygon for node {node_data.get('id', 'unknown')}, vertices: {vertices}")
     else:
-        node_data['centroid'] = [0.0, 0.0]
-        node_data['cx'] = 0.0
-        node_data['cy'] = 0.0
+        node_data['centroid'] = None
+        node_data['cx'] = None
+        node_data['cy'] = None
         node_data['fallback_geometry'] = True
-        node_data['area'] = 0.0
-        node_data['perimeter'] = 0.0
-        node_data['bbox'] = [0.0, 0.0, 0.0, 0.0]
-        node_data['aspect_ratio'] = 1.0
-        node_data['orientation'] = 0.0
-        node_data['compactness'] = 0.0
-        node_data['inertia'] = 0.0
-        node_data['convexity'] = 0.0
-        node_data['num_segments'] = 0
-        node_data['num_junctions'] = 0
-        node_data['curvature'] = 0.0
-        node_data['skeleton_length'] = 0.0
+        node_data['area'] = None
+        node_data['perimeter'] = None
+        node_data['bbox'] = None
+        node_data['aspect_ratio'] = None
+        node_data['orientation'] = None
+        node_data['compactness'] = None
+        node_data['inertia'] = None
+        node_data['convexity'] = None
+        node_data['num_segments'] = None
+        node_data['num_junctions'] = None
+        node_data['curvature'] = None
+        node_data['skeleton_length'] = None
         node_data['symmetry_axis'] = None
         logging.warning(f"Node {node_data.get('id', 'unknown')} missing or insufficient vertices for LOGO polygon.")
 # --- Visualization Utility ---

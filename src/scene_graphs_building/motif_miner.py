@@ -96,41 +96,66 @@ class MotifMiner:
                 'action_program_type': None,
                 'function_label': None,
                 'conceptnet_rels': list(CONCEPTNET_KEEP_RELS),
+                'attribute_validity': {},
                 **physics_attrs
             }
             # Assign placeholder for gnn_score
             motif_node['gnn_score'] = 0.0
             # Aggregate motif_score from member nodes (mean)
-            motif_score = sum([m.get('motif_score', 0.0) for m in members]) / max(1, len(members))
+            # Aggregate motif_score from member nodes (mean of valid numeric values only)
+            motif_scores = [m.get('motif_score', 0.0) for m in members if isinstance(m.get('motif_score', 0.0), (int, float)) and m.get('motif_score', 0.0) is not None]
+            if motif_scores:
+                motif_score = sum(motif_scores) / len(motif_scores)
+            else:
+                motif_score = None
             motif_node['motif_score'] = motif_score
             # Ensure centroid is present for motif node
             if 'cx' in motif_node and 'cy' in motif_node:
                 motif_node['centroid'] = [motif_node['cx'], motif_node['cy']]
             # --- Compute and assign clip_sim and vl_sim for motif node ---
+            # Only compute clip_sim/vl_sim if all members are polygons and have valid embeddings
             try:
                 from src.scene_graphs_building.clip_embedder import CLIPEmbedder
-                # Use mean vl_embed from member nodes
-                vl_embed = np.mean([n.get('vl_embed', np.zeros(512)) for n in members], axis=0)
-                motif_node['vl_embed'] = vl_embed
-                # Compute similarity to all other motif nodes (or a reference set)
-                # For demonstration, self-similarity (should be extended to compare with other motifs)
-                clip_embedder = CLIPEmbedder()
-                # If motif_node has an image or features, compute CLIP similarity
-                # Here, we use vl_embed for both clip_sim and vl_sim for demonstration
-                motif_node['clip_sim'] = float(np.linalg.norm(vl_embed))
-                motif_node['vl_sim'] = float(np.linalg.norm(vl_embed))
-                # For real use, replace with actual similarity computation between motif_node and other nodes
+                valid_members = [n for n in members if n.get('object_type') == 'polygon' and n.get('vl_embed') is not None]
+                if valid_members and len(valid_members) == len(members):
+                    vl_embed = np.mean([n['vl_embed'] for n in valid_members], axis=0)
+                    motif_node['vl_embed'] = vl_embed
+                    clip_embedder = CLIPEmbedder()
+                    motif_node['clip_sim'] = float(np.linalg.norm(vl_embed))
+                    motif_node['vl_sim'] = float(np.linalg.norm(vl_embed))
+                    motif_node['attribute_validity']['clip_sim'] = 'valid'
+                    motif_node['attribute_validity']['vl_sim'] = 'valid'
+                else:
+                    motif_node['vl_embed'] = None
+                    motif_node['clip_sim'] = None
+                    motif_node['vl_sim'] = None
+                    motif_node['attribute_validity']['clip_sim'] = 'not_applicable'
+                    motif_node['attribute_validity']['vl_sim'] = 'not_applicable'
+                    logging.info(f"MotifMiner.cluster_motifs: motif node {motif_id} has non-polygon or missing-embedding members; clip_sim/vl_sim set to None.")
             except Exception as e:
+                motif_node['vl_embed'] = None
+                motif_node['clip_sim'] = None
+                motif_node['vl_sim'] = None
+                motif_node['attribute_validity']['clip_sim'] = 'not_applicable'
+                motif_node['attribute_validity']['vl_sim'] = 'not_applicable'
                 logging.warning(f"MotifMiner.cluster_motifs: CLIP/VL similarity computation failed for motif {motif_id}: {e}")
-            # Validate and fill missing required features
+            # Validate and fill missing required features, using None for degenerate/inapplicable
             REQUIRED_FEATURES = [
                 'curvature', 'skeleton_length', 'symmetry_axis', 'gnn_score',
                 'clip_sim', 'motif_score', 'vl_sim'
             ]
+            motif_node['attribute_validity'] = {}
             for feat in REQUIRED_FEATURES:
                 if feat not in motif_node:
-                    motif_node[feat] = 0.0
-                    logging.info(f"MotifMiner.cluster_motifs: motif node {motif_id} missing '{feat}', set to default 0.0.")
+                    # Use None for degenerate/inapplicable, 0.0 only for truly valid zero
+                    if feat in ['curvature', 'skeleton_length', 'symmetry_axis'] and not is_valid_polygon:
+                        motif_node[feat] = None
+                        motif_node['attribute_validity'][feat] = 'not_applicable'
+                        logging.info(f"MotifMiner.cluster_motifs: motif node {motif_id} missing '{feat}', set to None (not_applicable, degenerate geometry).")
+                    else:
+                        motif_node[feat] = 0.0
+                        motif_node['attribute_validity'][feat] = 'default_zero'
+                        logging.info(f"MotifMiner.cluster_motifs: motif node {motif_id} missing '{feat}', set to default 0.0.")
             motif_nodes.append(motif_node)
         logging.info(f"MotifMiner.cluster_motifs: motif_dict keys={list(motif_dict.keys())}")
         # Always return both motif_dict and motif_nodes for downstream motif construction
@@ -181,15 +206,22 @@ class MotifMiner:
         # Ensure centroid is present for motif supernode
         if 'cx' in supernode and 'cy' in supernode:
             supernode['centroid'] = [supernode['cx'], supernode['cy']]
-        # Validate and fill missing required features
+        # Validate and fill missing required features, using None for degenerate/inapplicable
         REQUIRED_FEATURES = [
             'curvature', 'skeleton_length', 'symmetry_axis', 'gnn_score',
             'clip_sim', 'motif_score', 'vl_sim'
         ]
+        supernode['attribute_validity'] = {}
         for feat in REQUIRED_FEATURES:
             if feat not in supernode:
-                supernode[feat] = 0.0
-                logging.info(f"MotifMiner.create_motif_supernode: supernode {motif_id} missing '{feat}', set to default 0.0.")
+                if feat in ['curvature', 'skeleton_length', 'symmetry_axis'] and not is_valid_polygon:
+                    supernode[feat] = None
+                    supernode['attribute_validity'][feat] = 'not_applicable'
+                    logging.info(f"MotifMiner.create_motif_supernode: supernode {motif_id} missing '{feat}', set to None (not_applicable, degenerate geometry).")
+                else:
+                    supernode[feat] = 0.0
+                    supernode['attribute_validity'][feat] = 'default_zero'
+                    logging.info(f"MotifMiner.create_motif_supernode: supernode {motif_id} missing '{feat}', set to default 0.0.")
         logging.debug(f"MotifMiner.create_motif_supernode: Supernode {motif_id} keys: {list(supernode.keys())}")
         logging.info(f"MotifMiner.create_motif_supernode: Created motif supernode {motif_id} with shape_label={supernode['shape_label']} and {len(vertices)} vertices. Physics keys: {list(physics_attrs.keys())}")
         return supernode
