@@ -125,7 +125,23 @@ def compute_physics_attributes(node_data):
             logging.warning(f"Could not save fallback centroid visualization: {e}")
         return
     # Always update centroid field to match computed cx/cy (even in fallback)
-    node_data['centroid'] = [node_data.get('cx', 0.0), node_data.get('cy', 0.0)]
+    cx = node_data.get('cx', 0.0)
+    cy = node_data.get('cy', 0.0)
+    centroid = [cx, cy]
+    # Defensive: If centroid is None, NaN, or not 2D, fallback to mean of vertices
+    fallback_centroid = False
+    if (centroid is None or
+        (isinstance(centroid, (list, tuple, np.ndarray)) and (len(centroid) != 2 or any([v is None or (isinstance(v, float) and np.isnan(v)) for v in centroid]))) or
+        (isinstance(centroid, float) and np.isnan(centroid))):
+        vertices = node_data.get('vertices')
+        if vertices and len(vertices) >= 1:
+            arr = np.array(vertices)
+            mean_centroid = np.mean(arr, axis=0)
+            centroid = [float(mean_centroid[0]), float(mean_centroid[1])]
+            fallback_centroid = True
+    node_data['centroid'] = centroid
+    if fallback_centroid:
+        logging.warning(f"compute_physics_attributes: Node {node_data.get('id', 'unknown')} centroid fallback to mean of vertices: {centroid}")
     # Automatically save visualization for this node (fallback case)
     try:
         from src.scene_graphs_building.visualization import save_fallback_centroid_visualizations
@@ -145,7 +161,35 @@ def compute_physics_attributes(node_data):
     logging.info(f"compute_physics_attributes: Node {node_data.get('id', 'unknown')} input vertices: {vertices}")
     logging.info(f"compute_physics_attributes: Node {node_data.get('id', 'unknown')} input centroid: {node_data.get('centroid', None)}")
 
+    # --- Robust Motif Supernode Attribute Assignment ---
+    def assign_motif_supernode_attributes(supernode, member_nodes, required_fields):
+        import numpy as np
+        fallback = False
+        for field in required_fields:
+            if field not in supernode or supernode[field] is None or (isinstance(supernode[field], float) and np.isnan(supernode[field])):
+                vals = [n.get(field) for n in member_nodes if n.get(field) is not None]
+                if vals:
+                    if field != "centroid":
+                        supernode[field] = float(np.nanmean(vals))
+                    else:
+                        centroids = [n.get("centroid") for n in member_nodes if "centroid" in n and n.get("centroid") is not None]
+                        if centroids:
+                            supernode[field] = tuple(np.nanmean(centroids, axis=0))
+                        else:
+                            fallback = True
+                            supernode[field] = 0.
+                else:
+                    fallback = True
+                    supernode[field] = 0.
+        if fallback:
+            supernode['is_valid'] = False
+            logging.warning(f"Motif supernode {supernode.get('id')} failed robust attribute inference; marking as invalid.")
+        else:
+            supernode['is_valid'] = True
+
     # --- Advanced Polygon Repair and Validation ---
+    # Always initialize fallback_geometry to False; set to True only if fallback is used
+    node_data['fallback_geometry'] = False
     valid_poly = False
     repaired = False
     repaired_reason = None
@@ -309,7 +353,8 @@ def compute_physics_attributes(node_data):
         compute_physics_attributes.fallback_samples = []
     if not valid_poly:
         compute_physics_attributes.fallback_count += 1
-        logging.warning(f"compute_physics_attributes: Node {node_data.get('id', 'unknown')} has invalid geometry and cannot be repaired. Fallback centroid will be used.")
+        logging.warning(f"Motif {node_data.get('id', None)} using fallback centroid and geometry! Motif results may be unreliable.")
+        node_data['fallback_geometry'] = True
         vertices = node_data.get('vertices')
         if vertices and len(vertices) >= 1:
             arr = np.array(vertices)
@@ -338,6 +383,8 @@ def compute_physics_attributes(node_data):
 
     # Only run polygon feature computation if valid_poly is True
     if valid_poly:
+        # Geometry is valid, so ensure fallback_geometry is False
+        node_data['fallback_geometry'] = False
         # Now compute attributes as usual
         basic_features = compute_basic_features(poly)
         node_data.update(basic_features)
