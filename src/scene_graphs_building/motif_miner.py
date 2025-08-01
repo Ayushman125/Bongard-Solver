@@ -43,15 +43,16 @@ class MotifMiner:
             valid_objects = []
             centroids = []
             for o in objects:
-                if o.get('geometry_valid', False):
-                    if o.get('centroid') is not None:
-                        valid_objects.append(o)
-                        centroids.append(o['centroid'])
-                    elif o.get('object_type') == 'line' and o.get('vertices') is not None:
-                        # Fallback: use midpoint of line vertices
-                        midpoint = np.mean(o['vertices'], axis=0).tolist()
-                        valid_objects.append(o)
-                        centroids.append(midpoint)
+                # Accept any object with a valid centroid (not just geometry_valid==True)
+                centroid = o.get('centroid', None)
+                if centroid is not None and isinstance(centroid, (list, tuple, np.ndarray)) and len(centroid) == 2 and all(isinstance(x, (int, float, np.floating, np.integer)) for x in centroid):
+                    valid_objects.append(o)
+                    centroids.append(centroid)
+                elif o.get('object_type') == 'line' and o.get('vertices') is not None:
+                    # Fallback: use midpoint of line vertices
+                    midpoint = np.mean(o['vertices'], axis=0).tolist()
+                    valid_objects.append(o)
+                    centroids.append(midpoint)
             centroids = np.array(centroids)
             if len(centroids) == 0:
                 logging.error("MotifMiner.cluster_motifs: No valid centroids for clustering (including lines).")
@@ -280,7 +281,7 @@ class MotifMiner:
     @staticmethod
     def normalize_features(nodes, feature_list=None):
         """
-        Robust normalization for motif and regular node features. Avoids nan by using epsilon and fallback.
+        Robust normalization for motif and regular node features. Avoids nan by using epsilon and fallback. Skips nodes with missing/None features.
         """
         eps = 1e-6
         if feature_list is None:
@@ -288,24 +289,30 @@ class MotifMiner:
         motif_nodes = [n for n in nodes if n.get('is_motif')]
         regular_nodes = [n for n in nodes if not n.get('is_motif')]
         for feat in feature_list:
-            # Motif normalization
-            motif_vals = np.array([n.get(feat, 0) for n in motif_nodes])
+            # Motif normalization (skip None values)
+            motif_vals = np.array([n.get(feat, 0) for n in motif_nodes if n.get(feat) is not None])
             motif_mean = motif_vals.mean() if len(motif_vals) else 0.0
             motif_std = motif_vals.std() if len(motif_vals) else 0.0
             for n in motif_nodes:
                 val = n.get(feat, 0)
+                if val is None:
+                    n[feat+'_norm'] = 0.0
+                    continue
                 if motif_std > eps:
                     n[feat+'_norm'] = (val - motif_mean) / (motif_std + eps)
                 elif motif_mean > eps:
                     n[feat+'_norm'] = val / (motif_mean + eps)
                 else:
                     n[feat+'_norm'] = 0.0
-            # Regular normalization
-            reg_vals = np.array([n.get(feat, 0) for n in regular_nodes])
+            # Regular normalization (skip None values)
+            reg_vals = np.array([n.get(feat, 0) for n in regular_nodes if n.get(feat) is not None])
             reg_mean = reg_vals.mean() if len(reg_vals) else 0.0
             reg_std = reg_vals.std() if len(reg_vals) else 0.0
             for n in regular_nodes:
                 val = n.get(feat, 0)
+                if val is None:
+                    n[feat+'_norm'] = 0.0
+                    continue
                 if reg_std > eps:
                     n[feat+'_norm'] = (val - reg_mean) / (reg_std + eps)
                 elif reg_mean > eps:

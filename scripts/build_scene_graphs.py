@@ -1117,7 +1117,7 @@ async def main(): # Main is now async because it calls async functions
     parser.add_argument('--parallel', type=int, default=4, help='Number of parallel workers for batch processing')
     parser.add_argument('--batch-size', type=int, default=16, help='Batch size for graph building (0=auto-profile). Now refers to problems per batch.')
     parser.add_argument('--feedback-dir', type=str, default='feedback_samples', help='Directory to save QA/feedback images')
-    parser.add_argument('--feedback-rate', type=int, default=20, help='Save every Nth sample for feedback (default: 20, set 1 to save all)')
+    parser.add_argument('--feedback-rate', type=int, default=1, help='Save every Nth sample for feedback (default: 1 = save all)')
     parser.add_argument('--decompose-polygons', action='store_true', help='Enable decomposition of complex polygons into sub-polygons.')
     parser.add_argument('--tpot-max-time', type=int, default=5, help='Max time in minutes for TPOT AutoML (default: 5)')
     parser.add_argument('--tpot-generations', type=int, default=5, help='Number of generations for TPOT AutoML (default: 5)')
@@ -1154,6 +1154,9 @@ async def main(): # Main is now async because it calls async functions
         window_size=50,
         visualization_dir="visualizations/drift"
     ) if args.feedback_rate > 0 else None # Only enable if feedback_rate allows visualization
+
+    # Track all feedback images saved for summary
+    saved_feedback_images = []
     enhanced_builder = EnhancedSceneGraphBuilder()
 
     # Adaptive predicate threshold learning (now uses SQLite)
@@ -1287,13 +1290,17 @@ async def main(): # Main is now async because it calls async functions
                 drift_visualizer,
                 enhanced_builder,
                 args.feedback_dir,
-                args.feedback_rate,
+                1,  # Always save feedback images for every problem
                 args.decompose_polygons,
                 adaptive_thresholds,
                 args=args
             )
             if result is not None:
                 graphs.append(result)
+                # Track feedback image for summary
+                feedback_img_path = os.path.join(args.feedback_dir, f"{problem_id}_img_graph.png")
+                if os.path.exists(feedback_img_path):
+                    saved_feedback_images.append(feedback_img_path)
         # Cutting-edge GNN training block (after all graphs are built)
         if getattr(args, 'use_gnn', False) and len(graphs) > 0:
             try:
@@ -1305,10 +1312,16 @@ async def main(): # Main is now async because it calls async functions
                     scene_graph = g_result.get('scene_graph')
                     if scene_graph is not None and hasattr(scene_graph, 'nodes'):
                         gnn = GNNReasoner(in_dim=10)
-                        data, _ = gnn.nx_to_pyg(scene_graph)
+                        data, node_ids = gnn.nx_to_pyg(scene_graph)
                         graph_data_list.append(data)
                         # Use a placeholder label (e.g., 1.0) or extract from your data
                         graph_labels.append(1.0)
+                        # Log GNN node scores if available
+                        if hasattr(scene_graph, 'nodes'):
+                            for n in scene_graph.nodes:
+                                score = scene_graph.nodes[n].get('gnn_score')
+                                logging.info(f"[GNN] Node {n} gnn_score: {score}")
+                        logging.info(f"[GNN] Graph status: {scene_graph.graph.get('gnn_status')}")
                 if len(graph_data_list) > 0:
                     gnn_model = GNNReasoner.train(graph_data_list, graph_labels, epochs=50, batch_size=8, val_split=0.2, patience=5, lr=1e-3, weight_decay=1e-4)
                     # Save model weights for reproducibility
@@ -1354,8 +1367,18 @@ async def main(): # Main is now async because it calls async functions
     except Exception as e:
         logging.error(f"Failed to save scene graphs to {args.out}: {e}")
 
+
     # Log diversity metrics (now operates on problem-level graphs)
     log_diversity_metrics(graphs)
+
+    # Print summary of saved feedback images
+    if saved_feedback_images:
+        print("\n[Scene Graph Visualization Summary]")
+        print(f"Saved {len(saved_feedback_images)} scene graph visualizations to '{args.feedback_dir}':")
+        for img_path in saved_feedback_images:
+            print(f"  {img_path}")
+    else:
+        print("No scene graph visualizations were saved.")
 
     # Save adaptive thresholds
     try:

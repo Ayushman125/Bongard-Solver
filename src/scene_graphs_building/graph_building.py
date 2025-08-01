@@ -19,10 +19,13 @@ def add_predicate_edges(G, predicates):
     # Group nodes by OneStrokeShape if available (assume 'action_index' and 'stroke_type' present)
     nodes_by_action = {}
     for u, data_u in node_list:
-        if 'action_index' in data_u:
-            nodes_by_action[(data_u.get('parent_shape_id', None), data_u['action_index'])] = (u, data_u)
+        idx = data_u.get('action_index', None)
+        if 'action_index' in data_u and idx is not None:
+            nodes_by_action[(data_u.get('parent_shape_id', None), idx)] = (u, data_u)
     # Add next_action and turns_toward edges
     for (parent_id, idx), (u, data_u) in nodes_by_action.items():
+        if idx is None:
+            continue
         next_key = (parent_id, idx+1)
         if next_key in nodes_by_action:
             v, data_v = nodes_by_action[next_key]
@@ -253,9 +256,10 @@ def build_graph_unvalidated(record, predicates, top_k, extra_edges=None, kb=None
         # Motif handling: assign geometry and string label if missing
         if node.get('is_motif'):
             if node.get('vertices') is None or len(node.get('vertices')) < 3:
-                # Try to aggregate geometry from members
+                # Try to aggregate geometry from member_nodes (new) or members (legacy)
                 from src.scene_graphs_building.motif_miner import MotifMiner
-                member_nodes = [n for n in geometry if n.get('object_id', n.get('id')) in node.get('members', [])]
+                member_ids = node.get('member_nodes', node.get('members', []))
+                member_nodes = [n for n in geometry if n.get('object_id', n.get('id')) in member_ids]
                 node['vertices'] = MotifMiner().aggregate_motif_vertices(member_nodes)
             if isinstance(node.get('shape_label'), int):
                 from src.scene_graphs_building.motif_miner import MotifMiner

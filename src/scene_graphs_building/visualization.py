@@ -1,3 +1,34 @@
+import logging
+import os
+import matplotlib.pyplot as plt
+
+# --- GNN Training/Validation Logging Utilities ---
+def log_gnn_training(epoch, train_loss, val_loss, val_acc=None, patience=None, best_val=None):
+    msg = f"[GNN][Epoch {epoch}] Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}"
+    if val_acc is not None:
+        msg += f" | Val Acc: {val_acc:.4f}"
+    if best_val is not None:
+        msg += f" | Best Val: {best_val:.4f}"
+    if patience is not None:
+        msg += f" | Patience: {patience}"
+    logging.info(msg)
+
+def plot_gnn_training_curves(train_losses, val_losses, val_accs=None, out_dir="visualizations/gnn"):
+    os.makedirs(out_dir, exist_ok=True)
+    plt.figure(figsize=(8,5))
+    plt.plot(train_losses, label="Train Loss")
+    plt.plot(val_losses, label="Val Loss")
+    if val_accs is not None:
+        plt.plot(val_accs, label="Val Acc")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss/Accuracy")
+    plt.title("GNN Training Curves")
+    plt.legend()
+    plt.tight_layout()
+    out_path = os.path.join(out_dir, "gnn_training_curves.png")
+    plt.savefig(out_path)
+    plt.close()
+    logging.info(f"[GNN] Saved training curves to {out_path}")
 def save_fallback_centroid_visualizations(samples, output_dir):
     """
     Save visualizations of fallback centroid cases to output_dir.
@@ -170,7 +201,7 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
         # Save CSV table
         csv_path = os.path.join(feedback_dir, f"{base_name}_node_metadata.csv")
         with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=csv_fields)
+            writer = csv.DictWriter(csvfile, fieldnames=csv_fields, extrasaction='ignore')
             writer.writeheader()
             for row in csv_rows:
                 writer.writerow(row)

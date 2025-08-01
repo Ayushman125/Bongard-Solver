@@ -165,6 +165,18 @@ def compute_physics_attributes(node_data):
     node_data['geometry_valid'] = geometry_valid
     # Per-feature valid flags
     feature_valid = {}
+    # List of all required features and their valid flags
+    required_features = [
+        'centroid', 'cx', 'cy', 'area', 'perimeter', 'bbox', 'aspect_ratio', 'orientation',
+        'compactness', 'inertia', 'convexity', 'num_segments', 'num_junctions', 'curvature',
+        'skeleton_length', 'symmetry_axis', 'length', 'curvature_type', 'stroke_type',
+        'turn_direction', 'turn_angle', 'action_index', 'repetition_count'
+    ]
+    required_valid_flags = [
+        'curvature_valid','skeleton_length_valid','symmetry_axis_valid','centroid_valid','area_valid',
+        'orientation_valid','aspect_ratio_valid','perimeter_valid','compactness_valid','convexity_valid',
+        'inertia_valid','num_segments_valid','num_junctions_valid'
+    ]
     # Polygon and closed: compute all features
     if geometry_valid:
         poly = Polygon(vertices)
@@ -254,30 +266,25 @@ def compute_physics_attributes(node_data):
             feature_valid['inertia_valid'] = inertia is not None
             feature_valid['num_segments_valid'] = num_segments is not None
             feature_valid['num_junctions_valid'] = True
+            # Ensure all required features are present, set to None if missing
+            for feat in required_features:
+                if feat not in node_data:
+                    node_data[feat] = None
+            # Ensure all required valid flags are present, set to False if missing
+            for flag in required_valid_flags:
+                if flag not in feature_valid:
+                    feature_valid[flag] = False
             node_data['feature_valid'] = feature_valid
             logging.info(f"compute_physics_attributes: Node {node_data.get('id', 'unknown')} features computed from LOGO vertices.")
         else:
             # Invalid polygon (bad geometry)
             node_data['geometry_valid'] = False
-            node_data['centroid'] = None
-            node_data['cx'] = None
-            node_data['cy'] = None
+            # Set all required features to None
+            for feat in required_features:
+                node_data[feat] = None
             node_data['fallback_geometry'] = True
-            node_data['area'] = None
-            node_data['perimeter'] = None
-            node_data['bbox'] = None
-            node_data['aspect_ratio'] = None
-            node_data['orientation'] = None
-            node_data['compactness'] = None
-            node_data['inertia'] = None
-            node_data['convexity'] = None
-            node_data['num_segments'] = None
-            node_data['num_junctions'] = None
-            node_data['curvature'] = None
-            node_data['skeleton_length'] = None
-            node_data['symmetry_axis'] = None
-            feature_valid = {k: False for k in [
-                'curvature_valid','skeleton_length_valid','symmetry_axis_valid','centroid_valid','area_valid','orientation_valid','aspect_ratio_valid','perimeter_valid','compactness_valid','convexity_valid','inertia_valid','num_segments_valid','num_junctions_valid']}
+            # Set all required valid flags to False
+            feature_valid = {k: False for k in required_valid_flags}
             node_data['feature_valid'] = feature_valid
             logging.warning(f"Invalid LOGO polygon for node {node_data.get('id', 'unknown')}, vertices: {vertices}")
     elif object_type == 'line' and vertices and len(vertices) == 2:
@@ -296,6 +303,10 @@ def compute_physics_attributes(node_data):
         node_data['symmetry_axis'] = None
         node_data['fallback_geometry'] = True
         node_data['bbox'] = [float(np.min(arr[:,0])), float(np.min(arr[:,1])), float(np.max(arr[:,0])), float(np.max(arr[:,1]))]
+        # Set all required features to None if missing
+        for feat in required_features:
+            if feat not in node_data:
+                node_data[feat] = None
         feature_valid = {
             'centroid_valid': True,
             'perimeter_valid': True,
@@ -311,31 +322,46 @@ def compute_physics_attributes(node_data):
             'num_segments_valid': False,
             'num_junctions_valid': False
         }
+        # Ensure all required valid flags are present, set to False if missing
+        for flag in required_valid_flags:
+            if flag not in feature_valid:
+                feature_valid[flag] = False
         node_data['geometry_valid'] = True
         node_data['feature_valid'] = feature_valid
         logging.info(f"compute_physics_attributes: Node {node_data.get('id', 'unknown')} features computed for line.")
     else:
         # Degenerate or unsupported
         node_data['geometry_valid'] = False
-        node_data['centroid'] = None
-        node_data['cx'] = None
-        node_data['cy'] = None
+        # Try to assign a fallback centroid if possible
+        centroid = None
+        if vertices and len(vertices) >= 2:
+            try:
+                arr = np.array(vertices)
+                centroid = np.mean(arr, axis=0)
+                node_data['centroid'] = centroid.tolist()
+                node_data['cx'] = float(centroid[0])
+                node_data['cy'] = float(centroid[1])
+                logging.info(f"compute_physics_attributes: Node {node_data.get('id', 'unknown')} assigned fallback centroid {centroid.tolist()} for degenerate shape.")
+            except Exception as e:
+                node_data['centroid'] = None
+                node_data['cx'] = None
+                node_data['cy'] = None
+                logging.warning(f"compute_physics_attributes: Fallback centroid computation failed for node {node_data.get('id', 'unknown')}: {e}")
+        else:
+            node_data['centroid'] = None
+            node_data['cx'] = None
+            node_data['cy'] = None
+            logging.info(f"compute_physics_attributes: Node {node_data.get('id', 'unknown')} has no vertices for centroid assignment.")
         node_data['fallback_geometry'] = True
-        node_data['area'] = None
-        node_data['perimeter'] = None
-        node_data['bbox'] = None
-        node_data['aspect_ratio'] = None
-        node_data['orientation'] = None
-        node_data['compactness'] = None
-        node_data['inertia'] = None
-        node_data['convexity'] = None
-        node_data['num_segments'] = None
-        node_data['num_junctions'] = None
-        node_data['curvature'] = None
-        node_data['skeleton_length'] = None
-        node_data['symmetry_axis'] = None
-        feature_valid = {k: False for k in [
-            'curvature_valid','skeleton_length_valid','symmetry_axis_valid','centroid_valid','area_valid','orientation_valid','aspect_ratio_valid','perimeter_valid','compactness_valid','convexity_valid','inertia_valid','num_segments_valid','num_junctions_valid']}
+        # Set all required features to None
+        for feat in required_features:
+            if feat not in node_data:
+                node_data[feat] = None
+        # Set all required valid flags to False
+        feature_valid = {k: False for k in required_valid_flags}
+        # If we assigned a fallback centroid, mark centroid_valid True
+        if centroid is not None:
+            feature_valid['centroid_valid'] = True
         node_data['feature_valid'] = feature_valid
         logging.warning(f"Node {node_data.get('id', 'unknown')} missing or insufficient vertices for LOGO polygon or line.")
 # --- Visualization Utility ---

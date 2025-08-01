@@ -171,6 +171,7 @@ class GNNReasoner:
         """
         import logging
         from sklearn.model_selection import train_test_split
+        from src.scene_graphs_building.visualization import log_gnn_training, plot_gnn_training_curves
         device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         # Split train/val
         idx = np.arange(len(graphs))
@@ -187,6 +188,10 @@ class GNNReasoner:
         best_val_loss = float('inf')
         best_state = None
         patience_counter = 0
+        train_losses = []
+        val_losses = []
+        # Optionally, collect val_accs if you compute accuracy
+        val_accs = []
         for epoch in range(epochs):
             model.train()
             train_loss = 0
@@ -202,14 +207,29 @@ class GNNReasoner:
             # Validation
             model.eval()
             val_loss = 0
+            # Optionally, compute accuracy if labels are binary/classification
+            val_acc = None
             with torch.no_grad():
+                correct = 0
+                total = 0
                 for i, data in enumerate(val_graphs):
                     data = data.to(device)
                     out = model(data).squeeze()
                     loss = criterion(out, val_labels[i].to(device))
                     val_loss += loss.item()
+                    # For regression, skip accuracy; for classification, compute below
+                    # Example for binary classification:
+                    # pred = (out > 0.5).float()
+                    # correct += (pred == val_labels[i].to(device)).sum().item()
+                    # total += pred.numel()
+                # Uncomment if using classification:
+                # if total > 0:
+                #     val_acc = correct / total
             val_loss /= len(val_graphs)
-            logging.info(f"[GNN] Epoch {epoch+1}/{epochs} train_loss={train_loss:.4f} val_loss={val_loss:.4f}")
+            train_losses.append(train_loss)
+            val_losses.append(val_loss)
+            # val_accs.append(val_acc)  # Uncomment if using accuracy
+            log_gnn_training(epoch+1, train_loss, val_loss, val_acc, patience_counter, best_val_loss)
             # Early stopping
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
@@ -220,6 +240,8 @@ class GNNReasoner:
                 if patience_counter >= patience:
                     logging.info(f"[GNN] Early stopping at epoch {epoch+1}")
                     break
+        # Plot training curves
+        plot_gnn_training_curves(train_losses, val_losses)  # , val_accs=val_accs if using accuracy
         # Load best model
         if best_state:
             model.load_state_dict(best_state)
