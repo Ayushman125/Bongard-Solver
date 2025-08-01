@@ -14,6 +14,10 @@ class HierarchicalPredicatePredictor(nn.Module):
         self.super_category_to_predicates = self._build_category_mapping()
         # Feature encoder
         self.feature_encoder = nn.Linear(feature_dim * 2, feature_dim)
+        # Topology/geometry predicate MLP (for parallel, longer_than, adjacent_endpoints, etc.)
+        self.topo_geom_mlp = nn.Sequential(
+            nn.Linear(6, 32), nn.ReLU(), nn.Linear(32, feature_dim), nn.ReLU()
+        )
         # Knowledge fusion layer
         self.knowledge_fusion = KnowledgeFusionLayer(feature_dim)
         # Super-category classifier
@@ -25,7 +29,7 @@ class HierarchicalPredicatePredictor(nn.Module):
         })
         # Uncertainty estimation
         self.uncertainty_head = nn.Linear(feature_dim, 1)
-    def forward(self, subject_features: torch.Tensor, object_features: torch.Tensor, knowledge_embeddings: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
+    def forward(self, subject_features: torch.Tensor, object_features: torch.Tensor, knowledge_embeddings: Optional[torch.Tensor] = None, topo_geom_predicates: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
         """
         Forward pass with Bayesian hierarchical prediction.
         Returns:
@@ -36,6 +40,10 @@ class HierarchicalPredicatePredictor(nn.Module):
         combined_features = torch.cat([subject_features, object_features], dim=-1)
         # Encode features
         encoded_features = self.feature_encoder(combined_features)
+        # Integrate topology/geometry predicate embedding if provided
+        if topo_geom_predicates is not None:
+            topo_geom_emb = self.topo_geom_mlp(topo_geom_predicates)
+            encoded_features = encoded_features + topo_geom_emb
         # Integrate knowledge embeddings if available
         if knowledge_embeddings is not None:
             encoded_features = self.knowledge_fusion(encoded_features, knowledge_embeddings)

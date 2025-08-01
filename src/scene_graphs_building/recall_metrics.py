@@ -22,10 +22,12 @@ class RecallAtKEvaluator:
     def __init__(self, 
                  predicate_classes: List[str],
                  k_values: List[int] = [20, 50, 100],
-                 iou_threshold: float = 0.5):
+                 iou_threshold: float = 0.5,
+                 endpoint_threshold: float = 8.0):
         self.predicate_classes = predicate_classes
         self.k_values = k_values
         self.iou_threshold = iou_threshold
+        self.endpoint_threshold = endpoint_threshold
         self.predicate_frequency = Counter()
         self.evaluation_history = []
         logging.info(f"RecallAtKEvaluator initialized with {len(predicate_classes)} predicates")
@@ -58,31 +60,72 @@ class RecallAtKEvaluator:
     def _match_objects(self, 
                       predicted_objects: List[Dict], 
                       ground_truth_objects: List[Dict]) -> Dict[str, str]:
+        """
+        Robust object matching for Bongard-LOGO: uses IoU for polygons, endpoint proximity for lines/arcs, fallback to Hausdorff for open shapes.
+        """
         matching = {}
         used_gt_objects = set()
-        iou_matrix = np.zeros((len(predicted_objects), len(ground_truth_objects)))
+        n_pred, n_gt = len(predicted_objects), len(ground_truth_objects)
+        match_matrix = np.zeros((n_pred, n_gt))
         for i, pred_obj in enumerate(predicted_objects):
             for j, gt_obj in enumerate(ground_truth_objects):
-                iou = self._calculate_bbox_iou(
-                    pred_obj.get('bbox', [0, 0, 1, 1]),
-                    gt_obj.get('bbox', [0, 0, 1, 1])
-                )
-                iou_matrix[i, j] = iou
+                ot_pred = pred_obj.get('object_type')
+                ot_gt = gt_obj.get('object_type')
+                # Both polygons: use IoU
+                if ot_pred == ot_gt == 'polygon' and pred_obj.get('is_closed', True) and gt_obj.get('is_closed', True):
+                    iou = self._calculate_bbox_iou(
+                        pred_obj.get('bbox', [0, 0, 1, 1]),
+                        gt_obj.get('bbox', [0, 0, 1, 1])
+                    )
+                    match_matrix[i, j] = iou
+                # Both lines/arcs: use endpoint proximity
+                elif ot_pred in ('line', 'arc') and ot_gt in ('line', 'arc'):
+                    v1 = pred_obj.get('vertices', [])
+                    v2 = gt_obj.get('vertices', [])
+                    if v1 and v2:
+                        d0 = np.linalg.norm(np.array(v1[0]) - np.array(v2[0]))
+                        d1 = np.linalg.norm(np.array(v1[-1]) - np.array(v2[-1]))
+                        dist = min(d0, d1)
+                        match_matrix[i, j] = 1.0 if dist < self.endpoint_threshold else 0.0
+                # Fallback: use Hausdorff distance if available
+                else:
+                    try:
+                        from scipy.spatial.distance import directed_hausdorff
+                        v1 = np.array(pred_obj.get('vertices', []))
+                        v2 = np.array(gt_obj.get('vertices', []))
+                        if v1.shape[0] > 0 and v2.shape[0] > 0:
+                            hd = max(directed_hausdorff(v1, v2)[0], directed_hausdorff(v2, v1)[0])
+                            match_matrix[i, j] = 1.0 if hd < self.endpoint_threshold else 0.0
+                    except Exception:
+                        match_matrix[i, j] = 0.0
         while True:
-            max_iou_idx = np.unravel_index(np.argmax(iou_matrix), iou_matrix.shape)
-            max_iou = iou_matrix[max_iou_idx]
-            if max_iou < self.iou_threshold:
+            max_idx = np.unravel_index(np.argmax(match_matrix), match_matrix.shape)
+            max_val = match_matrix[max_idx]
+            if max_val < 0.5:
                 break
-            pred_idx, gt_idx = max_iou_idx
+            pred_idx, gt_idx = max_idx
             if pred_idx in matching or gt_idx in used_gt_objects:
-                iou_matrix[pred_idx, :] = -1
-                iou_matrix[:, gt_idx] = -1
+                match_matrix[pred_idx, :] = -1
+                match_matrix[:, gt_idx] = -1
                 continue
             matching[predicted_objects[pred_idx]['id']] = ground_truth_objects[gt_idx]['id']
             used_gt_objects.add(gt_idx)
-            iou_matrix[pred_idx, :] = -1
-            iou_matrix[:, gt_idx] = -1
+            match_matrix[pred_idx, :] = -1
+            match_matrix[:, gt_idx] = -1
         return matching
+    def _normalize_predicate(self, pred: str) -> str:
+        """Map predicate variants to canonical forms for robust matching."""
+        mapping = {
+            'adjacent_endpoints': 'touch',
+            'touching': 'touch',
+            'intersects': 'intersect',
+            'intersection': 'intersect',
+            'next_action': 'program_step',
+            'turns_left': 'turn',
+            'turns_right': 'turn',
+            # Add more as needed
+        }
+        return mapping.get(pred, pred)
     def _calculate_bbox_iou(self, bbox1, bbox2) -> float:
         x1_min, y1_min, x1_max, y1_max = bbox1
         x2_min, y2_min, x2_max, y2_max = bbox2
@@ -126,7 +169,7 @@ class RecallAtKEvaluator:
         for triplet in ground_truth_triplets:
             gt_set.add((
                 triplet['subject_id'],
-                triplet['predicate'],
+                self._normalize_predicate(triplet['predicate']),
                 triplet['object_id']
             ))
         sorted_predictions = sorted(
@@ -141,7 +184,7 @@ class RecallAtKEvaluator:
             for pred in top_k_predictions:
                 pred_triplet = (
                     pred['subject_id'],
-                    pred['predicate'],
+                    self._normalize_predicate(pred['predicate']),
                     pred['object_id']
                 )
                 if pred_triplet in gt_set:
@@ -332,13 +375,19 @@ def compute_pc_error(graphs):
 
         nodes = list(G.nodes(data=True))
         polygons = []
+        n_polygons = 0
         for _, data in nodes:
-            if data.get('vertices') and len(data['vertices']) >= 3:
+            if data.get('object_type') == 'polygon' and data.get('is_closed', True) and data.get('vertices') and len(data['vertices']) >= 3:
                 try:
                     polygons.append(Polygon(data['vertices']))
+                    n_polygons += 1
                 except Exception as e:
                     logging.warning(f"Invalid polygon vertices for node {data.get('id')}: {e}")
                     continue
+
+        if n_polygons == 0:
+            logging.info(f"No polygons in graph for problem {G_data.get('problem_id')}; PC error not applicable.")
+            continue
 
         has_overlap = False
         for i in range(len(polygons)):
@@ -365,6 +414,7 @@ def log_diversity_metrics(graphs, out_path='logs/graph_diversity.jsonl'):
     unique_triples = set()
     predicate_counts = Counter()
     total_possible_triples = 0
+    per_graph_predicate_diversity = []
 
     for G_data in graphs:
         G = G_data.get('scene_graph', {}).get('graph')
@@ -375,21 +425,27 @@ def log_diversity_metrics(graphs, out_path='logs/graph_diversity.jsonl'):
         if len(G.nodes) > 1:
             total_possible_triples += len(G.nodes) * (len(G.nodes) - 1) # N*(N-1) for directed pairs
 
+        graph_predicates = set()
         for u, v, data in G.edges(data=True):
-            unique_triples.add((u, data.get('predicate', 'unknown'), v))
-            predicate_counts[data.get('predicate', 'unknown')] += 1
+            pred = data.get('predicate', 'unknown')
+            unique_triples.add((u, pred, v))
+            predicate_counts[pred] += 1
+            graph_predicates.add(pred)
+        if len(G.nodes) > 0:
+            per_graph_predicate_diversity.append(len(graph_predicates) / len(G.nodes))
 
     C = len(unique_triples) / total_possible_triples if total_possible_triples > 0 else 0
     H = stats.entropy(list(predicate_counts.values()), base=2) if predicate_counts else 0
     pc_error = compute_pc_error(graphs) # This function already updated to handle new graph structure
+    avg_pred_diversity = float(np.mean(per_graph_predicate_diversity)) if per_graph_predicate_diversity else 0.0
 
-    metrics = {'coverage': C, 'entropy': H, 'pc_error': pc_error}
+    metrics = {'coverage': C, 'entropy': H, 'pc_error': pc_error, 'avg_predicate_diversity': avg_pred_diversity}
 
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, 'a') as f:
         f.write(json.dumps(metrics) + "\n")
 
-    logging.info(f"Diversity Metrics: Coverage={C:.3f}, Entropy={H:.3f} bits, PC-Error={pc_error:.3f}")
+    logging.info(f"Diversity Metrics: Coverage={C:.3f}, Entropy={H:.3f} bits, PC-Error={pc_error:.3f}, AvgPredDiv={avg_pred_diversity:.3f}")
 
 def mask_quality_stats(image, mask):
     """Calculates mask quality statistics like Edge IoU, precision, and recall."""

@@ -263,6 +263,11 @@ def build_graph_unvalidated(record, predicates, top_k, extra_edges=None, kb=None
     G = nx.MultiDiGraph()
     geometry = record.get('geometry', [])
     logging.info(f"[build_graph_unvalidated] Called with {len(geometry)} objects, {len(predicates)} predicates, top_k={top_k}")
+    # --- SOTA: Per-stroke feature extraction and caching ---
+    from src.scene_graphs_building.feature_extraction import get_real_feature_extractor
+    feature_extractor = get_real_feature_extractor()
+    problem_id = record.get('problem_id', None)
+    node_features = {}
     for idx, node in enumerate(geometry):
         if not isinstance(node, dict):
             logging.error(f"build_graph_unvalidated: Skipping non-dict node at index {idx}: type={type(node)}, value={repr(node)}")
@@ -270,7 +275,6 @@ def build_graph_unvalidated(record, predicates, top_k, extra_edges=None, kb=None
         # Motif handling: assign geometry and string label if missing
         if node.get('is_motif'):
             if node.get('vertices') is None or len(node.get('vertices')) < 3:
-                # Try to aggregate geometry from member_nodes (new) or members (legacy)
                 from src.scene_graphs_building.motif_miner import MotifMiner
                 member_ids = node.get('member_nodes', node.get('members', []))
                 member_nodes = [n for n in geometry if n.get('object_id', n.get('id')) in member_ids]
@@ -279,7 +283,6 @@ def build_graph_unvalidated(record, predicates, top_k, extra_edges=None, kb=None
                 from src.scene_graphs_building.motif_miner import MotifMiner
                 node['shape_label'] = MotifMiner.MOTIF_LABELS.get(node['shape_label'], f"motif_{node['shape_label']}")
         try:
-            # Bypass strict repair for motifs
             if node.get('is_motif'):
                 pass
             else:
@@ -290,6 +293,16 @@ def build_graph_unvalidated(record, predicates, top_k, extra_edges=None, kb=None
             continue
         try:
             node_id = node.get('object_id', node.get('id'))
+            # --- SOTA: Extract and cache per-stroke features ---
+            if feature_extractor is not None and 'image' in record and 'mask' in node:
+                try:
+                    feat = feature_extractor.extract_object_features(
+                        record['image'], node['mask'], object_id=node_id, problem_id=problem_id, node_attrs=node
+                    )
+                    node['vl_embed'] = feat.detach().cpu().numpy().astype(np.float32)
+                    node_features[node_id] = node['vl_embed']
+                except Exception as e:
+                    logging.warning(f"VL feature extraction failed for node {node_id}: {e}")
             G.add_node(node_id, **node)
             logging.debug(f"[build_graph_unvalidated] Added node: id={node_id}, shape_label={node.get('shape_label')}, category={node.get('category')}, vertices_len={len(node.get('vertices', []) if 'vertices' in node else [])}")
         except Exception as e:
@@ -304,6 +317,41 @@ def build_graph_unvalidated(record, predicates, top_k, extra_edges=None, kb=None
         logging.warning(f"Motif feature normalization failed: {e}")
     add_predicate_edges(G, predicates)
     add_commonsense_edges(G, top_k, kb=kb)
+    # --- SOTA: Add CLIP/vision-language similarity edges for high-similarity strokes ---
+    try:
+        from src.scene_graphs_building.vl_features import CLIPEmbedder
+        clip_embedder = CLIPEmbedder()
+        # Prepare objects for CLIPEmbedder: must have image_path, bounding_box, mask, id
+        objects = []
+        for node_id in node_features:
+            node = G.nodes[node_id]
+            obj = {
+                'id': node_id,
+                'image_path': record.get('image', None),
+                'bounding_box': node.get('bounding_box', None),
+                'mask': node.get('mask', None)
+            }
+            objects.append(obj)
+        if objects and objects[0]['image_path'] is not None:
+            clip_edges = clip_embedder.contrastive_edges(objects, threshold=0.2)
+            for u, v, data in clip_edges:
+                G.add_edge(u, v, **data)
+    except Exception as e:
+        logging.warning(f"CLIPEmbedder contrastive_edges failed: {e}")
+    # Retain legacy VL similarity edges for backward compatibility
+    if node_features:
+        import numpy as np
+        node_ids = list(node_features.keys())
+        feats = np.stack([node_features[nid] for nid in node_ids])
+        normed = feats / (np.linalg.norm(feats, axis=1, keepdims=True) + 1e-8)
+        sim = np.dot(normed, normed.T)
+        np.fill_diagonal(sim, -np.inf)
+        for i, src_id in enumerate(node_ids):
+            top_idx = np.argsort(sim[i])[-2:][::-1]  # Top 2 most similar
+            for j in top_idx:
+                tgt_id = node_ids[j]
+                if sim[i, j] > 0.7:  # High similarity threshold
+                    G.add_edge(src_id, tgt_id, predicate='vl_sim', weight=float(sim[i, j]), source='vl')
     # Add extra edges if provided (e.g., CLIP/vision-language edges)
     if extra_edges is not None:
         for edge in extra_edges:

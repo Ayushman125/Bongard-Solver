@@ -25,11 +25,15 @@ class MultiSourceKnowledgeFusion:
         self.knowledge_gnn = KnowledgeGraphNN(hidden_dim=384, num_layers=3)
         logging.info("Initialized MultiSourceKnowledgeFusion with ConceptNet REST API")
 
-    async def get_enriched_relationships(self, subject: str, obj: str, candidate_predicates: List[str]) -> List[Dict]:
+    async def get_enriched_relationships(self, subject: str, obj: str, candidate_predicates: List[str],
+                                         stroke_metadata: Optional[dict] = None) -> List[Dict]:
         """
         Retrieve and rank relationships using multi-source knowledge fusion with ConceptNet REST API.
         """
         # Query ConceptNet API for direct and path relations
+        # Restrict queries to kb_concept mapping and only allowed predicates
+        if subject not in candidate_predicates and obj not in candidate_predicates:
+            return []
         direct_relations = self.conceptnet_kb.query_direct_relations(subject, obj)
         path_relations = self.conceptnet_kb.find_relationship_paths(subject, obj, max_hops=2)
 
@@ -47,7 +51,15 @@ class MultiSourceKnowledgeFusion:
         fused_relationships = []
         for pred, rels in rels_by_pred.items():
             conf = min(1.0, sum(r.get('weight', 1.0) for r in rels) / len(rels))
-            fused_relationships.append({'predicate': pred, 'knowledge_confidence': conf, 'source_agreement': len(rels)})
+            # Add stroke metadata as knowledge_embedding
+            knowledge_embedding = None
+            if stroke_metadata is not None:
+                # Example: concatenate curvature_type, adjacency, intersection counts
+                curvature_type = stroke_metadata.get('curvature_type', 0)
+                adjacency = stroke_metadata.get('adjacency_count', 0)
+                intersection = stroke_metadata.get('intersection_count', 0)
+                knowledge_embedding = np.array([float(curvature_type == 'arc'), float(curvature_type == 'line'), float(adjacency), float(intersection)], dtype=np.float32)
+            fused_relationships.append({'predicate': pred, 'knowledge_confidence': conf, 'source_agreement': len(rels), 'knowledge_embedding': knowledge_embedding})
 
         # Apply commonsense validation
         validated_relationships = []

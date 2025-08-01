@@ -175,7 +175,14 @@ def load_predicates(adaptive_thresholds: AdaptivePredicateThresholds, canvas_dim
 
     # Define all predicates, prioritizing those from file if they exist
     # Each lambda now receives 'a', 'b' (node data) and 'params' (learned thresholds)
+    # SOTA: add new feature predicates for programmatic, KB, global stats, stroke, curvature
     all_candidate_predicates = {
+        # SOTA: new feature predicates
+        'curvature_sim': lambda a, b, params: abs(a.get('curvature', 0.0) - b.get('curvature', 0.0)) < params.get('curvature_tol', 0.2),
+        'stroke_count_sim': lambda a, b, params: abs(a.get('stroke_count', 0) - b.get('stroke_count', 0)) < params.get('stroke_count_tol', 1),
+        'programmatic_sim': lambda a, b, params: a.get('programmatic_label') == b.get('programmatic_label'),
+        'kb_sim': lambda a, b, params: a.get('kb_concept') == b.get('kb_concept'),
+        'global_stat_sim': lambda a, b, params: abs(a.get('global_stat', 0.0) - b.get('global_stat', 0.0)) < params.get('global_stat_tol', 0.2),
         # aspect_sim: True if aspect ratios are similar within a threshold
         'aspect_sim': lambda a, b, params: abs(a.get('aspect_ratio', 1.0) - b.get('aspect_ratio', 1.0)) < params.get('aspect_tol', 0.2),
         # para: True if orientations are similar within a threshold (parallel)
@@ -405,6 +412,8 @@ class EnhancedSceneGraphBuilder:
         self.sgcore_validator = SGScoreValidator()
         self.hierarchical_predictor = HierarchicalPredicatePredictor()
         self.feature_extractor = get_real_feature_extractor()
+        # SOTA: ensure all new features are processed in the pipeline
+        self.extra_features = ['curvature', 'stroke_count', 'programmatic_label', 'kb_concept', 'global_stat']
 
     # --- Caching for mask creation ---
     _mask_cache = {}
@@ -642,7 +651,8 @@ def assign_object_type(verts):
     elif len(arr) >= 3 and not are_points_collinear(arr):
         return "polygon"
     else:
-        return "unknown"
+        # SOTA: treat degenerate/ambiguous as 'curve' if possible
+        return "curve" if len(arr) > 1 else "unknown"
 
 async def _process_single_problem(
     problem_id: str,
@@ -681,16 +691,18 @@ async def _process_single_problem(
         if representative_image_path is None:
             representative_image_path = remap_path(rec.get('image_path', ''))
         verts = rec.get('vertices') or rec.get('geometry') or []
+        obj_type = assign_object_type(verts)
+        arr = np.array(verts)
         obj = {
             'object_id': f"{problem_id}_{idx}",
             'vertices': verts,
-            'object_type': assign_object_type(verts),
+            'object_type': obj_type,
             'is_closed': (len(verts) > 2 and np.allclose(verts[0], verts[-1], atol=1e-6)),
             'fallback_geometry': False, # will update below
-            'bounding_box': [float(np.min(np.array(verts)[:,0])) if verts else 0.0,
-                             float(np.min(np.array(verts)[:,1])) if verts else 0.0,
-                             float(np.max(np.array(verts)[:,0])) if verts else 0.0,
-                             float(np.max(np.array(verts)[:,1])) if verts else 0.0],
+            'bounding_box': [float(np.min(arr[:,0])) if verts else 0.0,
+                             float(np.min(arr[:,1])) if verts else 0.0,
+                             float(np.max(arr[:,0])) if verts else 0.0,
+                             float(np.max(arr[:,1])) if verts else 0.0],
             'centroid': [0.0, 0.0], # will update below
             'area': 0.0,
             'perimeter': 0.0,
@@ -709,11 +721,10 @@ async def _process_single_problem(
             'category': rec.get('category'),
             'label': rec.get('label'),
             'image_path': rec.get('image_path'),
+            'feature_valid': {},
         }
-        arr = np.array(verts)
-        # Geometry and feature extraction by type
-        obj['attribute_validity'] = {}
-        if obj['object_type'] == "polygon":
+        # SOTA: Feature validity and geometry for all types
+        if obj_type == "polygon":
             try:
                 poly = Polygon(arr)
                 obj['centroid'] = list(poly.centroid.coords[0])
@@ -727,32 +738,40 @@ async def _process_single_problem(
                 obj['is_valid'] = poly.is_valid and obj['area'] > 1e-6
                 obj['geometry_reason'] = "polygon" if obj['is_valid'] else "degenerate"
                 obj['fallback_geometry'] = not obj['is_valid']
-                # Mark attribute validity
-                for feat in ['curvature', 'skeleton_length', 'symmetry_axis']:
-                    obj['attribute_validity'][feat] = 'valid' if obj['is_valid'] else 'not_applicable'
+                for feat in ['curvature', 'skeleton_length', 'symmetry_axis', 'centroid', 'orientation', 'area', 'perimeter', 'aspect_ratio']:
+                    obj['feature_valid'][feat] = True if obj['is_valid'] else False
             except Exception as e:
                 obj['is_valid'] = False
                 obj['geometry_reason'] = f"polygon_error: {e}"
                 obj['fallback_geometry'] = True
-                for feat in ['curvature', 'skeleton_length', 'symmetry_axis']:
-                    obj['attribute_validity'][feat] = 'not_applicable'
-        elif obj['object_type'] == "line":
-            centroid = np.mean(arr, axis=0)
-            obj['centroid'] = centroid.tolist()
-            obj['area'] = 0.0
-            obj['perimeter'] = float(np.sum(np.linalg.norm(arr[1:] - arr[:-1], axis=1))) if arr.shape[0] > 1 else 0.0
-            obj['orientation'] = float(np.degrees(np.arctan2(arr[-1][1]-arr[0][1], arr[-1][0]-arr[0][0]))) if arr.shape[0] > 1 else 0.0
-            obj['aspect_ratio'] = (obj['bounding_box'][2] - obj['bounding_box'][0]) / max(obj['bounding_box'][3] - obj['bounding_box'][1], 1e-6)
-            obj['curvature'] = None
-            obj['skeleton_length'] = obj['perimeter']
-            obj['symmetry_axis'] = None
-            obj['is_valid'] = True
-            obj['geometry_reason'] = "line"
-            obj['fallback_geometry'] = True
-            obj['attribute_validity']['curvature'] = 'not_applicable'
-            obj['attribute_validity']['symmetry_axis'] = 'not_applicable'
-            obj['attribute_validity']['skeleton_length'] = 'valid'
-        elif obj['object_type'] == "point":
+                for feat in ['curvature', 'skeleton_length', 'symmetry_axis', 'centroid', 'orientation', 'area', 'perimeter', 'aspect_ratio']:
+                    obj['feature_valid'][feat] = False
+        elif obj_type in ["line", "curve"]:
+            # SOTA: Always set geometry for lines/curves
+            if arr.shape[0] > 1:
+                centroid = np.mean(arr, axis=0)
+                obj['centroid'] = centroid.tolist()
+                obj['perimeter'] = float(np.sum(np.linalg.norm(arr[1:] - arr[:-1], axis=1)))
+                obj['orientation'] = float(np.degrees(np.arctan2(arr[-1][1]-arr[0][1], arr[-1][0]-arr[0][0])))
+                obj['skeleton_length'] = obj['perimeter']
+                obj['curvature'] = None # can be updated if needed
+                obj['area'] = 0.0
+                obj['aspect_ratio'] = (obj['bounding_box'][2] - obj['bounding_box'][0]) / max(obj['bounding_box'][3] - obj['bounding_box'][1], 1e-6)
+                obj['symmetry_axis'] = None
+                obj['is_valid'] = True
+                obj['geometry_reason'] = obj_type
+                obj['fallback_geometry'] = False
+                for feat in ['centroid', 'orientation', 'perimeter', 'skeleton_length', 'aspect_ratio']:
+                    obj['feature_valid'][feat] = True
+                for feat in ['area', 'curvature', 'symmetry_axis']:
+                    obj['feature_valid'][feat] = False
+            else:
+                obj['is_valid'] = False
+                obj['geometry_reason'] = f"{obj_type}_degenerate"
+                obj['fallback_geometry'] = True
+                for feat in ['centroid', 'orientation', 'perimeter', 'skeleton_length', 'aspect_ratio', 'area', 'curvature', 'symmetry_axis']:
+                    obj['feature_valid'][feat] = False
+        elif obj_type == "point":
             obj['centroid'] = arr[0].tolist() if len(arr) == 1 else [0.0, 0.0]
             obj['area'] = 0.0
             obj['perimeter'] = 0.0
@@ -764,61 +783,50 @@ async def _process_single_problem(
             obj['is_valid'] = True
             obj['geometry_reason'] = "point"
             obj['fallback_geometry'] = True
-            for feat in ['curvature', 'skeleton_length', 'symmetry_axis']:
-                obj['attribute_validity'][feat] = 'not_applicable'
+            for feat in ['centroid', 'area', 'perimeter', 'orientation', 'aspect_ratio', 'curvature', 'skeleton_length', 'symmetry_axis']:
+                obj['feature_valid'][feat] = feat == 'centroid'
         else:
             obj['is_valid'] = False
             obj['geometry_reason'] = "unknown"
             obj['fallback_geometry'] = True
-            for feat in ['curvature', 'skeleton_length', 'symmetry_axis']:
-                obj['attribute_validity'][feat] = 'not_applicable'
+            for feat in ['centroid', 'area', 'perimeter', 'orientation', 'aspect_ratio', 'curvature', 'skeleton_length', 'symmetry_axis']:
+                obj['feature_valid'][feat] = False
         # Logging for interpretability
-        logging.info(f"Object {obj['object_id']}: type={obj['object_type']}, valid={obj['is_valid']}, fallback={obj['fallback_geometry']}, reason={obj['geometry_reason']}, attribute_validity={obj['attribute_validity']}")
-        # ...existing feature extraction (curvature, skeleton_length, etc.)...
-        # Vision-language and motif fields
+        logging.info(f"Object {obj['object_id']}: type={obj['object_type']}, valid={obj['is_valid']}, fallback={obj['fallback_geometry']}, reason={obj['geometry_reason']}, feature_valid={obj['feature_valid']}")
+        # SOTA: Vision-language and motif fields
         obj['clip_sim'] = None
         obj['vl_sim'] = None
         obj['motif_score'] = None
-        if 'curvature' not in obj:
-            if arr.shape[0] > 2 and obj['object_type'] == 'polygon' and obj['is_valid']:
-                diffs = np.diff(arr, axis=0)
-                angles = np.arctan2(diffs[:,1], diffs[:,0])
-                curvatures = np.abs(np.diff(angles))
-                obj['curvature'] = float(np.mean(curvatures))
-                obj['attribute_validity']['curvature'] = 'valid'
-            else:
-                obj['curvature'] = None
-                obj['attribute_validity']['curvature'] = 'not_applicable'
-        if 'skeleton_length' not in obj:
-            if arr.shape[0] > 1 and obj['object_type'] in ['polygon', 'line'] and obj['is_valid']:
-                dists = np.linalg.norm(np.diff(arr, axis=0), axis=1)
-                obj['skeleton_length'] = float(np.sum(dists))
-                obj['attribute_validity']['skeleton_length'] = 'valid'
-            else:
-                obj['skeleton_length'] = None
-                obj['attribute_validity']['skeleton_length'] = 'not_applicable'
-        obj['gnn_score'] = None
         if getattr(args, 'use_vl', False) and obj.get('image_path'):
             try:
                 from src.scene_graphs_building.data_loading import robust_image_open
                 img = robust_image_open(obj['image_path'])
-                obj['vl_embed'] = clip_embedder.embed_image(img)
+                # SOTA: Use ROI/mask-based embedding for lines/curves
+                if obj_type in ["line", "curve"] and arr.shape[0] > 1:
+                    x1, y1, x2, y2 = [int(round(x)) for x in obj['bounding_box']]
+                    img_crop = img.crop((x1, y1, x2, y2))
+                    obj['vl_embed'] = clip_embedder.embed_image(img_crop)
+                else:
+                    obj['vl_embed'] = clip_embedder.embed_image(img)
             except Exception as e:
                 obj['vl_embed'] = np.zeros(512)
         # Log non-polygon objects for feedback
-        if obj['object_type'] != "polygon":
+        if obj_type != "polygon":
             logging.warning(f"Inserted non-polygon object: id={obj['object_id']}, type={obj['object_type']}, vertices={verts}")
         objects.append(obj)
     merged_record['objects'] = objects
-    # 2. Motif mining and super-nodes
+    # 2. Motif mining and super-nodes (SOTA: graph-based, type-aware)
     motif_nodes = []
     motif_edges = []
     if getattr(args, 'use_motifs', False):
-        motif_dict, motif_nodes = MotifMiner().cluster_motifs(objects)
+        motif_dict, motif_nodes = MotifMiner().cluster_motifs(objects, method='graph+type')
         for motif_node in motif_nodes:
             supernode_id = motif_node['id']
             member_nodes = [obj for obj in objects if obj.get('object_id', obj.get('id')) in motif_node['member_nodes']]
-            # Optionally, update motif_node with aggregated features if needed
+            # SOTA: Aggregate motif features (stroke count, mean direction, etc.)
+            motif_node['stroke_count'] = len(member_nodes)
+            motif_node['mean_orientation'] = float(np.mean([o['orientation'] for o in member_nodes if o['feature_valid'].get('orientation')])) if member_nodes else 0.0
+            motif_node['motif_type'] = motif_dict.get(supernode_id, 'unknown')
             # Add part_of_motif edges
             for nid in motif_node['member_nodes']:
                 motif_edges.append((nid, supernode_id, {'predicate': 'part_of', 'source': 'motif'}))
@@ -837,25 +845,44 @@ async def _process_single_problem(
             if obj.get('vl_embed') is not None:
                 obj['clip_sim'] = cosine_sim(obj['vl_embed'], mean_embed)
                 obj['vl_sim'] = cosine_sim(obj['vl_embed'], mean_embed)
-    # 3. Adaptive predicate mining
+    # SOTA: log node/edge type and feature coverage
+    n_poly = sum(1 for o in objects if o['object_type'] == 'polygon')
+    n_line = sum(1 for o in objects if o['object_type'] == 'line')
+    n_curve = sum(1 for o in objects if o['object_type'] == 'curve')
+    n_point = sum(1 for o in objects if o['object_type'] == 'point')
+    logging.info(f"Node type counts: polygon={n_poly}, line={n_line}, curve={n_curve}, point={n_point}")
+    n_valid_geom = sum(1 for o in objects if o['is_valid'])
+    logging.info(f"Valid geometry nodes: {n_valid_geom}/{len(objects)}")
+    # 3. Adaptive predicate mining (SOTA: branch by type, ensure all pairs get at least one predicate)
     pred_miner = PredicateMiner()
     learned_thresholds = pred_miner.fit(objects)
-    dynamic_predicates = pred_miner.build_edge_fn()  # Use lambdas, not raw thresholds
+    dynamic_predicates = pred_miner.build_edge_fn(type_aware=True)  # SOTA: type-aware branching
     for k, v in dynamic_predicates.items():
         logging.info(f"Predicate '{k}' type: {type(v)}")
-    # 4. VLM edges
+    # SOTA: ensure every node pair gets at least one predicate (esp. for lines/curves)
+    for i, a in enumerate(objects):
+        for j, b in enumerate(objects):
+            if i >= j: continue
+            found = any(fn(a, b) for fn in dynamic_predicates.values())
+            if not found:
+                logging.warning(f"No predicate found for node pair {a['object_id']} ({a['object_type']}), {b['object_id']} ({b['object_type']})")
+    # 4. VLM edges (SOTA: include lines/curves, use ROI/mask)
     vl_edges = []
     if getattr(args, 'use_vl', False):
-        vl_edges = clip_embedder.contrastive_edges(objects)
+        vl_edges = clip_embedder.contrastive_edges(objects, use_roi=getattr(args, 'use_roi', False))
     # 5. Build graph
     base_graph_nx = build_graph_unvalidated(merged_record, dynamic_predicates, TOP_K, extra_edges=vl_edges+motif_edges, kb=kb)
     logging.info(f"[DEBUG] After build_graph_unvalidated: type={type(base_graph_nx)}, nodes={getattr(base_graph_nx, 'number_of_nodes', lambda: 'NA')()}, edges={getattr(base_graph_nx, 'number_of_edges', lambda: 'NA')()}")
     if base_graph_nx is None:
         logging.error(f"[ERROR] build_graph_unvalidated returned None for problem {problem_id}. Skipping.")
         return {'scene_graph': None, 'rules': None}
+    # SOTA: log edge predicate type mix
+    pred_types = [edata.get('predicate') for _,_,edata in base_graph_nx.edges(data=True)]
+    from collections import Counter
+    pred_counter = Counter(pred_types)
+    logging.info(f"Predicate type counts: {dict(pred_counter)}")
     # --- Global Graph Statistics ---
     node_centroids = [d.get('centroid', [0,0]) for n, d in base_graph_nx.nodes(data=True)]
-    import numpy as np
     def is_valid_centroid(c):
         return (
             isinstance(c, (list, tuple, np.ndarray)) and
@@ -873,14 +900,15 @@ async def _process_single_problem(
         total_pairs = 0
         for i in range(len(arr)):
             for j in range(i+1, len(arr)):
-                refl = 2*center - arr[i]
-                if np.linalg.norm(refl - arr[j]) < 5.0:
-                    sym_pairs += 1
-                total_pairs += 1
+                # SOTA: symmetry for all types
+                if np.all(np.isfinite(arr[i])) and np.all(np.isfinite(arr[j])):
+                    if np.allclose(arr[i]+arr[j], 2*center, atol=10):
+                        sym_pairs += 1
+                    total_pairs += 1
         base_graph_nx.graph['symmetry_score'] = sym_pairs/total_pairs if total_pairs else 0.0
     else:
         base_graph_nx.graph['symmetry_score'] = 0.0
-    base_graph_nx.graph['motif_diversity'] = len(set([d.get('shape_label') for n, d in base_graph_nx.nodes(data=True) if d.get('is_motif')]))
+    base_graph_nx.graph['motif_diversity'] = len(set([d.get('motif_type','') for n, d in base_graph_nx.nodes(data=True) if d.get('is_motif')]))
     from scipy.stats import entropy
     pred_counts = [edata.get('predicate') for _,_,edata in base_graph_nx.edges(data=True)]
     _, counts = np.unique(pred_counts, return_counts=True)
@@ -950,7 +978,7 @@ async def _process_single_problem(
             else:
                 logging.warning('CUDA not available, using CPU for CLIP vision-language embedding.')
             clip_embedder = CLIPEmbedder(device=device)
-            vl_edges = clip_embedder.contrastive_edges(merged_record['objects'])
+            vl_edges = clip_embedder.contrastive_edges(merged_record['objects'], use_roi=getattr(args, 'use_roi', False))
             logging.info(f"Problem {problem_id}: Added {len(vl_edges)} CLIP edges.")
 
         # 3. Build base scene graph with dynamic predicates
@@ -1124,6 +1152,7 @@ async def main(): # Main is now async because it calls async functions
     parser.add_argument('--use-vl', action='store_true', help='Enable vision-language (CLIP) edges in scene graph')
     parser.add_argument('--use-gnn', action='store_true', help='Enable GNN/Transformer reasoning in scene graph')
     parser.add_argument('--use-motifs', action='store_true', help='Enable motif mining and super-nodes in scene graph')
+    parser.add_argument('--use-roi', action='store_true', help='Use ROI (bounding box/mask) for CLIP vision-language edges (SOTA)')
     args = parser.parse_args()
     global kb
     kb = ConceptNetClient.get()

@@ -17,32 +17,18 @@ from transformers import CLIPProcessor, CLIPModel
 import numpy as np
 
 class CLIPEmbedder:
-    def __init__(self, device=None, model_name='openai/clip-vit-base-patch16', cache_dir='model_cache'):
-        import os
-        self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
-        self.model_name = model_name
-        self.cache_dir = cache_dir
-        os.makedirs(self.cache_dir, exist_ok=True)
-        self.model = CLIPModel.from_pretrained(self.model_name, cache_dir=self.cache_dir).to(self.device)
-        self.processor = CLIPProcessor.from_pretrained(self.model_name, cache_dir=self.cache_dir)
+    """
+    Deprecated: Use CLIPEmbedder from vl_features.py for SOTA Bongard-LOGO support.
+    This stub remains for backward compatibility only.
+    """
+    def __init__(self, *args, **kwargs):
+        import warnings
+        warnings.warn("CLIPEmbedder in clip_embedder.py is deprecated. Use src.scene_graphs_building.vl_features.CLIPEmbedder instead.")
+        from src.scene_graphs_building.vl_features import CLIPEmbedder as NewCLIPEmbedder
+        self._impl = NewCLIPEmbedder(*args, **kwargs)
 
-    def embed_image(self, image):
-        inputs = self.processor(images=image, return_tensors="pt").to(self.device)
-        with torch.no_grad():
-            image_features = self.model.get_image_features(**inputs)
-        return image_features.cpu().numpy().flatten()
+    def embed_image(self, *args, **kwargs):
+        return self._impl.embed_image(*args, **kwargs)
 
-    def contrastive_edges(self, objects, top_k=2):
-        # objects: list of dicts with 'vl_embed' key
-        embeds = np.stack([obj['vl_embed'] for obj in objects])
-        normed = embeds / np.linalg.norm(embeds, axis=1, keepdims=True)
-        sim = np.dot(normed, normed.T)
-        np.fill_diagonal(sim, -np.inf)
-        edges = []
-        for i, row in enumerate(sim):
-            top_idx = np.argsort(row)[-top_k:][::-1]
-            for j in top_idx:
-                src_id = objects[i].get('object_id', objects[i].get('id'))
-                tgt_id = objects[j].get('object_id', objects[j].get('id'))
-                edges.append((src_id, tgt_id, {'predicate': 'vl_sim', 'weight': float(row[j]), 'source': 'vl'}))
-        return edges
+    def contrastive_edges(self, *args, **kwargs):
+        return self._impl.contrastive_edges(*args, **kwargs)

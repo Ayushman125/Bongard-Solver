@@ -132,85 +132,97 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
         node_colors = []
         from src.scene_graphs_building.config import SEMANTIC_FIELDS
         # Prepare CSV table for all node metadata
-        csv_fields = [
-            'node_id', 'object_id', 'shape_label', 'semantic_label', 'kb_concept', 'motif_label', 'motif_type', 'pattern_role', 'action_program_type', 'function_label',
-            'object_type', 'is_closed', 'fallback_geometry', 'bounding_box', 'centroid', 'orientation', 'aspect_ratio', 'curvature', 'skeleton_length', 'symmetry_axis', 'component_index', 'is_valid', 'geometry_reason', 'object_color',
-            'gnn_score', 'clip_sim', 'motif_score', 'vl_sim', 'warnings', 'label', 'img'
-        ]
-        csv_rows = []
-        for n in G.nodes():
-            node = G.nodes[n]
-            # Color degenerate nodes red, lines orange, motifs gold, valid polygons green, others blue
-            if node.get('is_motif'):
-                node_colors.append('gold')
-                node_border_colors.append('goldenrod')
-            elif not node.get('geometry_valid', False):
-                node_colors.append('red')
-                node_border_colors.append('black')
-            elif node.get('object_type') == 'line':
-                node_colors.append('orange')
-                node_border_colors.append('black')
-            elif node.get('gnn_score') is not None:
-                node_colors.append('lightgreen')
-                node_border_colors.append('green')
+    # SOTA: add new features to CSV and visualization
+    csv_fields = [
+        'node_id', 'object_id', 'shape_label', 'semantic_label', 'kb_concept', 'motif_label', 'motif_type', 'pattern_role', 'action_program_type', 'function_label',
+        'object_type', 'is_closed', 'fallback_geometry', 'bounding_box', 'centroid', 'orientation', 'aspect_ratio', 'curvature', 'skeleton_length', 'symmetry_axis', 'component_index', 'is_valid', 'geometry_reason', 'object_color',
+        'gnn_score', 'clip_sim', 'motif_score', 'vl_sim', 'warnings', 'label', 'img',
+        'stroke_count', 'programmatic_label', 'global_stat'
+    ]
+    csv_rows = []
+    for n in G.nodes():
+        node = G.nodes[n]
+        # Color degenerate nodes red, lines orange, motifs gold, valid polygons green, others blue
+        if node.get('is_motif'):
+            node_colors.append('gold')
+            node_border_colors.append('goldenrod')
+        elif not node.get('geometry_valid', False):
+            node_colors.append('red')
+            node_border_colors.append('black')
+        elif node.get('object_type') == 'line':
+            node_colors.append('orange')
+            node_border_colors.append('black')
+        elif node.get('object_type') in ('arc', 'point'):
+            node_colors.append('purple')
+            node_border_colors.append('black')
+        elif node.get('gnn_score') is not None:
+            node_colors.append('lightgreen')
+            node_border_colors.append('green')
+        else:
+            node_colors.append('skyblue')
+            node_border_colors.append('blue')
+
+        # Minimal label: node id or shape label, plus degenerate tag if not valid
+        raw = node.get('shape_label', n)
+        norm = normalize_shape_label(raw)
+        label = norm if norm else str(n)
+        if not node.get('geometry_valid', False):
+            label = f"{label}\n[degenerate]"
+        elif node.get('object_type') == 'line':
+            label = f"{label}\n[line]"
+        elif node.get('object_type') == 'arc':
+            label = f"{label}\n[arc]"
+        elif node.get('object_type') == 'point':
+            label = f"{label}\n[point]"
+        # Optionally, append feature_valid summary
+        fv = node.get('feature_valid', {})
+        if fv:
+            valid_feats = [k for k, v in fv.items() if v]
+            invalid_feats = [k for k, v in fv.items() if not v]
+            if invalid_feats:
+                label += f"\n[invalid: {', '.join(invalid_feats)}]"
+        node_labels[n] = label
+
+        # Prepare row for CSV
+        row = {'node_id': n}
+        for field in csv_fields:
+            if field == 'node_id':
+                continue
+            if field == 'label':
+                row['label'] = label
+            elif field == 'img':
+                row['img'] = get_img_name(node)
             else:
-                node_colors.append('skyblue')
-                node_border_colors.append('blue')
-
-            # Minimal label: node id or shape label, plus degenerate tag if not valid
-            raw = node.get('shape_label', n)
-            norm = normalize_shape_label(raw)
-            label = norm if norm else str(n)
-            if not node.get('geometry_valid', False):
-                label = f"{label}\n[degenerate]"
-            elif node.get('object_type') == 'line':
-                label = f"{label}\n[line]"
-            # Optionally, append feature_valid summary
-            fv = node.get('feature_valid', {})
-            if fv:
-                valid_feats = [k for k, v in fv.items() if v]
-                invalid_feats = [k for k, v in fv.items() if not v]
-                if invalid_feats:
-                    label += f"\n[invalid: {', '.join(invalid_feats)}]"
-            node_labels[n] = label
-
-            # Prepare row for CSV
-            row = {'node_id': n}
-            for field in csv_fields:
-                if field == 'node_id':
-                    continue
-                if field == 'label':
-                    row['label'] = label
-                elif field == 'img':
-                    row['img'] = get_img_name(node)
+                val = node.get(field)
+                if val is None or val == 'not_applicable':
+                    val_str = 'N/A'
+                elif field in ['bounding_box', 'centroid', 'symmetry_axis'] and isinstance(val, (list, tuple)):
+                    val_str = ','.join([f'{v:.2f}' if isinstance(v, float) else str(v) for v in val])
+                elif isinstance(val, (list, tuple)):
+                    val_str = ';'.join([str(v) for v in val])
                 else:
-                    val = node.get(field)
-                    if val is None or val == 'not_applicable':
-                        val_str = 'N/A'
-                    elif field in ['bounding_box', 'centroid', 'symmetry_axis'] and isinstance(val, (list, tuple)):
-                        val_str = ','.join([f'{v:.2f}' if isinstance(v, float) else str(v) for v in val])
-                    elif isinstance(val, (list, tuple)):
-                        val_str = ';'.join([str(v) for v in val])
-                    else:
-                        val_str = str(val)
-                    row[field] = val_str
-            # Optionally add feature_valid flags to CSV
-            for k, v in fv.items():
-                row[k] = v
-            csv_rows.append(row)
-        # Save CSV table
-        csv_path = os.path.join(feedback_dir, f"{base_name}_node_metadata.csv")
-        with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=csv_fields, extrasaction='ignore')
-            writer.writeheader()
-            for row in csv_rows:
-                writer.writerow(row)
-        # Draw edges: color VLM edges red, motif edges orange, others gray
+                    val_str = str(val)
+                row[field] = val_str
+        # Optionally add feature_valid flags to CSV
+        for k, v in fv.items():
+            row[k] = v
+        csv_rows.append(row)
+    # Save CSV table
+    csv_path = os.path.join(feedback_dir, f"{base_name}_node_metadata.csv")
+    with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=csv_fields, extrasaction='ignore')
+        writer.writeheader()
+        for row in csv_rows:
+            writer.writerow(row)
+        # Draw edges: color VLM edges red, motif edges orange, spatial green, programmatic blue, KB purple, global stats brown, others gray
         edges_to_draw = list(G.edges(data=True))
         vl_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate')=='vl_sim']
         motif_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate')=='part_of']
         spatial_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate') in ('near','para','aspect_sim')]
-        other_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate') not in ('vl_sim','part_of','near','para','aspect_sim')]
+        programmatic_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate') == 'programmatic_sim']
+        kb_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate') == 'kb_sim']
+        global_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate') == 'global_stat_sim']
+        other_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate') not in ('vl_sim','part_of','near','para','aspect_sim','programmatic_sim','kb_sim','global_stat_sim')]
         import networkx as nx
         # Draw nodes with colored borders for degenerate/invalid/valid
         nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=700, edgecolors=node_border_colors, linewidths=2)
@@ -218,6 +230,9 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
         nx.draw_networkx_edges(G, pos, edgelist=vl_edges, arrows=True, arrowstyle='-|>', width=2.5, alpha=0.8, edge_color='red')
         nx.draw_networkx_edges(G, pos, edgelist=motif_edges, arrows=True, arrowstyle='-|>', width=2.5, alpha=0.8, edge_color='orange')
         nx.draw_networkx_edges(G, pos, edgelist=spatial_edges, arrows=True, arrowstyle='-|>', width=2.5, alpha=0.8, edge_color='green')
+        nx.draw_networkx_edges(G, pos, edgelist=programmatic_edges, arrows=True, arrowstyle='-|>', width=2.5, alpha=0.8, edge_color='blue')
+        nx.draw_networkx_edges(G, pos, edgelist=kb_edges, arrows=True, arrowstyle='-|>', width=2.5, alpha=0.8, edge_color='purple')
+        nx.draw_networkx_edges(G, pos, edgelist=global_edges, arrows=True, arrowstyle='-|>', width=2.5, alpha=0.8, edge_color='brown')
         # Draw only minimal node labels (ID or shape label, plus degenerate/feature info)
         nx.draw_networkx_labels(G, pos, labels=node_labels, font_size=9, font_family='sans-serif', font_color='black')
         # Add a legend for node color meanings
@@ -226,8 +241,12 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
             mpatches.Patch(color='gold', label='Motif'),
             mpatches.Patch(color='red', label='Degenerate'),
             mpatches.Patch(color='orange', label='Line'),
+            mpatches.Patch(color='purple', label='Arc/Point'),
             mpatches.Patch(color='lightgreen', label='Valid Polygon'),
             mpatches.Patch(color='skyblue', label='Other'),
+            mpatches.Patch(color='blue', label='Programmatic Edge'),
+            mpatches.Patch(color='purple', label='KB Edge'),
+            mpatches.Patch(color='brown', label='Global Stat Edge'),
         ]
         plt.legend(handles=legend_handles, loc='upper right', fontsize=8)
         from collections import defaultdict
@@ -242,11 +261,11 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
         rules = scene_graph.get('rules') if scene_graph else None
         if rules is not None:
             plt.gcf().text(0.01, 0.01, f"Rules: {getattr(rules, 'tree_', None)}", fontsize=8, color='purple', ha='left', va='bottom')
-        plt.title(f"Scene Graph: {base_name}")
-        plt.axis('off')
-    else:
-        plt.text(0.5, 0.5, 'No graph', ha='center', va='center', fontsize=12)
-        plt.axis('off')
+            plt.title(f"Scene Graph: {base_name}")
+            plt.axis('off')
+        else:
+            plt.text(0.5, 0.5, 'No graph', ha='center', va='center', fontsize=12)
+            plt.axis('off')
     plt.tight_layout()
     plt.savefig(graph_img_path, bbox_inches='tight')
     plt.close()

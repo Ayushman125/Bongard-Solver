@@ -20,7 +20,7 @@ class BongardGNN(nn.Module):
         x = self.conv2(x, edge_index)
         return x
 class SimpleGCN(nn.Module):
-    def __init__(self, in_dim, hidden_dim=64, out_dim=1, dropout=0.2, use_layernorm=True):
+    def __init__(self, in_dim, hidden_dim=64, out_dim=1, dropout=0.2, use_layernorm=True, graph_head=True):
         super().__init__()
         self.conv1 = GCNConv(in_dim, hidden_dim)
         self.conv2 = GCNConv(hidden_dim, hidden_dim)
@@ -30,9 +30,15 @@ class SimpleGCN(nn.Module):
         if use_layernorm:
             self.ln1 = nn.LayerNorm(hidden_dim)
             self.ln2 = nn.LayerNorm(hidden_dim)
+        self.graph_head = graph_head
+        if graph_head:
+            from torch_geometric.nn import global_mean_pool
+            self.pool = global_mean_pool
+            self.graph_pred = nn.Linear(out_dim, 1)
 
     def forward(self, data):
         x, edge_index = data.x, data.edge_index
+        batch = getattr(data, 'batch', None)
         x1 = self.conv1(x, edge_index)
         if self.use_layernorm:
             x1 = self.ln1(x1)
@@ -44,80 +50,70 @@ class SimpleGCN(nn.Module):
         x2 = F.relu(x2)
         x2 = self.dropout(x2)
         x3 = self.conv3(x2, edge_index)
-        # Output shape: [num_nodes, 1] -> squeeze to [num_nodes] for scalar output per node
         out = x3.squeeze(-1)
-        return out
+        # Node-level output: [num_nodes]
+        if self.graph_head and batch is not None:
+            graph_out = self.graph_pred(self.pool(out.unsqueeze(-1), batch)).squeeze(-1)
+            return out, graph_out
+        return out, None
 
 class GNNReasoner:
-    def __init__(self, in_dim=10, model_path=None, device=None, hidden_dim=64, dropout=0.2, use_layernorm=True):
+    def __init__(self, in_dim=10, model_path=None, device=None, hidden_dim=64, dropout=0.2, use_layernorm=True, graph_head=True):
         self.in_dim = in_dim
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = SimpleGCN(in_dim, hidden_dim=hidden_dim, out_dim=1, dropout=dropout, use_layernorm=use_layernorm).to(self.device)
+        self.model = SimpleGCN(in_dim, hidden_dim=hidden_dim, out_dim=1, dropout=dropout, use_layernorm=use_layernorm, graph_head=graph_head).to(self.device)
         if model_path:
             self.model.load_state_dict(torch.load(model_path, map_location=self.device))
         self.model.eval()
 
     def nx_to_pyg(self, G):
         import logging
-        # Use a broader set of features for all valid geometry (lines, arcs, polygons, points)
+        # --- SOTA: Node type and feature validity mask ---
         required_features = ['area', 'aspect_ratio', 'orientation', 'curvature', 'skeleton_length', 'length', 'centroid', 'gnn_score', 'clip_sim', 'motif_score', 'vl_sim']
-        node_ids = [n for n in G.nodes() if G.nodes[n].get('geometry_valid', False)]
+        node_types = ['polygon', 'line', 'arc', 'point', 'motif']
+        node_ids = list(G.nodes())
         node_feats = []
         diagnostics = []
-        # Separate motif and regular nodes for normalization
-        motif_nodes = [n for n in node_ids if G.nodes[n].get('is_motif')]
-        regular_nodes = [n for n in node_ids if not G.nodes[n].get('is_motif')]
-        def get_feat(n, f):
-            val = G.nodes[n].get(f, 0)
-            if isinstance(val, (int, float, np.integer, np.floating)):
-                return float(val)
-            elif isinstance(val, str):
-                try:
-                    return float(val)
-                except Exception:
-                    return 0.0
-            elif isinstance(val, (list, tuple, np.ndarray)):
-                # Use mean for centroid or vector features
-                arr = np.array(val)
-                return float(np.mean(arr)) if arr.size > 0 else 0.0
-            else:
-                return 0.0
-        for f in required_features:
-            motif_vals = [get_feat(n, f) for n in motif_nodes]
-            reg_vals = [get_feat(n, f) for n in regular_nodes]
-            motif_mean = np.mean(motif_vals) if motif_vals else 1.0
-            reg_mean = np.mean(reg_vals) if reg_vals else 1.0
-            if motif_mean is None or motif_mean == 0 or (hasattr(motif_mean, 'item') and motif_mean.item() == 0) or np.isnan(motif_mean):
-                motif_mean = 1.0
-            if reg_mean is None or reg_mean == 0 or (hasattr(reg_mean, 'item') and reg_mean.item() == 0) or np.isnan(reg_mean):
-                reg_mean = 1.0
-            for n in motif_nodes:
-                val = get_feat(n, f)
-                G.nodes[n][f+'_norm'] = val / motif_mean if motif_mean else 0.0
-            for n in regular_nodes:
-                val = get_feat(n, f)
-                G.nodes[n][f+'_norm'] = val / reg_mean if reg_mean else 0.0
         for n in node_ids:
             d = G.nodes[n]
-            missing = [f for f in required_features if f not in d]
-            for f in missing:
-                d[f] = 0.0
-            if missing:
-                diagnostics.append(f"Node {n} missing features: {missing}. Node keys: {list(d.keys())}")
-                logging.warning(f"GNNReasoner.nx_to_pyg: Node {n} missing features: {missing}. Node keys: {list(d.keys())}")
-            feats = [float(d.get(f+'_norm', 0)) for f in required_features]
-            logging.info(f"GNNReasoner.nx_to_pyg: Node {n} normalized feature vector: {feats}")
-            node_feats.append(feats)
+            # Node type one-hot
+            ntype = d.get('node_type', None)
+            type_onehot = [0]*len(node_types)
+            if ntype in node_types:
+                type_onehot[node_types.index(ntype)] = 1
+            else:
+                # Heuristic fallback
+                if d.get('is_motif'): type_onehot[-1] = 1
+                elif d.get('geometry_valid', False): type_onehot[0] = 1
+            # Feature vector and validity mask
+            feat_vec = []
+            validity_mask = []
+            for f in required_features:
+                val = d.get(f, None)
+                if val is None:
+                    feat_vec.append(-1.0)  # Reserved for missing
+                    validity_mask.append(0)
+                elif isinstance(val, (int, float, np.integer, np.floating)):
+                    feat_vec.append(float(val))
+                    validity_mask.append(1)
+                elif isinstance(val, (list, tuple, np.ndarray)):
+                    arr = np.array(val)
+                    feat_vec.append(float(np.mean(arr)) if arr.size > 0 else -1.0)
+                    validity_mask.append(1 if arr.size > 0 else 0)
+                else:
+                    feat_vec.append(-1.0)
+                    validity_mask.append(0)
+            node_feats.append(type_onehot + feat_vec + validity_mask)
         if not node_feats:
             diagnostics.append("No node features found. Graph may be empty.")
             logging.error("GNNReasoner.nx_to_pyg: No node features found. Graph may be empty.")
-        if len(node_feats) == 0 or len(node_ids) == 0:
-            diagnostics.append("Graph is empty or has no nodes. Skipping GNN.")
-            logging.error("GNNReasoner.nx_to_pyg: Graph is empty or has no nodes. Skipping GNN.")
-        x = torch.tensor(node_feats, dtype=torch.float) if node_feats else torch.empty((0, len(required_features)), dtype=torch.float)
+        x = torch.tensor(node_feats, dtype=torch.float) if node_feats else torch.empty((0, len(required_features)+len(node_types)*2), dtype=torch.float)
+        # --- Robust edge mapping ---
         edge_index = []
+        node_id_map = {nid: i for i, nid in enumerate(node_ids)}
         for u, v in G.edges():
-            edge_index.append([node_ids.index(u), node_ids.index(v)])
+            if u in node_id_map and v in node_id_map:
+                edge_index.append([node_id_map[u], node_id_map[v]])
         if edge_index:
             edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
         else:
@@ -133,18 +129,20 @@ class GNNReasoner:
             if hasattr(data, 'diagnostics') and data.diagnostics:
                 for msg in data.diagnostics:
                     logging.warning(f"GNNReasoner.predict: {msg}")
-            # Validate graph structure
             if data.x.shape[0] == 0 or data.edge_index.shape[1] == 0:
                 logging.error("GNNReasoner.predict: Graph is empty or has no edges. No GNN score assigned.")
                 G.graph['gnn_status'] = 'no_gnn_score'
                 return G
             data = data.to(self.device)
             with torch.no_grad():
-                out = self.model(data)
+                node_out, graph_out = self.model(data)
             # Save GNN score to each node
             for i, n in enumerate(G.nodes):
-                G.nodes[n]['gnn_score'] = float(out[i].item())
+                G.nodes[n]['gnn_score'] = float(node_out[i].item())
                 logging.info(f"GNNReasoner.predict: Updated node {n} with gnn_score={G.nodes[n]['gnn_score']}")
+            if graph_out is not None:
+                G.graph['graph_gnn_score'] = float(graph_out.item())
+                logging.info(f"GNNReasoner.predict: Graph-level GNN score: {G.graph['graph_gnn_score']}")
             G.graph['gnn_status'] = 'success'
             return G
         except Exception as e:

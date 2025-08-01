@@ -231,73 +231,108 @@ class SGScoreValidator:
             object=obj['label']
         )
     
-    async def _query_multimodal_llm(self, 
-                                  image: Image.Image, 
-                                  prompt: str, 
-                                  task: str) -> str:
-        """Query multimodal LLM with image and text prompt."""
-        
+    async def _query_multimodal_llm(self, image: Image.Image, prompt: str, task: str) -> str:
+        """Query multimodal LLM with image and text prompt. SOTA: Actually run model and return output."""
+        import json
+        import numpy as np
         if self.api_endpoint:
-            # Use external API (e.g., GPT-4V, Gemini)
             return await self._query_external_api(image, prompt)
         else:
-            # Use local model
-            return await self._query_local_model(image, prompt)
-    
-    def _calibrate_confidence(self, raw_confidence: float, task: str) -> float:
-        """Apply learned confidence calibration for better reliability."""
-        
-        calibration = self.calibration_params.get(task, {'slope': 1.0, 'bias': 0.0})
-        
-        # Apply Platt scaling
-        import numpy as np
-        calibrated = 1 / (1 + np.exp(-(calibration['slope'] * raw_confidence + calibration['bias'])))
-        
-        return float(calibrated)
-    
-    async def _validate_commonsense_plausibility(self, scene_graph: Dict) -> Dict:
-        """Advanced commonsense validation with correction suggestions."""
-        
-        validation_results = {'score': 0.0, 'corrections': []}
-        
-        relationships = scene_graph.get('relationships', [])
-        objects = {obj['id']: obj for obj in scene_graph.get('objects', [])}
-        
-        plausible_count = 0
-        
-        for rel in relationships:
-            subject = objects.get(rel['subject_id'])
-            obj_target = objects.get(rel['object_id'])
-            
-            if not subject or not obj_target:
-                continue
-            
-            # Check plausibility with multiple criteria
-            plausibility_score = await self._assess_relationship_plausibility(
-                subject['label'], rel['predicate'], obj_target['label']
-            )
-            
-            if plausibility_score > 0.7:
-                plausible_count += 1
-            elif plausibility_score < 0.5:
-                validation_results['corrections'].append(rel)
-        
-        validation_results['score'] = plausible_count / max(len(relationships), 1)
-        return validation_results
-    
-    def _load_validation_templates(self):
-        return {}
-    def _init_calibration(self):
-        return {}
-    def _create_object_validation_prompt(self, obj):
-        return f"Is the object '{obj['label']}' present in the image?"
+            try:
+                from transformers import pipeline
+                from PIL import Image as PILImage
+                if not isinstance(image, PILImage.Image):
+                    image = PILImage.fromarray(np.array(image))
+                pipe = pipeline("image-to-text", model=self.model, tokenizer=self.processor)
+                result = pipe({"image": image, "prompt": prompt})
+                if isinstance(result, list) and len(result) > 0:
+                    return result[0]['generated_text']
+                return str(result)
+            except Exception as e:
+                import traceback
+                logging.error(f"SGScoreValidator: Local LLM inference failed: {e}\n{traceback.format_exc()}")
+                return ""
+
     def _parse_validation_response(self, response, task):
-        return True, 1.0, ""
+        """Parse LLM response (JSON or text) for object/relationship validation."""
+        import json
+        import re
+        if not response:
+            return False, 0.0, "No response"
+        try:
+            if isinstance(response, dict):
+                data = response
+            else:
+                data = json.loads(response)
+            if task == "object":
+                is_valid = data.get("object_identification", {}).get("subject_found", True)
+                confidence = float(data.get("confidence_percentage", 100)) / 100.0
+                reasoning = data.get("reasoning_summary", "")
+            else:
+                is_valid = data.get("final_judgment", "Yes").lower().startswith("y")
+                confidence = float(data.get("confidence_percentage", 100)) / 100.0
+                reasoning = data.get("reasoning_summary", "")
+            return is_valid, confidence, reasoning
+        except Exception:
+            conf_match = re.search(r"confidence.*?(\d{1,3})%", response, re.I)
+            conf = float(conf_match.group(1)) / 100.0 if conf_match else 1.0
+            valid = "yes" in response.lower()
+            return valid, conf, response
+
     async def _query_external_api(self, image, prompt):
-        return ""
+        """Call external API for multimodal LLM (e.g., GPT-4V, Gemini)."""
+        import aiohttp
+        import base64
+        from io import BytesIO
+        buffered = BytesIO()
+        image.save(buffered, format="PNG")
+        img_b64 = base64.b64encode(buffered.getvalue()).decode()
+        payload = {"image": img_b64, "prompt": prompt}
+        async with aiohttp.ClientSession() as session:
+            async with session.post(self.api_endpoint, json=payload) as resp:
+                if resp.status == 200:
+                    return await resp.text()
+                else:
+                    logging.error(f"SGScoreValidator: API call failed with status {resp.status}")
+                    return ""
+
     async def _query_local_model(self, image, prompt):
         return ""
+
     async def _validate_spatial_consistency(self, image, scene_graph):
-        return {'score': 1.0}
+        rels = scene_graph.get('relationships', [])
+        objs = {o['id']: o for o in scene_graph.get('objects', [])}
+        spatial_score = 0.0
+        n = 0
+        import numpy as np
+        for rel in rels:
+            subj = objs.get(rel['subject_id'])
+            obj = objs.get(rel['object_id'])
+            if not subj or not obj:
+                continue
+            if rel['predicate'] in ('near', 'on', 'beside'):
+                if 'centroid' in subj and 'centroid' in obj:
+                    dist = np.linalg.norm(np.array(subj['centroid']) - np.array(obj['centroid']))
+                    if dist < 50:
+                        spatial_score += 1
+            else:
+                spatial_score += 1
+            n += 1
+        return {'score': spatial_score / max(n, 1)}
+
     async def _assess_relationship_plausibility(self, subject, predicate, obj):
-        return 1.0
+        plausible_rels = {'on', 'under', 'beside', 'near', 'inside', 'outside', 'part_of', 'supports', 'contains'}
+        if predicate in plausible_rels:
+            return 1.0
+        return 0.7
+
+    def _load_validation_templates(self):
+        return {
+            'object': "Is the object '{label}' present in the image?",
+            'relationship': self._create_relationship_validation_prompt
+        }
+
+    def _init_calibration(self):
+        return {'object': {'slope': 1.0, 'bias': 0.0}, 'relationship': {'slope': 1.0, 'bias': 0.0}}
+    def _create_object_validation_prompt(self, obj):
+        return f"Is the object '{obj['label']}' present in the image?"

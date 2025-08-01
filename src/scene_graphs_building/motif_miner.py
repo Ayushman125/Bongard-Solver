@@ -7,6 +7,10 @@ from scipy.spatial import ConvexHull
 
 from src.scene_graphs_building.config import SHAPE_MAP, COMMONSENSE_LABEL_MAP, MOTIF_CATEGORIES, CONCEPTNET_KEEP_RELS
 
+from sklearn.cluster import SpectralClustering
+from shapely.geometry import LineString
+from src.scene_graphs_building.feature_extraction import compute_physics_attributes
+
 class MotifMiner:
     @staticmethod
     def aggregate_motif_vertices(members):
@@ -34,33 +38,32 @@ class MotifMiner:
     from src.scene_graphs_building.config import SHAPE_MAP, COMMONSENSE_LABEL_MAP, MOTIF_CATEGORIES, CONCEPTNET_KEEP_RELS
     MOTIF_LABELS = {i: k for i, k in enumerate(SHAPE_MAP.keys())}
 
-    def cluster_motifs(self, objects):
+    def cluster_motifs(self, objects, method='auto'):
         # Log type and keys of each object for debugging
         for i, o in enumerate(objects):
             logging.info(f"MotifMiner.cluster_motifs: object[{i}] type={type(o)}, keys={list(o.keys())}")
         # Cluster by centroid proximity, fallback to line centroids if polygons fail
-        try:
-            valid_objects = []
-            centroids = []
-            for o in objects:
-                # Accept any object with a valid centroid (not just geometry_valid==True)
-                centroid = o.get('centroid', None)
-                if centroid is not None and isinstance(centroid, (list, tuple, np.ndarray)) and len(centroid) == 2 and all(isinstance(x, (int, float, np.floating, np.integer)) for x in centroid):
-                    valid_objects.append(o)
-                    centroids.append(centroid)
-                elif o.get('object_type') == 'line' and o.get('vertices') is not None:
-                    # Fallback: use midpoint of line vertices
-                    midpoint = np.mean(o['vertices'], axis=0).tolist()
-                    valid_objects.append(o)
-                    centroids.append(midpoint)
-            centroids = np.array(centroids)
-            if len(centroids) == 0:
-                logging.error("MotifMiner.cluster_motifs: No valid centroids for clustering (including lines).")
-                return {}, []
-        except Exception as e:
-            logging.error(f"MotifMiner.cluster_motifs: Error extracting centroids: {e}")
+        # --- SOTA: Alternative clustering for multi-part motifs ---
+        valid_objects = []
+        centroids = []
+        for o in objects:
+            centroid = o.get('centroid', None)
+            if centroid is not None and isinstance(centroid, (list, tuple, np.ndarray)) and len(centroid) == 2 and all(isinstance(x, (int, float, np.floating, np.integer)) for x in centroid):
+                valid_objects.append(o)
+                centroids.append(centroid)
+            elif o.get('object_type') == 'line' and o.get('vertices') is not None:
+                midpoint = np.mean(o['vertices'], axis=0).tolist()
+                valid_objects.append(o)
+                centroids.append(midpoint)
+        centroids = np.array(centroids)
+        if len(centroids) == 0:
+            logging.error("MotifMiner.cluster_motifs: No valid centroids for clustering (including lines).")
             return {}, []
-        clustering = DBSCAN(eps=20, min_samples=1).fit(centroids)
+        # Choose clustering method
+        if method == 'spectral' and len(centroids) > 2:
+            clustering = SpectralClustering(n_clusters=min(4, len(centroids)), affinity='nearest_neighbors', assign_labels='kmeans').fit(centroids)
+        else:
+            clustering = DBSCAN(eps=20, min_samples=1).fit(centroids)
         motif_dict = {}
         clusters = {}
         # Record cluster membership and assign string labels
@@ -80,17 +83,35 @@ class MotifMiner:
                 continue
             motif_id = f"motif_{label}"
             member_ids = [m.get('object_id', m.get('id')) for m in members]
-            # Aggregate geometry from member vertices
+            # Aggregate geometry from member vertices (SOTA: fallback to alpha shape, mark degenerate)
             all_vertices = [v for m in members for v in (m.get('vertices') or [])]
+            motif_vertices = all_vertices
+            is_degenerate = False
             if len(all_vertices) >= 3:
                 try:
                     arr = np.array(all_vertices)
                     hull = ConvexHull(arr)
                     motif_vertices = arr[hull.vertices].tolist()
                 except Exception as e:
-                    logging.warning(f"MotifMiner.cluster_motifs: Convex hull failed for motif {label}: {e}")
-                    motif_vertices = all_vertices
+                    try:
+                        from shapely.geometry import Polygon
+                        import alphashape
+                        alpha_poly = alphashape.alphashape(arr, 0.1)
+                        if isinstance(alpha_poly, Polygon):
+                            coords = np.array(alpha_poly.exterior.coords)
+                            if len(coords) >= 3:
+                                motif_vertices = coords.tolist()
+                                is_degenerate = False
+                            else:
+                                is_degenerate = True
+                        else:
+                            is_degenerate = True
+                    except Exception as e2:
+                        logging.warning(f"MotifMiner.cluster_motifs: Alpha shape failed for motif {label}: {e2}")
+                        is_degenerate = True
+                        motif_vertices = all_vertices
             else:
+                is_degenerate = True
                 motif_vertices = all_vertices
             # Compute physics attributes and merge all into motif_node
             physics_attrs = {}
@@ -101,19 +122,37 @@ class MotifMiner:
                 if np.linalg.matrix_rank(v - v[0]) >= 2:
                     is_valid_polygon = True
             if is_valid_polygon:
-                try:
-                    from src.scene_graphs_building.feature_extraction import compute_physics_attributes
-                    physics_attrs['vertices'] = motif_vertices
-                    compute_physics_attributes(physics_attrs)
-                except Exception as e:
-                    logging.warning(f"MotifMiner.cluster_motifs: compute_physics_attributes failed for motif {motif_id}: {e}")
+                physics_attrs['vertices'] = motif_vertices
+                compute_physics_attributes(physics_attrs)
             else:
-                logging.warning(f"MotifMiner.cluster_motifs: Skipping physics attribute computation for motif {motif_id} due to degenerate or invalid geometry. Vertices: {motif_vertices}")
+                # SOTA: For open/degenerate motifs, compute line/curve features
+                if motif_vertices_arr.shape[0] >= 2:
+                    try:
+                        line = LineString(motif_vertices_arr)
+                        physics_attrs['length'] = line.length
+                        physics_attrs['centroid'] = list(line.centroid.coords)[0]
+                        physics_attrs['orientation'] = float(np.degrees(np.arctan2(motif_vertices_arr[-1][1] - motif_vertices_arr[0][1], motif_vertices_arr[-1][0] - motif_vertices_arr[0][0])))
+                        physics_attrs['vertices'] = motif_vertices
+                        physics_attrs['geometry_valid'] = True
+                    except Exception as e:
+                        logging.warning(f"MotifMiner.cluster_motifs: LineString feature extraction failed for motif {motif_id}: {e}")
+                        physics_attrs['geometry_valid'] = False
+                else:
+                    physics_attrs['geometry_valid'] = False
+                logging.warning(f"MotifMiner.cluster_motifs: Skipping polygon physics for motif {motif_id}, using line/curve features if possible. Vertices: {motif_vertices}")
             # Use config for all motif node fields
             shape_label = self.MOTIF_LABELS.get(label, f"motif_{label}")
             kb_concept = COMMONSENSE_LABEL_MAP.get(shape_label, shape_label)
+            # SOTA: Motif type by topology/program
             motif_type = None
-            for cat in MOTIF_CATEGORIES:
+            # Try topology-based typing
+            if is_valid_polygon:
+                motif_type = 'enclosed'
+            elif not is_valid_polygon and not is_degenerate:
+                motif_type = 'open'
+            # Try programmatic typing (e.g., chain, ring, symmetry)
+            program_types = ['chain', 'ring', 'symmetry', 'repeat', 'mirrored', 'spiral', 'reflection', 'loop']
+            for cat in MOTIF_CATEGORIES + program_types:
                 if cat in shape_label.lower():
                     motif_type = cat
                     break
@@ -146,26 +185,40 @@ class MotifMiner:
             # Ensure centroid is present for motif node
             if 'cx' in motif_node and 'cy' in motif_node:
                 motif_node['centroid'] = [motif_node['cx'], motif_node['cy']]
-            # --- Compute and assign clip_sim and vl_sim for motif node ---
-            # Only compute clip_sim/vl_sim if all members are polygons and have valid embeddings
+            # --- SOTA: Compute and assign CLIP/VL features for all motifs (lines/arcs: ROI crop) ---
             try:
-                from src.scene_graphs_building.clip_embedder import CLIPEmbedder
+                from src.scene_graphs_building.vl_features import CLIPEmbedder
+                clip_embedder = CLIPEmbedder()
+                # If all members are polygons with valid embeddings, use mean
                 valid_members = [n for n in members if n.get('object_type') == 'polygon' and n.get('vl_embed') is not None]
                 if valid_members and len(valid_members) == len(members):
                     vl_embed = np.mean([n['vl_embed'] for n in valid_members], axis=0)
                     motif_node['vl_embed'] = vl_embed
-                    clip_embedder = CLIPEmbedder()
                     motif_node['clip_sim'] = float(np.linalg.norm(vl_embed))
                     motif_node['vl_sim'] = float(np.linalg.norm(vl_embed))
                     motif_node['attribute_validity']['clip_sim'] = 'valid'
                     motif_node['attribute_validity']['vl_sim'] = 'valid'
                 else:
-                    motif_node['vl_embed'] = None
-                    motif_node['clip_sim'] = None
-                    motif_node['vl_sim'] = None
-                    motif_node['attribute_validity']['clip_sim'] = 'not_applicable'
-                    motif_node['attribute_validity']['vl_sim'] = 'not_applicable'
-                    logging.info(f"MotifMiner.cluster_motifs: motif node {motif_id} has non-polygon or missing-embedding members; clip_sim/vl_sim set to None.")
+                    # SOTA: For lines/arcs, compute ROI-cropped CLIP embedding for each stroke
+                    embeds = []
+                    for n in members:
+                        if n.get('object_type') in ('line', 'arc') and n.get('image_path') is not None and n.get('bounding_box') is not None:
+                            feat = clip_embedder.embed_image(n['image_path'], bounding_box=n['bounding_box'], mask=n.get('mask'), fallback_global=True)
+                            embeds.append(feat)
+                    if embeds:
+                        vl_embed = np.mean(embeds, axis=0)
+                        motif_node['vl_embed'] = vl_embed
+                        motif_node['clip_sim'] = float(np.linalg.norm(vl_embed))
+                        motif_node['vl_sim'] = float(np.linalg.norm(vl_embed))
+                        motif_node['attribute_validity']['clip_sim'] = 'valid'
+                        motif_node['attribute_validity']['vl_sim'] = 'valid'
+                    else:
+                        motif_node['vl_embed'] = None
+                        motif_node['clip_sim'] = None
+                        motif_node['vl_sim'] = None
+                        motif_node['attribute_validity']['clip_sim'] = 'not_applicable'
+                        motif_node['attribute_validity']['vl_sim'] = 'not_applicable'
+                        logging.info(f"MotifMiner.cluster_motifs: motif node {motif_id} has no valid embedding for lines/arcs; clip_sim/vl_sim set to None.")
             except Exception as e:
                 motif_node['vl_embed'] = None
                 motif_node['clip_sim'] = None
