@@ -97,6 +97,7 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
             return SHAPE_MAP.get(lbl, lbl)
         import csv
         node_labels = {}
+        node_border_colors = []
         node_colors = []
         from src.scene_graphs_building.config import SEMANTIC_FIELDS
         # Prepare CSV table for all node metadata
@@ -108,18 +109,38 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
         csv_rows = []
         for n in G.nodes():
             node = G.nodes[n]
-            # Color logic unchanged
+            # Color degenerate nodes red, lines orange, motifs gold, valid polygons green, others blue
             if node.get('is_motif'):
                 node_colors.append('gold')
+                node_border_colors.append('goldenrod')
+            elif not node.get('geometry_valid', False):
+                node_colors.append('red')
+                node_border_colors.append('black')
+            elif node.get('object_type') == 'line':
+                node_colors.append('orange')
+                node_border_colors.append('black')
             elif node.get('gnn_score') is not None:
                 node_colors.append('lightgreen')
+                node_border_colors.append('green')
             else:
                 node_colors.append('skyblue')
+                node_border_colors.append('blue')
 
-            # Minimal label: node id or shape label
+            # Minimal label: node id or shape label, plus degenerate tag if not valid
             raw = node.get('shape_label', n)
             norm = normalize_shape_label(raw)
             label = norm if norm else str(n)
+            if not node.get('geometry_valid', False):
+                label = f"{label}\n[degenerate]"
+            elif node.get('object_type') == 'line':
+                label = f"{label}\n[line]"
+            # Optionally, append feature_valid summary
+            fv = node.get('feature_valid', {})
+            if fv:
+                valid_feats = [k for k, v in fv.items() if v]
+                invalid_feats = [k for k, v in fv.items() if not v]
+                if invalid_feats:
+                    label += f"\n[invalid: {', '.join(invalid_feats)}]"
             node_labels[n] = label
 
             # Prepare row for CSV
@@ -142,6 +163,9 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
                     else:
                         val_str = str(val)
                     row[field] = val_str
+            # Optionally add feature_valid flags to CSV
+            for k, v in fv.items():
+                row[k] = v
             csv_rows.append(row)
         # Save CSV table
         csv_path = os.path.join(feedback_dir, f"{base_name}_node_metadata.csv")
@@ -157,13 +181,24 @@ def save_feedback_images(image, mask, base_name, feedback_dir, scene_graph=None)
         spatial_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate') in ('near','para','aspect_sim')]
         other_edges = [(u,v) for u,v,d in edges_to_draw if d.get('predicate') not in ('vl_sim','part_of','near','para','aspect_sim')]
         import networkx as nx
-        nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=700)
+        # Draw nodes with colored borders for degenerate/invalid/valid
+        nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=700, edgecolors=node_border_colors, linewidths=2)
         nx.draw_networkx_edges(G, pos, edgelist=other_edges, arrows=True, arrowstyle='-|>', width=1.5, alpha=0.7, edge_color='gray')
         nx.draw_networkx_edges(G, pos, edgelist=vl_edges, arrows=True, arrowstyle='-|>', width=2.5, alpha=0.8, edge_color='red')
         nx.draw_networkx_edges(G, pos, edgelist=motif_edges, arrows=True, arrowstyle='-|>', width=2.5, alpha=0.8, edge_color='orange')
         nx.draw_networkx_edges(G, pos, edgelist=spatial_edges, arrows=True, arrowstyle='-|>', width=2.5, alpha=0.8, edge_color='green')
-        # Draw only minimal node labels (ID or shape label)
+        # Draw only minimal node labels (ID or shape label, plus degenerate/feature info)
         nx.draw_networkx_labels(G, pos, labels=node_labels, font_size=9, font_family='sans-serif', font_color='black')
+        # Add a legend for node color meanings
+        import matplotlib.patches as mpatches
+        legend_handles = [
+            mpatches.Patch(color='gold', label='Motif'),
+            mpatches.Patch(color='red', label='Degenerate'),
+            mpatches.Patch(color='orange', label='Line'),
+            mpatches.Patch(color='lightgreen', label='Valid Polygon'),
+            mpatches.Patch(color='skyblue', label='Other'),
+        ]
+        plt.legend(handles=legend_handles, loc='upper right', fontsize=8)
         from collections import defaultdict
         combined = defaultdict(list)
         for u, v, d in edges_to_draw:

@@ -60,8 +60,9 @@ class GNNReasoner:
     def nx_to_pyg(self, G):
         import logging
         required_features = ['area', 'aspect_ratio', 'orientation', 'curvature', 'skeleton_length', 'symmetry_axis', 'gnn_score', 'clip_sim', 'motif_score', 'vl_sim']
+        # Only use nodes with valid geometry and all required features
+        node_ids = [n for n in G.nodes() if G.nodes[n].get('geometry_valid', False) and all(G.nodes[n].get('feature_valid', {}).get(f+'_valid', False) for f in required_features)]
         node_feats = []
-        node_ids = list(G.nodes())
         diagnostics = []
         # Separate motif and regular nodes for normalization
         motif_nodes = [n for n in node_ids if G.nodes[n].get('is_motif')]

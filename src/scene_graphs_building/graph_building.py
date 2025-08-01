@@ -6,17 +6,69 @@ from src.scene_graphs_building.config import CONCEPTNET_KEEP_RELS, SHAPE_MAP
 
 
 def add_predicate_edges(G, predicates):
-    """Iterates through all node pairs and adds edges based on the predicate registry."""
+    """Iterates through all node pairs and adds edges based on the predicate registry, with robust feature validity guards and line-specific proxies."""
+    def safe_get(node, key):
+        val = node.get(key)
+        return val if val is not None else None
+
     node_list = list(G.nodes(data=True))
     edge_count = 0
     for i, (u, data_u) in enumerate(node_list):
         for j, (v, data_v) in enumerate(node_list):
             if i == j:
                 continue
-            # Ensure a and b are valid dicts and not None
             if not isinstance(data_u, dict) or not isinstance(data_v, dict):
                 continue
+            # Robust geometry guards
+            if not (data_u.get('geometry_valid', False) and data_v.get('geometry_valid', False)):
+                # For line-based predicates, allow if both are lines
+                if not (data_u.get('object_type') == 'line' and data_v.get('object_type') == 'line'):
+                    continue
+            # Line-specific proxies for 'near' and 'para'
+            if data_u.get('object_type') == 'line' and data_v.get('object_type') == 'line':
+                mid1, mid2 = safe_get(data_u, 'centroid'), safe_get(data_v, 'centroid')
+                orient1, orient2 = safe_get(data_u, 'orientation'), safe_get(data_v, 'orientation')
+                near_thresh = 32.0  # or from config
+                para_thresh = 12.0  # or from config
+                if mid1 and mid2 and all(isinstance(x, (int, float)) for x in mid1+mid2):
+                    dist = np.linalg.norm(np.array(mid1) - np.array(mid2))
+                    if dist < near_thresh:
+                        G.add_edge(u, v, predicate='near', source='spatial')
+                        edge_count += 1
+                if orient1 is not None and orient2 is not None:
+                    if abs(orient1 - orient2) < para_thresh:
+                        G.add_edge(u, v, predicate='para', source='spatial')
+                        edge_count += 1
+                continue  # skip other predicates for lines
+            # For polygons and valid geometry
             for pred, fn in predicates.items():
+                # Area-based predicates
+                if pred in ['larger_than', 'aspect_sim']:
+                    if not (data_u.get('feature_valid', {}).get('area_valid', False) and data_v.get('feature_valid', {}).get('area_valid', False)):
+                        continue
+                    area1 = safe_get(data_u, 'area')
+                    area2 = safe_get(data_v, 'area')
+                    if area1 is None or area2 is None:
+                        continue
+                # Near/para require centroid/orientation
+                if pred in ['near', 'para']:
+                    if not (data_u.get('feature_valid', {}).get('centroid_valid', False) and data_v.get('feature_valid', {}).get('centroid_valid', False)):
+                        continue
+                    c1 = safe_get(data_u, 'centroid')
+                    c2 = safe_get(data_v, 'centroid')
+                    if c1 is None or c2 is None or not all(isinstance(x, (int, float)) for x in c1+c2):
+                        continue
+                    if pred == 'near':
+                        dist = np.linalg.norm(np.array(c1) - np.array(c2))
+                        if dist >= 32.0:
+                            continue
+                    if pred == 'para':
+                        o1 = safe_get(data_u, 'orientation')
+                        o2 = safe_get(data_v, 'orientation')
+                        if o1 is None or o2 is None:
+                            continue
+                        if abs(o1 - o2) >= 12.0:
+                            continue
                 try:
                     result = fn(data_u, data_v)
                     logging.debug(f"[add_predicate_edges] Predicate '{pred}' between {u} and {v}: {result}")

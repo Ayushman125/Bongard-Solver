@@ -8,6 +8,24 @@ from scipy.spatial import ConvexHull
 from src.scene_graphs_building.config import SHAPE_MAP, COMMONSENSE_LABEL_MAP, MOTIF_CATEGORIES, CONCEPTNET_KEEP_RELS
 
 class MotifMiner:
+    @staticmethod
+    def aggregate_motif_vertices(members):
+        # Only aggregate from valid members
+        valid_members = [m for m in members if m.get('geometry_valid', False) and m.get('vertices') is not None and len(m.get('vertices')) >= 3]
+        if not valid_members:
+            return None
+        all_vertices = []
+        for m in valid_members:
+            all_vertices.extend(m['vertices'])
+        return all_vertices if all_vertices else None
+
+    @staticmethod
+    def propagate_motif_validity(motif_node, member_nodes):
+        # Motif is valid if any member is valid
+        motif_node['geometry_valid'] = any(m.get('geometry_valid', False) for m in member_nodes)
+        motif_node['feature_valid'] = {}
+        for key in ['centroid_valid','area_valid','orientation_valid','aspect_ratio_valid','perimeter_valid','compactness_valid','convexity_valid','inertia_valid','num_segments_valid','num_junctions_valid','curvature_valid','skeleton_length_valid','symmetry_axis_valid']:
+            motif_node['feature_valid'][key] = any(m.get('feature_valid', {}).get(key, False) for m in member_nodes)
     def decompose(self, vertices):
         # Dummy: return input as one motif
         return [vertices]
@@ -22,15 +40,19 @@ class MotifMiner:
             logging.info(f"MotifMiner.cluster_motifs: object[{i}] type={type(o)}, keys={list(o.keys())}")
         # Cluster by centroid proximity, return dict: motif_label -> [node_ids]
         try:
-            centroids = np.array([o['centroid'] for o in objects])
+            valid_objects = [o for o in objects if o.get('geometry_valid', False) and o.get('feature_valid', {}).get('centroid_valid', False) and o.get('centroid') is not None]
+            centroids = np.array([o['centroid'] for o in valid_objects])
+            if len(centroids) == 0:
+                logging.error("MotifMiner.cluster_motifs: No valid centroids for clustering.")
+                return {}, []
         except Exception as e:
             logging.error(f"MotifMiner.cluster_motifs: Error extracting centroids: {e}")
-            return {}
+            return {}, []
         clustering = DBSCAN(eps=20, min_samples=1).fit(centroids)
         motif_dict = {}
         clusters = {}
         # Record cluster membership and assign string labels
-        for obj, label in zip(objects, clustering.labels_):
+        for obj, label in zip(valid_objects, clustering.labels_):
             obj['motif_label'] = int(label)
             # Use config for shape_label and semantic_label
             shape_label = self.MOTIF_LABELS.get(int(label), f"motif_{label}")
@@ -187,9 +209,9 @@ class MotifMiner:
         else:
             logging.warning(f"MotifMiner.create_motif_supernode: Skipping physics attribute computation for motif {motif_id} due to degenerate or invalid geometry. Vertices: {vertices}")
         # 3. Aggregate semantic cues
-        area = sum([n.get('area', 0) for n in member_nodes])
-        motif_score = sum([n.get('motif_score', 0) for n in member_nodes]) / max(1, len(member_nodes))
-        vl_embed = np.mean([n.get('vl_embed', np.zeros(512)) for n in member_nodes], axis=0)
+        area = sum([n.get('area', 0) for n in member_nodes if n.get('feature_valid', {}).get('area_valid', False)])
+        motif_score = sum([n.get('motif_score', 0) for n in member_nodes if n.get('motif_score', None) is not None]) / max(1, len([n for n in member_nodes if n.get('motif_score', None) is not None]))
+        vl_embed = np.mean([n.get('vl_embed', np.zeros(512)) for n in member_nodes if n.get('vl_embed', None) is not None], axis=0) if any(n.get('vl_embed', None) is not None for n in member_nodes) else np.zeros(512)
         # 4. Compose supernode, merging all physics attributes
         supernode = {
             'id': motif_id,

@@ -111,7 +111,15 @@ def compute_physics_attributes(node_data):
     """
     # --- Simplified, robust LOGO/NVLabs geometry handling ---
     vertices = node_data.get('vertices', [])
-    if vertices and len(vertices) >= 3:
+    object_type = node_data.get('object_type', None)
+    is_closed = node_data.get('is_closed', False)
+    # Geometry valid if polygon and closed
+    geometry_valid = object_type == 'polygon' and is_closed and vertices and len(vertices) >= 3
+    node_data['geometry_valid'] = geometry_valid
+    # Per-feature valid flags
+    feature_valid = {}
+    # Polygon and closed: compute all features
+    if geometry_valid:
         poly = Polygon(vertices)
         if poly.is_valid and poly.area > 0:
             centroid = [float(poly.centroid.x), float(poly.centroid.y)]
@@ -119,38 +127,34 @@ def compute_physics_attributes(node_data):
             node_data['cx'] = centroid[0]
             node_data['cy'] = centroid[1]
             node_data['fallback_geometry'] = False
-            # Compute and update all other features directly from poly
             basic_features = compute_basic_features(poly)
             node_data.update(basic_features)
             area = node_data['area']
             try:
                 inertia = poly.moment_of_inertia
             except Exception:
-                inertia = 0.0
-            convexity = poly.convex_hull.area / area if area > 0 else 0.0
+                inertia = None
+            convexity = poly.convex_hull.area / area if area > 0 else None
             perimeter = node_data['perimeter']
-            compactness = perimeter**2 / (4 * math.pi * area) if area > 0 else 0.0
+            compactness = perimeter**2 / (4 * math.pi * area) if area > 0 else None
             action_program = node_data.get('action_program', [])
-            # Robust type check: only extract segments if action_program is a list of dicts
             if (
                 isinstance(action_program, list)
                 and all(isinstance(cmd, dict) for cmd in action_program)
             ):
                 num_segments = len(extract_line_segments(action_program))
             else:
-                num_segments = None  # or 'not_applicable' if you prefer string
-            # Junction counting
+                num_segments = None
             coords_counter = Counter(tuple(c) for c in poly.exterior.coords)
             num_junctions = sum(1 for count in coords_counter.values() if count > 1)
             node_data.update({
-                'inertia': float(inertia),
-                'convexity': float(convexity),
-                'compactness': float(compactness),
-                'num_segments': int(num_segments),
+                'inertia': inertia,
+                'convexity': convexity,
+                'compactness': compactness,
+                'num_segments': int(num_segments) if num_segments is not None else None,
                 'num_junctions': int(num_junctions),
             })
-            # Curvature calculation
-            curvature = 0.0
+            # Curvature
             arr = np.array(vertices)
             angles = []
             for i in range(len(arr)):
@@ -167,8 +171,12 @@ def compute_physics_attributes(node_data):
                     angles.append(angle)
             if angles:
                 curvature = float(np.mean(np.abs(angles)))
-            node_data['curvature'] = curvature
-            # Symmetry axis calculation
+                node_data['curvature'] = curvature
+                feature_valid['curvature_valid'] = True
+            else:
+                node_data['curvature'] = None
+                feature_valid['curvature_valid'] = False
+            # Symmetry axis
             symmetry_axis = None
             try:
                 if len(vertices) >= 2:
@@ -185,10 +193,25 @@ def compute_physics_attributes(node_data):
             except Exception as e:
                 logging.warning(f"Symmetry axis computation failed: {e}")
             node_data['symmetry_axis'] = symmetry_axis
-            # Skeleton length: not needed for LOGO data, set to 0.0
+            feature_valid['symmetry_axis_valid'] = symmetry_axis is not None
+            # Skeleton length: not needed for LOGO data
             node_data['skeleton_length'] = None
+            feature_valid['skeleton_length_valid'] = False
+            feature_valid['centroid_valid'] = True
+            feature_valid['area_valid'] = True
+            feature_valid['orientation_valid'] = True
+            feature_valid['aspect_ratio_valid'] = True
+            feature_valid['perimeter_valid'] = True
+            feature_valid['compactness_valid'] = compactness is not None
+            feature_valid['convexity_valid'] = convexity is not None
+            feature_valid['inertia_valid'] = inertia is not None
+            feature_valid['num_segments_valid'] = num_segments is not None
+            feature_valid['num_junctions_valid'] = True
+            node_data['feature_valid'] = feature_valid
             logging.info(f"compute_physics_attributes: Node {node_data.get('id', 'unknown')} features computed from LOGO vertices.")
         else:
+            # Invalid polygon (bad geometry)
+            node_data['geometry_valid'] = False
             node_data['centroid'] = None
             node_data['cx'] = None
             node_data['cy'] = None
@@ -206,8 +229,47 @@ def compute_physics_attributes(node_data):
             node_data['curvature'] = None
             node_data['skeleton_length'] = None
             node_data['symmetry_axis'] = None
+            feature_valid = {k: False for k in [
+                'curvature_valid','skeleton_length_valid','symmetry_axis_valid','centroid_valid','area_valid','orientation_valid','aspect_ratio_valid','perimeter_valid','compactness_valid','convexity_valid','inertia_valid','num_segments_valid','num_junctions_valid']}
+            node_data['feature_valid'] = feature_valid
             logging.warning(f"Invalid LOGO polygon for node {node_data.get('id', 'unknown')}, vertices: {vertices}")
+    elif object_type == 'line' and vertices and len(vertices) == 2:
+        # Proxy features for lines
+        arr = np.array(vertices)
+        midpoint = np.mean(arr, axis=0)
+        node_data['centroid'] = midpoint.tolist()
+        node_data['cx'] = midpoint[0]
+        node_data['cy'] = midpoint[1]
+        node_data['area'] = None
+        node_data['perimeter'] = float(np.linalg.norm(arr[1] - arr[0]))
+        node_data['orientation'] = float(np.degrees(np.arctan2(arr[1][1]-arr[0][1], arr[1][0]-arr[0][0])))
+        node_data['aspect_ratio'] = None
+        node_data['curvature'] = None
+        node_data['skeleton_length'] = node_data['perimeter']
+        node_data['symmetry_axis'] = None
+        node_data['fallback_geometry'] = True
+        node_data['bbox'] = [float(np.min(arr[:,0])), float(np.min(arr[:,1])), float(np.max(arr[:,0])), float(np.max(arr[:,1]))]
+        feature_valid = {
+            'centroid_valid': True,
+            'perimeter_valid': True,
+            'orientation_valid': True,
+            'skeleton_length_valid': True,
+            'area_valid': False,
+            'aspect_ratio_valid': False,
+            'curvature_valid': False,
+            'symmetry_axis_valid': False,
+            'compactness_valid': False,
+            'convexity_valid': False,
+            'inertia_valid': False,
+            'num_segments_valid': False,
+            'num_junctions_valid': False
+        }
+        node_data['geometry_valid'] = True
+        node_data['feature_valid'] = feature_valid
+        logging.info(f"compute_physics_attributes: Node {node_data.get('id', 'unknown')} features computed for line.")
     else:
+        # Degenerate or unsupported
+        node_data['geometry_valid'] = False
         node_data['centroid'] = None
         node_data['cx'] = None
         node_data['cy'] = None
@@ -225,7 +287,10 @@ def compute_physics_attributes(node_data):
         node_data['curvature'] = None
         node_data['skeleton_length'] = None
         node_data['symmetry_axis'] = None
-        logging.warning(f"Node {node_data.get('id', 'unknown')} missing or insufficient vertices for LOGO polygon.")
+        feature_valid = {k: False for k in [
+            'curvature_valid','skeleton_length_valid','symmetry_axis_valid','centroid_valid','area_valid','orientation_valid','aspect_ratio_valid','perimeter_valid','compactness_valid','convexity_valid','inertia_valid','num_segments_valid','num_junctions_valid']}
+        node_data['feature_valid'] = feature_valid
+        logging.warning(f"Node {node_data.get('id', 'unknown')} missing or insufficient vertices for LOGO polygon or line.")
 # --- Visualization Utility ---
 def visualize_shape_and_centroid(vertices, centroid, save_path=None):
     import matplotlib.pyplot as plt
