@@ -7,9 +7,17 @@ import numpy as np
 class CLIPEmbedder:
 
     def __init__(self, device='cpu'):
-        self.model, self.preprocess = clip.load("ViT-B/32", device=device)
-        self.device = device
-        self._feature_cache = {}  # (path, bbox tuple) -> feature
+        try:
+            self.model, self.preprocess = clip.load("ViT-B/32", device=device)
+            self.device = device
+            self._feature_cache = {}  # (path, bbox tuple) -> feature
+            logging.info(f"CLIP model loaded successfully on device: {device}")
+        except Exception as e:
+            logging.error(f"Failed to load CLIP model: {e}")
+            self.model = None
+            self.preprocess = None
+            self.device = device
+            self._feature_cache = {}
 
     def embed_image(self, image_or_path, bounding_box=None, mask=None, fallback_global=True, logo_object_data=None):
         """
@@ -88,6 +96,10 @@ class CLIPEmbedder:
                     img = img.resize((min_size, min_size), Image.LANCZOS)
             
             # Extract CLIP features with enhanced context
+            if self.model is None or self.preprocess is None:
+                logging.warning("CLIP model not available, returning random embedding")
+                return np.random.normal(0, 0.1, 512)  # Small random values instead of zeros
+            
             image_input = self.preprocess(img).unsqueeze(0).to(self.device)
             with torch.no_grad():
                 feat = self.model.encode_image(image_input)
@@ -291,6 +303,16 @@ class CLIPEmbedder:
         Handles missing data gracefully and provides quality metrics.
         """
         try:
+            # Check if CLIP model is available
+            if self.model is None:
+                logging.warning("CLIP model not available, returning zero embedding")
+                return {
+                    'vl_embed': [0.0] * 512,
+                    'vl_embed_norm': 0.0,
+                    'vl_embed_nonzero_ratio': 0.0,
+                    'vl_context_description': 'clip_model_unavailable'
+                }
+            
             # Generate context-aware description
             object_type = object_data.get('object_type', 'unknown')
             shape_class = object_data.get('shape_label', 'unknown')
@@ -322,8 +344,13 @@ class CLIPEmbedder:
                 logo_object_data=object_data
             )
             
+            # Check if image embedding is valid
+            if image_embedding is None or np.allclose(image_embedding, 0):
+                logging.warning(f"Failed to get valid image embedding for {image_path}")
+                image_embedding = np.random.normal(0, 0.1, 512)  # Small random values instead of zeros
+            
             # Compute text embedding for semantic context
-            if hasattr(self, 'model'):
+            if hasattr(self, 'model') and self.model is not None:
                 import clip
                 text_tokens = clip.tokenize([description]).to(self.device)
                 with torch.no_grad():

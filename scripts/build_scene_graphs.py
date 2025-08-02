@@ -893,7 +893,28 @@ def assign_object_type(verts):
                 else:
                     obj['vl_embed'] = clip_embedder.embed_image(img)
             except Exception as e:
-                obj['vl_embed'] = np.zeros(512)
+                try:
+                    # Attempt VL embedding with CLIPEmbedder
+                    if clip_embedder and clip_embedder.model is not None:
+                        img_path = obj.get('image_path')
+                        bbox = obj.get('bounding_box')
+                        if img_path and os.path.exists(img_path):
+                            vl_embed = clip_embedder.embed_image(img_path, bounding_box=bbox)
+                            if vl_embed is not None and not np.allclose(vl_embed, 0):
+                                obj['vl_embed'] = vl_embed
+                                logging.info(f"VL embedding computed for {obj['object_id']}")
+                            else:
+                                obj['vl_embed'] = np.zeros(512)
+                                logging.warning(f"VL embedding returned zeros for {obj['object_id']}")
+                        else:
+                            obj['vl_embed'] = np.zeros(512)
+                            logging.warning(f"No valid image path for VL embedding: {obj['object_id']}")
+                    else:
+                        obj['vl_embed'] = np.zeros(512)
+                        logging.warning(f"CLIPEmbedder not available for {obj['object_id']}")
+                except Exception as e:
+                    logging.error(f"VL embedding failed for {obj['object_id']}: {e}")
+                    obj['vl_embed'] = np.zeros(512)
         # Log non-polygon objects for feedback
         if obj_type != "polygon":
             logging.warning(f"Inserted non-polygon object: id={obj['object_id']}, type={obj['object_type']}, vertices={verts}")

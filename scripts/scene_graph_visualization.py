@@ -22,6 +22,24 @@ import os
 import logging
 import networkx as nx
 import matplotlib.pyplot as plt
+
+
+def get_node_value(node_data, field_name, default_value=None):
+        """Safely extract node field value with appropriate defaults"""
+        value = node_data.get(field_name, default_value)
+        
+        # Handle special cases
+        if field_name == 'vl_embed' and (value is None or value == []):
+            return [0.0] * 512
+        elif field_name in ['motif_type', 'connectivity_pattern', 'symmetry_type'] and value is None:
+            return 'unknown'
+        elif field_name in ['motif_complexity_score', 'clip_sim', 'vl_sim'] and value is None:
+            return 0.0
+        elif field_name == 'predicate' and value is None:
+            return ''
+        
+        return value
+    
 import matplotlib.patches as patches
 from matplotlib.patches import FancyBboxPatch
 from PIL import Image

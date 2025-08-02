@@ -751,11 +751,20 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                 from src.scene_graphs_building.vl_features import CLIPEmbedder
                 from src.scene_graphs_building.data_loading import robust_image_open
                 
+                logging.info("Loading CLIP model for enhanced VL features...")
                 clip_embedder = CLIPEmbedder()
+                
+                # Validate CLIP model is loaded properly
+                if not hasattr(clip_embedder, 'model') or clip_embedder.model is None:
+                    logging.error("CLIP model failed to load, skipping VL enhancements")
+                    raise Exception("CLIP model not available")
+                
+                logging.info(f"CLIP model loaded successfully on device: {clip_embedder.device}")
                 
                 # Extract enhanced features for each node
                 for node_id, node_data in G.nodes(data=True):
                     image_path = None
+                    parent_shape_id = node_data.get('parent_shape_id', '')
                     for rec in problem_records:
                         if rec.get('image_path') and parent_shape_id in rec.get('image_path', ''):
                             image_path = rec['image_path']
@@ -763,6 +772,7 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                     
                     if image_path:
                         try:
+                            logging.debug(f"Computing VL embedding for node {node_id} with image {image_path}")
                             # Enhanced VL embedding with context
                             vl_data = clip_embedder.compute_enhanced_vl_embedding(
                                 image_path, node_data, f"bongard puzzle {problem_id}"
@@ -854,9 +864,35 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                             
                         except Exception as e:
                             logging.warning(f"Failed to extract enhanced features for node {node_id}: {e}")
-                            G.nodes[node_id]['vl_embed'] = [0.0] * 512
-                            G.nodes[node_id]['vl_embed_norm'] = 0.0
-                            G.nodes[node_id]['vl_embed_nonzero_ratio'] = 0.0
+                            # Try to compute VL embedding with CLIP
+                            try:
+                                if clip_embedder and clip_embedder.model is not None:
+                                    # Use object image path and bounding box for precise embedding
+                                    img_path = node_data.get('image_path')
+                                    bbox = node_data.get('bounding_box')
+                                    if img_path and bbox:
+                                        vl_embed = clip_embedder.embed_image(img_path, bounding_box=bbox)
+                                        if vl_embed is not None and not np.allclose(vl_embed, 0):
+                                            G.nodes[node_id]['vl_embed'] = vl_embed.tolist()
+                                            G.nodes[node_id]['vl_embed_norm'] = float(np.linalg.norm(vl_embed))
+                                            G.nodes[node_id]['vl_embed_nonzero_ratio'] = float(np.count_nonzero(vl_embed) / len(vl_embed))
+                                        else:
+                                            G.nodes[node_id]['vl_embed'] = [0.0] * 512
+                                            G.nodes[node_id]['vl_embed_norm'] = 0.0
+                                            G.nodes[node_id]['vl_embed_nonzero_ratio'] = 0.0
+                                    else:
+                                        G.nodes[node_id]['vl_embed'] = [0.0] * 512
+                                        G.nodes[node_id]['vl_embed_norm'] = 0.0
+                                        G.nodes[node_id]['vl_embed_nonzero_ratio'] = 0.0
+                                else:
+                                    G.nodes[node_id]['vl_embed'] = [0.0] * 512
+                                    G.nodes[node_id]['vl_embed_norm'] = 0.0
+                                    G.nodes[node_id]['vl_embed_nonzero_ratio'] = 0.0
+                            except Exception as e:
+                                logging.warning(f"VL embedding failed for node {node_id}: {e}")
+                                G.nodes[node_id]['vl_embed'] = [0.0] * 512
+                                G.nodes[node_id]['vl_embed_norm'] = 0.0
+                                G.nodes[node_id]['vl_embed_nonzero_ratio'] = 0.0
                             G.nodes[node_id]['has_vl_features'] = False
                             G.nodes[node_id]['data_completeness_score'] = 0.0
                             G.nodes[node_id]['missing_field_count'] = len(['area', 'perimeter', 'centroid', 'vertices', 'object_type'])
