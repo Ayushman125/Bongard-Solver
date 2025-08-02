@@ -12,6 +12,7 @@ import asyncio
 import argparse
 import hashlib
 import pickle
+import math
 import sys
 from collections import defaultdict, Counter
 from typing import Tuple, Dict, Any, List
@@ -31,7 +32,6 @@ from scipy.stats import ttest_ind
 
 # Conditional imports for torch/kornia/torchvision
 TORCH_KORNIA_AVAILABLE = False
-import argparse
 from src.scene_graphs_building.process_single_problem import _process_single_problem
 
 
@@ -298,28 +298,28 @@ def load_predicates(adaptive_thresholds: AdaptivePredicateThresholds, canvas_dim
         pass
     return registry
 
-    # Wrap predicates to pass learned_params
-    for name, func in all_candidate_predicates.items():
-        if callable(func):
-            registry[name] = lambda a, b, params, func=func: func(a, b, params)
+
+
+# --- Utility Functions ---
+def _robust_edge_unpack(edges):
+    """Yield (u, v, k, data) for all edge tuples, handling 2, 3, 4-item cases and non-dict data."""
+    for edge in edges:
+        if len(edge) == 4:
+            u, v, k, data = edge
+        elif len(edge) == 3:
+            u, v, data = edge
+            k = None
+        elif len(edge) == 2:
+            u, v = edge
+            k = None
+            data = {}
         else:
-            logging.warning(f"Predicate '{name}' is not callable and will be skipped.")
-
-    # Add predicates from file, mapping to defined logic if available
-    for entry in predicate_defs:
-        name = entry['predicate']
-        func = all_candidate_predicates.get(name)
-        if callable(func):
-            # Only wrap and register if callable and not already registered
-            if name not in registry:
-                registry[name] = lambda a, b, func=func: func(a, b, learned_params)
-        else:
-            # Skip non-callables (dicts, etc) and warn
-            logging.warning(f"Predicate '{name}' from edge_types.json has no defined logic in build_scene_graphs.py or is not callable. Skipping.")
-
-    return registry
-
-
+            logging.warning(f"Skipping unexpectedly short/long edge tuple: {edge}")
+            continue
+        if not isinstance(data, dict):
+            logging.warning(f"Edge data not dict: {repr(data)} for edge {edge}; using empty dict.")
+            data = {}
+        yield u, v, k, data
 
 # --- Caching and Profiling Utilities ---
 def compute_hash(input_paths, params_dict):
@@ -1382,6 +1382,7 @@ async def main(): # Main is now async because it calls async functions
         # Cutting-edge GNN training block (after all graphs are built)
         if getattr(args, 'use_gnn', False) and len(graphs) > 0:
             try:
+                import torch
                 from src.reasoner.gnn_reasoner import GNNReasoner
                 # Prepare torch_geometric Data objects and labels
                 graph_data_list = []

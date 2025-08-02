@@ -301,7 +301,7 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                 'endpoints': [verts[0], verts[-1]], 'length': length, 'orientation': orientation,
                 'bounding_box': bb, 'centroid': cent, 'area': area, 'perimeter': perim,
                 'aspect_ratio': ar, 'compactness': comp, 'relationships': relationships,
-                'source': 'action_program', 'is_closed': np.allclose(verts[0], verts[-1]),
+                'source': 'action_program', 'is_closed': len(verts) > 2 and np.allclose(verts[0], verts[-1], atol=1e-5),
                 **common_attrs
             }
             all_objects_by_image[parent_shape_id].append(obj)
@@ -344,22 +344,23 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                             # Edge direction: composite -> part
                             G.add_edge(u, v_id, predicate='part_of', source='geometric_grouping')
 
-        # Add advanced predicate edges ONLY between higher-level shapes
-        higher_level_nodes = [
-            (node_id, data) for node_id, data in G.nodes(data=True) 
-            if data.get('source') == 'geometric_grouping'
-        ]
+        # Add advanced predicate edges between ALL relevant node pairs
+        all_nodes = list(G.nodes(data=True))
         
         from itertools import combinations
-        if len(higher_level_nodes) > 1:
-            for (id_a, data_a), (id_b, data_b) in combinations(higher_level_nodes, 2):
+        for (id_a, data_a), (id_b, data_b) in combinations(all_nodes, 2):
+            # Apply advanced predicates to ALL node pairs (not just higher-level shapes)
+            # This ensures comprehensive spatial relationships are captured
+            try:
                 for pred_name, pred_func in ADVANCED_PREDICATE_REGISTRY.items():
                     # Check A -> B
                     if pred_func(data_a, data_b):
                         G.add_edge(id_a, id_b, predicate=pred_name, source='advanced_geometry')
                     # Check B -> A for non-symmetric predicates
                     if pred_name in ['contains', 'is_above'] and pred_func(data_b, data_a):
-                         G.add_edge(id_b, id_a, predicate=pred_name, source='advanced_geometry')
+                        G.add_edge(id_b, id_a, predicate=pred_name, source='advanced_geometry')
+            except Exception as e:
+                logging.warning(f"Failed to apply advanced predicates between {id_a} and {id_b}: {e}")
 
         final_graphs[parent_shape_id] = G
 
