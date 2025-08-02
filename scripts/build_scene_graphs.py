@@ -51,6 +51,7 @@ from src.scene_graphs_building.graph_building import build_graph_unvalidated, ad
 from src.scene_graphs_building.visualization import save_feedback_images
 from src.scene_graphs_building.recall_metrics import log_diversity_metrics
 from src.scene_graphs_building.adaptive_predicates import AdaptivePredicateThresholds, create_adaptive_predicate_functions
+from src.scene_graphs_building.advanced_predicates import ADVANCED_PREDICATE_REGISTRY
 # --- Enhanced visualization imports ---
 from scripts.scene_graph_visualization import save_scene_graph_csv
 # --- Research-grade modules ---
@@ -154,8 +155,8 @@ def physics_contact(poly_a, poly_b):
 
 def load_predicates(adaptive_thresholds: AdaptivePredicateThresholds, canvas_dims: Tuple[int, int] = (128, 128)):
     """
-    Loads predicate definitions from schemas/edge_types.json or uses built-in defaults,
-    and integrates adaptive thresholds.
+    STATE-OF-THE-ART: Loads predicate definitions including abstract BONGARD-LOGO style predicates,
+    and integrates adaptive thresholds and advanced reasoning predicates.
     """
     predicate_file = os.path.join(os.path.dirname(__file__), '..', 'schemas', 'edge_types.json')
     predicate_defs = []
@@ -186,6 +187,13 @@ def load_predicates(adaptive_thresholds: AdaptivePredicateThresholds, canvas_dim
         args = globals()['args']
     elif hasattr(sys.modules['__main__'], 'args'):
         args = getattr(sys.modules['__main__'], 'args')
+
+    # === STATE-OF-THE-ART: INTEGRATE ADVANCED PREDICATES ===
+    # Load advanced predicates from registry
+    for predicate_name, predicate_func in ADVANCED_PREDICATE_REGISTRY.items():
+        registry[predicate_name] = predicate_func
+    
+    logging.info(f"Loaded {len(ADVANCED_PREDICATE_REGISTRY)} STATE-OF-THE-ART advanced predicates: {list(ADVANCED_PREDICATE_REGISTRY.keys())}")
 
     # LOGO mode: restrict to LOGO semantics only
     def next_action(a, b, params):
@@ -231,6 +239,7 @@ def load_predicates(adaptive_thresholds: AdaptivePredicateThresholds, canvas_dim
         if len(verts_a) < 2 or len(verts_b) < 2:
             return False
         try:
+            from shapely.geometry import LineString
             line_a = LineString(verts_a)
             line_b = LineString(verts_b)
             return line_a.intersects(line_b) and not line_a.touches(line_b)
@@ -245,6 +254,17 @@ def load_predicates(adaptive_thresholds: AdaptivePredicateThresholds, canvas_dim
 
     def symmetric_with(a, b, params):
         return False
+
+    # STATE-OF-THE-ART: Import abstract predicates from config
+    from src.scene_graphs_building.config import ABSTRACT_PREDICATES, BASIC_LOGO_PREDICATES
+    
+    # Add abstract predicates to the registry
+    for pred_name, pred_func in ABSTRACT_PREDICATES.items():
+        registry[pred_name] = pred_func
+    
+    # Add basic LOGO predicates
+    for pred_name, pred_func in BASIC_LOGO_PREDICATES.items():
+        registry[pred_name] = pred_func
 
     if args is not None and hasattr(args, 'mode') and args.mode == 'logo':
         all_candidate_predicates = {
@@ -523,7 +543,7 @@ class EnhancedSceneGraphBuilder:
     async def build_enhanced_scene_graph(self, image_path: str, base_scene_graph: dict) -> dict:
         """
         Builds an enhanced scene graph by adding real features, knowledge fusion,
-        and hierarchical predicate refinement.
+        hierarchical predicate refinement, and STATE-OF-THE-ART contrastive reasoning.
         The base_scene_graph now contains a NetworkX graph for the entire problem.
         """
         # --- Fast image loading and caching ---
@@ -549,6 +569,8 @@ class EnhancedSceneGraphBuilder:
         # Feature extraction for each node in the graph
         G = base_scene_graph.get('graph')
         object_features = {}
+        node_objects = []  # For contrastive analysis
+        
         if G:
             for node_id, node_data in list(G.nodes(data=True)):
                 mask = None
@@ -559,6 +581,25 @@ class EnhancedSceneGraphBuilder:
                 else:
                     logging.warning(f"Node {node_id} missing valid vertices or bbox. Skipping feature extraction for this node.")
                     continue
+
+                # Store node object data for contrastive analysis
+                node_objects.append({
+                    'id': node_id,
+                    'vertices': node_data.get('vertices', []),
+                    'bbox': node_data.get('bbox', []),
+                    'stroke_count': node_data.get('stroke_count', len(node_data.get('vertices', []))),
+                    'compactness': node_data.get('compactness', 0.0),
+                    'aspect_ratio': node_data.get('aspect_ratio', 1.0),
+                    'orientation': node_data.get('orientation', 0.0),
+                    'is_closed': node_data.get('is_closed', False),
+                    'curvature_score': node_data.get('curvature_score', 0.0),
+                    'area': node_data.get('area', 0.0),
+                    'length': node_data.get('length', 0.0),
+                    'shape_label': node_data.get('shape_label', ''),
+                    'category': node_data.get('category', ''),
+                    'action_program': node_data.get('action_program', []),
+                    'object_type': node_data.get('object_type', 'unknown')
+                })
 
                 if self.feature_extractor and mask is not None:
                     try:
@@ -572,6 +613,77 @@ class EnhancedSceneGraphBuilder:
                         logging.error(traceback.format_exc())
                 else:
                     logging.debug(f"Feature extractor not available or mask is None for node {node_id}. Skipping feature extraction.")
+        
+        # === STATE-OF-THE-ART: CONTRASTIVE PREDICATE INDUCTION ===
+        contrastive_results = {}
+        analogical_patterns = []
+        program_rules = []
+        
+        if hasattr(self.feature_extractor, 'compute_contrastive_features') and len(node_objects) >= 2:
+            try:
+                # Group objects by their labels for contrastive analysis
+                label_groups = {}
+                for obj in node_objects:
+                    label = obj.get('shape_label', obj.get('category', 'unknown'))
+                    if label not in label_groups:
+                        label_groups[label] = []
+                    label_groups[label].append(obj)
+                
+                # Perform contrastive analysis between different label groups
+                label_keys = list(label_groups.keys())
+                if len(label_keys) >= 2:
+                    positive_objects = label_groups[label_keys[0]]
+                    negative_objects = label_groups[label_keys[1]]
+                    
+                    contrastive_results = self.feature_extractor.compute_contrastive_features(
+                        positive_objects, negative_objects
+                    )
+                    
+                    if contrastive_results:
+                        logging.info(f"Contrastive analysis found {len(contrastive_results.get('discriminative_rules', []))} discriminative rules")
+                        
+                        # Add contrastive predicates to graph
+                        for rule in contrastive_results.get('discriminative_rules', []):
+                            if rule['confidence'] > 0.7:  # High confidence rules
+                                # Add as graph metadata
+                                if 'contrastive_rules' not in G.graph:
+                                    G.graph['contrastive_rules'] = []
+                                G.graph['contrastive_rules'].append(rule)
+                
+            except Exception as e:
+                logging.warning(f"Contrastive analysis failed: {e}")
+        
+        # === STATE-OF-THE-ART: ANALOGICAL REASONING ===
+        if hasattr(self.feature_extractor, 'find_analogical_patterns') and len(node_objects) >= 4:
+            try:
+                # Split objects into two sets for analogical comparison
+                mid_point = len(node_objects) // 2
+                set_a = node_objects[:mid_point]
+                set_b = node_objects[mid_point:]
+                
+                analogical_patterns = self.feature_extractor.find_analogical_patterns(set_a, set_b)
+                
+                if analogical_patterns:
+                    logging.info(f"Analogical reasoning found {len(analogical_patterns)} patterns")
+                    G.graph['analogical_patterns'] = analogical_patterns
+                    
+            except Exception as e:
+                logging.warning(f"Analogical reasoning failed: {e}")
+        
+        # === STATE-OF-THE-ART: PROGRAM SYNTHESIS FOR RULE EXTRACTION ===
+        if hasattr(self.feature_extractor, 'extract_program_rules'):
+            try:
+                action_programs = [obj.get('action_program', []) for obj in node_objects]
+                object_labels = [obj.get('shape_label', obj.get('category', 'unknown')) for obj in node_objects]
+                
+                program_rules = self.feature_extractor.extract_program_rules(action_programs, object_labels)
+                
+                if program_rules:
+                    logging.info(f"Program synthesis extracted {len(program_rules)} rules")
+                    G.graph['program_rules'] = program_rules
+                    
+            except Exception as e:
+                logging.warning(f"Program rule extraction failed: {e}")
         
         # Knowledge fusion and Hierarchical predicate refinement now operate on the problem-level graph
         # This part needs to iterate through existing edges and potentially add new ones based on features
@@ -678,7 +790,12 @@ class EnhancedSceneGraphBuilder:
             'quality_metrics': {
                 'knowledge_confidence': float(np.mean([r.get('final_confidence', 1.0) for r in enhanced_relationships]) if enhanced_relationships else 1.0),
                 'validation_score': validation_results.get('overall_score', 0.0),
-                'relationship_accuracy': validation_results.get('relationship_accuracy_score', 0.0)
+                'relationship_accuracy': validation_results.get('relationship_accuracy_score', 0.0),
+                # STATE-OF-THE-ART quality metrics
+                'contrastive_rules_count': len(contrastive_results.get('discriminative_rules', [])),
+                'analogical_patterns_count': len(analogical_patterns),
+                'program_rules_count': len(program_rules),
+                'has_advanced_reasoning': len(contrastive_results.get('discriminative_rules', [])) > 0 or len(analogical_patterns) > 0 or len(program_rules) > 0
             }
         }
 
@@ -1027,6 +1144,11 @@ def assign_object_type(verts):
     scene_graph_data = asyncio.run(run_enhanced_scene_graph())
     final_scene_graph = scene_graph_data['scene_graph']
     quality_metrics = scene_graph_data['quality_metrics']
+    
+    # STATE-OF-THE-ART: Get the chosen predicate from the scene graph processing
+    chosen_predicate = final_scene_graph.get('chosen_predicate', 'same_shape')
+    if not chosen_predicate or chosen_predicate == 'unknown':
+        chosen_predicate = 'same_shape'
 
     # 6. Iterative Rule Refinement & Human-in-the-Loop (Ambiguity check & trigger)
     rels = final_scene_graph.get('relationships', [])

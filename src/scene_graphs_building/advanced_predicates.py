@@ -571,6 +571,453 @@ def exhibits_rotational_symmetry(node_a, node_b):
     except Exception:
         return False
 
+# === STATE-OF-THE-ART: PROGRAM SYNTHESIS PREDICATES ===
+
+def has_stroke_count_pattern(node_a, node_b, target_count=None):
+    """Checks if objects have specific stroke count patterns (e.g., 'has_four_lines', 'has_six_lines')"""
+    try:
+        count_a = node_a.get('stroke_count', len(node_a.get('vertices', [])))
+        count_b = node_b.get('stroke_count', len(node_b.get('vertices', [])))
+        
+        if target_count is not None:
+            return count_a == target_count or count_b == target_count
+        
+        # Check for distinctive count patterns (4 vs 6 is common in BONGARD-LOGO)
+        distinctive_counts = [3, 4, 5, 6, 8]
+        return count_a in distinctive_counts and count_b in distinctive_counts and count_a != count_b
+    except Exception:
+        return False
+
+def has_convexity_distinction(node_a, node_b):
+    """Checks for convex vs non-convex distinction using convex hull analysis"""
+    try:
+        from scipy.spatial import ConvexHull
+        
+        def is_convex(vertices):
+            if len(vertices) < 4:
+                return True
+            try:
+                hull = ConvexHull(vertices)
+                return len(hull.vertices) == len(vertices)
+            except:
+                return False
+        
+        convex_a = is_convex(node_a.get('vertices', []))
+        convex_b = is_convex(node_b.get('vertices', []))
+        
+        return convex_a != convex_b
+    except Exception:
+        return False
+
+def has_symmetry_axis(node_a, node_b):
+    """Checks for bilateral symmetry along vertical or horizontal axis"""
+    try:
+        def has_bilateral_symmetry(vertices, axis='vertical'):
+            if len(vertices) < 3:
+                return False
+            
+            vertices = np.array(vertices)
+            center = np.mean(vertices, axis=0)
+            
+            if axis == 'vertical':
+                # Mirror across vertical line through center
+                mirrored = vertices.copy()
+                mirrored[:, 0] = 2 * center[0] - mirrored[:, 0]
+            else:  # horizontal
+                mirrored = vertices.copy()
+                mirrored[:, 1] = 2 * center[1] - mirrored[:, 1]
+            
+            # Check if mirrored points match original (within tolerance)
+            tolerance = 3.0
+            for mp in mirrored:
+                min_dist = min(np.linalg.norm(mp - v) for v in vertices)
+                if min_dist > tolerance:
+                    return False
+            return True
+        
+        sym_a_v = has_bilateral_symmetry(node_a.get('vertices', []), 'vertical')
+        sym_a_h = has_bilateral_symmetry(node_a.get('vertices', []), 'horizontal')
+        sym_b_v = has_bilateral_symmetry(node_b.get('vertices', []), 'vertical')
+        sym_b_h = has_bilateral_symmetry(node_b.get('vertices', []), 'horizontal')
+        
+        # Return True if one has symmetry and the other doesn't
+        return (sym_a_v or sym_a_h) != (sym_b_v or sym_b_h)
+    except Exception:
+        return False
+
+def has_hole_distinction(node_a, node_b):
+    """Checks for shapes with holes vs solid shapes"""
+    try:
+        # Approximate hole detection: check if there are disconnected components
+        def has_hole(vertices):
+            if len(vertices) < 6:  # Need sufficient complexity for holes
+                return False
+            
+            # Simple hole heuristic: if compactness is very low despite being closed
+            is_closed = len(vertices) > 2 and np.allclose(vertices[0], vertices[-1], atol=1e-5)
+            if not is_closed:
+                return False
+            
+            # Calculate area vs perimeter ratio
+            try:
+                from shapely.geometry import Polygon
+                poly = Polygon(vertices)
+                compactness = (4 * np.pi * poly.area) / (poly.length ** 2)
+                return compactness < 0.3  # Very low compactness suggests holes
+            except:
+                return False
+        
+        hole_a = has_hole(node_a.get('vertices', []))
+        hole_b = has_hole(node_b.get('vertices', []))
+        
+        return hole_a != hole_b
+    except Exception:
+        return False
+
+def has_angle_count_pattern(node_a, node_b):
+    """Checks for specific angle count patterns (triangle vs square vs pentagon)"""
+    try:
+        def count_significant_angles(vertices):
+            if len(vertices) < 3:
+                return 0
+            
+            angles = []
+            n = len(vertices)
+            for i in range(n):
+                v1 = np.array(vertices[i])
+                v2 = np.array(vertices[(i + 1) % n])
+                v3 = np.array(vertices[(i + 2) % n])
+                
+                # Calculate angle at v2
+                vec1 = v1 - v2
+                vec2 = v3 - v2
+                
+                if np.linalg.norm(vec1) > 1e-6 and np.linalg.norm(vec2) > 1e-6:
+                    cos_angle = np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
+                    cos_angle = np.clip(cos_angle, -1, 1)
+                    angle = np.degrees(np.arccos(cos_angle))
+                    
+                    # Count significant angles (not near 180 degrees)
+                    if abs(angle - 180) > 30:  # Significant turn
+                        angles.append(angle)
+            
+            return len(angles)
+        
+        angles_a = count_significant_angles(node_a.get('vertices', []))
+        angles_b = count_significant_angles(node_b.get('vertices', []))
+        
+        # Common patterns: 3 (triangle), 4 (square), 5 (pentagon), 6 (hexagon)
+        return angles_a != angles_b and min(angles_a, angles_b) >= 3
+    except Exception:
+        return False
+
+def has_intersection_count_pattern(node_a, node_b):
+    """Checks for patterns based on self-intersections or line crossings"""
+    try:
+        def count_self_intersections(vertices):
+            if len(vertices) < 4:
+                return 0
+            
+            intersections = 0
+            n = len(vertices)
+            
+            for i in range(n - 1):
+                line1 = (vertices[i], vertices[i + 1])
+                for j in range(i + 2, n - 1):
+                    line2 = (vertices[j], vertices[j + 1])
+                    
+                    # Skip adjacent segments
+                    if abs(i - j) <= 1 or (i == 0 and j == n - 2):
+                        continue
+                    
+                    # Check intersection using cross product method
+                    def lines_intersect(p1, p2, p3, p4):
+                        def ccw(A, B, C):
+                            return (C[1] - A[1]) * (B[0] - A[0]) > (B[1] - A[1]) * (C[0] - A[0])
+                        return ccw(p1, p3, p4) != ccw(p2, p3, p4) and ccw(p1, p2, p3) != ccw(p1, p2, p4)
+                    
+                    if lines_intersect(line1[0], line1[1], line2[0], line2[1]):
+                        intersections += 1
+            
+            return intersections
+        
+        intersections_a = count_self_intersections(node_a.get('vertices', []))
+        intersections_b = count_self_intersections(node_b.get('vertices', []))
+        
+        return intersections_a != intersections_b
+    except Exception:
+        return False
+
+# === STATE-OF-THE-ART: CONTRASTIVE ANALOGICAL PREDICATES ===
+
+def forms_action_sequence_analogy(node_a, node_b):
+    """Checks if objects are analogous through their action program sequence patterns"""
+    try:
+        program_a = node_a.get('action_program', [])
+        program_b = node_b.get('action_program', [])
+        
+        if not program_a or not program_b:
+            return False
+        
+        # Extract command types
+        def extract_command_pattern(program):
+            pattern = []
+            for cmd in program:
+                if isinstance(cmd, str) and '_' in cmd:
+                    cmd_type = cmd.split('_')[0]
+                    pattern.append(cmd_type)
+            return pattern
+        
+        pattern_a = extract_command_pattern(program_a)
+        pattern_b = extract_command_pattern(program_b)
+        
+        # Check for analogous patterns (e.g., line->arc vs arc->line)
+        if len(pattern_a) == len(pattern_b):
+            # Exact analogy: same sequence
+            if pattern_a == pattern_b:
+                return True
+            
+            # Mirror analogy: reversed sequence
+            if pattern_a == pattern_b[::-1]:
+                return True
+            
+            # Substitution analogy: one type replaced by another
+            diff_count = sum(1 for a, b in zip(pattern_a, pattern_b) if a != b)
+            if diff_count == 1:  # Single substitution
+                return True
+        
+        return False
+    except Exception:
+        return False
+
+def has_scaling_invariant_property(node_a, node_b):
+    """Checks for properties that remain invariant under scaling (shape ratios, angles)"""
+    try:
+        # Compare normalized shape properties
+        def get_normalized_properties(node):
+            area = node.get('area', 0)
+            perimeter = node.get('perimeter', 0)
+            bbox = node.get('bounding_box', [0, 0, 0, 0])
+            
+            if len(bbox) >= 4:
+                width = bbox[2] - bbox[0]
+                height = bbox[3] - bbox[1]
+                size_measure = max(width, height)
+            else:
+                size_measure = 1.0
+            
+            # Normalize by size
+            if size_measure > 0 and perimeter > 0:
+                normalized_area = area / (size_measure ** 2)
+                normalized_perimeter = perimeter / size_measure
+                aspect_ratio = node.get('aspect_ratio', 1.0)
+                
+                return {
+                    'norm_area': normalized_area,
+                    'norm_perimeter': normalized_perimeter,
+                    'aspect_ratio': aspect_ratio
+                }
+            return None
+        
+        props_a = get_normalized_properties(node_a)
+        props_b = get_normalized_properties(node_b)
+        
+        if props_a and props_b:
+            # Check if normalized properties are similar (indicating same shape, different scale)
+            area_sim = abs(props_a['norm_area'] - props_b['norm_area']) < 0.1
+            perimeter_sim = abs(props_a['norm_perimeter'] - props_b['norm_perimeter']) < 0.1
+            aspect_sim = abs(props_a['aspect_ratio'] - props_b['aspect_ratio']) < 0.2
+            
+            return area_sim and perimeter_sim and aspect_sim
+        
+        return False
+    except Exception:
+        return False
+
+def exhibits_topological_invariance(node_a, node_b):
+    """Checks for topological invariants (connectivity, genus) that persist under continuous deformation"""
+    try:
+        # Compare topological properties
+        def get_topology_signature(node):
+            vertices = node.get('vertices', [])
+            is_closed = node.get('is_closed', False)
+            
+            # Basic topology: closed vs open
+            closure_type = 'closed' if is_closed else 'open'
+            
+            # Connectivity: count of disconnected components (simplified)
+            # For now, assume single component, but this could be extended
+            component_count = 1
+            
+            # Junction count (approximate genus)
+            junction_count = 0
+            if len(vertices) > 4:
+                # Simplified junction detection based on sharp turns
+                for i in range(1, len(vertices) - 1):
+                    v1 = np.array(vertices[i - 1])
+                    v2 = np.array(vertices[i])
+                    v3 = np.array(vertices[i + 1])
+                    
+                    vec1 = v2 - v1
+                    vec2 = v3 - v2
+                    
+                    if np.linalg.norm(vec1) > 1e-6 and np.linalg.norm(vec2) > 1e-6:
+                        cos_angle = np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
+                        angle = np.degrees(np.arccos(np.clip(cos_angle, -1, 1)))
+                        
+                        if abs(angle - 180) > 60:  # Sharp turn indicates junction
+                            junction_count += 1
+            
+            return (closure_type, component_count, junction_count)
+        
+        topo_a = get_topology_signature(node_a)
+        topo_b = get_topology_signature(node_b)
+        
+        return topo_a == topo_b
+    except Exception:
+        return False
+
+# === STATE-OF-THE-ART: CONTEXT-DEPENDENT PREDICATES ===
+
+def has_context_dependent_interpretation(node_a, node_b, context_nodes=None):
+    """Checks for predicates that depend on surrounding context (e.g., 'inside', 'between')"""
+    try:
+        if not context_nodes:
+            return False
+        
+        # Example: "between" predicate that depends on three or more objects
+        centroid_a = np.array(node_a.get('centroid', [0, 0]))
+        centroid_b = np.array(node_b.get('centroid', [0, 0]))
+        
+        for context_node in context_nodes:
+            if context_node['object_id'] != node_a['object_id'] and context_node['object_id'] != node_b['object_id']:
+                centroid_c = np.array(context_node.get('centroid', [0, 0]))
+                
+                # Check if one object is between the other two
+                dist_ac = np.linalg.norm(centroid_a - centroid_c)
+                dist_bc = np.linalg.norm(centroid_b - centroid_c)
+                dist_ab = np.linalg.norm(centroid_a - centroid_b)
+                
+                # A is between B and C if dist(B,C) ≈ dist(B,A) + dist(A,C)
+                if abs(dist_bc - (dist_ab + dist_ac)) < 5.0:
+                    return True
+                
+                # B is between A and C
+                if abs(dist_ac - (dist_ab + dist_bc)) < 5.0:
+                    return True
+        
+        return False
+    except Exception:
+        return False
+
+def forms_grouping_gestalt(node_a, node_b, all_nodes=None):
+    """Checks for Gestalt grouping principles (proximity, similarity, continuity)"""
+    try:
+        if not all_nodes:
+            return False
+        
+        # Proximity grouping
+        centroid_a = np.array(node_a.get('centroid', [0, 0]))
+        centroid_b = np.array(node_b.get('centroid', [0, 0]))
+        dist_ab = np.linalg.norm(centroid_a - centroid_b)
+        
+        # Check if A and B are closer to each other than to any other object
+        closer_to_each_other = True
+        for other_node in all_nodes:
+            if other_node['object_id'] not in [node_a['object_id'], node_b['object_id']]:
+                centroid_other = np.array(other_node.get('centroid', [0, 0]))
+                dist_a_other = np.linalg.norm(centroid_a - centroid_other)
+                dist_b_other = np.linalg.norm(centroid_b - centroid_other)
+                
+                if dist_a_other < dist_ab or dist_b_other < dist_ab:
+                    closer_to_each_other = False
+                    break
+        
+        if closer_to_each_other:
+            return True
+        
+        # Similarity grouping
+        type_a = node_a.get('object_type', '')
+        type_b = node_b.get('object_type', '')
+        size_a = node_a.get('area', 0) if node_a.get('area', 0) > 0 else node_a.get('length', 0)
+        size_b = node_b.get('area', 0) if node_b.get('area', 0) > 0 else node_b.get('length', 0)
+        
+        type_similar = type_a == type_b
+        size_similar = abs(size_a - size_b) / max(size_a, size_b, 1e-6) < 0.3
+        
+        return type_similar and size_similar
+    except Exception:
+        return False
+
+# === STATE-OF-THE-ART: PROGRAM-SEMANTIC ALIGNMENT PREDICATES ===
+
+def aligns_with_logo_semantics(node_a, node_b):
+    """Checks if spatial relationships align with LOGO program semantics"""
+    try:
+        # Check if action sequence semantics match spatial arrangement
+        program_a = node_a.get('action_program', [])
+        program_b = node_b.get('action_program', [])
+        
+        if not program_a or not program_b:
+            return False
+        
+        # Extract movement semantics
+        def extract_movement_semantics(program):
+            movements = []
+            for cmd in program:
+                if isinstance(cmd, str):
+                    if 'forward' in cmd or 'line' in cmd:
+                        movements.append('linear')
+                    elif 'turn' in cmd or 'arc' in cmd:
+                        movements.append('angular')
+                    elif 'start' in cmd:
+                        movements.append('start')
+            return movements
+        
+        semantics_a = extract_movement_semantics(program_a)
+        semantics_b = extract_movement_semantics(program_b)
+        
+        # Check if spatial relationship aligns with program semantics
+        if 'angular' in semantics_a and 'linear' in semantics_b:
+            # If A has angular movements and B has linear, check if they form junction
+            return shares_endpoint(node_a, node_b)
+        
+        if semantics_a == semantics_b:
+            # Similar movement patterns should result in similar shapes
+            return same_shape_class(node_a, node_b)
+        
+        return False
+    except Exception:
+        return False
+
+def exhibits_rule_compositionality(node_a, node_b, rule_context=None):
+    """Checks if objects follow compositional rules that can be learned from examples"""
+    try:
+        if not rule_context:
+            return False
+        
+        # Example: if rule is "triangles are always red and squares are always blue"
+        # This would check color-shape associations
+        
+        # For now, implement a simple compositional rule:
+        # "closed shapes with N sides have property P"
+        
+        def get_compositional_features(node):
+            is_closed = node.get('is_closed', False)
+            side_count = len(node.get('vertices', [])) - 1 if is_closed else len(node.get('vertices', []))
+            size_category = 'large' if node.get('area', 0) > 100 else 'small'
+            orientation_category = 'tilted' if abs(node.get('orientation', 0) % 90) > 15 else 'cardinal'
+            
+            return (is_closed, side_count, size_category, orientation_category)
+        
+        features_a = get_compositional_features(node_a)
+        features_b = get_compositional_features(node_b)
+        
+        # Check if they follow the same compositional pattern
+        return features_a[0] == features_b[0] and features_a[1] == features_b[1]  # Same closure and side count
+    except Exception:
+        return False
+
 # Registry of advanced predicates to be applied to higher-level objects
 ADVANCED_PREDICATE_REGISTRY = {
     # Low-level geometric predicates
@@ -607,4 +1054,25 @@ ADVANCED_PREDICATE_REGISTRY = {
     'forms_bridge_arc': forms_bridge_arc,
     'has_irregular_shape': has_irregular_shape,
     'exhibits_rotational_symmetry': exhibits_rotational_symmetry,
+    
+    # STATE-OF-THE-ART: Program synthesis predicates
+    'has_stroke_count_pattern': has_stroke_count_pattern,
+    'has_convexity_distinction': has_convexity_distinction,
+    'has_symmetry_axis': has_symmetry_axis,
+    'has_hole_distinction': has_hole_distinction,
+    'has_angle_count_pattern': has_angle_count_pattern,
+    'has_intersection_count_pattern': has_intersection_count_pattern,
+    
+    # STATE-OF-THE-ART: Contrastive analogical predicates
+    'forms_action_sequence_analogy': forms_action_sequence_analogy,
+    'has_scaling_invariant_property': has_scaling_invariant_property,
+    'exhibits_topological_invariance': exhibits_topological_invariance,
+    
+    # STATE-OF-THE-ART: Context-dependent predicates
+    'has_context_dependent_interpretation': has_context_dependent_interpretation,
+    'forms_grouping_gestalt': forms_grouping_gestalt,
+    
+    # STATE-OF-THE-ART: Program-semantic alignment predicates
+    'aligns_with_logo_semantics': aligns_with_logo_semantics,
+    'exhibits_rule_compositionality': exhibits_rule_compositionality,
 }

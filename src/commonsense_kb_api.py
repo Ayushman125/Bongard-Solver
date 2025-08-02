@@ -20,6 +20,36 @@ class ConceptNetAPI:
         self.cache_size = cache_size
         self.rate_limit = rate_limit
         self.last_request_time = 0
+        
+        # Initialize concept normalization mapping for geometric terms
+        self.concept_map = {
+            "open_curve": "curve",
+            "closed_curve": "curve", 
+            "open curve": "curve",
+            "closed curve": "curve",
+            "bezier_curve": "curve",
+            "bezier curve": "curve",
+            "spline_curve": "curve", 
+            "spline curve": "curve",
+            "quadrilateral": "polygon",
+            "pentagon": "polygon",
+            "hexagon": "polygon",
+            "heptagon": "polygon",
+            "octagon": "polygon",
+            "zigzag": "line",
+            "straight_line": "line",
+            "straight line": "line",
+            "curved_line": "curve",
+            "curved line": "curve",
+            "y_shape": "junction",
+            "y shape": "junction",
+            "t_junction": "junction",
+            "t junction": "junction",
+            "intersection": "junction",
+            "vertex": "point",
+            "endpoint": "point"
+        }
+        
         # Session for connection pooling
         self.session = requests.Session()
         self.session.headers.update({
@@ -27,6 +57,33 @@ class ConceptNetAPI:
             'User-Agent': 'BongardSolver/1.0'
         })
         logging.info(f"ConceptNetAPI initialized with REST interface. base_url={self.base_url}, cache_size={self.cache_size}, rate_limit={self.rate_limit}")
+    
+    def _normalize_concept(self, concept: str) -> str:
+        """Normalize geometric concepts to ConceptNet-friendly terms."""
+        if not concept:
+            return "shape"
+        
+        concept_lower = concept.lower().strip()
+        
+        # Use explicit mapping first
+        if concept_lower in self.concept_map:
+            return self.concept_map[concept_lower]
+        
+        # Default normalization rules
+        if "curve" in concept_lower:
+            return "curve"
+        elif "line" in concept_lower:
+            return "line"
+        elif "polygon" in concept_lower:
+            return "polygon"
+        elif "angle" in concept_lower:
+            return "angle"
+        elif "junction" in concept_lower or "intersection" in concept_lower:
+            return "junction"
+        elif "point" in concept_lower or "dot" in concept_lower:
+            return "point"
+        else:
+            return concept_lower
     
     def _rate_limit_wait(self):
         """Implement rate limiting to be respectful to the API."""
@@ -56,31 +113,36 @@ class ConceptNetAPI:
     
     def query_direct_relations(self, subject: str, obj: str) -> List[Dict]:
         """Query direct relations between subject and object."""
-        cache_key = f"direct_{subject}_{obj}"
+        # Normalize concepts before querying
+        subject_norm = self._normalize_concept(subject)
+        obj_norm = self._normalize_concept(obj)
+        
+        cache_key = f"direct_{subject_norm}_{obj_norm}"
         if cache_key in self.cache:
             logging.debug(f"ConceptNetAPI: cache hit for {cache_key}")
             return self.cache[cache_key]
-        subject_encoded = quote(subject, safe='')
-        obj_encoded = quote(obj, safe='')
+        
+        subject_encoded = quote(subject_norm, safe='')
+        obj_encoded = quote(obj_norm, safe='')
         endpoint = f"/query"
         params = {
             'start': f'/c/en/{subject_encoded}',
             'end': f'/c/en/{obj_encoded}',
             'limit': 20
         }
-        logging.info(f"ConceptNetAPI: query_direct_relations for subject={subject}, obj={obj}")
+        logging.info(f"ConceptNetAPI: query_direct_relations for subject={subject} (norm: {subject_norm}), obj={obj} (norm: {obj_norm})")
         relations = []
         data = self._make_request(endpoint, params)
         if data is None:
-            logging.warning(f"ConceptNetAPI: No data returned for direct relations query: subject={subject}, obj={obj}")
+            logging.warning(f"ConceptNetAPI: No data returned for direct relations query: subject={subject_norm}, obj={obj_norm}")
         if data and 'edges' in data:
             if not data['edges']:
-                logging.warning(f"ConceptNetAPI: No edges found for direct relations: subject={subject}, obj={obj}")
+                logging.warning(f"ConceptNetAPI: No edges found for direct relations: subject={subject_norm}, obj={obj_norm}")
             for edge in data['edges']:
                 relations.append({
-                    'subject': edge.get('start', {}).get('label', subject),
+                    'subject': edge.get('start', {}).get('label', subject_norm),
                     'predicate': edge.get('rel', {}).get('label', 'unknown'),
-                    'object': edge.get('end', {}).get('label', obj),
+                    'object': edge.get('end', {}).get('label', obj_norm),
                     'weight': edge.get('weight', 1.0),
                     'source': 'conceptnet_api'
                 })
@@ -92,26 +154,30 @@ class ConceptNetAPI:
     
     def query_relations_for_concept(self, concept: str, rel: Optional[str] = None) -> List[Dict]:
         """Query all outgoing relations for a concept."""
-        cache_key = f"concept_{concept}_{rel or 'all'}"
+        # Normalize concept before querying
+        concept_norm = self._normalize_concept(concept)
+        
+        cache_key = f"concept_{concept_norm}_{rel or 'all'}"
         if cache_key in self.cache:
             logging.debug(f"ConceptNetAPI: cache hit for {cache_key}")
             return self.cache[cache_key]
-        concept_encoded = quote(concept, safe='')
+        
+        concept_encoded = quote(concept_norm, safe='')
         endpoint = f"/c/en/{concept_encoded}"
         params = {'limit': 50}
         if rel:
             params['rel'] = f'/r/{rel}'
-        logging.info(f"ConceptNetAPI: query_relations_for_concept for concept={concept}, rel={rel}")
+        logging.info(f"ConceptNetAPI: query_relations_for_concept for concept={concept} (norm: {concept_norm}), rel={rel}")
         relations = []
         data = self._make_request(endpoint, params)
         if data is None:
-            logging.warning(f"ConceptNetAPI: No data returned for relations_for_concept: concept={concept}, rel={rel}")
+            logging.warning(f"ConceptNetAPI: No data returned for relations_for_concept: concept={concept_norm}, rel={rel}")
         if data and 'edges' in data:
             if not data['edges']:
-                logging.warning(f"ConceptNetAPI: No edges found for relations_for_concept: concept={concept}, rel={rel}")
+                logging.warning(f"ConceptNetAPI: No edges found for relations_for_concept: concept={concept_norm}, rel={rel}")
             for edge in data['edges']:
                 relations.append({
-                    'subject': edge.get('start', {}).get('label', concept),
+                    'subject': edge.get('start', {}).get('label', concept_norm),
                     'predicate': edge.get('rel', {}).get('label', 'unknown'),
                     'object': edge.get('end', {}).get('label', 'unknown'),
                     'weight': edge.get('weight', 1.0),
@@ -121,6 +187,7 @@ class ConceptNetAPI:
             oldest_key = next(iter(self.cache))
             del self.cache[oldest_key]
         self.cache[cache_key] = relations
+        return relations
         return relations
     
     def find_relationship_paths(self, subject: str, obj: str, max_hops: int = 2) -> List[List[Dict]]:

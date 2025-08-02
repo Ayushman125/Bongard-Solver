@@ -449,6 +449,35 @@ def _calculate_enhanced_geometry_features(verts, existing_attrs=None):
             'geometric_complexity': len(verts) * (1 + features.get('horizontal_asymmetry', 0) + features.get('vertical_asymmetry', 0))
         })
         
+        # Ensure essential fields are not empty
+        if 'stroke_count' not in features or features['stroke_count'] is None:
+            features['stroke_count'] = 1  # Default for single shapes
+        
+        if 'is_valid' not in features:
+            features['is_valid'] = True  # Default to valid unless explicitly marked otherwise
+            
+        # Ensure numeric fields have valid defaults
+        numeric_defaults = {
+            'curvature_score': 0.0,
+            'max_curvature': 0.0,
+            'horizontal_asymmetry': 0.0,
+            'vertical_asymmetry': 0.0,
+            'left_extent': 0.0,
+            'right_extent': 0.0,
+            'top_extent': 0.0,
+            'bottom_extent': 0.0,
+            'principal_orientation': 0.0,
+            'orientation_variance': 1.0,
+            'aspect_ratio': 1.0,
+            'compactness': 0.0,
+            'area': 0.0,
+            'perimeter': 0.0
+        }
+        
+        for field, default_val in numeric_defaults.items():
+            if field not in features or features[field] is None or (isinstance(features[field], (int, float)) and np.isnan(features[field])):
+                features[field] = default_val
+        
     except Exception as e:
         logging.warning(f"Could not compute enhanced geometry features: {e}")
     
@@ -541,6 +570,55 @@ def _group_strokes_into_shapes(stroke_objects: List[Dict[str, Any]], parent_shap
     return new_shapes
 
 
+def _ensure_complete_node_data(graph):
+    """Ensure all nodes have complete data with proper defaults before CSV export"""
+    required_fields = {
+        'stroke_count': 1,
+        'is_valid': True,
+        'curvature_score': 0.0,
+        'max_curvature': 0.0,
+        'horizontal_asymmetry': 0.0,
+        'vertical_asymmetry': 0.0,
+        'left_extent': 0.0,
+        'right_extent': 0.0,
+        'top_extent': 0.0,
+        'bottom_extent': 0.0,
+        'principal_orientation': 0.0,
+        'orientation_variance': 1.0,
+        'aspect_ratio': 1.0,
+        'compactness': 0.0,
+        'area': 0.0,
+        'perimeter': 0.0,
+        'vertex_count': 0,
+        'geometric_complexity': 0.0,
+        'has_prominent_apex': False,
+        'is_highly_curved': False,
+        'apex_relative_to_center': 'center',
+        'apex_x_position': 0.0,
+        'bbox_aspect_ratio': 1.0,
+        'vl_embed': [0.0] * 512,
+        'vl_embed_norm': 0.0,
+        'vl_embed_nonzero_ratio': 0.0,
+        'has_vl_features': False,
+        'data_completeness_score': 0.0,
+        'missing_field_count': 0,
+        'object_type': 'unknown',
+        'source': 'unknown',
+        'label': '',
+        'shape_label': '',
+        'category': '',
+        'programmatic_label': '',
+        'image_path': '',
+        'original_record_idx': 0,
+        'relationships': []
+    }
+    
+    for node_id, node_data in graph.nodes(data=True):
+        for field, default_value in required_fields.items():
+            if field not in node_data or node_data[field] is None:
+                node_data[field] = default_value
+            elif isinstance(node_data[field], (int, float)) and np.isnan(node_data[field]):
+                node_data[field] = default_value
 
 
 async def _process_single_problem(problem_id: str, problem_records: List[Dict[str, Any]], feature_cache, *, args=None):
@@ -689,6 +767,65 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
     # --- Graph Construction (per image) ---
     final_graphs = {}
     all_objects_for_return = []
+    
+    # STATE-OF-THE-ART: Contrastive predicate induction for BONGARD-LOGO style reasoning
+    chosen_predicate = "same_shape"  # Default fallback
+    predicate_params = None
+    
+    # Separate positive and negative examples for contrastive analysis
+    positive_objects = []
+    negative_objects = []
+    
+    for parent_shape_id, objects_in_image in all_objects_by_image.items():
+        for obj in objects_in_image:
+            all_objects_for_return.append(obj)
+            
+            # Categorize objects for contrastive analysis
+            category = str(obj.get('category', obj.get('label', ''))).lower()
+            image_path = obj.get('image_path', parent_shape_id)
+            
+            # Enhanced categorization logic - Fixed for Bongard LOGO dataset structure
+            is_positive = (
+                category in ['positive', '1', '1.0', 'pos'] or
+                'A' in str(image_path) or 'pos' in str(image_path) or
+                'category_1' in str(image_path) or  # Added Bongard LOGO positive pattern
+                any(marker in str(image_path).lower() for marker in ['positive', '_a_', '/a/', '_a.'])
+            )
+            is_negative = (
+                category in ['negative', '0', '0.0', 'neg'] or
+                'B' in str(image_path) or 'neg' in str(image_path) or
+                'category_0' in str(image_path) or  # Fixed: category_0 is negative, not category_2
+                any(marker in str(image_path).lower() for marker in ['negative', '_b_', '/b/', '_b.'])
+            )
+            
+            if is_positive:
+                positive_objects.append(obj)
+            elif is_negative:
+                negative_objects.append(obj)
+    
+    # Perform contrastive predicate induction if we have both positive and negative examples
+    if positive_objects and negative_objects:
+        try:
+            from src.scene_graphs_building.predicate_induction import induce_predicate_for_problem
+            
+            logging.info(f"Performing contrastive predicate induction for {problem_id}: {len(positive_objects)} positive, {len(negative_objects)} negative objects")
+            
+            # Use the enhanced predicate induction with contrastive analysis
+            chosen_predicate, predicate_params = induce_predicate_for_problem(
+                objects=None,  # Not used in contrastive mode
+                positive_objects=positive_objects,
+                negative_objects=negative_objects
+            )
+            
+            logging.info(f"Induced predicate for {problem_id}: {chosen_predicate}")
+            if predicate_params:
+                logging.info(f"Predicate parameters: {predicate_params}")
+                
+        except Exception as e:
+            logging.warning(f"Predicate induction failed for {problem_id}: {e}")
+            logging.debug(traceback.format_exc())
+    else:
+        logging.info(f"No contrastive analysis for {problem_id}: {len(positive_objects)} pos, {len(negative_objects)} neg objects")
 
     for parent_shape_id, objects_in_image in all_objects_by_image.items():
         # --- Hierarchical Grouping Step ---
@@ -1156,6 +1293,9 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
             from scripts.scene_graph_visualization import save_scene_graph_visualization, save_scene_graph_csv
             feedback_vis_dir = os.path.join('feedback', 'visualizations_logo')
             os.makedirs(feedback_vis_dir, exist_ok=True)
+            
+            # Clean up and ensure complete node data before export
+            _ensure_complete_node_data(combined_graph)
             
             # Save CSVs and visualizations
             save_scene_graph_csv(combined_graph, feedback_vis_dir, problem_id)
