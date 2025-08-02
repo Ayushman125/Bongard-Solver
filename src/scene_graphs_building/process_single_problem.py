@@ -11,6 +11,143 @@ from collections import defaultdict
 # Import the new advanced predicates
 from src.scene_graphs_building.advanced_predicates import ADVANCED_PREDICATE_REGISTRY
 
+def _calculate_predicate_importance(graph, problem_id):
+    """Calculate importance scores for predicates based on their discriminative power"""
+    predicate_counts = {}
+    total_edges = 0
+    
+    # Count predicate frequencies
+    for u, v, data in graph.edges(data=True):
+        predicate = data.get('predicate', 'unknown')
+        predicate_counts[predicate] = predicate_counts.get(predicate, 0) + 1
+        total_edges += 1
+    
+    # Calculate importance scores (inverse frequency for rarity bonus)
+    importance_scores = {}
+    for predicate, count in predicate_counts.items():
+        # Semantic predicates get higher base importance
+        base_importance = 1.0
+        if predicate in ['has_apex_at_left', 'has_asymmetric_base', 'has_tilted_orientation', 
+                        'has_length_ratio_imbalance', 'exhibits_mirror_asymmetry', 
+                        'forms_open_vs_closed_distinction', 'has_geometric_complexity_difference']:
+            base_importance = 3.0
+        elif predicate in ['same_shape_class', 'forms_symmetry', 'has_compactness_difference']:
+            base_importance = 2.0
+        
+        # Rarity bonus (less frequent predicates are more discriminative)
+        frequency = count / total_edges if total_edges > 0 else 0
+        rarity_bonus = 1.0 / (frequency + 0.1)  # Avoid division by zero
+        
+        importance_scores[predicate] = base_importance * rarity_bonus
+    
+    return importance_scores
+
+def _filter_low_importance_edges(graph, importance_threshold=1.5):
+    """Remove edges with low discriminative importance to reduce graph complexity"""
+    importance_scores = _calculate_predicate_importance(graph, "analysis")
+    
+    edges_to_remove = []
+    for u, v, key, data in graph.edges(keys=True, data=True):
+        predicate = data.get('predicate', 'unknown')
+        importance = importance_scores.get(predicate, 1.0)
+        
+        # Keep high-importance edges and always keep structural edges
+        if importance < importance_threshold and data.get('source') != 'program':
+            edges_to_remove.append((u, v, key))
+    
+    # Remove low-importance edges
+    for edge in edges_to_remove:
+        if graph.has_edge(edge[0], edge[1], edge[2]):
+            graph.remove_edge(edge[0], edge[1], edge[2])
+    
+    return graph
+
+def _add_abstract_conceptual_nodes(graph, parent_shape_id):
+    """Add higher-level conceptual nodes that represent abstract concepts"""
+    composite_shapes = [n for n, data in graph.nodes(data=True) 
+                       if data.get('source') == 'geometric_grouping']
+    
+    if not composite_shapes:
+        return graph
+    
+    # Analyze overall shape properties to create conceptual nodes
+    shape_properties = {}
+    for shape_id in composite_shapes:
+        data = graph.nodes[shape_id]
+        
+        # Collect semantic properties
+        properties = []
+        
+        # Check asymmetry
+        verts = data.get('vertices', [])
+        if len(verts) >= 3:
+            # Simple asymmetry check
+            centroid = data.get('centroid', [0, 0])
+            x_coords = [v[0] for v in verts]
+            left_extent = centroid[0] - min(x_coords)
+            right_extent = max(x_coords) - centroid[0]
+            
+            if max(left_extent, right_extent) > 0:
+                asymmetry_ratio = abs(left_extent - right_extent) / max(left_extent, right_extent)
+                if asymmetry_ratio > 0.2:
+                    properties.append('asymmetric')
+                else:
+                    properties.append('symmetric')
+        
+        # Check orientation
+        aspect_ratio = data.get('aspect_ratio', 1.0)
+        if aspect_ratio > 1.5:
+            properties.append('horizontal_dominant')
+        elif aspect_ratio < 0.67:
+            properties.append('vertical_dominant')
+        else:
+            properties.append('balanced_proportions')
+        
+        # Check complexity
+        stroke_count = data.get('stroke_count', 1)
+        if stroke_count > 6:
+            properties.append('complex')
+        elif stroke_count <= 3:
+            properties.append('simple')
+        else:
+            properties.append('moderate_complexity')
+        
+        # Check closure
+        if data.get('is_closed', False):
+            properties.append('closed_shape')
+        else:
+            properties.append('open_shape')
+        
+        shape_properties[shape_id] = properties
+    
+    # Create conceptual nodes for common properties
+    property_groups = {}
+    for shape_id, props in shape_properties.items():
+        for prop in props:
+            if prop not in property_groups:
+                property_groups[prop] = []
+            property_groups[prop].append(shape_id)
+    
+    # Add conceptual nodes for properties that apply to multiple shapes
+    for prop, shapes in property_groups.items():
+        if len(shapes) > 1:  # Only create concepts that apply to multiple shapes
+            concept_id = f"{parent_shape_id}_concept_{prop}"
+            graph.add_node(concept_id, 
+                          object_id=concept_id,
+                          object_type='conceptual',
+                          source='semantic_abstraction',
+                          concept_type=prop,
+                          applies_to=shapes,
+                          abstraction_level='high')
+            
+            # Connect conceptual node to shapes it describes
+            for shape_id in shapes:
+                graph.add_edge(concept_id, shape_id, 
+                             predicate='describes', 
+                             source='semantic_abstraction')
+    
+    return graph
+
 
 
 
@@ -131,6 +268,105 @@ def _calculate_stroke_geometry(verts):
 
     return bounding_box, centroid, area, perimeter, aspect_ratio, compactness
 
+def _calculate_enhanced_geometry_features(verts, existing_attrs=None):
+    """Calculate enhanced geometric features for better semantic analysis"""
+    if existing_attrs is None:
+        existing_attrs = {}
+    
+    features = existing_attrs.copy()
+    
+    if len(verts) < 2:
+        return features
+    
+    try:
+        # Basic features
+        bb, cent, area, perim, ar, comp = _calculate_stroke_geometry(verts)
+        features.update({
+            'bounding_box': bb,
+            'centroid': cent,
+            'area': area,
+            'perimeter': perim,
+            'aspect_ratio': ar,
+            'compactness': comp
+        })
+        
+        # Enhanced asymmetry analysis
+        if len(verts) >= 3 and cent:
+            x_coords = [v[0] for v in verts]
+            y_coords = [v[1] for v in verts]
+            
+            # Calculate extent asymmetry
+            left_extent = cent[0] - min(x_coords)
+            right_extent = max(x_coords) - cent[0]
+            top_extent = max(y_coords) - cent[1]
+            bottom_extent = cent[1] - min(y_coords)
+            
+            horizontal_asymmetry = 0.0
+            vertical_asymmetry = 0.0
+            
+            if max(left_extent, right_extent) > 0:
+                horizontal_asymmetry = abs(left_extent - right_extent) / max(left_extent, right_extent)
+            
+            if max(top_extent, bottom_extent) > 0:
+                vertical_asymmetry = abs(top_extent - bottom_extent) / max(top_extent, bottom_extent)
+            
+            features.update({
+                'horizontal_asymmetry': horizontal_asymmetry,
+                'vertical_asymmetry': vertical_asymmetry,
+                'left_extent': left_extent,
+                'right_extent': right_extent,
+                'top_extent': top_extent,
+                'bottom_extent': bottom_extent
+            })
+            
+            # Find apex and base characteristics
+            max_y_idx = np.argmax(y_coords)
+            min_y_idx = np.argmin(y_coords)
+            
+            apex_x = x_coords[max_y_idx] if abs(y_coords[max_y_idx] - cent[1]) > abs(y_coords[min_y_idx] - cent[1]) else x_coords[min_y_idx]
+            
+            features.update({
+                'apex_x_position': apex_x,
+                'apex_relative_to_center': 'left' if apex_x < cent[0] else 'right',
+                'has_prominent_apex': max(top_extent, bottom_extent) > 1.5 * min(top_extent, bottom_extent)
+            })
+        
+        # Enhanced orientation analysis
+        if len(verts) >= 2:
+            # Calculate dominant direction using PCA-like approach
+            points = np.array(verts)
+            if len(points) > 1:
+                # Center the points
+                centered = points - np.mean(points, axis=0)
+                
+                # Calculate covariance matrix
+                cov_matrix = np.cov(centered.T)
+                eigenvals, eigenvecs = np.linalg.eigh(cov_matrix)
+                
+                # Principal direction
+                principal_direction = eigenvecs[:, -1]  # Eigenvector with largest eigenvalue
+                angle = np.degrees(np.arctan2(principal_direction[1], principal_direction[0]))
+                
+                # Normalize to [0, 180) for principal axis
+                if angle < 0:
+                    angle += 180
+                
+                features.update({
+                    'principal_orientation': angle,
+                    'orientation_variance': eigenvals[-1] / (eigenvals[0] + 1e-10),  # Ratio of principal to secondary axis
+                })
+        
+        # Geometric complexity measures
+        features.update({
+            'vertex_count': len(verts),
+            'geometric_complexity': len(verts) * (1 + features.get('horizontal_asymmetry', 0) + features.get('vertical_asymmetry', 0))
+        })
+        
+    except Exception as e:
+        logging.warning(f"Could not compute enhanced geometry features: {e}")
+    
+    return features
+
 def _group_strokes_into_shapes(stroke_objects: List[Dict[str, Any]], parent_shape_id: str) -> List[Dict[str, Any]]:
     """
     Groups connected primitive strokes into composite shapes using a graph approach.
@@ -187,20 +423,26 @@ def _group_strokes_into_shapes(stroke_objects: List[Dict[str, Any]], parent_shap
         is_closed = len(all_verts) > 2 and np.allclose(all_verts[0], all_verts[-1], atol=1e-5)
         object_type = 'polygon' if is_closed else 'open_curve'
         
-        # Re-calculate geometric properties for the new composite shape
-        bb, cent, area, perim, ar, comp = _calculate_stroke_geometry(all_verts)
+        # Calculate enhanced geometric properties for the new composite shape
         base_obj = sorted_primitives[0]
-
-        shape_obj = {
-            'object_id': shape_id, 'parent_shape_id': parent_shape_id,
-            'object_type': object_type, 'source': 'geometric_grouping',
-            'vertices': all_verts, 'is_closed': is_closed, 'stroke_count': len(component_primitives),
-            'bounding_box': bb, 'centroid': cent, 'area': area, 'perimeter': perim,
-            'aspect_ratio': ar, 'compactness': comp,
-            'label': base_obj.get('label'), 'shape_label': base_obj.get('shape_label'),
-            'category': base_obj.get('category'), 'original_record_idx': base_obj.get('original_record_idx'),
-            'image_path': base_obj.get('image_path'), 'relationships': [], 'is_valid': True,
-        }
+        enhanced_features = _calculate_enhanced_geometry_features(all_verts, {
+            'object_id': shape_id, 
+            'parent_shape_id': parent_shape_id,
+            'object_type': object_type, 
+            'source': 'geometric_grouping',
+            'vertices': all_verts, 
+            'is_closed': is_closed, 
+            'stroke_count': len(component_primitives),
+            'label': base_obj.get('label'), 
+            'shape_label': base_obj.get('shape_label'),
+            'category': base_obj.get('category'), 
+            'original_record_idx': base_obj.get('original_record_idx'),
+            'image_path': base_obj.get('image_path'), 
+            'relationships': [], 
+            'is_valid': True,
+        })
+        
+        shape_obj = enhanced_features
         new_shapes.append(shape_obj)
 
         # Update original strokes to link them to their new parent shape
@@ -287,23 +529,31 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
             if not verts: continue
 
             obj_id = f"{problem_id}_{idx}_{stroke_idx}"
-            bb, cent, area, perim, ar, comp = _calculate_stroke_geometry(verts)
+            
+            # Calculate enhanced geometric features
+            enhanced_features = _calculate_enhanced_geometry_features(verts, {
+                'object_id': obj_id, 
+                'parent_shape_id': parent_shape_id, 
+                'action_index': stroke_idx,
+                'vertices': verts, 
+                'object_type': assign_object_type(verts), 
+                'action_command': cmd,
+                'endpoints': [verts[0], verts[-1]], 
+                'length': length, 
+                'orientation': orientation,
+                'source': 'action_program', 
+                'is_closed': len(verts) > 2 and np.allclose(verts[0], verts[-1], atol=1e-5),
+                **common_attrs
+            })
             
             relationships = []
             if last_stroke_obj:
                 # Check for adjacency based on endpoint proximity
                 if np.allclose(last_stroke_obj['endpoints'][-1], verts[0], atol=1e-5):
                     relationships.append(f"adjacent_to_{last_stroke_obj['object_id']}")
-
-            obj = {
-                'object_id': obj_id, 'parent_shape_id': parent_shape_id, 'action_index': stroke_idx,
-                'vertices': verts, 'object_type': assign_object_type(verts), 'action_command': cmd,
-                'endpoints': [verts[0], verts[-1]], 'length': length, 'orientation': orientation,
-                'bounding_box': bb, 'centroid': cent, 'area': area, 'perimeter': perim,
-                'aspect_ratio': ar, 'compactness': comp, 'relationships': relationships,
-                'source': 'action_program', 'is_closed': len(verts) > 2 and np.allclose(verts[0], verts[-1], atol=1e-5),
-                **common_attrs
-            }
+            
+            enhanced_features['relationships'] = relationships
+            obj = enhanced_features
             all_objects_by_image[parent_shape_id].append(obj)
             last_stroke_obj = obj
 
@@ -361,6 +611,22 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                         G.add_edge(id_b, id_a, predicate=pred_name, source='advanced_geometry')
             except Exception as e:
                 logging.warning(f"Failed to apply advanced predicates between {id_a} and {id_b}: {e}")
+
+        # === ENHANCED PROCESSING: Add semantic abstraction and feature selection ===
+        
+        # 1. Add abstract conceptual nodes for high-level patterns
+        G = _add_abstract_conceptual_nodes(G, parent_shape_id)
+        
+        # 2. Apply predicate importance filtering to reduce noise
+        G = _filter_low_importance_edges(G, importance_threshold=1.2)
+        
+        # 3. Calculate and store predicate importance scores for analysis
+        importance_scores = _calculate_predicate_importance(G, problem_id)
+        
+        # Add metadata to graph for analysis
+        G.graph['predicate_importance'] = importance_scores
+        G.graph['problem_id'] = problem_id
+        G.graph['processing_mode'] = 'enhanced_semantic'
 
         final_graphs[parent_shape_id] = G
 
