@@ -51,6 +51,8 @@ from src.scene_graphs_building.graph_building import build_graph_unvalidated, ad
 from src.scene_graphs_building.visualization import save_feedback_images
 from src.scene_graphs_building.recall_metrics import log_diversity_metrics
 from src.scene_graphs_building.adaptive_predicates import AdaptivePredicateThresholds, create_adaptive_predicate_functions
+# --- Enhanced visualization imports ---
+from scripts.scene_graph_visualization import save_scene_graph_csv
 # --- Research-grade modules ---
 from src.scene_graphs_building.predicate_miner import PredicateMiner
 from src.scene_graphs_building.motif_miner import MotifMiner
@@ -1036,8 +1038,28 @@ def assign_object_type(verts):
             else:
                 logging.info(f"[Feedback Save] Problem {problem_id}: scene_graph missing or invalid.")
             if img is not None:
-                # Use problem_id as base_name for feedback images
+                # Enhanced feedback saving with comprehensive analysis
                 save_feedback_images(img, None, problem_id, feedback_dir, scene_graph=final_scene_graph)
+                
+                # Generate enhanced visualizations if scene graph available
+                if final_scene_graph is not None and 'graph' in final_scene_graph:
+                    try:
+                        from scripts.scene_graph_visualization import save_enhanced_scene_graph_visualization
+                        G = final_scene_graph['graph']
+                        
+                        # Save enhanced visualization
+                        enhanced_viz_path = save_enhanced_scene_graph_visualization(
+                            G, representative_image_path, feedback_dir, problem_id,
+                            show_missing_data=True, show_patterns=True
+                        )
+                        
+                        # Save enhanced CSV with all calculated fields
+                        save_scene_graph_csv(G, feedback_dir, problem_id)
+                        
+                        logging.info(f"Generated enhanced visualization and CSV: {enhanced_viz_path}")
+                        
+                    except Exception as e:
+                        logging.warning(f"Failed to generate enhanced visualization for {problem_id}: {e}")
             else:
                 logging.warning(f"Could not read representative image for feedback: {representative_image_path}")
         except Exception as e:
@@ -1140,10 +1162,11 @@ async def main(): # Main is now async because it calls async functions
     parser.add_argument('--decompose-polygons', action='store_true', help='Enable decomposition of complex polygons into sub-polygons.')
     parser.add_argument('--tpot-max-time', type=int, default=5, help='Max time in minutes for TPOT AutoML (default: 5)')
     parser.add_argument('--tpot-generations', type=int, default=5, help='Number of generations for TPOT AutoML (default: 5)')
-    parser.add_argument('--use-vl', action='store_true', help='Enable vision-language (CLIP) edges in scene graph')
+    parser.add_argument('--use-vl', action='store_true', default=True, help='Enable enhanced vision-language (CLIP) features with missing data calculations')
     parser.add_argument('--use-gnn', action='store_true', help='Enable GNN/Transformer reasoning in scene graph')
-    parser.add_argument('--use-motifs', action='store_true', help='Enable motif mining and super-nodes in scene graph')
-    parser.add_argument('--use-roi', action='store_true', help='Use ROI (bounding box/mask) for CLIP vision-language edges (SOTA)')
+    parser.add_argument('--use-motifs', action='store_true', default=True, help='Enable enhanced motif mining with comprehensive feature calculations')
+    parser.add_argument('--use-roi', action='store_true', default=True, help='Use ROI (bounding box/mask) for CLIP vision-language edges (SOTA)')
+    parser.add_argument('--enhanced-viz', action='store_true', default=True, help='Generate enhanced multi-view visualizations with missing data analysis')
     parser.add_argument('--mode', type=str, default='sota', choices=['sota', 'logo'], help='Pipeline mode: "sota" (default, all features) or "logo" (LOGO-only, NVLabs baseline)')
     parser.add_argument('--puzzles-list', type=str, required=False, help='Path to puzzle list for LOGO mode')
     parser.add_argument('--action-base-dir', type=str, required=False, help='Base directory for action program JSONs for LOGO mode')
@@ -1452,6 +1475,41 @@ async def main(): # Main is now async because it calls async functions
             logging.info(f"Threshold evolution visualization saved to: {viz_path}")
         else:
             logging.warning("No common predicates found to generate drift report.")
+
+    # Generate comprehensive analysis report if enhanced features were used
+    if getattr(args, 'enhanced_viz', True) and (args.use_vl or args.use_motifs):
+        try:
+            logging.info("Generating comprehensive multi-puzzle analysis...")
+            
+            from scripts.scene_graph_visualization import (
+                create_multi_puzzle_visualization, 
+                create_missing_data_analysis
+            )
+            
+            # Create multi-puzzle overview
+            if os.path.exists(args.feedback_dir):
+                multi_viz_path = create_multi_puzzle_visualization(
+                    csv_dir=args.feedback_dir,
+                    out_dir=args.feedback_dir,
+                    puzzle_pattern="*",
+                    max_puzzles=12
+                )
+                
+                # Create missing data analysis  
+                analysis_paths = create_missing_data_analysis(
+                    csv_dir=args.feedback_dir,
+                    out_dir=args.feedback_dir,
+                    puzzle_pattern="*"
+                )
+                
+                if multi_viz_path:
+                    print(f"\n[Enhanced Analysis] Multi-puzzle visualization: {multi_viz_path}")
+                if analysis_paths:
+                    print(f"[Enhanced Analysis] Missing data analysis: {analysis_paths[0]}")
+                    print(f"[Enhanced Analysis] Completeness report: {analysis_paths[1]}")
+                    
+        except Exception as e:
+            logging.warning(f"Failed to generate comprehensive analysis: {e}")
 
     # Log overall performance stats
     cache_stats = feature_cache.get_cache_stats()

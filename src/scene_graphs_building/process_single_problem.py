@@ -745,7 +745,7 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
         
         # === ADVANCED TECHNIQUES INTEGRATION ===
         
-        # 1. Vision-Language (VL) Features using CLIP
+        # 1. Enhanced Vision-Language (VL) Features with Missing Calculations
         if getattr(args, 'use_vl', False):
             try:
                 from src.scene_graphs_building.vl_features import CLIPEmbedder
@@ -753,7 +753,7 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                 
                 clip_embedder = CLIPEmbedder()
                 
-                # Extract VL features for each node
+                # Extract enhanced features for each node
                 for node_id, node_data in G.nodes(data=True):
                     image_path = None
                     for rec in problem_records:
@@ -763,38 +763,110 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                     
                     if image_path:
                         try:
-                            img = robust_image_open(remap_path(image_path))
+                            # Enhanced VL embedding with context
+                            vl_data = clip_embedder.compute_enhanced_vl_embedding(
+                                image_path, node_data, f"bongard puzzle {problem_id}"
+                            )
                             
-                            # Use ROI if enabled and bounding box available
-                            if getattr(args, 'use_roi', False) and node_data.get('bounding_box'):
-                                bb = node_data['bounding_box']
-                                x1, y1, x2, y2 = [int(round(x)) for x in bb]
-                                # Ensure valid crop coordinates
-                                img_w, img_h = img.size
-                                x1, y1 = max(0, x1), max(0, y1)
-                                x2, y2 = min(img_w, x2), min(img_h, y2)
-                                if x2 > x1 and y2 > y1:
-                                    img_crop = img.crop((x1, y1, x2, y2))
-                                    vl_embed = clip_embedder.embed_image(img_crop)
-                                else:
-                                    vl_embed = clip_embedder.embed_image(img)
-                            else:
-                                vl_embed = clip_embedder.embed_image(img)
-                            
-                            # Add VL embedding to node
-                            G.nodes[node_id]['vl_embed'] = vl_embed
+                            # Add enhanced VL features to node
+                            G.nodes[node_id].update(vl_data)
                             G.nodes[node_id]['has_vl_features'] = True
                             
+                            # Compute curvature metrics for curves and lines
+                            vertices = node_data.get('vertices', [])
+                            if vertices and len(vertices) >= 3:
+                                curvature_data = clip_embedder.compute_curvature_metrics(vertices)
+                                
+                                # Add curvature features with enhanced_ prefix to distinguish
+                                for key, value in curvature_data.items():
+                                    G.nodes[node_id][f'enhanced_{key}'] = value
+                                
+                                # Update the original curvature_score if it was missing/zero
+                                if G.nodes[node_id].get('curvature_score', 0.0) == 0.0:
+                                    G.nodes[node_id]['curvature_score'] = curvature_data['curvature_mean']
+                            
+                            # Compute additional geometric features
+                            if vertices:
+                                vertices_array = np.array(vertices)
+                                
+                                # Bounding box calculations
+                                if len(vertices_array) > 0:
+                                    x_coords = vertices_array[:, 0]
+                                    y_coords = vertices_array[:, 1]
+                                    bbox_width = np.max(x_coords) - np.min(x_coords)
+                                    bbox_height = np.max(y_coords) - np.min(y_coords)
+                                    G.nodes[node_id]['bbox_aspect_ratio'] = bbox_width / max(bbox_height, 1e-6)
+                                
+                                # Convex hull area for complexity measure
+                                if len(vertices_array) >= 3:
+                                    try:
+                                        from scipy.spatial import ConvexHull
+                                        hull = ConvexHull(vertices_array)
+                                        G.nodes[node_id]['convex_hull_area'] = hull.volume  # volume is area in 2D
+                                    except:
+                                        G.nodes[node_id]['convex_hull_area'] = 0.0
+                                
+                                # Enhanced symmetry calculations
+                                centroid = node_data.get('centroid', [0, 0])
+                                if centroid and len(centroid) == 2:
+                                    # Horizontal symmetry score
+                                    left_points = vertices_array[vertices_array[:, 0] < centroid[0]]
+                                    right_points = vertices_array[vertices_array[:, 0] > centroid[0]]
+                                    h_symmetry = 1.0 / (1.0 + abs(len(left_points) - len(right_points)))
+                                    G.nodes[node_id]['horizontal_symmetry_score'] = h_symmetry
+                                    
+                                    # Vertical symmetry score
+                                    top_points = vertices_array[vertices_array[:, 1] < centroid[1]]
+                                    bottom_points = vertices_array[vertices_array[:, 1] > centroid[1]]
+                                    v_symmetry = 1.0 / (1.0 + abs(len(top_points) - len(bottom_points)))
+                                    G.nodes[node_id]['vertical_symmetry_score'] = v_symmetry
+                                
+                                # Turning angle variation and inflection point count
+                                if len(vertices_array) >= 4:
+                                    turning_angles = []
+                                    for i in range(1, len(vertices_array) - 1):
+                                        v1 = vertices_array[i] - vertices_array[i-1]
+                                        v2 = vertices_array[i+1] - vertices_array[i]
+                                        
+                                        norm_v1 = np.linalg.norm(v1)
+                                        norm_v2 = np.linalg.norm(v2)
+                                        
+                                        if norm_v1 > 1e-6 and norm_v2 > 1e-6:
+                                            cos_angle = np.dot(v1, v2) / (norm_v1 * norm_v2)
+                                            cos_angle = np.clip(cos_angle, -1.0, 1.0)
+                                            angle = np.arccos(cos_angle)
+                                            turning_angles.append(angle)
+                                    
+                                    if turning_angles:
+                                        G.nodes[node_id]['turning_angle_variation'] = float(np.std(turning_angles))
+                                        
+                                        # Count inflection points (significant direction changes)
+                                        inflection_threshold = np.pi / 4  # 45 degrees
+                                        significant_turns = [a for a in turning_angles if a > inflection_threshold]
+                                        G.nodes[node_id]['inflection_points'] = len(significant_turns)
+                            
+                            # Data completeness scoring
+                            required_fields = ['area', 'perimeter', 'centroid', 'vertices', 'object_type']
+                            missing_fields = [f for f in required_fields if not node_data.get(f)]
+                            completeness_score = (len(required_fields) - len(missing_fields)) / len(required_fields)
+                            G.nodes[node_id]['data_completeness_score'] = completeness_score
+                            G.nodes[node_id]['missing_field_count'] = len(missing_fields)
+                            
                         except Exception as e:
-                            logging.warning(f"Failed to extract VL features for node {node_id}: {e}")
-                            G.nodes[node_id]['vl_embed'] = np.zeros(512)
+                            logging.warning(f"Failed to extract enhanced features for node {node_id}: {e}")
+                            G.nodes[node_id]['vl_embed'] = [0.0] * 512
+                            G.nodes[node_id]['vl_embed_norm'] = 0.0
+                            G.nodes[node_id]['vl_embed_nonzero_ratio'] = 0.0
                             G.nodes[node_id]['has_vl_features'] = False
+                            G.nodes[node_id]['data_completeness_score'] = 0.0
+                            G.nodes[node_id]['missing_field_count'] = len(['area', 'perimeter', 'centroid', 'vertices', 'object_type'])
                 
-                # Add VL-based edges
+                # Add VL-based edges with enhanced similarity
                 vl_edges = clip_embedder.contrastive_edges(
                     [G.nodes[n] for n in G.nodes()], 
                     threshold=0.15, 
-                    use_roi=getattr(args, 'use_roi', False)
+                    use_roi=getattr(args, 'use_roi', False),
+                    logo_mode=True
                 )
                 
                 for edge_data in vl_edges:
@@ -808,7 +880,7 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
             except Exception as e:
                 logging.warning(f"Failed to apply VL features: {e}")
         
-        # 2. Motif Mining and Pattern Discovery
+        # 2. Enhanced Motif Mining with Missing Feature Calculations
         if getattr(args, 'use_motifs', False):
             try:
                 from src.scene_graphs_building.motif_miner import MotifMiner
@@ -818,6 +890,68 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                 
                 # Discover motifs and create super-nodes
                 motif_dict, motif_nodes = motif_miner.cluster_motifs(node_objects, method='graph+type')
+                
+                # Add enhanced motif features using CLIPEmbedder if available
+                if getattr(args, 'use_vl', False) and 'clip_embedder' in locals():
+                    for motif_node in motif_nodes:
+                        try:
+                            # Get motif members
+                            member_ids = motif_node.get('member_nodes', [])
+                            motif_members = [G.nodes[mid] for mid in member_ids if G.has_node(mid)]
+                            
+                            # Get motif relationships
+                            motif_relationships = []
+                            for u in member_ids:
+                                for v in member_ids:
+                                    if u != v and G.has_edge(u, v):
+                                        for edge_data in G[u][v].values():
+                                            motif_relationships.append(edge_data)
+                            
+                            # Compute comprehensive motif features
+                            motif_features = clip_embedder.compute_motif_features(
+                                motif_members, motif_relationships
+                            )
+                            
+                            # Add motif features to node
+                            motif_node.update(motif_features)
+                            
+                            # Compute motif-level VL embedding if image data available
+                            image_paths = []
+                            member_bboxes = []
+                            for member in motif_members:
+                                # Try to find image path from problem records
+                                for rec in problem_records:
+                                    if rec.get('image_path') and parent_shape_id in rec.get('image_path', ''):
+                                        image_paths.append(rec['image_path'])
+                                        bbox = member.get('bounding_box')
+                                        member_bboxes.append(bbox if bbox else [0, 0, 100, 100])
+                                        break
+                            
+                            if image_paths:
+                                try:
+                                    motif_vl_embedding = clip_embedder.compute_motif_embedding(
+                                        image_paths[:1], member_bboxes[:1]  # Use first image as representative
+                                    )
+                                    motif_node['motif_vl_embed'] = motif_vl_embedding
+                                    motif_node['has_motif_vl_features'] = True
+                                except Exception as e:
+                                    logging.warning(f"Failed to compute motif VL embedding: {e}")
+                                    motif_node['motif_vl_embed'] = [0.0] * 512
+                                    motif_node['has_motif_vl_features'] = False
+                            
+                            # Calculate motif complexity metrics
+                            motif_node['motif_complexity_score'] = (
+                                motif_features['motif_type_diversity'] * 0.3 +
+                                motif_features['motif_relationship_diversity'] * 0.3 +
+                                motif_features['motif_internal_connectivity'] * 0.2 +
+                                (1.0 - motif_features['motif_size_uniformity']) * 0.2  # diversity bonus
+                            )
+                            
+                        except Exception as e:
+                            logging.warning(f"Failed to compute enhanced motif features: {e}")
+                            # Add default empty motif features
+                            empty_features = clip_embedder._empty_motif_features() if 'clip_embedder' in locals() else {}
+                            motif_node.update(empty_features)
                 
                 # Add motif super-nodes to graph
                 for motif_node in motif_nodes:
@@ -834,18 +968,23 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                 apex_patterns = motif_miner.find_apex_patterns(G)
                 symmetry_patterns = motif_miner.find_symmetry_patterns(G)
                 
-                # Add pattern-based edges
+                # Add pattern-based edges with enhanced metadata
+                pattern_count = 0
                 for pattern in bridge_patterns + apex_patterns + symmetry_patterns:
                     pattern_type = pattern.get('type', 'unknown')
+                    pattern_confidence = pattern.get('confidence', 0.0)
+                    
                     for i, node_a in enumerate(pattern.get('nodes', [])):
                         for node_b in pattern.get('nodes', [])[i+1:]:
                             if G.has_node(node_a) and G.has_node(node_b):
                                 G.add_edge(node_a, node_b, 
                                          predicate=f'forms_{pattern_type}_pattern', 
                                          source='motif_discovery',
-                                         pattern_confidence=pattern.get('confidence', 0.0))
+                                         pattern_confidence=pattern_confidence,
+                                         pattern_id=f'pattern_{pattern_count}')
+                                pattern_count += 1
                 
-                logging.info(f"Motif mining added {len(motif_nodes)} super-nodes and {len(bridge_patterns + apex_patterns + symmetry_patterns)} pattern relationships")
+                logging.info(f"Enhanced motif mining added {len(motif_nodes)} super-nodes with comprehensive features and {len(bridge_patterns + apex_patterns + symmetry_patterns)} pattern relationships")
                 
             except Exception as e:
                 logging.warning(f"Failed to apply motif mining: {e}")

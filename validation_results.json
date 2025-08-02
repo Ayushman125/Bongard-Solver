@@ -1,0 +1,25 @@
+{
+  "csv_validation": {
+    "total_files": 1,
+    "files_analyzed": [
+      {
+        "file": "data\\sample_test_nodes.csv",
+        "total_rows": 4,
+        "issues": [
+          "VL embeddings zero/missing: 4",
+          "Curvature missing for curves: 1"
+        ]
+      }
+    ],
+    "missing_data_summary": {
+      "vl_embed_issues": 4,
+      "curvature_missing": "1",
+      "motif_empty": 0,
+      "centroid_missing": 0
+    },
+    "sample_issues": []
+  },
+  "calculations_test": true,
+  "visualization_test": true,
+  "sample_processing": true
+}
