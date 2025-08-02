@@ -1359,7 +1359,10 @@ async def main(): # Main is now async because it calls async functions
                 for g_result in graphs:
                     scene_graph = g_result.get('scene_graph')
                     if scene_graph is not None and hasattr(scene_graph, 'nodes'):
-                        gnn = GNNReasoner(in_dim=10)
+                        # Calculate correct feature dimension: type_onehot + features + validity + action + vl
+                        # 5 + 10 + 10 + 4 + 10 = 39 features total
+                        expected_dim = 39
+                        gnn = GNNReasoner(in_dim=expected_dim)
                         data, node_ids = gnn.nx_to_pyg(scene_graph)
                         graph_data_list.append(data)
                         # Use a placeholder label (e.g., 1.0) or extract from your data

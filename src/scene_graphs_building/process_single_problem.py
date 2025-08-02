@@ -863,7 +863,7 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                     sample_node = next(iter(G.nodes(data=True)))[1]
                     
                     # LOGO MODE: Ensure all nodes have required features for GNN
-                    required_gnn_features = ['area', 'aspect_ratio', 'orientation', 'curvature_score', 'perimeter', 
+                    required_gnn_features = ['area', 'aspect_ratio', 'orientation', 'curvature_score', 'perimeter', 'centroid', 
                                            'horizontal_asymmetry', 'vertical_asymmetry', 'apex_x_position', 'is_highly_curved']
                     
                     for node_id, node_data in G.nodes(data=True):
@@ -872,7 +872,7 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                             if feat not in node_data or node_data[feat] is None:
                                 if feat == 'is_highly_curved':
                                     node_data[feat] = False
-                                elif feat in ['area', 'aspect_ratio', 'orientation', 'curvature_score', 'perimeter',
+                                elif feat in ['area', 'aspect_ratio', 'orientation', 'curvature_score', 'perimeter', 'centroid',
                                             'horizontal_asymmetry', 'vertical_asymmetry', 'apex_x_position']:
                                     node_data[feat] = 0.0
                         
@@ -884,43 +884,19 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                     expected_dim = 5 + len(required_gnn_features) + len(required_gnn_features) + 4 + 10  # type_onehot + features + validity + action + vl
                     gnn_reasoner = GNNReasoner(in_dim=expected_dim)
                     
-                    # Convert NetworkX graph to PyTorch Geometric format
+                    # Convert NetworkX graph to PyTorch Geometric format and apply GNN reasoning
                     try:
-                        node_features_tensor = gnn_reasoner.nx_to_pyg(G)
+                        # Use the proper GNN predict method which handles the full conversion
+                        enhanced_graph = gnn_reasoner.predict(G)
                         
-                        # Create edge index tensor
-                        edge_list = list(G.edges())
-                        if edge_list:
-                            edge_index = torch.tensor([[u, v] for u, v in edge_list], dtype=torch.long).t().contiguous()
-                            
-                            # Create simple data object for GNN
-                            from torch_geometric.data import Data
-                            data = Data(x=node_features_tensor, edge_index=edge_index)
-                            
-                            # Apply GNN reasoning
-                            with torch.no_grad():
-                                node_embeddings, graph_embedding = gnn_reasoner.model(data)
-                            
-                            # Add GNN features back to nodes
-                            node_list = list(G.nodes())
-                            for i, node_id in enumerate(node_list):
-                                if i < len(node_embeddings):
-                                    G.nodes[node_id]['gnn_embedding'] = node_embeddings[i].numpy().tolist()
-                                    G.nodes[node_id]['gnn_score'] = float(node_embeddings[i].norm().item())
-                                    G.nodes[node_id]['has_gnn_features'] = True
-                                else:
-                                    G.nodes[node_id]['gnn_embedding'] = [0.0] * node_embeddings.shape[1]
-                                    G.nodes[node_id]['gnn_score'] = 0.0
-                                    G.nodes[node_id]['has_gnn_features'] = False
-                            
-                            logging.info(f"GNN processing enhanced {len(G.nodes())} nodes with LOGO-aware learned representations")
+                        # Extract GNN embeddings and scores from enhanced graph
+                        if enhanced_graph.graph.get('gnn_status') == 'success':
+                            logging.info(f"GNN processing successfully enhanced {len(enhanced_graph.nodes())} nodes with learned representations")
                         else:
-                            logging.warning("No edges available for GNN processing")
-                            # Set default GNN features for all nodes
-                            for node_id in G.nodes():
-                                G.nodes[node_id]['gnn_embedding'] = [0.0] * 64
-                                G.nodes[node_id]['gnn_score'] = 0.0
-                                G.nodes[node_id]['has_gnn_features'] = False
+                            logging.warning(f"GNN processing failed with status: {enhanced_graph.graph.get('gnn_status', 'unknown')}")
+                        
+                        # Copy enhanced graph back to G
+                        G = enhanced_graph
                     
                     except Exception as e:
                         logging.warning(f"GNN tensor conversion failed: {e}")

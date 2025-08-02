@@ -5,7 +5,9 @@ def extract_clean_contours(mask, min_area=10, simplify_epsilon=2.0):
     - Contour detection & hierarchy analysis
     - Hole-punching (internal contours)
     - Aggressive thinning & skeletonization
-    - Morphological cleaning
+    - Morpholog                except Exception as e:
+                    # Fallback to multipoint centroid calculation
+                    vertices_array = np.array(vertices)l cleaning
     - Contour simplification & filtering
     Returns: List of polygons (each is a list of [x, y] points)
     """
@@ -48,8 +50,8 @@ def extract_clean_contours(mask, min_area=10, simplify_epsilon=2.0):
 
 # --- Geometry validity logic update ---
 def set_geometry_valid(obj):
-    # Broaden geometry_valid: allow polygons, lines, arcs, and points as valid geometry
-    if obj.get('object_type') in ('polygon', 'line', 'arc', 'point'):
+    # Broaden geometry_valid: allow polygons, lines, arcs, points, and motifs as valid geometry
+    if obj.get('object_type') in ('polygon', 'line', 'arc', 'point', 'motif'):
         obj['geometry_valid'] = True
     else:
         obj['geometry_valid'] = False
@@ -109,16 +111,122 @@ def compute_basic_features(poly: Polygon) -> Dict[str, Any]:
         'orientation': float(orientation)
     }
 
+def _set_default_attributes(node_data, node_id):
+    """Set default attributes for nodes with invalid or missing geometry."""
+    required_features = [
+        'centroid', 'cx', 'cy', 'area', 'perimeter', 'bbox', 'aspect_ratio', 'orientation',
+        'compactness', 'inertia', 'convexity', 'num_segments', 'num_junctions', 'curvature',
+        'skeleton_length', 'symmetry_axis', 'length', 'curvature_type', 'stroke_type',
+        'turn_direction', 'turn_angle', 'action_index', 'repetition_count'
+    ]
+    required_valid_flags = [
+        'curvature_valid','skeleton_length_valid','symmetry_axis_valid','centroid_valid','area_valid',
+        'orientation_valid','aspect_ratio_valid','perimeter_valid','compactness_valid','convexity_valid',
+        'inertia_valid','num_segments_valid','num_junctions_valid'
+    ]
+    
+    # Set all features to None/default values
+    for feat in required_features:
+        if feat not in node_data:
+            node_data[feat] = None
+    
+    # Set all validity flags to False
+    feature_valid = {k: False for k in required_valid_flags}
+    node_data['feature_valid'] = feature_valid
+    node_data['geometry_valid'] = False
+    node_data['fallback_geometry'] = True
+    
+    # Set default centroid to (0, 0) if not already set
+    if node_data.get('centroid') is None:
+        node_data['centroid'] = [0.0, 0.0]
+        node_data['cx'] = 0.0
+        node_data['cy'] = 0.0
+        node_data['feature_valid']['centroid_valid'] = True
+        logging.info(f"compute_physics_attributes: Node {node_id} assigned default centroid [0.0, 0.0] due to invalid geometry")
+
 def compute_physics_attributes(node_data):
     """
     Computes robust physics attributes and asserts their domain validity.
     Now also computes perimeter and compactness.
     """
+    # Initialize feature_valid dictionary early to avoid KeyError
+    required_valid_flags = [
+        'area_valid', 'aspect_ratio_valid', 'orientation_valid', 'curvature_valid',
+        'perimeter_valid', 'centroid_valid', 'horizontal_asymmetry_valid', 'vertical_asymmetry_valid',
+        'apex_x_position_valid', 'is_highly_curved_valid', 'compactness_valid', 'convexity_valid',
+        'inertia_valid', 'num_segments_valid', 'num_junctions_valid'
+    ]
+    feature_valid = {k: False for k in required_valid_flags}
+    node_data['feature_valid'] = feature_valid
+    
     # --- Simplified, robust LOGO/NVLabs geometry handling ---
     vertices = node_data.get('vertices', [])
     object_type = node_data.get('object_type', None)
     is_closed = node_data.get('is_closed', False)
     action_program = node_data.get('action_program', [])
+    # Enhanced node ID detection for better debugging
+    node_id = None
+    # Try multiple possible ID fields in order of preference
+    for id_field in ['object_id', 'id', 'node_id', 'parent_shape_id']:
+        if id_field in node_data and node_data[id_field] is not None:
+            node_id = str(node_data[id_field])
+            break
+    
+    # If still no ID found, try to construct one from available data
+    if node_id is None or node_id == 'None':
+        action_cmd = node_data.get('action_command', '')
+        action_idx = node_data.get('action_index', '')
+        if action_cmd and action_idx is not None:
+            node_id = f"action_{action_idx}_{action_cmd.split('_')[0] if '_' in action_cmd else action_cmd}"
+        else:
+            node_id = 'unknown_node'
+    
+    # Log when we encounter problematic nodes for debugging
+    if node_id == 'unknown_node' or 'unknown' in node_id:
+        logging.warning(f"Node missing proper ID fields. Available keys: {list(node_data.keys())[:10]}...")
+    
+    # Enhanced vertex validation with fallback options
+    if not vertices or len(vertices) == 0:
+        # Try alternative vertex sources
+        fallback_vertices = None
+        for vertex_field in ['original_vertices', 'endpoints', 'centroid']:
+            fallback_data = node_data.get(vertex_field, None)
+            if fallback_data and len(fallback_data) >= 2:
+                try:
+                    # Handle different formats
+                    if vertex_field == 'centroid' and len(fallback_data) == 2:
+                        # Use centroid as single point
+                        fallback_vertices = [fallback_data]
+                        break
+                    elif vertex_field == 'endpoints' and len(fallback_data) >= 4:
+                        # Convert endpoints [x1,y1,x2,y2] to [[x1,y1],[x2,y2]]
+                        fallback_vertices = [[fallback_data[0], fallback_data[1]], [fallback_data[2], fallback_data[3]]]
+                        break
+                    elif len(fallback_data) >= 2:
+                        fallback_vertices = fallback_data
+                        break
+                except Exception:
+                    continue
+        
+        if fallback_vertices:
+            vertices = fallback_vertices
+            logging.info(f"compute_physics_attributes: Node {node_id} using fallback vertices from alternative source")
+        else:
+            logging.warning(f"compute_physics_attributes: Node {node_id} has no vertices, skipping physics computation")
+            _set_default_attributes(node_data, node_id)
+            return node_data
+    
+    # Ensure vertices are valid numeric coordinates
+    try:
+        vertices_array = np.array(vertices, dtype=float)
+        if vertices_array.size == 0 or vertices_array.ndim != 2 or vertices_array.shape[1] != 2:
+            logging.warning(f"compute_physics_attributes: Node {node_id} has invalid vertex structure: {vertices}")
+            _set_default_attributes(node_data, node_id)
+            return node_data
+    except (ValueError, TypeError) as e:
+        logging.warning(f"compute_physics_attributes: Node {node_id} has non-numeric vertices: {e}")
+        _set_default_attributes(node_data, node_id)
+        return node_data
     # --- Extract stroke-level programmatic metadata ---
     # If action_program is a list of dicts, extract per-stroke fields
     if isinstance(action_program, list) and all(isinstance(cmd, dict) for cmd in action_program):
@@ -163,8 +271,16 @@ def compute_physics_attributes(node_data):
     else:
         node_data['length'] = None
         node_data['orientation'] = None
-    # Geometry valid if polygon and closed
-    geometry_valid = object_type == 'polygon' and is_closed and vertices and len(vertices) >= 3
+    
+    # Validate geometry - allow polygons, lines, and motifs for proper geometric calculations
+    # Polygons: require closed shape with 3+ vertices
+    # Lines: require 2+ vertices for valid line segments
+    # Motifs: require 2+ vertices for aggregate geometry
+    geometry_valid = (
+        (object_type == 'polygon' and is_closed and vertices and len(vertices) >= 3) or
+        (object_type == 'line' and vertices and len(vertices) >= 2) or
+        (object_type == 'motif' and vertices and len(vertices) >= 2)
+    )
     node_data['geometry_valid'] = geometry_valid
     # Per-feature valid flags
     feature_valid = {}
@@ -182,23 +298,140 @@ def compute_physics_attributes(node_data):
     ]
     # Polygon and closed: compute all features
     if geometry_valid:
-        poly = Polygon(vertices)
-        if poly.is_valid and poly.area > 0:
-            centroid = [float(poly.centroid.x), float(poly.centroid.y)]
-            node_data['centroid'] = centroid
-            node_data['cx'] = centroid[0]
-            node_data['cy'] = centroid[1]
-            node_data['fallback_geometry'] = False
-            basic_features = compute_basic_features(poly)
-            node_data.update(basic_features)
-            area = node_data['area']
-            try:
-                inertia = poly.moment_of_inertia
-            except Exception:
-                inertia = None
-            convexity = poly.convex_hull.area / area if area > 0 else None
-            perimeter = node_data['perimeter']
-            compactness = perimeter**2 / (4 * math.pi * area) if area > 0 else None
+        if object_type == 'polygon' and is_closed and len(vertices) >= 3:
+            poly = Polygon(vertices)
+            if poly.is_valid and poly.area > 0:
+                centroid = [float(poly.centroid.x), float(poly.centroid.y)]
+                node_data['centroid'] = centroid
+                node_data['cx'] = centroid[0]
+                node_data['cy'] = centroid[1]
+                node_data['fallback_geometry'] = False
+                basic_features = compute_basic_features(poly)
+                node_data.update(basic_features)
+                area = node_data['area']
+                try:
+                    inertia = poly.moment_of_inertia
+                except Exception:
+                    inertia = None
+                convexity = poly.convex_hull.area / area if area > 0 else None
+                perimeter = node_data['perimeter']
+                compactness = perimeter**2 / (4 * math.pi * area) if area > 0 else None
+            else:
+                # Invalid polygon - use fallback
+                geometry_valid = False
+        elif object_type == 'line' and len(vertices) >= 2:
+            # Handle line objects with LineString
+            from shapely.geometry import LineString
+            line = LineString(vertices)
+            if line.is_valid and line.length > 0:
+                centroid = [float(line.centroid.x), float(line.centroid.y)]
+                node_data['centroid'] = centroid
+                node_data['cx'] = centroid[0]
+                node_data['cy'] = centroid[1]
+                node_data['fallback_geometry'] = False
+                # Compute basic features for lines
+                node_data['area'] = 0.0  # Lines have no area
+                node_data['perimeter'] = line.length
+                bounds = line.bounds
+                node_data['bbox'] = [bounds[0], bounds[1], bounds[2], bounds[3]]
+                width = bounds[2] - bounds[0]
+                height = bounds[3] - bounds[1]
+                node_data['aspect_ratio'] = width / height if height > 0 else float('inf')
+                # Line-specific calculations
+                compactness = None  # Not applicable for lines
+                convexity = None   # Not applicable for lines
+                inertia = None     # Not applicable for lines
+            else:
+                # Invalid line - use fallback
+                geometry_valid = False
+        elif object_type == 'motif' and len(vertices) >= 2:
+            # Handle motif objects - try polygon first, then multipoint/line
+            from shapely.geometry import LineString, MultiPoint
+            
+            # Try to create a polygon from motif vertices if we have enough points
+            if len(vertices) >= 3:
+                try:
+                    poly = Polygon(vertices)
+                    if poly.is_valid and poly.area > 0:
+                        # Valid polygon motif
+                        centroid = [float(poly.centroid.x), float(poly.centroid.y)]
+                        node_data['centroid'] = centroid
+                        node_data['cx'] = centroid[0]
+                        node_data['cy'] = centroid[1]
+                        node_data['fallback_geometry'] = False
+                        basic_features = compute_basic_features(poly)
+                        node_data.update(basic_features)
+                        area = node_data['area']
+                        try:
+                            inertia = poly.moment_of_inertia
+                        except Exception:
+                            inertia = None
+                        convexity = poly.convex_hull.area / area if area > 0 else None
+                        perimeter = node_data['perimeter']
+                        compactness = perimeter**2 / (4 * math.pi * area) if area > 0 else None
+                    else:
+                        # Invalid polygon, try as multipoint
+                        raise ValueError("Invalid polygon, trying multipoint")
+                except Exception:
+                    # Fallback to multipoint centroid calculation
+                    vertices_array = np.array(vertices)
+                    centroid = np.mean(vertices_array, axis=0)
+                    node_data['centroid'] = centroid.tolist()
+                    node_data['cx'] = float(centroid[0])
+                    node_data['cy'] = float(centroid[1])
+                    node_data['fallback_geometry'] = False
+                    # Basic motif features - area from convex hull
+                    try:
+                        multipoint = MultiPoint(vertices)
+                        convex_hull = multipoint.convex_hull
+                        if hasattr(convex_hull, 'area') and convex_hull.area > 0:
+                            node_data['area'] = float(convex_hull.area)
+                            node_data['perimeter'] = float(convex_hull.length)
+                        else:
+                            node_data['area'] = 0.0
+                            node_data['perimeter'] = 0.0
+                    except Exception:
+                        node_data['area'] = 0.0
+                        node_data['perimeter'] = 0.0
+                    
+                    bounds = [float(np.min(vertices_array[:,0])), float(np.min(vertices_array[:,1])), 
+                             float(np.max(vertices_array[:,0])), float(np.max(vertices_array[:,1]))]
+                    node_data['bbox'] = bounds
+                    width = bounds[2] - bounds[0]
+                    height = bounds[3] - bounds[1]
+                    node_data['aspect_ratio'] = width / height if height > 0 else 1.0
+                    # Motif-specific defaults
+                    compactness = None
+                    convexity = None
+                    inertia = None
+            else:
+                # Only 2 vertices - treat as line
+                line = LineString(vertices)
+                if line.is_valid and line.length > 0:
+                    centroid = [float(line.centroid.x), float(line.centroid.y)]
+                    node_data['centroid'] = centroid
+                    node_data['cx'] = centroid[0]
+                    node_data['cy'] = centroid[1]
+                    node_data['fallback_geometry'] = False
+                    node_data['area'] = 0.0
+                    node_data['perimeter'] = line.length
+                    bounds = line.bounds
+                    node_data['bbox'] = [bounds[0], bounds[1], bounds[2], bounds[3]]
+                    width = bounds[2] - bounds[0]
+                    height = bounds[3] - bounds[1]
+                    node_data['aspect_ratio'] = width / height if height > 0 else float('inf')
+                    compactness = None
+                    convexity = None
+                    inertia = None
+                else:
+                    # Invalid motif - use fallback
+                    geometry_valid = False
+        else:
+            # Unknown geometry type - use fallback
+            geometry_valid = False
+        
+        # Continue with common processing for valid geometries
+        if geometry_valid and not node_data.get('fallback_geometry', True):
             action_program = node_data.get('action_program', [])
             if (
                 isinstance(action_program, list)
@@ -207,15 +440,27 @@ def compute_physics_attributes(node_data):
                 num_segments = len(extract_line_segments(action_program))
             else:
                 num_segments = None
-            coords_counter = Counter(tuple(c) for c in poly.exterior.coords)
-            num_junctions = sum(1 for count in coords_counter.values() if count > 1)
-            node_data.update({
-                'inertia': inertia,
-                'convexity': convexity,
-                'compactness': compactness,
-                'num_segments': int(num_segments) if num_segments is not None else None,
-                'num_junctions': int(num_junctions),
-            })
+            
+            # Handle geometry-specific processing
+            if object_type == 'polygon' and is_closed:
+                coords_counter = Counter(tuple(c) for c in poly.exterior.coords)
+                num_junctions = sum(1 for count in coords_counter.values() if count > 1)
+                node_data.update({
+                    'inertia': inertia,
+                    'convexity': convexity,
+                    'compactness': compactness,
+                    'num_segments': int(num_segments) if num_segments is not None else None,
+                    'num_junctions': int(num_junctions),
+                })
+            elif object_type == 'line':
+                # For lines, set appropriate default values
+                node_data.update({
+                    'inertia': inertia,
+                    'convexity': convexity,
+                    'compactness': compactness,
+                    'num_segments': int(num_segments) if num_segments is not None else None,
+                    'num_junctions': 2,  # Lines have 2 endpoints
+                })
             # Curvature
             arr = np.array(vertices)
             angles = []
@@ -239,7 +484,10 @@ def compute_physics_attributes(node_data):
                 node_data['curvature'] = None
                 feature_valid['curvature_valid'] = False
         if geometry_valid:
-            if poly.is_valid and poly.area > 0:
+            # Only check poly validity for polygon objects - motifs and lines use different validation
+            if object_type == 'polygon' and 'poly' in locals() and poly.is_valid and poly.area > 0:
+                feature_valid['centroid_valid'] = True
+            elif object_type in ['motif', 'line'] and node_data.get('centroid') is not None:
                 feature_valid['centroid_valid'] = True
             feature_valid['area_valid'] = True
             feature_valid['orientation_valid'] = True
@@ -299,16 +547,6 @@ def compute_physics_attributes(node_data):
                     feature_valid[flag] = False
             node_data['feature_valid'] = feature_valid
             logging.info(f"compute_physics_attributes: Node {node_data.get('id', 'unknown')} features computed from LOGO vertices.")
-        # Invalid polygon (bad geometry)
-        node_data['geometry_valid'] = False
-        # Set all required features to None
-        for feat in required_features:
-            node_data[feat] = None
-        node_data['fallback_geometry'] = True
-        # Set all required valid flags to False
-        feature_valid = {k: False for k in required_valid_flags}
-        node_data['feature_valid'] = feature_valid
-        logging.warning(f"Invalid LOGO polygon for node {node_data.get('id', 'unknown')}, vertices: {vertices}")
     elif object_type == 'line' and vertices and len(vertices) == 2:
         # Proxy features for lines
         arr = np.array(vertices)
@@ -352,40 +590,60 @@ def compute_physics_attributes(node_data):
         node_data['feature_valid'] = feature_valid
         logging.info(f"compute_physics_attributes: Node {node_data.get('id', 'unknown')} features computed for line.")
     else:
-        # Degenerate or unsupported
+        # Degenerate or unsupported geometry - use more robust fallback logic
         node_data['geometry_valid'] = False
+        
         # Try to assign a fallback centroid if possible
         centroid = None
-        if vertices and len(vertices) >= 2:
+        if vertices and len(vertices) >= 1:
             try:
-                arr = np.array(vertices)
-                centroid = np.mean(arr, axis=0)
-                node_data['centroid'] = centroid.tolist()
-                node_data['cx'] = float(centroid[0])
-                node_data['cy'] = float(centroid[1])
-                logging.info(f"compute_physics_attributes: Node {node_data.get('id', 'unknown')} assigned fallback centroid {centroid.tolist()} for degenerate shape.")
+                vertices_array = np.array(vertices, dtype=float)
+                if vertices_array.size >= 2 and vertices_array.ndim >= 1:
+                    # Handle both [[x,y], [x,y]] and [x,y,x,y] formats
+                    if vertices_array.ndim == 1 and len(vertices_array) >= 2:
+                        # Reshape flat array to coordinate pairs
+                        if len(vertices_array) % 2 == 0:
+                            vertices_array = vertices_array.reshape(-1, 2)
+                        else:
+                            vertices_array = vertices_array[:-1].reshape(-1, 2)  # Drop last odd element
+                    
+                    if vertices_array.ndim == 2 and vertices_array.shape[1] == 2:
+                        centroid = np.mean(vertices_array, axis=0)
+                        node_data['centroid'] = centroid.tolist()
+                        node_data['cx'] = float(centroid[0])
+                        node_data['cy'] = float(centroid[1])
+                        node_data['feature_valid']['centroid_valid'] = True
+                        logging.info(f"compute_physics_attributes: Node {node_id} assigned fallback centroid {centroid.tolist()} from vertices")
+                    else:
+                        logging.warning(f"compute_physics_attributes: Node {node_id} has invalid vertex array shape: {vertices_array.shape}")
+                        _set_default_attributes(node_data, node_id)
+                else:
+                    logging.warning(f"compute_physics_attributes: Node {node_id} has insufficient vertex data: {vertices_array}")
+                    _set_default_attributes(node_data, node_id)
             except Exception as e:
-                node_data['centroid'] = None
-                node_data['cx'] = None
-                node_data['cy'] = None
-                logging.warning(f"compute_physics_attributes: Fallback centroid computation failed for node {node_data.get('id', 'unknown')}: {e}")
+                logging.warning(f"compute_physics_attributes: Failed to compute fallback centroid for node {node_id}: {e}")
+                _set_default_attributes(node_data, node_id)
         else:
-            node_data['centroid'] = None
-            node_data['cx'] = None
-            node_data['cy'] = None
-            logging.info(f"compute_physics_attributes: Node {node_data.get('id', 'unknown')} has no vertices for centroid assignment.")
+            logging.warning(f"compute_physics_attributes: Node {node_id} has no valid vertices for centroid computation")
+            _set_default_attributes(node_data, node_id)
+        
         node_data['fallback_geometry'] = True
-        # Set all required features to None
+        
+        # Set all other required features to None if not set by fallback logic
         for feat in required_features:
             if feat not in node_data:
                 node_data[feat] = None
-        # Set all required valid flags to False
-        feature_valid = {k: False for k in required_valid_flags}
-        # If we assigned a fallback centroid, mark centroid_valid True
-        if centroid is not None:
-            feature_valid['centroid_valid'] = True
-        node_data['feature_valid'] = feature_valid
-        logging.warning(f"Node {node_data.get('id', 'unknown')} missing or insufficient vertices for LOGO polygon or line.")
+        
+        # Set all required valid flags to False except those set by fallback logic
+        for flag in required_valid_flags:
+            if flag not in node_data.get('feature_valid', {}):
+                if 'feature_valid' not in node_data:
+                    node_data['feature_valid'] = {}
+                node_data['feature_valid'][flag] = False
+    
+    # Ensure the function always returns the node_data
+    return node_data
+
 # --- Visualization Utility ---
 def visualize_shape_and_centroid(vertices, centroid, save_path=None):
     import matplotlib.pyplot as plt

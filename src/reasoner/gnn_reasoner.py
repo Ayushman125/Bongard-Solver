@@ -102,7 +102,7 @@ class SimpleGCN(nn.Module):
         return out, None
 
 class GNNReasoner:
-    def __init__(self, in_dim=10, model_path=None, device=None, hidden_dim=64, dropout=0.2, use_layernorm=True, graph_head=True):
+    def __init__(self, in_dim=39, model_path=None, device=None, hidden_dim=64, dropout=0.2, use_layernorm=True, graph_head=True):
         self.in_dim = in_dim
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.model = SimpleGCN(in_dim, hidden_dim=hidden_dim, out_dim=1, dropout=dropout, use_layernorm=use_layernorm, graph_head=graph_head).to(self.device)
@@ -131,13 +131,16 @@ class GNNReasoner:
                 # LOGO-aware fallback based on geometry
                 if d.get('is_motif', False):
                     type_onehot[4] = 1  # motif
-                elif d.get('vertices') and len(d.get('vertices', [])) >= 3:
-                    if d.get('is_closed', False):
-                        type_onehot[0] = 1  # polygon
-                    else:
-                        type_onehot[1] = 1  # line
                 else:
-                    type_onehot[3] = 1  # point
+                    # Safe vertex checking
+                    vertices = d.get('vertices', [])
+                    if vertices and isinstance(vertices, (list, tuple)) and len(vertices) >= 3:
+                        if d.get('is_closed', False):
+                            type_onehot[0] = 1  # polygon
+                        else:
+                            type_onehot[1] = 1  # line
+                    else:
+                        type_onehot[3] = 1  # point
             
             # LOGO MODE: Robust feature extraction with validation
             feat_vec = []
@@ -183,21 +186,31 @@ class GNNReasoner:
             else:
                 action_features.extend([0.0, 0.0, 1.0])  # other/composite
             
-            # Action sequence features
+            # Action sequence features with safe None handling
             action_index = d.get('action_index', -1)
-            action_features.append(float(action_index) if action_index >= 0 else 0.0)
+            if action_index is not None and isinstance(action_index, (int, float)):
+                action_features.append(float(action_index) if action_index >= 0 else 0.0)
+            else:
+                action_features.append(0.0)  # Default for None or invalid action_index
             
             # VL features with proper validation
             vl_features = []
             vl_embed = d.get('vl_embed', None)
-            if vl_embed is not None and len(vl_embed) >= 10:
+            
+            # Fix: Check vl_embed is not None AND has length before comparison
+            if vl_embed is not None:
                 try:
-                    vl_subset = np.array(vl_embed[:10], dtype=float)
-                    if np.all(np.isfinite(vl_subset)):
-                        vl_features.extend(vl_subset.tolist())
+                    # Safely check length
+                    vl_length = len(vl_embed) if hasattr(vl_embed, '__len__') else 0
+                    if vl_length >= 10:
+                        vl_subset = np.array(vl_embed[:10], dtype=float)
+                        if np.all(np.isfinite(vl_subset)):
+                            vl_features.extend(vl_subset.tolist())
+                        else:
+                            vl_features.extend([0.0] * 10)
                     else:
                         vl_features.extend([0.0] * 10)
-                except (ValueError, TypeError):
+                except (ValueError, TypeError, AttributeError):
                     vl_features.extend([0.0] * 10)
             else:
                 vl_features.extend([0.0] * 10)
@@ -222,11 +235,15 @@ class GNNReasoner:
         if diagnostics:
             logging.warning(f"GNN feature validation: {'; '.join(diagnostics[:3])}")
         
-        return torch.tensor(node_feats, dtype=torch.float32)
+        # Create feature tensor
         if not node_feats:
             diagnostics.append("No node features found. Graph may be empty.")
             logging.error("GNNReasoner.nx_to_pyg: No node features found. Graph may be empty.")
-        x = torch.tensor(node_feats, dtype=torch.float) if node_feats else torch.empty((0, len(required_features)+len(node_types)*2), dtype=torch.float)
+            # Total features: type_onehot(5) + feat_vec(10) + validity_mask(10) + action_features(4) + vl_features(10) = 39
+            total_feature_dim = len(node_types) + len(required_features) + len(required_features) + 4 + 10
+            x = torch.empty((0, total_feature_dim), dtype=torch.float)
+        else:
+            x = torch.tensor(node_feats, dtype=torch.float)
         # --- Robust edge mapping ---
         edge_index = []
         node_id_map = {nid: i for i, nid in enumerate(node_ids)}
