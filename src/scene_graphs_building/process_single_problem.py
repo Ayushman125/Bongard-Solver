@@ -268,6 +268,63 @@ def _calculate_stroke_geometry(verts):
 
     return bounding_box, centroid, area, perimeter, aspect_ratio, compactness
 
+def _regularize_stroke_vertices(vertices, tolerance=2.0):
+    """
+    Regularize stroke vertices using Ramer-Douglas-Peucker algorithm
+    to reduce over-segmentation of near-straight curves
+    """
+    if len(vertices) <= 2:
+        return vertices
+    
+    def perpendicular_distance(point, line_start, line_end):
+        """Calculate perpendicular distance from point to line segment"""
+        if np.allclose(line_start, line_end):
+            return np.linalg.norm(np.array(point) - np.array(line_start))
+        
+        line_vec = np.array(line_end) - np.array(line_start)
+        point_vec = np.array(point) - np.array(line_start)
+        
+        line_len_sq = np.dot(line_vec, line_vec)
+        if line_len_sq < 1e-10:
+            return np.linalg.norm(point_vec)
+        
+        t = max(0, min(1, np.dot(point_vec, line_vec) / line_len_sq))
+        projection = np.array(line_start) + t * line_vec
+        return np.linalg.norm(np.array(point) - projection)
+    
+    def douglas_peucker(points, tolerance):
+        """Ramer-Douglas-Peucker algorithm implementation"""
+        if len(points) <= 2:
+            return points
+        
+        # Find the point with maximum distance from line start-end
+        max_dist = 0
+        max_index = 0
+        for i in range(1, len(points) - 1):
+            dist = perpendicular_distance(points[i], points[0], points[-1])
+            if dist > max_dist:
+                max_dist = dist
+                max_index = i
+        
+        # If max distance is greater than tolerance, recursively simplify
+        if max_dist > tolerance:
+            # Recursive call for both parts
+            left_part = douglas_peucker(points[:max_index + 1], tolerance)
+            right_part = douglas_peucker(points[max_index:], tolerance)
+            
+            # Combine results (remove duplicate point at junction)
+            return left_part[:-1] + right_part
+        else:
+            # If all points are within tolerance, return just endpoints
+            return [points[0], points[-1]]
+    
+    try:
+        simplified = douglas_peucker(vertices, tolerance)
+        return simplified
+    except Exception as e:
+        logging.warning(f"Failed to regularize stroke vertices: {e}")
+        return vertices
+
 def _calculate_enhanced_geometry_features(verts, existing_attrs=None):
     """Calculate enhanced geometric features for better semantic analysis"""
     if existing_attrs is None:
@@ -355,6 +412,36 @@ def _calculate_enhanced_geometry_features(verts, existing_attrs=None):
                     'principal_orientation': angle,
                     'orientation_variance': eigenvals[-1] / (eigenvals[0] + 1e-10),  # Ratio of principal to secondary axis
                 })
+        
+        # Enhanced curvature analysis
+        if len(verts) >= 3:
+            # Calculate curvature score based on deviation from straight line
+            points = np.array(verts)
+            curvature_scores = []
+            
+            for i in range(1, len(points) - 1):
+                # Calculate angle between three consecutive points
+                v1 = points[i] - points[i-1]
+                v2 = points[i+1] - points[i]
+                
+                # Normalize vectors
+                v1_norm = np.linalg.norm(v1)
+                v2_norm = np.linalg.norm(v2)
+                
+                if v1_norm > 1e-6 and v2_norm > 1e-6:
+                    cos_angle = np.dot(v1, v2) / (v1_norm * v2_norm)
+                    cos_angle = np.clip(cos_angle, -1, 1)  # Handle numerical errors
+                    angle = np.arccos(cos_angle)
+                    curvature_scores.append(abs(angle - np.pi))  # Deviation from straight line
+            
+            avg_curvature = np.mean(curvature_scores) if curvature_scores else 0.0
+            max_curvature = np.max(curvature_scores) if curvature_scores else 0.0
+            
+            features.update({
+                'curvature_score': avg_curvature,
+                'max_curvature': max_curvature,
+                'is_highly_curved': avg_curvature > 0.5,  # Threshold for significant curvature
+            })
         
         # Geometric complexity measures
         features.update({
@@ -461,101 +548,143 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
     Processes a single Bongard problem to generate a scene graph for EACH image.
     Returns a dictionary mapping image_id to its scene graph.
     """
-    all_objects_by_image = defaultdict(list)
-
-    for idx, rec in enumerate(problem_records):
-        parent_shape_id = f"{problem_id}_{idx}"
-        action_program = rec.get('action_program', [])
-        # Common attributes for all objects in this record
-        common_attrs = {
-            'label': rec.get('label', ''), 'shape_label': rec.get('shape_label', ''),
-            'category': rec.get('category', ''), 'programmatic_label': rec.get('programmatic_label', ''),
-            'image_path': rec.get('image_path'), 'original_record_idx': idx,
-        }
-        if not action_program:
-            continue
-        turtle_pos = [0.0, 0.0]
-        turtle_heading = 0.0
-        
-        # LOGO simulation to generate strokes
-        last_stroke_obj = None
-        for stroke_idx, cmd in enumerate(action_program):
-            parsed_cmd = parse_action_command(cmd)
-            if not parsed_cmd: continue
-            cmd_type = parsed_cmd.get('type')
-            
-            verts = []
-            length = 0.0
-            orientation = 0.0
-
-            if cmd_type == 'start':
-                turtle_pos = [parsed_cmd['x'], parsed_cmd['y']]
-                continue
-
-            start_pos_for_stroke = list(turtle_pos)
-
-            if cmd_type == 'line':
-                dx, dy = parsed_cmd['x'], parsed_cmd['y']
-                new_pos = [turtle_pos[0] + dx, turtle_pos[1] + dy]
-                verts = [start_pos_for_stroke, list(new_pos)]
-                length = np.linalg.norm(np.array(new_pos) - np.array(turtle_pos))
-                orientation = np.degrees(np.arctan2(dy, dx))
-                turtle_pos = new_pos
-            elif cmd_type == 'arc':
-                radius = parsed_cmd.get('radius', 1.0)
-                angle = parsed_cmd.get('angle', 0.0)
-                num_points = max(6, int(abs(angle) // 10))
-                verts = [start_pos_for_stroke]
-                start_angle_rad = np.radians(turtle_heading)
-                center_of_rotation = [
-                    turtle_pos[0] - radius * np.sin(start_angle_rad),
-                    turtle_pos[1] + radius * np.cos(start_angle_rad)
-                ]
-                for i in range(1, num_points + 1):
-                    theta_rad = start_angle_rad + np.radians((angle / num_points) * i)
-                    x = center_of_rotation[0] + radius * np.sin(theta_rad)
-                    y = center_of_rotation[1] - radius * np.cos(theta_rad)
-                    verts.append([x, y])
-                length = abs(np.radians(angle) * radius)
-                orientation = np.degrees(np.arctan2(verts[-1][1] - verts[0][1], verts[-1][0] - verts[0][0]))
-                turtle_pos = verts[-1]
-                turtle_heading += angle
-            elif cmd_type == 'turn':
-                turtle_heading += parsed_cmd.get('angle', 0.0)
-                continue
+    
+    # Get ConceptNet KB instance if available
+    kb = None
+    try:
+        # Try to get the ConceptNet instance from the global state
+        if 'ConceptNetClient' in globals():
+            from scripts.build_scene_graphs import ConceptNetClient
+            kb = ConceptNetClient.get()
+            if kb:
+                logging.info(f"[_process_single_problem] ConceptNet KB available: {type(kb)}")
             else:
-                continue
-            
-            if not verts: continue
+                logging.info("[_process_single_problem] ConceptNet KB not available")
+        else:
+            # Fallback: try to create a new instance
+            from src.commonsense_kb_api import ConceptNetAPI
+            kb = ConceptNetAPI()
+            logging.info(f"[_process_single_problem] Created new ConceptNet KB instance: {type(kb)}")
+    except Exception as e:
+        logging.warning(f"[_process_single_problem] Failed to initialize ConceptNet KB: {e}")
+        kb = None
+    # LOGO MODE: Use enhanced physics computation for vertex processing
+    try:
+        from src.logo_physics import LOGOPhysicsComputation
+        
+        logo_physics = LOGOPhysicsComputation()
+        
+        # Process all records using LOGO physics computation
+        all_objects_by_image = logo_physics.process_problem_records(
+            problem_id, 
+            problem_records,
+            use_enhanced_features=True
+        )
+        
+        logging.info(f"LOGO physics computation processed {len(all_objects_by_image)} images with enhanced attributes")
+        
+    except Exception as e:
+        logging.warning(f"LOGO physics computation failed, falling back to basic processing: {e}")
+        # Fallback to basic processing
+        all_objects_by_image = defaultdict(list)
 
-            obj_id = f"{problem_id}_{idx}_{stroke_idx}"
+        for idx, rec in enumerate(problem_records):
+            parent_shape_id = f"{problem_id}_{idx}"
+            action_program = rec.get('action_program', [])
+            # Common attributes for all objects in this record
+            common_attrs = {
+                'label': rec.get('label', ''), 'shape_label': rec.get('shape_label', ''),
+                'category': rec.get('category', ''), 'programmatic_label': rec.get('programmatic_label', ''),
+                'image_path': rec.get('image_path'), 'original_record_idx': idx,
+            }
+            if not action_program:
+                continue
+            turtle_pos = [0.0, 0.0]
+            turtle_heading = 0.0
             
-            # Calculate enhanced geometric features
-            enhanced_features = _calculate_enhanced_geometry_features(verts, {
-                'object_id': obj_id, 
-                'parent_shape_id': parent_shape_id, 
-                'action_index': stroke_idx,
-                'vertices': verts, 
-                'object_type': assign_object_type(verts), 
-                'action_command': cmd,
-                'endpoints': [verts[0], verts[-1]], 
-                'length': length, 
-                'orientation': orientation,
-                'source': 'action_program', 
-                'is_closed': len(verts) > 2 and np.allclose(verts[0], verts[-1], atol=1e-5),
-                **common_attrs
-            })
-            
-            relationships = []
-            if last_stroke_obj:
-                # Check for adjacency based on endpoint proximity
-                if np.allclose(last_stroke_obj['endpoints'][-1], verts[0], atol=1e-5):
-                    relationships.append(f"adjacent_to_{last_stroke_obj['object_id']}")
-            
-            enhanced_features['relationships'] = relationships
-            obj = enhanced_features
-            all_objects_by_image[parent_shape_id].append(obj)
-            last_stroke_obj = obj
+            # LOGO simulation to generate strokes
+            last_stroke_obj = None
+            for stroke_idx, cmd in enumerate(action_program):
+                parsed_cmd = parse_action_command(cmd)
+                if not parsed_cmd: continue
+                cmd_type = parsed_cmd.get('type')
+                
+                verts = []
+                length = 0.0
+                orientation = 0.0
+
+                if cmd_type == 'start':
+                    turtle_pos = [parsed_cmd['x'], parsed_cmd['y']]
+                    continue
+
+                start_pos_for_stroke = list(turtle_pos)
+
+                if cmd_type == 'line':
+                    dx, dy = parsed_cmd['x'], parsed_cmd['y']
+                    new_pos = [turtle_pos[0] + dx, turtle_pos[1] + dy]
+                    verts = [start_pos_for_stroke, list(new_pos)]
+                    length = np.linalg.norm(np.array(new_pos) - np.array(turtle_pos))
+                    orientation = np.degrees(np.arctan2(dy, dx))
+                    turtle_pos = new_pos
+                elif cmd_type == 'arc':
+                    radius = parsed_cmd.get('radius', 1.0)
+                    angle = parsed_cmd.get('angle', 0.0)
+                    num_points = max(6, int(abs(angle) // 10))
+                    verts = [start_pos_for_stroke]
+                    start_angle_rad = np.radians(turtle_heading)
+                    center_of_rotation = [
+                        turtle_pos[0] - radius * np.sin(start_angle_rad),
+                        turtle_pos[1] + radius * np.cos(start_angle_rad)
+                    ]
+                    for i in range(1, num_points + 1):
+                        theta_rad = start_angle_rad + np.radians((angle / num_points) * i)
+                        x = center_of_rotation[0] + radius * np.sin(theta_rad)
+                        y = center_of_rotation[1] - radius * np.cos(theta_rad)
+                        verts.append([x, y])
+                    length = abs(np.radians(angle) * radius)
+                    orientation = np.degrees(np.arctan2(verts[-1][1] - verts[0][1], verts[-1][0] - verts[0][0]))
+                    turtle_pos = verts[-1]
+                    turtle_heading += angle
+                elif cmd_type == 'turn':
+                    turtle_heading += parsed_cmd.get('angle', 0.0)
+                    continue
+                else:
+                    continue
+                
+                if not verts: continue
+
+                # Apply stroke regularization to reduce over-segmentation
+                regularized_verts = _regularize_stroke_vertices(verts, tolerance=3.0)
+                
+                obj_id = f"{problem_id}_{idx}_{stroke_idx}"
+                
+                # Calculate enhanced geometric features with regularized vertices
+                enhanced_features = _calculate_enhanced_geometry_features(regularized_verts, {
+                    'object_id': obj_id, 
+                    'parent_shape_id': parent_shape_id, 
+                    'action_index': stroke_idx,
+                    'vertices': regularized_verts, 
+                    'original_vertices': verts,  # Keep original for debugging
+                    'object_type': assign_object_type(regularized_verts), 
+                    'action_command': cmd,
+                    'endpoints': [regularized_verts[0], regularized_verts[-1]], 
+                    'length': length, 
+                    'orientation': orientation,
+                    'source': 'action_program', 
+                    'is_closed': len(verts) > 2 and np.allclose(verts[0], verts[-1], atol=1e-5),
+                    **common_attrs
+                })
+                
+                relationships = []
+                if last_stroke_obj:
+                    # Check for adjacency based on endpoint proximity
+                    if np.allclose(last_stroke_obj['endpoints'][-1], verts[0], atol=1e-5):
+                        relationships.append(f"adjacent_to_{last_stroke_obj['object_id']}")
+                
+                enhanced_features['relationships'] = relationships
+                obj = enhanced_features
+                all_objects_by_image[parent_shape_id].append(obj)
+                last_stroke_obj = obj
 
     # --- Graph Construction (per image) ---
     final_graphs = {}
@@ -614,13 +743,250 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
 
         # === ENHANCED PROCESSING: Add semantic abstraction and feature selection ===
         
-        # 1. Add abstract conceptual nodes for high-level patterns
+        # === ADVANCED TECHNIQUES INTEGRATION ===
+        
+        # 1. Vision-Language (VL) Features using CLIP
+        if getattr(args, 'use_vl', False):
+            try:
+                from src.scene_graphs_building.vl_features import CLIPEmbedder
+                from src.scene_graphs_building.data_loading import robust_image_open
+                
+                clip_embedder = CLIPEmbedder()
+                
+                # Extract VL features for each node
+                for node_id, node_data in G.nodes(data=True):
+                    image_path = None
+                    for rec in problem_records:
+                        if rec.get('image_path') and parent_shape_id in rec.get('image_path', ''):
+                            image_path = rec['image_path']
+                            break
+                    
+                    if image_path:
+                        try:
+                            img = robust_image_open(remap_path(image_path))
+                            
+                            # Use ROI if enabled and bounding box available
+                            if getattr(args, 'use_roi', False) and node_data.get('bounding_box'):
+                                bb = node_data['bounding_box']
+                                x1, y1, x2, y2 = [int(round(x)) for x in bb]
+                                # Ensure valid crop coordinates
+                                img_w, img_h = img.size
+                                x1, y1 = max(0, x1), max(0, y1)
+                                x2, y2 = min(img_w, x2), min(img_h, y2)
+                                if x2 > x1 and y2 > y1:
+                                    img_crop = img.crop((x1, y1, x2, y2))
+                                    vl_embed = clip_embedder.embed_image(img_crop)
+                                else:
+                                    vl_embed = clip_embedder.embed_image(img)
+                            else:
+                                vl_embed = clip_embedder.embed_image(img)
+                            
+                            # Add VL embedding to node
+                            G.nodes[node_id]['vl_embed'] = vl_embed
+                            G.nodes[node_id]['has_vl_features'] = True
+                            
+                        except Exception as e:
+                            logging.warning(f"Failed to extract VL features for node {node_id}: {e}")
+                            G.nodes[node_id]['vl_embed'] = np.zeros(512)
+                            G.nodes[node_id]['has_vl_features'] = False
+                
+                # Add VL-based edges
+                vl_edges = clip_embedder.contrastive_edges(
+                    [G.nodes[n] for n in G.nodes()], 
+                    threshold=0.15, 
+                    use_roi=getattr(args, 'use_roi', False)
+                )
+                
+                for edge_data in vl_edges:
+                    if 'source' in edge_data and 'target' in edge_data:
+                        G.add_edge(edge_data['source'], edge_data['target'], 
+                                 predicate='visual_similarity', source='vision_language',
+                                 similarity_score=edge_data.get('similarity', 0.0))
+                
+                logging.info(f"Added {len(vl_edges)} VL-based edges to graph for {parent_shape_id}")
+                
+            except Exception as e:
+                logging.warning(f"Failed to apply VL features: {e}")
+        
+        # 2. Motif Mining and Pattern Discovery
+        if getattr(args, 'use_motifs', False):
+            try:
+                from src.scene_graphs_building.motif_miner import MotifMiner
+                
+                motif_miner = MotifMiner()
+                node_objects = [G.nodes[n] for n in G.nodes()]
+                
+                # Discover motifs and create super-nodes
+                motif_dict, motif_nodes = motif_miner.cluster_motifs(node_objects, method='graph+type')
+                
+                # Add motif super-nodes to graph
+                for motif_node in motif_nodes:
+                    motif_id = motif_node['object_id']
+                    G.add_node(motif_id, **motif_node)
+                    
+                    # Add part_of_motif edges
+                    for member_id in motif_node.get('member_nodes', []):
+                        if G.has_node(member_id):
+                            G.add_edge(member_id, motif_id, predicate='part_of_motif', source='motif_mining')
+                
+                # Discover structural patterns specific to Bongard problems
+                bridge_patterns = motif_miner.find_bridge_patterns(G)
+                apex_patterns = motif_miner.find_apex_patterns(G)
+                symmetry_patterns = motif_miner.find_symmetry_patterns(G)
+                
+                # Add pattern-based edges
+                for pattern in bridge_patterns + apex_patterns + symmetry_patterns:
+                    pattern_type = pattern.get('type', 'unknown')
+                    for i, node_a in enumerate(pattern.get('nodes', [])):
+                        for node_b in pattern.get('nodes', [])[i+1:]:
+                            if G.has_node(node_a) and G.has_node(node_b):
+                                G.add_edge(node_a, node_b, 
+                                         predicate=f'forms_{pattern_type}_pattern', 
+                                         source='motif_discovery',
+                                         pattern_confidence=pattern.get('confidence', 0.0))
+                
+                logging.info(f"Motif mining added {len(motif_nodes)} super-nodes and {len(bridge_patterns + apex_patterns + symmetry_patterns)} pattern relationships")
+                
+            except Exception as e:
+                logging.warning(f"Failed to apply motif mining: {e}")
+        
+        # 3. GNN-based Reasoning and Graph Enhancement
+        if getattr(args, 'use_gnn', False):
+            try:
+                from src.reasoner.gnn_reasoner import GNNReasoner
+                import torch
+                
+                # LOGO MODE: Enhanced GNN reasoning with LOGO-derived features
+                if G.number_of_nodes() > 0:
+                    # Initialize GNN reasoner with proper input dimensions
+                    # Calculate expected input dimension based on LOGO features
+                    sample_node = next(iter(G.nodes(data=True)))[1]
+                    
+                    # LOGO MODE: Ensure all nodes have required features for GNN
+                    required_gnn_features = ['area', 'aspect_ratio', 'orientation', 'curvature_score', 'perimeter', 
+                                           'horizontal_asymmetry', 'vertical_asymmetry', 'apex_x_position', 'is_highly_curved']
+                    
+                    for node_id, node_data in G.nodes(data=True):
+                        # Fill missing features with defaults
+                        for feat in required_gnn_features:
+                            if feat not in node_data or node_data[feat] is None:
+                                if feat == 'is_highly_curved':
+                                    node_data[feat] = False
+                                elif feat in ['area', 'aspect_ratio', 'orientation', 'curvature_score', 'perimeter',
+                                            'horizontal_asymmetry', 'vertical_asymmetry', 'apex_x_position']:
+                                    node_data[feat] = 0.0
+                        
+                        # Ensure VL embedding is available or set to zeros
+                        if node_data.get('vl_embed') is None:
+                            node_data['vl_embed'] = np.zeros(512)
+                    
+                    # Initialize GNN reasoner
+                    expected_dim = 5 + len(required_gnn_features) + len(required_gnn_features) + 4 + 10  # type_onehot + features + validity + action + vl
+                    gnn_reasoner = GNNReasoner(in_dim=expected_dim)
+                    
+                    # Convert NetworkX graph to PyTorch Geometric format
+                    try:
+                        node_features_tensor = gnn_reasoner.nx_to_pyg(G)
+                        
+                        # Create edge index tensor
+                        edge_list = list(G.edges())
+                        if edge_list:
+                            edge_index = torch.tensor([[u, v] for u, v in edge_list], dtype=torch.long).t().contiguous()
+                            
+                            # Create simple data object for GNN
+                            from torch_geometric.data import Data
+                            data = Data(x=node_features_tensor, edge_index=edge_index)
+                            
+                            # Apply GNN reasoning
+                            with torch.no_grad():
+                                node_embeddings, graph_embedding = gnn_reasoner.model(data)
+                            
+                            # Add GNN features back to nodes
+                            node_list = list(G.nodes())
+                            for i, node_id in enumerate(node_list):
+                                if i < len(node_embeddings):
+                                    G.nodes[node_id]['gnn_embedding'] = node_embeddings[i].numpy().tolist()
+                                    G.nodes[node_id]['gnn_score'] = float(node_embeddings[i].norm().item())
+                                    G.nodes[node_id]['has_gnn_features'] = True
+                                else:
+                                    G.nodes[node_id]['gnn_embedding'] = [0.0] * node_embeddings.shape[1]
+                                    G.nodes[node_id]['gnn_score'] = 0.0
+                                    G.nodes[node_id]['has_gnn_features'] = False
+                            
+                            logging.info(f"GNN processing enhanced {len(G.nodes())} nodes with LOGO-aware learned representations")
+                        else:
+                            logging.warning("No edges available for GNN processing")
+                            # Set default GNN features for all nodes
+                            for node_id in G.nodes():
+                                G.nodes[node_id]['gnn_embedding'] = [0.0] * 64
+                                G.nodes[node_id]['gnn_score'] = 0.0
+                                G.nodes[node_id]['has_gnn_features'] = False
+                    
+                    except Exception as e:
+                        logging.warning(f"GNN tensor conversion failed: {e}")
+                        # Set default GNN features for all nodes
+                        for node_id in G.nodes():
+                            G.nodes[node_id]['gnn_embedding'] = [0.0] * 64
+                            G.nodes[node_id]['gnn_score'] = 0.0
+                            G.nodes[node_id]['has_gnn_features'] = False
+                
+                else:
+                    logging.warning("Empty graph - skipping GNN processing")
+                
+            except Exception as e:
+                logging.warning(f"Failed to apply GNN reasoning: {e}")
+                # Ensure all nodes have default GNN features to prevent downstream errors
+                for node_id in G.nodes():
+                    G.nodes[node_id]['gnn_embedding'] = [0.0] * 64
+                    G.nodes[node_id]['gnn_score'] = 0.0
+                    G.nodes[node_id]['has_gnn_features'] = False
+        
+        # 4. Add ConceptNet commonsense edges 
+        if kb is not None and G.number_of_nodes() > 0:
+            try:
+                from src.scene_graphs_building.graph_building import add_commonsense_edges
+                from src.scene_graphs_building.config import COMMONSENSE_LABEL_MAP
+                
+                # Ensure all nodes have proper shape_label and kb_concept for ConceptNet
+                logging.info(f"Preparing {G.number_of_nodes()} nodes for ConceptNet integration")
+                for node_id, node_data in G.nodes(data=True):
+                    # Use shape_label if available, otherwise use object_type
+                    raw_label = node_data.get('shape_label', node_data.get('object_type', 'unknown'))
+                    if raw_label in (None, '', 'positive', 'negative'):
+                        raw_label = node_data.get('object_type', 'unknown')
+                    
+                    # Normalize and map to ConceptNet concepts
+                    normalized_label = str(raw_label).lower().replace('_', ' ').replace('-', ' ').strip()
+                    kb_concept = COMMONSENSE_LABEL_MAP.get(normalized_label, normalized_label)
+                    
+                    # Update node data
+                    node_data['shape_label'] = normalized_label
+                    node_data['kb_concept'] = kb_concept
+                    
+                    logging.debug(f"Node {node_id}: raw='{raw_label}' -> normalized='{normalized_label}' -> kb_concept='{kb_concept}'")
+                
+                logging.info(f"Adding ConceptNet commonsense edges to graph with {G.number_of_nodes()} nodes")
+                add_commonsense_edges(G, top_k=3, kb=kb)
+                
+                # Count ConceptNet edges added
+                kb_edges = [data for u, v, data in G.edges(data=True) if data.get('source') == 'kb']
+                logging.info(f"ConceptNet integration completed for {parent_shape_id}: {len(kb_edges)} KB edges added")
+            except Exception as e:
+                logging.warning(f"Failed to add ConceptNet edges: {e}")
+                logging.debug(traceback.format_exc())
+        else:
+            if kb is None:
+                logging.info("ConceptNet KB not available, skipping commonsense edges")
+            else:
+                logging.info("Empty graph, skipping ConceptNet integration")
+        
+        # 5. Add abstract conceptual nodes for high-level patterns
         G = _add_abstract_conceptual_nodes(G, parent_shape_id)
         
-        # 2. Apply predicate importance filtering to reduce noise
+        # 6. Apply predicate importance filtering to reduce noise
         G = _filter_low_importance_edges(G, importance_threshold=1.2)
         
-        # 3. Calculate and store predicate importance scores for analysis
+        # 7. Calculate and store predicate importance scores for analysis
         importance_scores = _calculate_predicate_importance(G, problem_id)
         
         # Add metadata to graph for analysis

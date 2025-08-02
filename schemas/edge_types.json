@@ -22,5 +22,35 @@
   {"predicate": "type_of", "description": "KB 'is a type of' relation between concepts.", "source": "commonsense"},
   {"predicate": "larger_than", "description": "a.area > b.area.", "source": "geometry"},
   {"predicate": "aspect_sim", "description": "abs(a.aspect_ratio - b.aspect_ratio) < T.", "source": "geometry"},
-  {"predicate": "contains", "description": "a contains b (for polygons).", "source": "geometry"}
+  {"predicate": "contains", "description": "a contains b (for polygons).", "source": "geometry"},
+  
+  {"predicate": "is_above", "description": "Object a is positioned above object b based on centroid coordinates.", "source": "advanced_geometry"},
+  {"predicate": "is_parallel", "description": "Objects a and b are parallel within tolerance.", "source": "advanced_geometry"},
+  {"predicate": "same_shape_class", "description": "Objects belong to the same abstract shape class.", "source": "advanced_geometry"},
+  {"predicate": "forms_symmetry", "description": "Objects form a symmetrical relationship.", "source": "advanced_geometry"},
+  {"predicate": "similar_size", "description": "Objects have similar sizes based on area or length.", "source": "advanced_geometry"},
+  {"predicate": "near_objects", "description": "Objects are spatially close to each other.", "source": "advanced_geometry"},
+  {"predicate": "same_orientation", "description": "Objects have similar orientations.", "source": "advanced_geometry"},
+  {"predicate": "same_stroke_count", "description": "Composite shapes have the same number of component strokes.", "source": "advanced_geometry"},
+  
+  {"predicate": "has_apex_at_left", "description": "Shape has its apex positioned to the left relative to its center.", "source": "semantic"},
+  {"predicate": "has_asymmetric_base", "description": "Shape has asymmetric base widths or irregular base structure.", "source": "semantic"},
+  {"predicate": "has_tilted_orientation", "description": "Shape has tilted orientation (not aligned with cardinal directions).", "source": "semantic"},
+  {"predicate": "has_length_ratio_imbalance", "description": "Significant imbalance in dimensional ratios between shapes.", "source": "semantic"},
+  {"predicate": "forms_open_vs_closed_distinction", "description": "One shape is open while another is closed.", "source": "semantic"},
+  {"predicate": "has_geometric_complexity_difference", "description": "Shapes have different geometric complexity (vertex count, curvature).", "source": "semantic"},
+  {"predicate": "has_compactness_difference", "description": "Shapes have significantly different compactness.", "source": "semantic"},
+  {"predicate": "exhibits_mirror_asymmetry", "description": "Shape exhibits mirror asymmetry patterns.", "source": "semantic"},
+  {"predicate": "has_dominant_direction", "description": "Shape has a dominant direction (vertical vs horizontal extent).", "source": "semantic"},
+  {"predicate": "forms_bridge_pattern", "description": "Objects form a bridge-like pattern.", "source": "semantic"},
+  {"predicate": "has_curvature_distinction", "description": "Distinguishes curved vs straight shapes.", "source": "semantic"},
+  
+  {"predicate": "is_arc_of_circle", "description": "Shape is identified as a circular arc.", "source": "curvature"},
+  {"predicate": "shares_endpoint", "description": "Line segments share an endpoint (T-junction, L-junction, etc.).", "source": "junction"},
+  {"predicate": "forms_apex", "description": "Objects form an apex structure (meeting at a point).", "source": "junction"},
+  {"predicate": "forms_t_junction", "description": "Objects form a T-junction pattern.", "source": "junction"},
+  {"predicate": "forms_x_junction", "description": "Objects intersect to form an X-junction (crossing).", "source": "junction"},
+  {"predicate": "forms_bridge_arc", "description": "Objects form a bridge-like arc structure.", "source": "pattern"},
+  {"predicate": "has_irregular_shape", "description": "Shape has irregular, non-geometric form.", "source": "pattern"},
+  {"predicate": "exhibits_rotational_symmetry", "description": "Shape exhibits rotational symmetry.", "source": "pattern"}
 ]

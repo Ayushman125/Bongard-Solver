@@ -170,29 +170,43 @@ def save_scene_graph_csv(G, out_dir, problem_id):
     """Save node and edge data of the scene graph as CSV files."""
     logging.info(f"[LOGO Visualization] save_scene_graph_csv called for problem_id={problem_id}")
     import json
+    import numpy as np
+
+    def sanitize(obj):
+        if isinstance(obj, dict):
+            return {k: sanitize(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [sanitize(v) for v in obj]
+        elif isinstance(obj, np.generic):
+            return obj.item()
+        elif isinstance(obj, (np.ndarray,)):
+            return obj.tolist()
+        else:
+            return obj
+
     nodes = []
     for n, data in G.nodes(data=True):
-        d = data.copy()
+        d = sanitize(data.copy())
         d['id'] = n
-        d['all_data'] = json.dumps(data, ensure_ascii=False)
+        d['all_data'] = json.dumps(d, ensure_ascii=False)
         nodes.append(d)
     edges = []
     logging.info(f"[LOGO Visualization] (CSV) Graph type: {type(G)}. is_multigraph={isinstance(G, (nx.MultiDiGraph, nx.MultiGraph))}")
     try:
         if hasattr(G, 'is_multigraph') and G.is_multigraph():
             for u, v, k, data in _robust_edge_unpack(G.edges(keys=True, data=True)):
-                d = data.copy()
+                d = sanitize(data.copy())
                 d['source'] = u
                 d['target'] = v
                 d['key'] = k
-                d['all_data'] = json.dumps(data, ensure_ascii=False)
+                d['all_data'] = json.dumps(d, ensure_ascii=False)
                 edges.append(d)
         else:
             for u, v, k, data in _robust_edge_unpack(G.edges(data=True)):
-                d = data.copy()
+                d = sanitize(data.copy())
                 d['source'] = u
                 d['target'] = v
-                d['all_data'] = json.dumps(data, ensure_ascii=False)
+                d['all_data'] = json.dumps(d, ensure_ascii=False)
                 edges.append(d)
     except Exception as e:
         logging.error(f"[LOGO Visualization] Error unpacking edges for CSV: {e}")

@@ -898,10 +898,16 @@ def assign_object_type(verts):
         objects.append(obj)
     merged_record['objects'] = objects
     # 2. Motif mining and super-nodes (SOTA: graph-based, type-aware)
+    logging.info(f"[LOG] Objects passed to MotifMiner: count={len(objects)}")
+    for obj in objects:
+        logging.info(f"[LOG] Motif input object: id={obj.get('object_id')}, type={obj.get('object_type')}, is_valid={obj.get('is_valid')}, vertices_len={len(obj.get('vertices',[]))}")
     motif_nodes = []
     motif_edges = []
     if getattr(args, 'use_motifs', False):
         motif_dict, motif_nodes = MotifMiner().cluster_motifs(objects, method='graph+type')
+        logging.info(f"[LOG] MotifMiner output: motif_nodes count={len(motif_nodes)}")
+        for motif_node in motif_nodes:
+            logging.info(f"[LOG] Motif node: id={motif_node.get('id')}, type={motif_node.get('motif_type','unknown')}, member_nodes={motif_node.get('member_nodes',[])}")
         for motif_node in motif_nodes:
             supernode_id = motif_node['id']
             member_nodes = [obj for obj in objects if obj.get('object_id', obj.get('id')) in motif_node['member_nodes']]
@@ -954,78 +960,37 @@ def assign_object_type(verts):
         vl_edges = clip_embedder.contrastive_edges(objects, use_roi=getattr(args, 'use_roi', False))
     # 5. Build graph
     base_graph_nx = build_graph_unvalidated(merged_record, dynamic_predicates, TOP_K, extra_edges=vl_edges, kb=kb)
-    logging.info(f"[DEBUG] After build_graph_unvalidated: type={type(base_graph_nx)}, nodes={getattr(base_graph_nx, 'number_of_nodes', lambda: 'NA')()}, edges={getattr(base_graph_nx, 'number_of_edges', lambda: 'NA')()}")
-    if base_graph_nx is None:
-        logging.error(f"[ERROR] build_graph_unvalidated returned None for problem {problem_id}. Skipping.")
-        return {'scene_graph': None, 'rules': None}
-    # SOTA: log edge predicate type mix
-    if isinstance(base_graph_nx, (nx.MultiDiGraph, nx.MultiGraph)):
-        pred_types = [data.get('predicate') for _,_,_,data in _robust_edge_unpack(base_graph_nx.edges(keys=True, data=True))]
-    else:
-        pred_types = [data.get('predicate') for _,_,_,data in _robust_edge_unpack(base_graph_nx.edges(data=True))]
-    from collections import Counter
-    pred_counter = Counter(pred_types)
-    logging.info(f"Predicate type counts: {dict(pred_counter)}")
-    # --- Global Graph Statistics ---
-    node_centroids = [d.get('centroid', [0,0]) for n, d in base_graph_nx.nodes(data=True)]
-    def is_valid_centroid(c):
-        return (
-            isinstance(c, (list, tuple, np.ndarray)) and
-            len(c) == 2 and
-            all(isinstance(v, (int, float, np.floating, np.integer)) and not np.isnan(v) for v in c)
-        )
-    if node_centroids:
-        node_centroids_clean = [
-            c if is_valid_centroid(c) else [np.nan, np.nan]
-            for c in node_centroids
-        ]
-        arr = np.array(node_centroids_clean)
-        center = np.nanmean(arr, axis=0)
-
-        sym_pairs = 0
-        total_pairs = 0
-        for i in range(len(arr)):
-            # ... symmetry analysis logic ...
-            pass
-
-# ...existing code for LOGO object creation loop...
-
-        # 3. Build base scene graph with dynamic predicates
-        # (You must update build_graph_unvalidated to accept dynamic_predicates)
-        base_graph_nx = build_graph_unvalidated(merged_record, dynamic_predicates, TOP_K, extra_edges=vl_edges, kb=kb)
-        # Log produced scene graph summary
-        if base_graph_nx is not None:
-            logging.info(f"Problem {problem_id}: base_graph_nx nodes={base_graph_nx.number_of_nodes()}, edges={base_graph_nx.number_of_edges()}")
-            # Log a sample of node and edge data
-            node_list = list(base_graph_nx.nodes(data=True))
-            edge_list = list(base_graph_nx.edges(data=True))
-            for i, (nid, ndata) in enumerate(node_list[:3]):
-                logging.info(f"Problem {problem_id}: node {i}: id={nid}, data_keys={list(ndata.keys())}, shape_label={ndata.get('shape_label')}, category={ndata.get('category')}, vertices={ndata.get('vertices')[:5]}... (total {len(ndata.get('vertices', []))} vertices)")
-
-        try:
-            # Log produced scene graph summary
-            if base_graph_nx is not None:
-                logging.info(f"Problem {problem_id}: base_graph_nx nodes={base_graph_nx.number_of_nodes()}, edges={base_graph_nx.number_of_edges()}")
-                # Log a sample of node and edge data
-                node_list = list(base_graph_nx.nodes(data=True))
-                edge_list = list(base_graph_nx.edges(data=True))
-                for i, (nid, ndata) in enumerate(node_list[:3]):
-                    logging.info(f"Problem {problem_id}: node {i}: id={nid}, data_keys={list(ndata.keys())}, shape_label={ndata.get('shape_label')}, category={ndata.get('category')}, vertices={ndata.get('vertices')[:5]}... (total {len(ndata.get('vertices', []))} vertices)")
-                for i, (u, v, edata) in enumerate(edge_list[:3]):
-                    logging.info(f"Problem {problem_id}: edge {i}: {u}->{v}, predicate={edata.get('predicate')}, source={edata.get('source', '')}, data_keys={list(edata.keys())}")
-            else:
-                logging.warning(f"Problem {problem_id}: base_graph_nx is None after build_graph_unvalidated.")
-        except Exception as e:
-            logging.error(f"Problem {problem_id}: Exception during graph building phase: {e}\n{traceback.format_exc()}")
-            return None
-
-    # ... rest of the function remains unchanged, operating on `base_graph_nx` ...
-
-
-
-
-    
-    # 3. Prepare base_scene_graph for enhanced builder
+    logging.info(f"[LOG] After build_graph_unvalidated: type={type(base_graph_nx)}, nodes={getattr(base_graph_nx, 'number_of_nodes', lambda: 'NA')()}, edges={getattr(base_graph_nx, 'number_of_edges', lambda: 'NA')()}")
+    if base_graph_nx is not None:
+        node_list = list(base_graph_nx.nodes(data=True))
+        edge_list = list(base_graph_nx.edges(data=True))
+        logging.info(f"[LOG] Graph nodes: count={len(node_list)}")
+        for i, (nid, ndata) in enumerate(node_list[:5]):
+            logging.info(f"[LOG] Node {i}: id={nid}, keys={list(ndata.keys())}, type={ndata.get('object_type')}, is_valid={ndata.get('is_valid')}, vertices_len={len(ndata.get('vertices',[]))}")
+        logging.info(f"[LOG] Graph edges: count={len(edge_list)}")
+        for i, (u, v, edata) in enumerate(edge_list[:5]):
+            logging.info(f"[LOG] Edge {i}: {u}->{v}, predicate={edata.get('predicate')}, source={edata.get('source', '')}, keys={list(edata.keys())}")
+    # ...existing code...
+    # After physics computation and object creation
+    logging.info(f"[LOG] Physics/geometry step: objects produced count={len(objects)}")
+    for obj in objects:
+        logging.info(f"[LOG] Physics output object: id={obj.get('object_id')}, type={obj.get('object_type')}, is_valid={obj.get('is_valid')}, vertices_len={len(obj.get('vertices',[]))}")
+    # Before graph construction
+    logging.info(f"[LOG] Objects passed to build_graph_unvalidated: count={len(objects)}")
+    for obj in objects:
+        logging.info(f"[LOG] Graph input object: id={obj.get('object_id')}, type={obj.get('object_type')}, is_valid={obj.get('is_valid')}, vertices_len={len(obj.get('vertices',[]))}")
+    base_graph_nx = build_graph_unvalidated(merged_record, dynamic_predicates, TOP_K, extra_edges=vl_edges, kb=kb)
+    logging.info(f"[LOG] After build_graph_unvalidated: type={type(base_graph_nx)}, nodes={getattr(base_graph_nx, 'number_of_nodes', lambda: 'NA')()}, edges={getattr(base_graph_nx, 'number_of_edges', lambda: 'NA')()}")
+    if base_graph_nx is not None:
+        node_list = list(base_graph_nx.nodes(data=True))
+        edge_list = list(base_graph_nx.edges(data=True))
+        logging.info(f"[LOG] Graph nodes: count={len(node_list)}")
+        for i, (nid, ndata) in enumerate(node_list[:5]):
+            logging.info(f"[LOG] Node {i}: id={nid}, keys={list(ndata.keys())}, type={ndata.get('object_type')}, is_valid={ndata.get('is_valid')}, vertices_len={len(ndata.get('vertices',[]))}")
+        logging.info(f"[LOG] Graph edges: count={len(edge_list)}")
+        for i, (u, v, edata) in enumerate(edge_list[:5]):
+            logging.info(f"[LOG] Edge {i}: {u}->{v}, predicate={edata.get('predicate')}, source={edata.get('source', '')}, keys={list(edata.keys())}")
+    # ...existing code...
     base_scene_graph_for_enhanced = {
         'objects': merged_record['objects'], # These are the node data for the graph
         'relationships': [], # Relationships will be filled by add_predicate_edges and enhanced_builder
@@ -1128,7 +1093,7 @@ def assign_object_type(verts):
 
     # [LOGO] Log all output objects and edges for this problem
     if args is not None and hasattr(args, 'mode') and args.mode == 'logo':
-        import json
+        
         # Output objects
         if 'objects' in output:
             logging.info(f"[LOGO] Output objects for problem_id={problem_id}: {json.dumps(output['objects'], indent=2, ensure_ascii=False)[:2000]}{'...TRUNCATED...' if len(json.dumps(output['objects']))>2000 else ''}")
@@ -1185,27 +1150,31 @@ async def main(): # Main is now async because it calls async functions
     args = parser.parse_args()
     # [LOGO] Log all input arguments and label values at the start
     if hasattr(args, 'mode') and args.mode == 'logo':
-        import logging
+    
         logging.info(f"[LOGO] All input arguments: {vars(args)}")
         # Print all label values loaded
         try:
-            import json
             with open(args.labels, 'r', encoding='utf-8') as f:
                 label_data = json.load(f)
-            logging.info(f"[LOGO] All label values from {args.labels}: {json.dumps(label_data, indent=2, ensure_ascii=False)[:2000]}{'...TRUNCATED...' if len(json.dumps(label_data))>2000 else ''}")
+                logging.info(f"[LOGO] All label values from {args.labels}: {json.dumps(label_data, indent=2, ensure_ascii=False)[:2000]}{'...TRUNCATED...' if len(json.dumps(label_data))>2000 else ''}")
         except Exception as e:
             logging.warning(f"[LOGO] Could not load or print all label values: {e}")
     global kb
     kb = ConceptNetClient.get()
     if kb is None:
         logging.warning("ConceptNet KB client could not be initialized. Commonsense edges will be skipped.")
-    # LOGO mode disables VL, GNN, motifs, KB
+    # LOGO mode: allow advanced techniques if explicitly enabled
     if args.mode == 'logo':
-        args.use_vl = False
-        args.use_gnn = False
-        args.use_motifs = False
-        kb = None
-        logging.info("LOGO mode: VL, GNN, motifs, and KB edges are disabled. Only programmatic and minimal geometry predicates will be used.")
+        # Only disable if not explicitly enabled
+        if not args.use_vl and not args.use_gnn and not args.use_motifs and not args.use_roi:
+            args.use_vl = False
+            args.use_gnn = False
+            args.use_motifs = False
+            kb = None
+            logging.info("LOGO mode: VL, GNN, motifs, and KB edges are disabled. Only programmatic and minimal geometry predicates will be used.")
+        else:
+            logging.info(f"LOGO mode with advanced techniques enabled: VL={args.use_vl}, GNN={args.use_gnn}, motifs={args.use_motifs}, ROI={args.use_roi}")
+            # Keep kb enabled if using advanced techniques
 
     # Initialize components
     feature_cache = MemoryEfficientFeatureCache(

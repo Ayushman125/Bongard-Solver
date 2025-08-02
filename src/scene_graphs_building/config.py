@@ -1,6 +1,13 @@
 # ConceptNet whitelist of relation types to retain
 CONCEPTNET_KEEP_RELS = {
-    "PartOf", "HasA", "AtLocation", "MadeOf", "DerivedFrom"
+    "PartOf", "HasA", "AtLocation", "MadeOf", "DerivedFrom",
+    "RelatedTo", "IsA", "UsedFor", "CapableOf", "Desires",
+    "HasProperty", "LocatedNear", "SimilarTo", "SymbolOf",
+    "HasSubevent", "CausesDesire", "MotivatedByGoal", "ObstructedBy",
+    "Causes", "HasPrerequisite", "HasFirstSubevent", "HasLastSubevent",
+    "DefinedAs", "MannerOf", "ReceivesAction", "HasContext",
+    "EntailsEvent", "InstanceOf", "ExternalURL", "EtymologicallyRelatedTo",
+    "FormOf", "Antonym", "Synonym", "DistinctFrom", "NotUsedFor"
 }
 
 
@@ -51,6 +58,7 @@ COMMONSENSE_LABEL_MAP = {
     "dot": "point",
     "triangle": "triangle",
     "quad": "quadrilateral",
+    "quadrilateral": "quadrilateral",
     "polygon": "polygon",
     "circle": "circle",
     "cluster": "group",
@@ -59,8 +67,16 @@ COMMONSENSE_LABEL_MAP = {
     "grid": "grid",
     "star": "star",
     "rectangle": "rectangle",
+    "square": "square",
     "arrow": "arrow",
     "curve": "curve",
+    "spiral": "spiral",
+    "cross": "cross",
+    "hook": "hook",
+    "vertex": "point",
+    "junction": "intersection",
+    "segment": "line",
+    "unknown": "shape",
     # Extend as you add more motif/shape computing
 }
 

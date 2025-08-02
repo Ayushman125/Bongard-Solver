@@ -102,9 +102,14 @@ def add_commonsense_edges(G, top_k, kb=None):
         raw = data_u.get('shape_label', '')
         concept = normalize_shape_label(raw)
         if not concept:
+            logging.debug(f"Node {u}: no valid concept found (raw='{raw}')")
             continue
+        logging.debug(f"Node {u}: processing concept '{concept}' (from raw='{raw}')")
         try:
             related = kb.related(concept) if hasattr(kb, 'related') else []
+            logging.info(f"ConceptNet query for concept '{concept}': found {len(related)} relations")
+            if related:
+                logging.debug(f"Relations for '{concept}': {related[:5]}")  # Log first 5 for debugging
         except Exception as e:
             logging.warning(f"Commonsense KB query failed for label '{concept}': {e}")
             continue

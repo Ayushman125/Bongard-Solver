@@ -1,7 +1,7 @@
 import requests
 import json
 import logging
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 from urllib.parse import quote
 import time
 
@@ -160,3 +160,37 @@ class ConceptNetAPI:
                             'source': 'conceptnet_api'
                         })
         return related
+
+    def related(self, concept: str) -> List[Tuple[str, str]]:
+        """
+        Get related concepts in the format expected by graph_building.py.
+        Returns a list of (relation, other_concept) tuples.
+        """
+        logging.info(f"ConceptNetAPI.related: Querying for concept '{concept}'")
+        
+        # Get all outgoing relations for the concept
+        relations = self.query_relations_for_concept(concept)
+        result = []
+        
+        logging.debug(f"ConceptNetAPI.related: Got {len(relations)} relations from query_relations_for_concept")
+        
+        for rel in relations:
+            relation = rel.get('predicate', 'unknown')
+            other_concept = rel.get('object', '')
+            if relation and other_concept:
+                result.append((relation, other_concept))
+                logging.debug(f"ConceptNetAPI.related: Adding relation ({relation}, {other_concept})")
+        
+        # Also get related concepts from the /related endpoint
+        related_concepts = self.get_related_concepts(concept)
+        logging.debug(f"ConceptNetAPI.related: Got {len(related_concepts)} concepts from get_related_concepts")
+        
+        for rel in related_concepts:
+            other_concept = rel.get('concept', '')
+            if other_concept:
+                # Use 'RelatedTo' as a generic relation for related endpoint
+                result.append(('RelatedTo', other_concept))
+                logging.debug(f"ConceptNetAPI.related: Adding related concept (RelatedTo, {other_concept})")
+        
+        logging.info(f"ConceptNetAPI.related: Found {len(result)} total relations for concept '{concept}'")
+        return result

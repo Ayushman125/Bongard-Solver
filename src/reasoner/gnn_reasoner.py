@@ -9,16 +9,60 @@ import networkx as nx
 import numpy as np
 
 class BongardGNN(nn.Module):
-    def __init__(self, model_cfg=None):
+    def __init__(self, input_dim=20, hidden_dim=64, output_dim=32, model_cfg=None):
         super().__init__()
-        self.conv1 = GCNConv(16, 32)
-        self.conv2 = GCNConv(32, 2)
+        # Enhanced architecture for Bongard problem reasoning
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
+        
+        # Multi-layer GCN with residual connections
+        self.conv1 = GCNConv(input_dim, hidden_dim)
+        self.conv2 = GCNConv(hidden_dim, hidden_dim)
+        self.conv3 = GCNConv(hidden_dim, output_dim)
+        
+        # Layer normalization for stable training
+        self.ln1 = nn.LayerNorm(hidden_dim)
+        self.ln2 = nn.LayerNorm(hidden_dim)
+        
+        # Dropout for regularization
+        self.dropout = nn.Dropout(0.2)
+        
+        # Skip connections
+        self.skip1 = nn.Linear(input_dim, hidden_dim) if input_dim != hidden_dim else nn.Identity()
+        self.skip2 = nn.Linear(hidden_dim, output_dim) if hidden_dim != output_dim else nn.Identity()
 
-    def forward(self, data):
-        x, edge_index = data.x, data.edge_index
-        x = self.conv1(x, edge_index).relu()
-        x = self.conv2(x, edge_index)
-        return x
+    def forward(self, x, edge_index, edge_attr=None):
+        """
+        Forward pass through the GNN
+        
+        Args:
+            x: Node features [num_nodes, input_dim]
+            edge_index: Edge connectivity [2, num_edges]
+            edge_attr: Edge features [num_edges, edge_dim] (optional)
+        
+        Returns:
+            Enhanced node representations [num_nodes, output_dim]
+        """
+        # First GCN layer with skip connection
+        x1 = self.conv1(x, edge_index)
+        x1 = self.ln1(x1)
+        x1 = F.relu(x1)
+        x1 = x1 + self.skip1(x)  # Skip connection
+        x1 = self.dropout(x1)
+        
+        # Second GCN layer with skip connection
+        x2 = self.conv2(x1, edge_index)
+        x2 = self.ln2(x2)
+        x2 = F.relu(x2)
+        x2 = x2 + x1  # Skip connection
+        x2 = self.dropout(x2)
+        
+        # Final layer
+        x3 = self.conv3(x2, edge_index)
+        x3 = x3 + self.skip2(x1)  # Long skip connection
+        
+        return x3
 class SimpleGCN(nn.Module):
     def __init__(self, in_dim, hidden_dim=64, out_dim=1, dropout=0.2, use_layernorm=True, graph_head=True):
         super().__init__()
@@ -68,42 +112,117 @@ class GNNReasoner:
 
     def nx_to_pyg(self, G):
         import logging
-        # --- SOTA: Node type and feature validity mask ---
-        required_features = ['area', 'aspect_ratio', 'orientation', 'curvature', 'skeleton_length', 'length', 'centroid', 'gnn_score', 'clip_sim', 'motif_score', 'vl_sim']
+        # LOGO MODE: Enhanced feature extraction using LOGO-derived attributes
+        required_features = ['area', 'aspect_ratio', 'orientation', 'curvature_score', 'perimeter', 'centroid', 'horizontal_asymmetry', 'vertical_asymmetry', 'apex_x_position', 'is_highly_curved']
         node_types = ['polygon', 'line', 'arc', 'point', 'motif']
         node_ids = list(G.nodes())
         node_feats = []
         diagnostics = []
+        
         for n in node_ids:
             d = G.nodes[n]
-            # Node type one-hot
-            ntype = d.get('node_type', None)
-            type_onehot = [0]*len(node_types)
+            
+            # LOGO MODE: Node type classification with fallback logic
+            ntype = d.get('object_type', d.get('node_type', 'unknown'))
+            type_onehot = [0] * len(node_types)
             if ntype in node_types:
                 type_onehot[node_types.index(ntype)] = 1
             else:
-                # Heuristic fallback
-                if d.get('is_motif'): type_onehot[-1] = 1
-                elif d.get('geometry_valid', False): type_onehot[0] = 1
-            # Feature vector and validity mask
+                # LOGO-aware fallback based on geometry
+                if d.get('is_motif', False):
+                    type_onehot[4] = 1  # motif
+                elif d.get('vertices') and len(d.get('vertices', [])) >= 3:
+                    if d.get('is_closed', False):
+                        type_onehot[0] = 1  # polygon
+                    else:
+                        type_onehot[1] = 1  # line
+                else:
+                    type_onehot[3] = 1  # point
+            
+            # LOGO MODE: Robust feature extraction with validation
             feat_vec = []
             validity_mask = []
+            
             for f in required_features:
                 val = d.get(f, None)
+                
+                # Handle different data types robustly
                 if val is None:
-                    feat_vec.append(-1.0)  # Reserved for missing
+                    feat_vec.append(0.0)  # Default to 0 instead of -1
                     validity_mask.append(0)
                 elif isinstance(val, (int, float, np.integer, np.floating)):
-                    feat_vec.append(float(val))
-                    validity_mask.append(1)
+                    if np.isnan(val) or np.isinf(val):
+                        feat_vec.append(0.0)
+                        validity_mask.append(0)
+                    else:
+                        feat_vec.append(float(val))
+                        validity_mask.append(1)
                 elif isinstance(val, (list, tuple, np.ndarray)):
-                    arr = np.array(val)
-                    feat_vec.append(float(np.mean(arr)) if arr.size > 0 else -1.0)
-                    validity_mask.append(1 if arr.size > 0 else 0)
+                    try:
+                        arr = np.array(val, dtype=float)
+                        if arr.size > 0 and np.all(np.isfinite(arr)):
+                            feat_vec.append(float(np.mean(arr)))
+                            validity_mask.append(1)
+                        else:
+                            feat_vec.append(0.0)
+                            validity_mask.append(0)
+                    except (ValueError, TypeError):
+                        feat_vec.append(0.0)
+                        validity_mask.append(0)
                 else:
-                    feat_vec.append(-1.0)
+                    feat_vec.append(0.0)
                     validity_mask.append(0)
-            node_feats.append(type_onehot + feat_vec + validity_mask)
+            
+            # LOGO MODE: Add action program features if available
+            action_features = []
+            action_command = d.get('action_command', '')
+            if 'line_' in action_command:
+                action_features.extend([1.0, 0.0, 0.0])  # line action
+            elif 'arc_' in action_command:
+                action_features.extend([0.0, 1.0, 0.0])  # arc action
+            else:
+                action_features.extend([0.0, 0.0, 1.0])  # other/composite
+            
+            # Action sequence features
+            action_index = d.get('action_index', -1)
+            action_features.append(float(action_index) if action_index >= 0 else 0.0)
+            
+            # VL features with proper validation
+            vl_features = []
+            vl_embed = d.get('vl_embed', None)
+            if vl_embed is not None and len(vl_embed) >= 10:
+                try:
+                    vl_subset = np.array(vl_embed[:10], dtype=float)
+                    if np.all(np.isfinite(vl_subset)):
+                        vl_features.extend(vl_subset.tolist())
+                    else:
+                        vl_features.extend([0.0] * 10)
+                except (ValueError, TypeError):
+                    vl_features.extend([0.0] * 10)
+            else:
+                vl_features.extend([0.0] * 10)
+            
+            # Combine all features
+            full_feature = type_onehot + feat_vec + validity_mask + action_features + vl_features
+            
+            # Final validation: ensure all features are finite numbers
+            final_feature = []
+            for val in full_feature:
+                if isinstance(val, (int, float, np.integer, np.floating)) and np.isfinite(val):
+                    final_feature.append(float(val))
+                else:
+                    final_feature.append(0.0)
+            
+            node_feats.append(final_feature)
+            
+            # Debug info for problematic nodes
+            if not all(np.isfinite(final_feature)):
+                diagnostics.append(f"Node {n}: invalid features found, replaced with zeros")
+        
+        if diagnostics:
+            logging.warning(f"GNN feature validation: {'; '.join(diagnostics[:3])}")
+        
+        return torch.tensor(node_feats, dtype=torch.float32)
         if not node_feats:
             diagnostics.append("No node features found. Graph may be empty.")
             logging.error("GNNReasoner.nx_to_pyg: No node features found. Graph may be empty.")

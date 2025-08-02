@@ -311,6 +311,266 @@ def has_dominant_direction(node_a, node_b):
     except Exception:
         return False
 
+# === HIGH-LEVEL SEMANTIC PREDICATES FOR BONGARD PROBLEMS ===
+
+def has_apex_at_left(node_a, node_b):
+    """Checks if one shape has an apex positioned to the left relative to its center"""
+    try:
+        for node in [node_a, node_b]:
+            if node.get('apex_relative_to_center') == 'left':
+                return True
+        return False
+    except Exception:
+        return False
+
+def has_asymmetric_base(node_a, node_b):
+    """Checks if shapes have asymmetric base widths or irregular base structure"""
+    try:
+        for node in [node_a, node_b]:
+            left_extent = node.get('left_extent', 0)
+            right_extent = node.get('right_extent', 0)
+            if max(left_extent, right_extent) > 0:
+                asymmetry = abs(left_extent - right_extent) / max(left_extent, right_extent)
+                if asymmetry > 0.3:  # 30% asymmetry threshold
+                    return True
+        return False
+    except Exception:
+        return False
+
+def has_tilted_orientation(node_a, node_b):
+    """Checks if shapes have tilted orientation (not aligned with cardinal directions)"""
+    try:
+        for node in [node_a, node_b]:
+            orientation = node.get('orientation', 0)
+            # Check if orientation is significantly off from 0, 90, 180, 270 degrees
+            normalized_angle = orientation % 90
+            tilt_amount = min(normalized_angle, 90 - normalized_angle)
+            if tilt_amount > 15:  # More than 15 degrees off cardinal direction
+                return True
+        return False
+    except Exception:
+        return False
+
+def has_length_ratio_imbalance(node_a, node_b):
+    """Checks if there's a significant imbalance in dimensional ratios"""
+    try:
+        ratio_a = node_a.get('aspect_ratio', 1.0)
+        ratio_b = node_b.get('aspect_ratio', 1.0)
+        
+        if max(ratio_a, ratio_b) > 0:
+            imbalance = abs(ratio_a - ratio_b) / max(ratio_a, ratio_b)
+            return imbalance > 0.5  # 50% difference in aspect ratios
+        return False
+    except Exception:
+        return False
+
+def forms_open_vs_closed_distinction(node_a, node_b):
+    """Checks if one shape is open while another is closed"""
+    try:
+        closed_a = node_a.get('is_closed', False)
+        closed_b = node_b.get('is_closed', False)
+        return closed_a != closed_b  # Different closure states
+    except Exception:
+        return False
+
+def has_geometric_complexity_difference(node_a, node_b):
+    """Checks for differences in geometric complexity (vertex count, curvature)"""
+    try:
+        complexity_a = node_a.get('geometric_complexity', 0)
+        complexity_b = node_b.get('geometric_complexity', 0)
+        
+        if max(complexity_a, complexity_b) > 0:
+            diff_ratio = abs(complexity_a - complexity_b) / max(complexity_a, complexity_b)
+            return diff_ratio > 0.4  # 40% complexity difference
+        return False
+    except Exception:
+        return False
+
+def has_compactness_difference(node_a, node_b):
+    """Checks for significant differences in shape compactness"""
+    try:
+        comp_a = node_a.get('compactness', 0)
+        comp_b = node_b.get('compactness', 0)
+        
+        if max(comp_a, comp_b) > 0:
+            diff_ratio = abs(comp_a - comp_b) / max(comp_a, comp_b)
+            return diff_ratio > 0.3  # 30% compactness difference
+        return False
+    except Exception:
+        return False
+
+def exhibits_mirror_asymmetry(node_a, node_b):
+    """Checks if shapes exhibit mirror asymmetry patterns"""
+    try:
+        h_asym_a = node_a.get('horizontal_asymmetry', 0)
+        h_asym_b = node_b.get('horizontal_asymmetry', 0)
+        v_asym_a = node_a.get('vertical_asymmetry', 0)
+        v_asym_b = node_b.get('vertical_asymmetry', 0)
+        
+        # Check if one has high asymmetry while the other doesn't
+        total_asym_a = h_asym_a + v_asym_a
+        total_asym_b = h_asym_b + v_asym_b
+        
+        return abs(total_asym_a - total_asym_b) > 0.4  # Significant asymmetry difference
+    except Exception:
+        return False
+
+def forms_bridge_pattern(node_a, node_b):
+    """Checks if nodes form a bridge-like pattern"""
+    try:
+        # Look for parallel structures with connecting elements
+        if is_parallel(node_a, node_b):
+            # Check if there are other nodes that could connect them
+            return True
+        return False
+    except Exception:
+        return False
+
+def has_curvature_distinction(node_a, node_b):
+    """Checks for curved vs straight distinctions"""
+    try:
+        # Determine curvature based on object type and compactness
+        curved_a = node_a.get('object_type') in ['arc', 'curve'] or node_a.get('compactness', 0) > 0.7
+        curved_b = node_b.get('object_type') in ['arc', 'curve'] or node_b.get('compactness', 0) > 0.7
+        return curved_a != curved_b  # One curved, one straight
+    except Exception:
+        return False
+
+def is_arc_of_circle(node_a, node_b):
+    """Checks if a shape is a circular arc"""
+    try:
+        # High compactness and curvature indicators suggest circular arcs
+        compactness = node_a.get('compactness', 0)
+        curvature_score = node_a.get('curvature_score', 0)
+        
+        return compactness > 0.6 and curvature_score > 0.5
+    except Exception:
+        return False
+
+def shares_endpoint(node_a, node_b):
+    """Checks if two line segments share an endpoint (T-junction, L-junction, etc.)"""
+    try:
+        endpoints_a = node_a.get('endpoints', [])
+        endpoints_b = node_b.get('endpoints', [])
+        
+        if not endpoints_a or not endpoints_b:
+            return False
+        
+        # Check if any endpoint from A is close to any endpoint from B
+        tolerance = 5.0  # Pixel tolerance for endpoint matching
+        for ep_a in endpoints_a:
+            for ep_b in endpoints_b:
+                if ep_a is not None and ep_b is not None:
+                    distance = np.linalg.norm(np.array(ep_a) - np.array(ep_b))
+                    if distance < tolerance:
+                        return True
+        return False
+    except Exception:
+        return False
+
+def forms_apex(node_a, node_b):
+    """Checks if nodes form an apex structure (meeting at a point)"""
+    try:
+        # Both nodes should share an endpoint and have diverging orientations
+        if not shares_endpoint(node_a, node_b):
+            return False
+        
+        # Check if orientations diverge (angle between them > 30 degrees)
+        orient_a = node_a.get('orientation', 0)
+        orient_b = node_b.get('orientation', 0)
+        
+        angle_diff = abs(orient_a - orient_b)
+        angle_diff = min(angle_diff, 180 - angle_diff)  # Normalize to [0, 90]
+        
+        return angle_diff > 30  # Significant angular difference
+    except Exception:
+        return False
+
+def forms_t_junction(node_a, node_b):
+    """Checks if nodes form a T-junction pattern"""
+    try:
+        if not shares_endpoint(node_a, node_b):
+            return False
+        
+        # T-junction: one line perpendicular to another
+        orient_a = node_a.get('orientation', 0)
+        orient_b = node_b.get('orientation', 0)
+        
+        angle_diff = abs(orient_a - orient_b)
+        angle_diff = min(angle_diff, 180 - angle_diff)
+        
+        # Near perpendicular (90 ± 15 degrees)
+        return abs(angle_diff - 90) < 15
+    except Exception:
+        return False
+
+def forms_x_junction(node_a, node_b):
+    """Checks if nodes intersect to form an X-junction (crossing)"""
+    try:
+        # Must intersect (not just touch at endpoints)
+        if not intersects(node_a, node_b):
+            return False
+        
+        # Should not share endpoints (that would be apex or T-junction)
+        if shares_endpoint(node_a, node_b):
+            return False
+        
+        # Orientations should be significantly different
+        orient_a = node_a.get('orientation', 0)
+        orient_b = node_b.get('orientation', 0)
+        
+        angle_diff = abs(orient_a - orient_b)
+        angle_diff = min(angle_diff, 180 - angle_diff)
+        
+        return angle_diff > 20  # Significant crossing angle
+    except Exception:
+        return False
+
+def forms_bridge_arc(node_a, node_b):
+    """Checks if nodes form a bridge-like arc structure"""
+    try:
+        # Look for curved connection between parallel elements
+        if is_parallel(node_a, node_b):
+            return False  # Parallel elements themselves, not the bridge
+        
+        # Check if one is curved and connects others
+        curved_a = node_a.get('object_type') in ['arc', 'curve'] or node_a.get('compactness', 0) > 0.5
+        curved_b = node_b.get('object_type') in ['arc', 'curve'] or node_b.get('compactness', 0) > 0.5
+        
+        # Bridge arc should be curved and positioned "above" straight elements
+        if curved_a:
+            return node_a.get('centroid', [0, 0])[1] < node_b.get('centroid', [0, 0])[1]
+        elif curved_b:
+            return node_b.get('centroid', [0, 0])[1] < node_a.get('centroid', [0, 0])[1]
+        
+        return False
+    except Exception:
+        return False
+
+def has_irregular_shape(node_a, node_b):
+    """Checks if shape has irregular, non-geometric form"""
+    try:
+        # High vertex count combined with low compactness suggests irregularity
+        vertex_count = len(node_a.get('vertices', []))
+        compactness = node_a.get('compactness', 0)
+        
+        # Many vertices but not compact = irregular
+        return vertex_count > 8 and compactness < 0.3
+    except Exception:
+        return False
+
+def exhibits_rotational_symmetry(node_a, node_b):
+    """Checks if shape exhibits rotational symmetry"""
+    try:
+        # Use orientation variance as indicator
+        orientation_variance = node_a.get('orientation_variance', 0)
+        compactness = node_a.get('compactness', 0)
+        
+        # High compactness with low orientation variance suggests rotational symmetry
+        return compactness > 0.7 and orientation_variance < 0.2
+    except Exception:
+        return False
+
 # Registry of advanced predicates to be applied to higher-level objects
 ADVANCED_PREDICATE_REGISTRY = {
     # Low-level geometric predicates
@@ -335,4 +595,16 @@ ADVANCED_PREDICATE_REGISTRY = {
     'has_compactness_difference': has_compactness_difference,
     'exhibits_mirror_asymmetry': exhibits_mirror_asymmetry,
     'has_dominant_direction': has_dominant_direction,
+    'forms_bridge_pattern': forms_bridge_pattern,
+    'has_curvature_distinction': has_curvature_distinction,
+    
+    # Curvature and junction type predicates
+    'is_arc_of_circle': is_arc_of_circle,
+    'shares_endpoint': shares_endpoint,
+    'forms_apex': forms_apex,
+    'forms_t_junction': forms_t_junction,
+    'forms_x_junction': forms_x_junction,
+    'forms_bridge_arc': forms_bridge_arc,
+    'has_irregular_shape': has_irregular_shape,
+    'exhibits_rotational_symmetry': exhibits_rotational_symmetry,
 }
