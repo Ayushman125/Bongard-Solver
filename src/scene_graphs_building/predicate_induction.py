@@ -7,45 +7,22 @@ def induce_predicate_statistical(objects):
     import pandas as pd
     # Convert objects to DataFrame for easier manipulation
     df = pd.DataFrame(objects)
-    features = [
-        'area', 'aspect_ratio', 'compactness', 'orientation', 'length', 'cx', 'cy',
-        'curvature', 'stroke_count', 'programmatic_label', 'kb_concept', 'global_stat'
-    ]
+    # Dynamically select only numeric columns for induction
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
     best_feature = None
     best_p = 1.0
-    # Separate positive and negative samples
     pos = df[df.get('category', 0) == 1]
     neg = df[df.get('category', 0) == 0]
-    for feat in features:
-        if feat in ('programmatic_label', 'kb_concept'):
-            # Categorical features: encode and use mutual_info_score
-            from sklearn.preprocessing import LabelEncoder
-            from sklearn.metrics import mutual_info_score
-            pos_vals = pos[feat].dropna().astype(str).tolist() if feat in pos.columns else []
-            neg_vals = neg[feat].dropna().astype(str).tolist() if feat in neg.columns else []
-            if len(pos_vals) < 4 or len(neg_vals) < 4:
-                logging.warning(f"Statistical induction: Skipping {feat} due to small group size (pos={len(pos_vals)}, neg={len(neg_vals)})")
-                continue
-            le = LabelEncoder()
-            all_vals = pos_vals + neg_vals
-            le.fit(all_vals)
-            pos_enc = le.transform(pos_vals)
-            neg_enc = le.transform(neg_vals)
-            mi = mutual_info_score(pos_enc, neg_enc)
-            if mi > 0.1 and mi > best_p:
-                best_p = mi
-                best_feature = feat
-        else:
-            # Numeric features: convert to numeric and drop NaNs
-            pos_vals = pd.to_numeric(pos[feat], errors='coerce').dropna().tolist() if feat in pos.columns else []
-            neg_vals = pd.to_numeric(neg[feat], errors='coerce').dropna().tolist() if feat in neg.columns else []
-            if len(pos_vals) < 4 or len(neg_vals) < 4:
-                logging.warning(f"Statistical induction: Skipping {feat} due to small group size (pos={len(pos_vals)}, neg={len(neg_vals)})")
-                continue
-            stat, p = ttest_ind(pos_vals, neg_vals, equal_var=False)
-            if p < best_p:
-                best_p = p
-                best_feature = feat
+    for feat in numeric_cols:
+        pos_vals = pos[feat].dropna().tolist() if feat in pos.columns else []
+        neg_vals = neg[feat].dropna().tolist() if feat in neg.columns else []
+        if len(pos_vals) < 4 or len(neg_vals) < 4:
+            logging.warning(f"Statistical induction: Skipping {feat} due to small group size (pos={len(pos_vals)}, neg={len(neg_vals)})")
+            continue
+        stat, p = ttest_ind(pos_vals, neg_vals, equal_var=False)
+        if p < best_p:
+            best_p = p
+            best_feature = feat
     if best_feature and best_p < 0.05:
         return f"{best_feature}_statistically_significant", best_feature
     return "same_shape", None

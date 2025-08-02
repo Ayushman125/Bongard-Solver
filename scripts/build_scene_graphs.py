@@ -93,162 +93,22 @@ def run_bongard_logo_scene_graph_pipeline(args):
 
         try:
             problem_records = pdata['records']
-            processed_objects, diversity_stats = asyncio.run(_process_single_problem(problem_id, problem_records, None, args=args))
-            if not processed_objects:
-                logging.warning(f"[LOGO] No objects were processed for problem {problem_id}. Skipping graph construction.")
+            # The new function returns a dictionary containing the scene graphs and all objects
+            processed_data = asyncio.run(_process_single_problem(problem_id, problem_records, None, args=args))
+            
+            if not processed_data or not processed_data.get('scene_graphs'):
+                logging.warning(f"[LOGO] No scene graphs were generated for problem {problem_id}. Skipping.")
                 continue
+            
+            # The core logic is now inside _process_single_problem. 
+            # This script's role is primarily to orchestrate the calls and save outputs.
+            final_graphs = processed_data['scene_graphs']
+            logging.info(f"[LOGO] Successfully processed problem {problem_id}, generated {len(final_graphs)} scene graphs.")
+
         except Exception as e:
             logging.error(f"Error processing problem {problem_id}: {e}")
-            continue
-
-        # --- ENRICH ALL NODES BEFORE GRAPH BUILD ---
-        def enrich_node(node_data, node_id=None):
-            # Required fields for all nodes
-            required_fields = {
-                'symmetry_axis': 0.0,
-                'predicate': 'unknown',
-                'source': 'programmatic',
-            }
-            # For fullpath/motif nodes, add extra fields
-            if node_id and ('fullpath' in str(node_id) or 'motif' in str(node_id)):
-                required_fields.update({
-                    'turn_direction': 'unknown',
-                    'action_command': 'unknown',
-                    'motif_membership': 'unknown',
-                })
-            for k, v in required_fields.items():
-                if k not in node_data or node_data[k] is None:
-                    node_data[k] = v
-            return node_data
-
-        # Enrich all processed objects before graph build
-        for idx, node in enumerate(processed_objects):
-            node_id = node.get('id', f"node_{idx}")
-            processed_objects[idx] = enrich_node(node, node_id)
-
-        # Build the graph from processed objects
-        G = build_graph_unvalidated({'geometry': processed_objects})
-
-
-        # --- ENRICH ALL NODES IN THE GRAPH (motif/fullpath nodes may be added during graph build) ---
-        for node_id in list(G.nodes()):
-            node_data = G.nodes[node_id]
-            # Enrich required fields
-            enrich_node(node_data, node_id)
-            # List all attributes used by predicates
-            predicate_fields = [
-                'parent_shape_id', 'action_index', 'turn_direction', 'command', 'object_id',
-                'endpoints', 'programmatic_label', 'stroke_type', 'start_point', 'end_point',
-                'vertices', 'label', 'category', 'shape_label', 'motif_membership'
-            ]
-            for field in predicate_fields:
-                if field not in node_data:
-                    node_data[field] = None
-            # Explicit logging for missing required fields
-            missing_fields = [f for f in ['symmetry_axis', 'predicate', 'source'] if f not in node_data or node_data[f] is None]
-            if 'fullpath' in str(node_id):
-                missing_fields.extend([f for f in ['turn_direction', 'action_command', 'motif_membership'] if f not in node_data or node_data[f] is None])
-            if missing_fields:
-                logging.warning(f"[LOGO] Node {node_id} is missing required fields: {list(set(missing_fields))}")
-
-        # Get adaptive thresholds for predicate functions
-        adaptive_params = args.adaptive_thresholds.get_current_thresholds() if hasattr(args, 'adaptive_thresholds') and hasattr(args.adaptive_thresholds, 'get_current_thresholds') else {}
-
-        # --- WRAP PREDICATES WITH DEBUG LOGGING ---
-        def debug_wrap_predicate(pred_name, pred_func):
-            def wrapped(a, b, params):
-                try:
-                    result = pred_func(a, b, params)
-                    logging.debug(f"Predicate '{pred_name}' for nodes {a.get('id','?')}->{b.get('id','?')}: result={result}")
-                    return result
-                except Exception as e:
-                    logging.error(f"Predicate '{pred_name}' error for nodes {a.get('id','?')}->{b.get('id','?')}: {e}")
-                    return False
-            return wrapped
-
-        # Load predicates and wrap with debug
-        raw_predicates = load_predicates(args.adaptive_thresholds)
-        PREDICATES = {name: debug_wrap_predicate(name, func) for name, func in raw_predicates.items()}
-
-        # --- EDGE CREATION ---
-        add_logo_predicates(G, PREDICATES, adaptive_params)
-
-        # If no edges, log node pairs and predicate results for diagnosis
-        if G.number_of_edges() == 0:
-            nodes = list(G.nodes(data=True))
-            for i in range(len(nodes)):
-                for j in range(len(nodes)):
-                    if i == j:
-                        continue
-                    node_id_a, data_a = nodes[i]
-                    node_id_b, data_b = nodes[j]
-                    for pred_name, pred_func in PREDICATES.items():
-                        try:
-                            result = pred_func(data_a, data_b, adaptive_params)
-                            logging.warning(f"[EDGE DIAG] {node_id_a}->{node_id_b} predicate '{pred_name}': {result}")
-                        except Exception as e:
-                            logging.error(f"[EDGE DIAG] {node_id_a}->{node_id_b} predicate '{pred_name}' error: {e}")
-
-        # Fallback: try commonsense edges if still no edges
-        if G.number_of_edges() == 0:
-            try:
-                add_commonsense_edges(G)
-                logging.info(f"[LOGO] add_commonsense_edges successfully called for {problem_id}. Edges: {G.number_of_edges()}")
-            except Exception as e:
-                logging.warning(f"[LOGO] add_commonsense_edges failed for {problem_id}: {e}")
-
-        # Assign predicate/source to all edges if missing
-        for u, v, data in G.edges(data=True):
-            if 'predicate' not in data or data['predicate'] is None:
-                data['predicate'] = 'unknown'
-            if 'source' not in data or data['source'] is None:
-                data['source'] = 'programmatic'
-
-        # Final validation and debug logging
-        logging.info(f"[LOGO VALIDATION] Problem {problem_id}: Graph has {G.number_of_nodes()} nodes and {G.number_of_edges()} edges.")
-        for node_id, node_data in G.nodes(data=True):
-            missing_fields = [f for f in ['symmetry_axis', 'predicate', 'source'] if f not in node_data or node_data[f] is None]
-            if 'fullpath' in str(node_id):
-                missing_fields.extend([f for f in ['turn_direction', 'action_command', 'motif_membership'] if f not in node_data or node_data[f] is None])
-            if missing_fields:
-                logging.warning(f"[LOGO VALIDATION] Node {node_id} is missing required fields: {list(set(missing_fields))}")
-        for u, v, data in G.edges(data=True):
-            missing_edge_fields = [f for f in ['predicate', 'source'] if f not in data or data[f] is None]
-            if missing_edge_fields:
-                logging.warning(f"[LOGO VALIDATION] Edge {u}->{v} is missing required fields: {missing_edge_fields}")
-# --- LOGO Predicate Edge Creation ---
-def add_logo_predicates(G, predicate_registry, params):
-    """
-    Iterates through all node pairs in the graph and adds edges based on LOGO predicates.
-    """
-    if not predicate_registry:
-        logging.warning("[LOGO] Predicate registry is empty. Cannot add LOGO edges.")
-        return
-
-    nodes = list(G.nodes(data=True))
-    for i in range(len(nodes)):
-        for j in range(len(nodes)):
-            if i == j:
-                continue
-            node_id_a, data_a = nodes[i]
-            node_id_b, data_b = nodes[j]
-        for pred_name, pred_func in predicate_registry.items():
-            try:
-                if pred_func(data_a, data_b, params):
-                    # Only add edge if not already present
-                    if not G.has_edge(node_id_a, node_id_b):
-                        G.add_edge(node_id_a, node_id_b, predicate=pred_name, source='programmatic_rule')
-                        logging.debug(f"Added edge {node_id_a}->{node_id_b} with predicate {pred_name}")
-            except Exception as e:
-                logging.error(f"Error evaluating predicate '{pred_name}' for nodes {node_id_a}, {node_id_b}: {e}")
-
-        # Visualization and saving
-        try:
-            from src.scene_graphs_building.visualization import save_feedback_images
-            save_feedback_images(problem_id, G, args.output_dir, args)
-        except Exception as e:
-            logging.error(f"[LOGO] Failed to process or build graph for problem {problem_id}: {e}")
             logging.error(traceback.format_exc())
+            continue
 
 # --- Global Constants and Utilities ---
 EPS = 1e-6 # Increased precision for epsilon

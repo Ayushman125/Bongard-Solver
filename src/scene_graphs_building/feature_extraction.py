@@ -238,28 +238,9 @@ def compute_physics_attributes(node_data):
             else:
                 node_data['curvature'] = None
                 feature_valid['curvature_valid'] = False
-            # Symmetry axis
-            symmetry_axis = None
-            try:
-                if len(vertices) >= 2:
-                    arr = np.array(vertices)
-                    cov_matrix = np.cov(arr.T)
-                    eigenvalues, eigenvectors = np.linalg.eig(cov_matrix)
-                    major_axis_idx = np.argmax(eigenvalues)
-                    principal_axis = eigenvectors[:, major_axis_idx]
-                    centroid = np.mean(arr, axis=0)
-                    symmetry_axis = {
-                        'centroid': centroid.tolist(),
-                        'direction': principal_axis.tolist()
-                    }
-            except Exception as e:
-                logging.warning(f"Symmetry axis computation failed: {e}")
-            node_data['symmetry_axis'] = symmetry_axis
-            feature_valid['symmetry_axis_valid'] = symmetry_axis is not None
-            # Skeleton length: not needed for LOGO data
-            node_data['skeleton_length'] = None
-            feature_valid['skeleton_length_valid'] = False
-            feature_valid['centroid_valid'] = True
+        if geometry_valid:
+            if poly.is_valid and poly.area > 0:
+                feature_valid['centroid_valid'] = True
             feature_valid['area_valid'] = True
             feature_valid['orientation_valid'] = True
             feature_valid['aspect_ratio_valid'] = True
@@ -277,19 +258,57 @@ def compute_physics_attributes(node_data):
             for flag in required_valid_flags:
                 if flag not in feature_valid:
                     feature_valid[flag] = False
+            # Populate symmetry_axis and predicate using parse_action_command from process_single_problem.py
+            action_program = node_data.get('action_program', [])
+            if isinstance(action_program, list) and all(isinstance(cmd, str) for cmd in action_program):
+                from src.scene_graphs_building.process_single_problem import parse_action_command
+                # Example: extract symmetry_axis and predicate from parsed commands
+                predicates = []
+                symmetry_axes = []
+                for cmd in action_program:
+                    parsed = parse_action_command(cmd)
+                    if parsed:
+                        if parsed.get('type') == 'line':
+                            predicates.append('line')
+                            # For lines, symmetry axis is the direction
+                            symmetry_axes.append(parsed.get('mode'))
+                        elif parsed.get('type') == 'arc':
+                            predicates.append('arc')
+                            symmetry_axes.append(parsed.get('mode'))
+                node_data['predicate'] = predicates[0] if predicates else None
+                node_data['symmetry_axis'] = symmetry_axes[0] if symmetry_axes else None
             node_data['feature_valid'] = feature_valid
             logging.info(f"compute_physics_attributes: Node {node_data.get('id', 'unknown')} features computed from LOGO vertices.")
         else:
             # Invalid polygon (bad geometry)
             node_data['geometry_valid'] = False
-            # Set all required features to None
             for feat in required_features:
                 node_data[feat] = None
             node_data['fallback_geometry'] = True
-            # Set all required valid flags to False
             feature_valid = {k: False for k in required_valid_flags}
             node_data['feature_valid'] = feature_valid
+            node_data['symmetry_axis'] = None
+            node_data['predicate'] = None
             logging.warning(f"Invalid LOGO polygon for node {node_data.get('id', 'unknown')}, vertices: {vertices}")
+            for feat in required_features:
+                if feat not in node_data:
+                    node_data[feat] = None
+            # Ensure all required valid flags are present, set to False if missing
+            for flag in required_valid_flags:
+                if flag not in feature_valid:
+                    feature_valid[flag] = False
+            node_data['feature_valid'] = feature_valid
+            logging.info(f"compute_physics_attributes: Node {node_data.get('id', 'unknown')} features computed from LOGO vertices.")
+        # Invalid polygon (bad geometry)
+        node_data['geometry_valid'] = False
+        # Set all required features to None
+        for feat in required_features:
+            node_data[feat] = None
+        node_data['fallback_geometry'] = True
+        # Set all required valid flags to False
+        feature_valid = {k: False for k in required_valid_flags}
+        node_data['feature_valid'] = feature_valid
+        logging.warning(f"Invalid LOGO polygon for node {node_data.get('id', 'unknown')}, vertices: {vertices}")
     elif object_type == 'line' and vertices and len(vertices) == 2:
         # Proxy features for lines
         arr = np.array(vertices)

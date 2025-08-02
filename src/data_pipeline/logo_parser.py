@@ -54,14 +54,33 @@ class BongardLogoParser:
     def parse_action_program(self, action_list: List[str], scale: float = 100.0) -> List[Tuple[float, float]]:
         self.reset()
         vertices = [(self.x, self.y)]
+        symmetry_axis = None
+        predicate = None
         for action_cmd in action_list:
             new_points = self.parse_single_action(action_cmd, scale)
             vertices.extend(new_points)
+            # LOGO predicate extraction logic (example: detect symmetry, parallelism, etc.)
+            if action_cmd.startswith('line_'):
+                predicate = 'line'
+                # For lines, symmetry axis is the direction of the line
+                if len(new_points) >= 2:
+                    x0, y0 = new_points[0]
+                    x1, y1 = new_points[-1]
+                    symmetry_axis = math.atan2(y1 - y0, x1 - x0)
+            elif action_cmd.startswith('arc_'):
+                predicate = 'arc'
+                # For arcs, symmetry axis is the bisector of the arc
+                if len(new_points) >= 2:
+                    x0, y0 = new_points[0]
+                    x1, y1 = new_points[-1]
+                    symmetry_axis = math.atan2(y1 - y0, x1 - x0)
         # Ensure at least 4 vertices for valid polygon
         if len(vertices) < 4:
-            # Generate a minimal valid square at current position
             x, y = self.x, self.y
             vertices = [(x, y), (x + 5, y), (x + 5, y + 5), (x, y)]
+        # Return vertices, symmetry_axis, predicate for downstream use
+        self.last_symmetry_axis = symmetry_axis
+        self.last_predicate = predicate
         return vertices
 
     def parse_single_action(self, action_cmd: str, scale: float) -> List[Tuple[float, float]]:
