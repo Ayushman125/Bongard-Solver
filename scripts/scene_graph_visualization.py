@@ -34,26 +34,50 @@ def save_scene_graph_visualization(G, image_path, out_dir, problem_id):
     """Save a visualization of the scene graph G overlaid on the real image."""
     os.makedirs(out_dir, exist_ok=True)
     # Node positions: use centroid, else first vertex, else (0,0)
+    import numpy as np
     pos = {}
     for n, data in G.nodes(data=True):
         if 'centroid' in data:
-            pos[n] = tuple(data['centroid'])
+            # Ensure centroid is a numpy array for compatibility
+            pos[n] = tuple(np.array(data['centroid'], dtype=np.float64))
         elif 'vertices' in data and data['vertices']:
-            pos[n] = tuple(data['vertices'][0])
+            # Ensure first vertex is a numpy array for compatibility
+            pos[n] = tuple(np.array(data['vertices'][0], dtype=np.float64))
         else:
-            pos[n] = (0, 0)
+            pos[n] = (0.0, 0.0)
+
+    # Ensure all nodes are shown, even if disconnected (add to plotG if missing)
+    import networkx as nx
+    if hasattr(G, 'is_multigraph') and G.is_multigraph():
+        plotG = nx.DiGraph()
+        plotG.add_nodes_from(G.nodes(data=True))
+        seen = set()
+        for u, v, k, data in _robust_edge_unpack(G.edges(keys=True, data=True)):
+            if (u, v) not in seen:
+                plotG.add_edge(u, v, **data)
+                seen.add((u, v))
+    else:
+        plotG = nx.DiGraph()
+        plotG.add_nodes_from(G.nodes(data=True))
+        for u, v, k, data in _robust_edge_unpack(G.edges(data=True)):
+            plotG.add_edge(u, v, **data)
+
+    # If any node is missing from plotG, add it (ensures isolated nodes are shown)
+    for n, data in G.nodes(data=True):
+        if n not in plotG:
+            plotG.add_node(n, **data)
 
     # 1. Save graph overlayed on real image (if image exists)
     # For visualization: if MultiDiGraph, convert to DiGraph for plotting edge labels
     import json
     from collections import defaultdict
     import matplotlib.patches as mpatches
-    plotG = G
+    
     # --- Node color/border/label logic ---
     node_labels = {}
     node_colors = []
     node_border_colors = []
-    for n, data in G.nodes(data=True):
+    for n, data in plotG.nodes(data=True):
         # Color and border logic
         if data.get('is_motif'):
             node_colors.append('gold')
@@ -73,10 +97,14 @@ def save_scene_graph_visualization(G, image_path, out_dir, problem_id):
         else:
             node_colors.append('skyblue')
             node_border_colors.append('blue')
-        # Label logic
-        label = str(n)
+        # Label logic: show program index, command, and shape_label for LOGO clarity
+        label = f"{n}"
+        if data.get('action_index') is not None:
+            label += f"\n[action {data['action_index']}]"
+        if data.get('command'):
+            label += f"\n{data['command']}"
         if data.get('shape_label'):
-            label = str(data['shape_label'])
+            label += f"\n{data['shape_label']}"
         if not data.get('geometry_valid', True):
             label += '\n[degenerate]'
         elif data.get('object_type') == 'line':
@@ -129,6 +157,15 @@ def save_scene_graph_visualization(G, image_path, out_dir, problem_id):
         color = color_map.get(preds[0], 'gray') if preds else 'gray'
         edge_colors.append(color)
         edge_labels[(u, v)] = ', '.join(sorted(set(preds)))
+
+    # Filter out labels for self-loops or edges between co-located nodes to prevent drawing errors
+    drawable_edge_labels = {
+        (u, v): label for (u, v), label in edge_labels.items()
+        if u != v and pos.get(u) != pos.get(v)
+    }
+    if len(drawable_edge_labels) < len(edge_labels):
+        logging.warning(f"Skipped {len(edge_labels) - len(drawable_edge_labels)} edge labels for self-loops or co-located nodes in {problem_id}.")
+
     if image_path and os.path.exists(image_path):
         img = cv2.imread(image_path)
         if img is not None:
@@ -152,10 +189,11 @@ def save_scene_graph_visualization(G, image_path, out_dir, problem_id):
                 mpatches.Patch(color='gray', label='Other Edge'),
             ]
             plt.legend(handles=legend_handles, loc='upper right', fontsize=8)
-            if nx.number_of_selfloops(plotG) > 0:
-                logging.warning(f"[LOGO Visualization] Skipping edge label drawing for {problem_id} due to self-loops (NetworkX limitation).")
-            else:
-                nx.draw_networkx_edge_labels(plotG, pos, edge_labels=edge_labels, font_color='blue', font_size=7)
+            # Draw edge labels using filtered labels; catch errors to avoid crashes
+            try:
+                nx.draw_networkx_edge_labels(plotG, pos, edge_labels=drawable_edge_labels, font_color='blue', font_size=7)
+            except ValueError as e:
+                logging.warning(f"[LOGO Visualization] Edge label drawing failed for {problem_id}: {e}")
             plt.axis('off')
             out_path_overlay = os.path.join(out_dir, f"{problem_id}_scene_graph.png")
             plt.savefig(out_path_overlay, bbox_inches='tight')
@@ -179,10 +217,11 @@ def save_scene_graph_visualization(G, image_path, out_dir, problem_id):
         mpatches.Patch(color='gray', label='Other Edge'),
     ]
     plt.legend(handles=legend_handles, loc='upper right', fontsize=8)
-    if nx.number_of_selfloops(plotG) > 0:
-        logging.warning(f"[LOGO Visualization] Skipping edge label drawing for {problem_id} due to self-loops (NetworkX limitation).")
-    else:
-        nx.draw_networkx_edge_labels(plotG, pos, edge_labels=edge_labels, font_color='blue', font_size=7)
+    # Draw edge labels using filtered labels; catch errors to avoid crashes
+    try:
+        nx.draw_networkx_edge_labels(plotG, pos, edge_labels=drawable_edge_labels, font_color='blue', font_size=7)
+    except ValueError as e:
+        logging.warning(f"[LOGO Visualization] Edge label drawing failed for {problem_id}: {e}")
     plt.axis('off')
     out_path_graph = os.path.join(out_dir, f"{problem_id}_graph_only.png")
     plt.savefig(out_path_graph, bbox_inches='tight')
