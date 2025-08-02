@@ -51,7 +51,7 @@ sam-hq/
 visualizations/
 feedback_samples/
 model_cache/
-
+feedback/
 
 
 # Ignore Jupyter and test outputs

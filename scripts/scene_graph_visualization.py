@@ -261,4 +261,7 @@ def save_scene_graph_csv(G, out_dir, problem_id):
         raise
     os.makedirs(out_dir, exist_ok=True)
     pd.DataFrame(nodes).to_csv(os.path.join(out_dir, f"{problem_id}_nodes.csv"), index=False)
-    pd.DataFrame(edges).to_csv(os.path.join(out_dir, f"{problem_id}_edges.csv"), index=False)
+    if edges:
+        pd.DataFrame(edges).to_csv(os.path.join(out_dir, f"{problem_id}_edges.csv"), index=False)
+    else:
+        logging.warning(f"[LOGO Visualization] No edges found for problem {problem_id}, skipping edge CSV.")
