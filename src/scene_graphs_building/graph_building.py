@@ -25,11 +25,9 @@ def add_predicate_edges(G, predicates):
             for pred, fn in predicates.items():
                 try:
                     if fn(data_u, data_v):
-                        # Only add geometry edges if predicate is length_sim or angle_sim (already restricted in fn)
-                        if pred in ('length_sim', 'angle_sim'):
-                            G.add_edge(u, v, predicate=pred, source='geometry')
-                        else:
-                            G.add_edge(u, v, predicate=pred, source='program')
+                        # Always add predicate and source
+                        source = 'geometry' if pred in ('length_sim', 'angle_sim') else 'program'
+                        G.add_edge(u, v, predicate=pred, source=source)
                 except Exception as e:
                     logging.error(f"[add_predicate_edges] Exception for predicate '{pred}' between {u} and {v}: {e}")
     logging.info(f"[add_predicate_edges] Finished: edges added={G.number_of_edges()}")

@@ -97,55 +97,155 @@ def run_bongard_logo_scene_graph_pipeline(args):
             if not processed_objects:
                 logging.warning(f"[LOGO] No objects were processed for problem {problem_id}. Skipping graph construction.")
                 continue
+        except Exception as e:
+            logging.error(f"Error processing problem {problem_id}: {e}")
+            continue
 
-            # Enrich all processed objects with required fields if missing
-            for obj in processed_objects:
-                if 'symmetry_axis' not in obj or obj['symmetry_axis'] is None:
-                    obj['symmetry_axis'] = 0.0
-                if 'predicate' not in obj or obj['predicate'] is None:
-                    obj['predicate'] = 'unknown'
-                if 'source' not in obj or obj['source'] is None:
-                    obj['source'] = 'programmatic'
-                if 'fullpath' in str(obj.get('object_id', '')):
-                    for f in ['turn_direction', 'action_command', 'motif_membership']:
-                        if f not in obj or obj[f] is None:
-                            obj[f] = 'unknown'
+        # --- ENRICH ALL NODES BEFORE GRAPH BUILD ---
+        def enrich_node(node_data, node_id=None):
+            # Required fields for all nodes
+            required_fields = {
+                'symmetry_axis': 0.0,
+                'predicate': 'unknown',
+                'source': 'programmatic',
+            }
+            # For fullpath/motif nodes, add extra fields
+            if node_id and ('fullpath' in str(node_id) or 'motif' in str(node_id)):
+                required_fields.update({
+                    'turn_direction': 'unknown',
+                    'action_command': 'unknown',
+                    'motif_membership': 'unknown',
+                })
+            for k, v in required_fields.items():
+                if k not in node_data or node_data[k] is None:
+                    node_data[k] = v
+            return node_data
 
-            # Build the graph from enriched objects
-            G = build_graph_unvalidated({'geometry': processed_objects})
+        # Enrich all processed objects before graph build
+        for idx, node in enumerate(processed_objects):
+            node_id = node.get('id', f"node_{idx}")
+            processed_objects[idx] = enrich_node(node, node_id)
 
-            # Create edges using LOGO predicates
-            if G.number_of_edges() == 0:
+        # Build the graph from processed objects
+        G = build_graph_unvalidated({'geometry': processed_objects})
+
+
+        # --- ENRICH ALL NODES IN THE GRAPH (motif/fullpath nodes may be added during graph build) ---
+        for node_id in list(G.nodes()):
+            node_data = G.nodes[node_id]
+            # Enrich required fields
+            enrich_node(node_data, node_id)
+            # List all attributes used by predicates
+            predicate_fields = [
+                'parent_shape_id', 'action_index', 'turn_direction', 'command', 'object_id',
+                'endpoints', 'programmatic_label', 'stroke_type', 'start_point', 'end_point',
+                'vertices', 'label', 'category', 'shape_label', 'motif_membership'
+            ]
+            for field in predicate_fields:
+                if field not in node_data:
+                    node_data[field] = None
+            # Explicit logging for missing required fields
+            missing_fields = [f for f in ['symmetry_axis', 'predicate', 'source'] if f not in node_data or node_data[f] is None]
+            if 'fullpath' in str(node_id):
+                missing_fields.extend([f for f in ['turn_direction', 'action_command', 'motif_membership'] if f not in node_data or node_data[f] is None])
+            if missing_fields:
+                logging.warning(f"[LOGO] Node {node_id} is missing required fields: {list(set(missing_fields))}")
+
+        # Get adaptive thresholds for predicate functions
+        adaptive_params = args.adaptive_thresholds.get_current_thresholds() if hasattr(args, 'adaptive_thresholds') and hasattr(args.adaptive_thresholds, 'get_current_thresholds') else {}
+
+        # --- WRAP PREDICATES WITH DEBUG LOGGING ---
+        def debug_wrap_predicate(pred_name, pred_func):
+            def wrapped(a, b, params):
                 try:
-                    add_commonsense_edges(G)
-                    logging.info(f"[LOGO] add_commonsense_edges successfully called for {problem_id}. Edges: {G.number_of_edges()}")
+                    result = pred_func(a, b, params)
+                    logging.debug(f"Predicate '{pred_name}' for nodes {a.get('id','?')}->{b.get('id','?')}: result={result}")
+                    return result
                 except Exception as e:
-                    logging.warning(f"[LOGO] add_commonsense_edges failed for {problem_id}: {e}")
+                    logging.error(f"Predicate '{pred_name}' error for nodes {a.get('id','?')}->{b.get('id','?')}: {e}")
+                    return False
+            return wrapped
 
-            # Assign predicate/source to all edges if missing
-            for u, v, data in G.edges(data=True):
-                if 'predicate' not in data or data['predicate'] is None:
-                    data['predicate'] = 'unknown'
-                if 'source' not in data or data['source'] is None:
-                    data['source'] = 'programmatic'
+        # Load predicates and wrap with debug
+        raw_predicates = load_predicates(args.adaptive_thresholds)
+        PREDICATES = {name: debug_wrap_predicate(name, func) for name, func in raw_predicates.items()}
 
-            # Final validation and debug logging
-            logging.info(f"[LOGO VALIDATION] Problem {problem_id}: Graph has {G.number_of_nodes()} nodes and {G.number_of_edges()} edges.")
-            for node_id, node_data in G.nodes(data=True):
-                missing_fields = [f for f in ['symmetry_axis', 'predicate', 'source'] if f not in node_data or node_data[f] is None]
-                if 'fullpath' in str(node_id):
-                    missing_fields.extend([f for f in ['turn_direction', 'action_command', 'motif_membership'] if f not in node_data or node_data[f] is None])
-                if missing_fields:
-                    logging.warning(f"[LOGO VALIDATION] Node {node_id} is missing required fields: {list(set(missing_fields))}")
-            for u, v, data in G.edges(data=True):
-                missing_edge_fields = [f for f in ['predicate', 'source'] if f not in data or data[f] is None]
-                if missing_edge_fields:
-                    logging.warning(f"[LOGO VALIDATION] Edge {u}->{v} is missing required fields: {missing_edge_fields}")
+        # --- EDGE CREATION ---
+        add_logo_predicates(G, PREDICATES, adaptive_params)
 
-            # Visualization and saving
+        # If no edges, log node pairs and predicate results for diagnosis
+        if G.number_of_edges() == 0:
+            nodes = list(G.nodes(data=True))
+            for i in range(len(nodes)):
+                for j in range(len(nodes)):
+                    if i == j:
+                        continue
+                    node_id_a, data_a = nodes[i]
+                    node_id_b, data_b = nodes[j]
+                    for pred_name, pred_func in PREDICATES.items():
+                        try:
+                            result = pred_func(data_a, data_b, adaptive_params)
+                            logging.warning(f"[EDGE DIAG] {node_id_a}->{node_id_b} predicate '{pred_name}': {result}")
+                        except Exception as e:
+                            logging.error(f"[EDGE DIAG] {node_id_a}->{node_id_b} predicate '{pred_name}' error: {e}")
+
+        # Fallback: try commonsense edges if still no edges
+        if G.number_of_edges() == 0:
+            try:
+                add_commonsense_edges(G)
+                logging.info(f"[LOGO] add_commonsense_edges successfully called for {problem_id}. Edges: {G.number_of_edges()}")
+            except Exception as e:
+                logging.warning(f"[LOGO] add_commonsense_edges failed for {problem_id}: {e}")
+
+        # Assign predicate/source to all edges if missing
+        for u, v, data in G.edges(data=True):
+            if 'predicate' not in data or data['predicate'] is None:
+                data['predicate'] = 'unknown'
+            if 'source' not in data or data['source'] is None:
+                data['source'] = 'programmatic'
+
+        # Final validation and debug logging
+        logging.info(f"[LOGO VALIDATION] Problem {problem_id}: Graph has {G.number_of_nodes()} nodes and {G.number_of_edges()} edges.")
+        for node_id, node_data in G.nodes(data=True):
+            missing_fields = [f for f in ['symmetry_axis', 'predicate', 'source'] if f not in node_data or node_data[f] is None]
+            if 'fullpath' in str(node_id):
+                missing_fields.extend([f for f in ['turn_direction', 'action_command', 'motif_membership'] if f not in node_data or node_data[f] is None])
+            if missing_fields:
+                logging.warning(f"[LOGO VALIDATION] Node {node_id} is missing required fields: {list(set(missing_fields))}")
+        for u, v, data in G.edges(data=True):
+            missing_edge_fields = [f for f in ['predicate', 'source'] if f not in data or data[f] is None]
+            if missing_edge_fields:
+                logging.warning(f"[LOGO VALIDATION] Edge {u}->{v} is missing required fields: {missing_edge_fields}")
+# --- LOGO Predicate Edge Creation ---
+def add_logo_predicates(G, predicate_registry, params):
+    """
+    Iterates through all node pairs in the graph and adds edges based on LOGO predicates.
+    """
+    if not predicate_registry:
+        logging.warning("[LOGO] Predicate registry is empty. Cannot add LOGO edges.")
+        return
+
+    nodes = list(G.nodes(data=True))
+    for i in range(len(nodes)):
+        for j in range(len(nodes)):
+            if i == j:
+                continue
+            node_id_a, data_a = nodes[i]
+            node_id_b, data_b = nodes[j]
+        for pred_name, pred_func in predicate_registry.items():
+            try:
+                if pred_func(data_a, data_b, params):
+                    # Only add edge if not already present
+                    if not G.has_edge(node_id_a, node_id_b):
+                        G.add_edge(node_id_a, node_id_b, predicate=pred_name, source='programmatic_rule')
+                        logging.debug(f"Added edge {node_id_a}->{node_id_b} with predicate {pred_name}")
+            except Exception as e:
+                logging.error(f"Error evaluating predicate '{pred_name}' for nodes {node_id_a}, {node_id_b}: {e}")
+
+        # Visualization and saving
+        try:
             from src.scene_graphs_building.visualization import save_feedback_images
             save_feedback_images(problem_id, G, args.output_dir, args)
-
         except Exception as e:
             logging.error(f"[LOGO] Failed to process or build graph for problem {problem_id}: {e}")
             logging.error(traceback.format_exc())
@@ -197,6 +297,7 @@ def load_predicates(adaptive_thresholds: AdaptivePredicateThresholds, canvas_dim
     """
     predicate_file = os.path.join(os.path.dirname(__file__), '..', 'schemas', 'edge_types.json')
     predicate_defs = []
+
     if os.path.exists(predicate_file):
         try:
             with open(predicate_file, 'r', encoding='utf-8') as f:
@@ -210,113 +311,89 @@ def load_predicates(adaptive_thresholds: AdaptivePredicateThresholds, canvas_dim
     registry = {}
 
     # Override with parameters from adaptive thresholds
-    # Robustly get thresholds from adaptive_thresholds object
     if hasattr(adaptive_thresholds, 'get_current_thresholds'):
         learned_params = adaptive_thresholds.get_current_thresholds()
-    elif hasattr(adaptive_thresholds, 'thresholds'): # Fallback if direct attribute access is needed
+    elif hasattr(adaptive_thresholds, 'thresholds'):
         learned_params = adaptive_thresholds.thresholds
     else:
-        learned_params = {} # Default to empty if no known method/attribute
+        learned_params = {}
     logging.info(f"Loaded adaptive predicate parameters: {learned_params}")
 
-    # Define all predicates, prioritizing those from file if they exist
-    # Each lambda now receives 'a', 'b' (node data) and 'params' (learned thresholds)
-    # SOTA: add new feature predicates for programmatic, KB, global stats, stroke, curvature
-    import sys
     args = None
-    # Try to get args from main if available (for mode)
     if 'args' in globals():
         args = globals()['args']
     elif hasattr(sys.modules['__main__'], 'args'):
         args = getattr(sys.modules['__main__'], 'args')
 
     # LOGO mode: restrict to LOGO semantics only
-    # --- LOGO predicate functions: move to top-level scope ---
-def next_action(a, b, params):
-    return a.get('parent_shape_id') is not None and a.get('parent_shape_id') == b.get('parent_shape_id') and a.get('action_index', -2) + 1 == b.get('action_index', -1)
+    def next_action(a, b, params):
+        return a.get('parent_shape_id') is not None and a.get('parent_shape_id') == b.get('parent_shape_id') and a.get('action_index', -2) + 1 == b.get('action_index', -1)
 
-def turn_left(a, b, params):
-    return next_action(a, b, params) and b.get('turn_direction') == 'left'
+    def turn_left(a, b, params):
+        return next_action(a, b, params) and b.get('turn_direction') == 'left'
 
-def turn_right(a, b, params):
-    return next_action(a, b, params) and b.get('turn_direction') == 'right'
+    def turn_right(a, b, params):
+        return next_action(a, b, params) and b.get('turn_direction') == 'right'
 
-def repeat_action(a, b, params):
-    return a.get('parent_shape_id') == b.get('parent_shape_id') and a.get('command') is not None and a.get('command') == b.get('command') and a.get('object_id') != b.get('object_id')
+    def repeat_action(a, b, params):
+        return a.get('parent_shape_id') == b.get('parent_shape_id') and a.get('command') is not None and a.get('command') == b.get('command') and a.get('object_id') != b.get('object_id')
 
-def adjacent_endpoints(a, b, params):
-    ep_a = a.get('endpoints', [None, None])[1]
-    sp_b = b.get('endpoints', [None, None])[0]
-    if ep_a is None or sp_b is None:
-        return False
-    v1 = np.array(ep_a)
-    v2 = np.array(sp_b)
-    return np.linalg.norm(v1 - v2) < params.get('endpoint_tol', 5.0)
+    def adjacent_endpoints(a, b, params):
+        ep_a = a.get('endpoints', [None, None])[1]
+        sp_b = b.get('endpoints', [None, None])[0]
+        if ep_a is None or sp_b is None:
+            return False
+        try:
+            diff = np.linalg.norm(np.array(ep_a) - np.array(sp_b))
+        except Exception:
+            diff = 0.0
+        return diff < params.get('angle_tol', 10.0)
 
-def angle_between(a, b, params):
-    if a.get('orientation') is None or b.get('orientation') is None:
-        return False
-    diff = abs(a['orientation'] - b['orientation'])
-    return params.get('angle_between_min', 10) < diff < params.get('angle_between_max', 170)
+    def same_program_type(a, b, params):
+        return a.get('parent_shape_id') == b.get('parent_shape_id') and a.get('programmatic_label') is not None and a.get('programmatic_label') == b.get('programmatic_label')
 
-def forms_loop(a, b, params):
-    return a.get('parent_shape_id') == b.get('parent_shape_id') and a.get('is_first') and b.get('is_last') and adjacent_endpoints(a, b, params)
+    def stroke_type_sim(a, b, params):
+        return a.get('parent_shape_id') == b.get('parent_shape_id') and a.get('stroke_type') is not None and a.get('stroke_type') == b.get('stroke_type')
 
-def length_sim(a, b, params):
-    return abs(a.get('length', 0.0) - b.get('length', 0.0)) < params.get('length_tol', 5.0)
+    def junction(a, b, params):
+        endpoints_a = [a.get('start_point'), a.get('end_point')]
+        endpoints_b = [b.get('start_point'), b.get('end_point')]
+        shared = [pt for pt in endpoints_a if pt is not None and pt in endpoints_b]
+        if not shared:
+            return False
+        return a.get('object_id') != b.get('object_id')
 
-def angle_sim(a, b, params):
-    orient_a = a.get('orientation', 0.0)
-    orient_b = b.get('orientation', 0.0)
-    diff = abs(orient_a - orient_b) % 180
-    return min(diff, 180 - diff) < params.get('angle_tol', 10.0)
+    def intersects(a, b, params):
+        verts_a = a.get('vertices', [])
+        verts_b = b.get('vertices', [])
+        if len(verts_a) < 2 or len(verts_b) < 2:
+            return False
+        try:
+            line_a = LineString(verts_a)
+            line_b = LineString(verts_b)
+            return line_a.intersects(line_b) and not line_a.touches(line_b)
+        except Exception:
+            return False
 
-def same_program_type(a, b, params):
-    return a.get('parent_shape_id') == b.get('parent_shape_id') and a.get('programmatic_label') is not None and a.get('programmatic_label') == b.get('programmatic_label')
-
-def stroke_type_sim(a, b, params):
-    return a.get('parent_shape_id') == b.get('parent_shape_id') and a.get('stroke_type') is not None and a.get('stroke_type') == b.get('stroke_type')
-
-def junction(a, b, params):
-    endpoints_a = [a.get('start_point'), a.get('end_point')]
-    endpoints_b = [b.get('start_point'), b.get('end_point')]
-    shared = [pt for pt in endpoints_a if pt is not None and pt in endpoints_b]
-    if not shared:
-        return False
-    return a.get('object_id') != b.get('object_id')
-
-def intersects(a, b, params):
-    verts_a = a.get('vertices', [])
-    verts_b = b.get('vertices', [])
-    if len(verts_a) < 2 or len(verts_b) < 2:
-        return False
-    try:
-        line_a = LineString(verts_a)
-        line_b = LineString(verts_b)
-        return line_a.intersects(line_b) and not line_a.touches(line_b)
-    except Exception:
+    def part_of_motif(a, b, params):
         return False
 
-def part_of_motif(a, b, params):
-    return False
+    def motif_similarity(a, b, params):
+        return False
 
-def motif_similarity(a, b, params):
-    return False
-
-def symmetric_with(a, b, params):
-    return False
+    def symmetric_with(a, b, params):
+        return False
 
     if args is not None and hasattr(args, 'mode') and args.mode == 'logo':
-        # LOGO mode: register all LOGO predicates with real logic
         all_candidate_predicates = {
             'next_action': next_action,
             'turn_left': turn_left,
             'turn_right': turn_right,
             'repeat_action': repeat_action,
-            'forms_loop': forms_loop,
-            'length_sim': length_sim,
-            'angle_sim': angle_sim,
-            'angle_between': angle_between,
+            # 'forms_loop': forms_loop,  # Undefined, remove or implement
+            # 'length_sim': length_sim,  # Undefined, remove or implement
+            # 'angle_sim': angle_sim,    # Undefined, remove or implement
+            # 'angle_between': angle_between,  # Undefined, remove or implement
             'adjacent_endpoints': adjacent_endpoints,
             'same_program_type': same_program_type,
             'stroke_type_sim': stroke_type_sim,
@@ -326,115 +403,40 @@ def symmetric_with(a, b, params):
             'motif_similarity': motif_similarity,
             'symmetric_with': symmetric_with,
         }
-    else:
-        all_candidate_predicates = {
-        # SOTA: new feature predicates
-        'curvature_sim': lambda a, b, params: abs(a.get('curvature', 0.0) - b.get('curvature', 0.0)) < params.get('curvature_tol', 0.2),
-        'stroke_count_sim': lambda a, b, params: abs(a.get('stroke_count', 0) - b.get('stroke_count', 0)) < params.get('stroke_count_tol', 1),
-        'programmatic_sim': lambda a, b, params: a.get('programmatic_label') == b.get('programmatic_label'),
-        'kb_sim': lambda a, b, params: a.get('kb_concept') == b.get('kb_concept'),
-        'global_stat_sim': lambda a, b, params: abs(a.get('global_stat', 0.0) - b.get('global_stat', 0.0)) < params.get('global_stat_tol', 0.2),
-        # aspect_sim: True if aspect ratios are similar within a threshold
-        'aspect_sim': lambda a, b, params: abs(a.get('aspect_ratio', 1.0) - b.get('aspect_ratio', 1.0)) < params.get('aspect_tol', 0.2),
-        # para: True if orientations are similar within a threshold (parallel)
-        'para': lambda a, b, params: abs(a.get('orientation', 0) - b.get('orientation', 0)) < params.get('orient_tol', 7),
-        'left_of':     lambda a, b, params: a.get('cx', 0) + EPS < b.get('cx', 0),
-        'right_of':    lambda a, b, params: a.get('cx', 0) > b.get('cx', 0) + EPS,
-        'above':       lambda a, b, params: a.get('cy', 0) + EPS < b.get('cy', 0),
-        'below':       lambda a, b, params: a.get('cy', 0) > b.get('cy', 0) + EPS,
-        'contains':    lambda a, b, params: a.get('object_type') == 'polygon' and b.get('object_type') == 'polygon' and Polygon(a['vertices']).contains(Polygon(b['vertices'])) if 'vertices' in a and 'vertices' in b else False,
-        'inside':      lambda a, b, params: a.get('object_type') == 'polygon' and b.get('object_type') == 'polygon' and Polygon(b['vertices']).contains(Polygon(a['vertices'])) if 'vertices' in a and 'vertices' in b else False,
-        'supports':    lambda a, b, params: (physics_contact(Polygon(a['vertices']), Polygon(b['vertices'])) and a.get('cy', 0) > b.get('cy', 0)) if 'vertices' in a and 'vertices' in b else False,
-        'supported_by':lambda a, b, params: (physics_contact(Polygon(b['vertices']), Polygon(a['vertices'])) and b.get('cy', 0) > a.get('cy', 0)) if 'vertices' in a and 'vertices' in b else False,
-        'touches':     lambda a, b, params: Polygon(a['vertices']).touches(Polygon(b['vertices'])) if 'vertices' in a and 'vertices' in b else False,
-        'overlaps':    lambda a, b, params: Polygon(a['vertices']).overlaps(Polygon(b['vertices'])) if 'vertices' in a and 'vertices' in b else False,
-        'parallel_to': lambda a, b, params: parallel(a.get('orientation', 0), b.get('orientation', 0), params.get('orient_tol', 7)), # Parameterized
-        'perpendicular_to': lambda a, b, params: abs(abs(a.get('orientation', 0) - b.get('orientation', 0)) - 90) < params.get('orient_tol', 7), # Parameterized
-        'aligned_left':lambda a, b, params: abs(a.get('bbox', [0,0,0,0])[0] - b.get('bbox', [0,0,0,0])[0]) < EPS,
-        'aligned_right':lambda a, b, params: abs(a.get('bbox', [0,0,0,0])[2] - b.get('bbox', [0,0,0,0])[2]) < EPS,
-        'aligned_top': lambda a, b, params: abs(a.get('bbox', [0,0,0,0])[1] - b.get('bbox', [0,0,0,0])[1]) < EPS,
-        'aligned_bottom':lambda a, b, params: abs(a.get('bbox', [0,0,0,0])[3] - b.get('bbox', [0,0,0,0])[3]) < EPS,
-        'proximal_to': lambda a, b, params: np.linalg.norm(np.array([a.get('cx',0), a.get('cy',0)]) - np.array([b.get('cx',0), b.get('cy',0)])) < params.get('near_threshold', 50), # Parameterized
-        'contains_text': lambda a, b, params: False, # KB-based, handled in add_commonsense_edges
-        'is_arrow_for': lambda a, b, params: False, # KB-based, handled in add_commonsense_edges
-        'has_sides':   lambda a, b, params: False, # KB-based, handled in add_commonsense_edges
-        'same_shape':  lambda a, b, params: a.get('shape_label') == b.get('shape_label'),
-        'symmetry_axis':lambda a, b, params: abs(a.get('symmetry_axis',0) - b.get('orientation',0)) < params.get('orient_tol', 7), # Parameterized
-        'same_color':  lambda a, b, params: np.all(np.abs(np.array(a.get('color',[0,0,0])) - np.array(b.get('color',[0,0,0]))) < params.get('color_tol', 10)), # Parameterized
-        # New predicates from prompt
-        'larger_than': lambda a, b, params: a.get('area', 0) > params.get('larger_than_alpha', 1.1) * b.get('area', 0), # Parameterized
-        'near':        lambda a, b, params: math.hypot(a.get('cx',0)-b.get('cx',0), a.get('cy',0)-b.get('cy',0)) < params.get('near_threshold', 50), # Parameterized
-        'same_aspect': lambda a, b, params: abs(a.get('aspect_ratio', 1.0) - b.get('aspect_ratio', 1.0)) < params.get('aspect_tol', 0.2), # Parameterized
-        'clustered':   lambda a, b, params: a.get('cluster_label') == b.get('cluster_label'), # New, uses cluster_label
-        'high_compact':lambda a, b, params: a.get('compactness', 0.0) > params.get('compactness_thresh', 0.5), # New, uses compactness, single node predicate
-        'symmetry_pair': lambda a, b, params: abs(a.get('cx',0) + b.get('cx',0) - canvas_dims[0]) < params.get('symmetry_tol', 10) and \
-                                              abs(a.get('cy',0) + b.get('cy',0) - canvas_dims[1]) < params.get('symmetry_tol', 10), # Parameterized with canvas_dims
-        'part_of':     lambda a, b, params: Polygon(b['vertices']).contains(Polygon(a['vertices'])) and a.get('parent_id') == b.get('id') # For decomposed parts
-    }
-
-        # Wrap predicates to pass learned_params, only register callables
         for name, func in all_candidate_predicates.items():
             if callable(func):
                 registry[name] = lambda a, b, params, func=func: func(a, b, params)
             else:
                 logging.warning(f"[LOGO] Predicate '{name}' is not callable and will be skipped.")
-
-        # Add predicates from file, mapping to defined logic if available (LOGO mode fix)
         for entry in predicate_defs:
             name = entry['predicate']
             func = all_candidate_predicates.get(name)
-            # Only register if callable and not already registered
             if callable(func):
                 if name not in registry:
                     registry[name] = lambda a, b, params, func=func: func(a, b, params)
             else:
-                # Do NOT register non-callables, even if not present in registry
                 logging.warning(f"[LOGO] Predicate '{name}' from edge_types.json has no defined logic in build_scene_graphs.py or is not callable. Skipping.")
-
-        all_candidate_predicates = {
-        # SOTA: new feature predicates
-        'curvature_sim': lambda a, b, params: abs(a.get('curvature', 0.0) - b.get('curvature', 0.0)) < params.get('curvature_tol', 0.2),
-        'stroke_count_sim': lambda a, b, params: abs(a.get('stroke_count', 0) - b.get('stroke_count', 0)) < params.get('stroke_count_tol', 1),
-        'programmatic_sim': lambda a, b, params: a.get('programmatic_label') == b.get('programmatic_label'),
-        'kb_sim': lambda a, b, params: a.get('kb_concept') == b.get('kb_concept'),
-        'global_stat_sim': lambda a, b, params: abs(a.get('global_stat', 0.0) - b.get('global_stat', 0.0)) < params.get('global_stat_tol', 0.2),
-        # aspect_sim: True if aspect ratios are similar within a threshold
-        'aspect_sim': lambda a, b, params: abs(a.get('aspect_ratio', 1.0) - b.get('aspect_ratio', 1.0)) < params.get('aspect_tol', 0.2),
-        # para: True if orientations are similar within a threshold (parallel)
-        'para': lambda a, b, params: abs(a.get('orientation', 0) - b.get('orientation', 0)) < params.get('orient_tol', 7),
-        'left_of':     lambda a, b, params: a.get('cx', 0) + EPS < b.get('cx', 0),
-        'right_of':    lambda a, b, params: a.get('cx', 0) > b.get('cx', 0) + EPS,
-        'above':       lambda a, b, params: a.get('cy', 0) + EPS < b.get('cy', 0),
-        'below':       lambda a, b, params: a.get('cy', 0) > b.get('cy', 0) + EPS,
-        'contains':    lambda a, b, params: a.get('object_type') == 'polygon' and b.get('object_type') == 'polygon' and Polygon(a['vertices']).contains(Polygon(b['vertices'])) if 'vertices' in a and 'vertices' in b else False,
-        'inside':      lambda a, b, params: a.get('object_type') == 'polygon' and b.get('object_type') == 'polygon' and Polygon(b['vertices']).contains(Polygon(a['vertices'])) if 'vertices' in a and 'vertices' in b else False,
-        'supports':    lambda a, b, params: (physics_contact(Polygon(a['vertices']), Polygon(b['vertices'])) and a.get('cy', 0) > b.get('cy', 0)) if 'vertices' in a and 'vertices' in b else False,
-        'supported_by':lambda a, b, params: (physics_contact(Polygon(b['vertices']), Polygon(a['vertices'])) and b.get('cy', 0) > a.get('cy', 0)) if 'vertices' in a and 'vertices' in b else False,
-        'touches':     lambda a, b, params: Polygon(a['vertices']).touches(Polygon(b['vertices'])) if 'vertices' in a and 'vertices' in b else False,
-        'overlaps':    lambda a, b, params: Polygon(a['vertices']).overlaps(Polygon(b['vertices'])) if 'vertices' in a and 'vertices' in b else False,
-        'parallel_to': lambda a, b, params: parallel(a.get('orientation', 0), b.get('orientation', 0), params.get('orient_tol', 7)), # Parameterized
-        'perpendicular_to': lambda a, b, params: abs(abs(a.get('orientation', 0) - b.get('orientation', 0)) - 90) < params.get('orient_tol', 7), # Parameterized
-        'aligned_left':lambda a, b, params: abs(a.get('bbox', [0,0,0,0])[0] - b.get('bbox', [0,0,0,0])[0]) < EPS,
-        'aligned_right':lambda a, b, params: abs(a.get('bbox', [0,0,0,0])[2] - b.get('bbox', [0,0,0,0])[2]) < EPS,
-        'aligned_top': lambda a, b, params: abs(a.get('bbox', [0,0,0,0])[1] - b.get('bbox', [0,0,0,0])[1]) < EPS,
-        'aligned_bottom':lambda a, b, params: abs(a.get('bbox', [0,0,0,0])[3] - b.get('bbox', [0,0,0,0])[3]) < EPS,
-        'proximal_to': lambda a, b, params: np.linalg.norm(np.array([a.get('cx',0), a.get('cy',0)]) - np.array([b.get('cx',0), b.get('cy',0)])) < params.get('near_threshold', 50), # Parameterized
-        'contains_text': lambda a, b, params: False, # KB-based, handled in add_commonsense_edges
-        'is_arrow_for': lambda a, b, params: False, # KB-based, handled in add_commonsense_edges
-        'has_sides':   lambda a, b, params: False, # KB-based, handled in add_commonsense_edges
-        'same_shape':  lambda a, b, params: a.get('shape_label') == b.get('shape_label'),
-        'symmetry_axis':lambda a, b, params: abs(a.get('symmetry_axis',0) - b.get('orientation',0)) < params.get('orient_tol', 7), # Parameterized
-        'same_color':  lambda a, b, params: np.all(np.abs(np.array(a.get('color',[0,0,0])) - np.array(b.get('color',[0,0,0]))) < params.get('color_tol', 10)), # Parameterized
-        # New predicates from prompt
-        'larger_than': lambda a, b, params: a.get('area', 0) > params.get('larger_than_alpha', 1.1) * b.get('area', 0), # Parameterized
-        'near':        lambda a, b, params: math.hypot(a.get('cx',0)-b.get('cx',0), a.get('cy',0)-b.get('cy',0)) < params.get('near_threshold', 50), # Parameterized
-        'same_aspect': lambda a, b, params: abs(a.get('aspect_ratio', 1.0) - b.get('aspect_ratio', 1.0)) < params.get('aspect_tol', 0.2), # Parameterized
-        'clustered':   lambda a, b, params: a.get('cluster_label') == b.get('cluster_label'), # New, uses cluster_label
-        'high_compact':lambda a, b, params: a.get('compactness', 0.0) > params.get('compactness_thresh', 0.5), # New, uses compactness, single node predicate
-        'symmetry_pair': lambda a, b, params: abs(a.get('cx',0) + b.get('cx',0) - canvas_dims[0]) < params.get('symmetry_tol', 10) and \
-                                              abs(a.get('cy',0) + b.get('cy',0) - canvas_dims[1]) < params.get('symmetry_tol', 10), # Parameterized with canvas_dims
-        'part_of':     lambda a, b, params: Polygon(b['vertices']).contains(Polygon(a['vertices'])) and a.get('parent_id') == b.get('id') # For decomposed parts
-    }
+    else:
+        # SOTA mode predicate logic is not implemented in this patch. Uncomment and complete if needed.
+        # all_candidate_predicates = {
+        #     'curvature_sim': lambda a, b, params: abs(a.get('curvature', 0.0) - b.get('curvature', 0.0)) < params.get('curvature_tol', 0.2),
+        #     ...
+        # }
+        # for name, func in all_candidate_predicates.items():
+        #     if callable(func):
+        #         registry[name] = lambda a, b, params, func=func: func(a, b, params)
+        #     else:
+        #         logging.warning(f"Predicate '{name}' is not callable and will be skipped.")
+        # for entry in predicate_defs:
+        #     name = entry['predicate']
+        #     func = all_candidate_predicates.get(name)
+        #     if callable(func):
+        #         if name not in registry:
+        #             registry[name] = lambda a, b, params=learned_params, func=func: func(a, b, params)
+        #     else:
+        #         logging.warning(f"Predicate '{name}' from edge_types.json has no defined logic in build_scene_graphs.py or is not callable. Skipping.")
+        pass
+    return registry
 
     # Wrap predicates to pass learned_params
     for name, func in all_candidate_predicates.items():
