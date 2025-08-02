@@ -4,24 +4,28 @@ from scipy.stats import ttest_ind
 import logging
 def induce_predicate_statistical(objects):
     import logging
-    pos = [o for o in objects if o.get('category') == 1]
-    neg = [o for o in objects if o.get('category') == 0]
+    import pandas as pd
+    # Convert objects to DataFrame for easier manipulation
+    df = pd.DataFrame(objects)
     features = [
         'area', 'aspect_ratio', 'compactness', 'orientation', 'length', 'cx', 'cy',
         'curvature', 'stroke_count', 'programmatic_label', 'kb_concept', 'global_stat'
     ]
     best_feature = None
     best_p = 1.0
+    # Separate positive and negative samples
+    pos = df[df.get('category', 0) == 1]
+    neg = df[df.get('category', 0) == 0]
     for feat in features:
-        pos_vals = [o.get(feat, 0) for o in pos if o.get(feat) is not None]
-        neg_vals = [o.get(feat, 0) for o in neg if o.get(feat) is not None]
-        if len(pos_vals) < 4 or len(neg_vals) < 4:
-            logging.warning(f"Statistical induction: Skipping {feat} due to small group size (pos={len(pos_vals)}, neg={len(neg_vals)})")
-            continue
-        # For categorical features, use mutual_info_score
         if feat in ('programmatic_label', 'kb_concept'):
+            # Categorical features: encode and use mutual_info_score
             from sklearn.preprocessing import LabelEncoder
             from sklearn.metrics import mutual_info_score
+            pos_vals = pos[feat].dropna().astype(str).tolist() if feat in pos.columns else []
+            neg_vals = neg[feat].dropna().astype(str).tolist() if feat in neg.columns else []
+            if len(pos_vals) < 4 or len(neg_vals) < 4:
+                logging.warning(f"Statistical induction: Skipping {feat} due to small group size (pos={len(pos_vals)}, neg={len(neg_vals)})")
+                continue
             le = LabelEncoder()
             all_vals = pos_vals + neg_vals
             le.fit(all_vals)
@@ -32,7 +36,12 @@ def induce_predicate_statistical(objects):
                 best_p = mi
                 best_feature = feat
         else:
-            from scipy.stats import ttest_ind
+            # Numeric features: convert to numeric and drop NaNs
+            pos_vals = pd.to_numeric(pos[feat], errors='coerce').dropna().tolist() if feat in pos.columns else []
+            neg_vals = pd.to_numeric(neg[feat], errors='coerce').dropna().tolist() if feat in neg.columns else []
+            if len(pos_vals) < 4 or len(neg_vals) < 4:
+                logging.warning(f"Statistical induction: Skipping {feat} due to small group size (pos={len(pos_vals)}, neg={len(neg_vals)})")
+                continue
             stat, p = ttest_ind(pos_vals, neg_vals, equal_var=False)
             if p < best_p:
                 best_p = p

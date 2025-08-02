@@ -73,3 +73,24 @@ MOTIF_CATEGORIES = [
 SEMANTIC_FIELDS = [
     "object_id", "vertices", "object_type", "is_closed", "fallback_geometry", "semantic_label", "shape_label", "motif_label", "motif_type", "kb_concept", "pattern_role", "action_program_type", "function_label", "gnn_score", "vl_embed"
 ]
+
+# LOGO geometric predicate registry for edge construction
+import numpy as np
+BASIC_LOGO_PREDICATES = {
+    'adjacent_endpoints': lambda a, b: (
+        a.get('object_type') == 'line' and
+        b.get('object_type') == 'line' and
+        any(np.allclose(np.array(pt1), np.array(pt2), atol=1e-3)
+            for pt1 in a.get('endpoints', [])
+            for pt2 in b.get('endpoints', []))
+    ),
+    'length_sim': lambda a, b: (
+        a.get('length') and b.get('length') and
+        abs(a['length'] - b['length']) < 0.05 * max(a['length'], b['length'])
+    ),
+    'angle_sim':  lambda a, b: (
+        a.get('orientation') is not None and
+        b.get('orientation') is not None and
+        abs(a['orientation'] - b['orientation']) < 5
+    ),
+}

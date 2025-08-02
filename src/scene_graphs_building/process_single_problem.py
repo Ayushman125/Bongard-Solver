@@ -45,30 +45,36 @@ def parse_action_command(cmd):
     if not isinstance(cmd, str):
         return None
     parts = cmd.split('_', 2)
-    if len(parts) < 3:
+    # Handle formats like "line_normal_0.2-0.3" (3 parts) and "start_0.1-0.2" (2 parts)
+    if len(parts) == 3:
+        shape, mode, rest = parts
+    elif len(parts) == 2:
+        shape, rest = parts
+        mode = None # No mode specified
+    else:
         return None
-    shape, mode, rest = parts  # e.g. ["line","normal","0.200-0.667"]
+
     if shape == "line" and '-' in rest:
-        a, b = rest.split('-',1)
         try:
+            a, b = rest.split('-',1)
             return {'type':'line', 'mode':mode, 'x':float(a), 'y':float(b)}
         except Exception:
             return None
-    if shape == "start" and '-' in rest:
-        a, b = rest.split('-',1)
+    elif shape == "start" and '-' in rest:
         try:
+            a, b = rest.split('-',1)
             return {'type':'start', 'x':float(a), 'y':float(b)}
         except Exception:
             return None
-    if shape == "arc" and '-' in rest:
-        radius, angle = rest.split('-',1)
+    elif shape == "arc" and '-' in rest:
         try:
+            radius, angle = rest.split('-',1)
             return {'type':'arc', 'mode':mode, 'radius':float(radius), 'angle':float(angle)}
         except Exception:
             return None
-    if shape == "turn" and '-' in rest:
-        angle = rest
+    elif shape == "turn" and '-' in rest:
         try:
+            angle = rest
             return {'type':'turn', 'mode':mode, 'angle':float(angle)}
         except Exception:
             return None
@@ -79,6 +85,7 @@ def parse_action_command(cmd):
 
 
 async def _process_single_problem(problem_id: str, problem_records: List[Dict[str, Any]], feature_cache, *, args=None):
+    # ...existing code...
 
     objects = []
     required_fields = ['action_index', 'parent_shape_id', 'turn_direction', 'action_command', 'programmatic_label', 'stroke_type', 'endpoints', 'length', 'orientation', 'label', 'vertices',
@@ -92,10 +99,22 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
     def enrich_kb_concept(concept):
         # TODO: integrate ConceptNet API
         return concept
+    # --- Perform predicate induction ONCE for the entire problem ---
+    predicate_val = None
+    try:
+        from src.scene_graphs_building.predicate_induction import induce_predicate_for_problem
+        if args is not None and hasattr(args, 'mode') and args.mode == 'logo':
+            # Pass all records for the problem to get meaningful stats
+            predicate_val, _ = induce_predicate_for_problem(problem_records)
+    except Exception as e:
+        logging.error(f"Predicate induction failed for problem {problem_id}: {e}")
+        predicate_val = None
+
     for idx, rec in enumerate(problem_records):
         parent_shape_id = f"{problem_id}_{idx}"
         action_program = rec.get('action_program', [])
         used_fallback = False
+        
         label = rec.get('label', '')
         shape_label = rec.get('shape_label', label)
         category = rec.get('category', label)
@@ -126,6 +145,16 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                         compactness = 4 * np.pi * area / (perimeter ** 2)
                 except Exception:
                     compactness = None
+        # Compute additional geometry attributes if possible
+        # Compute compactness if not present and geometry available
+        if compactness is None:
+            verts = rec.get('geometry') or rec.get('vertices') or []
+            if len(verts) >= 3:
+                try:
+                    # Placeholder for compactness calculation
+                    pass
+                except Exception:
+                    pass
         # Compute additional geometry attributes if possible
         bounding_box = None
         centroid = None
@@ -235,6 +264,8 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                     relationships_line = []
                     if stroke_idx > 0:
                         relationships_line.append(f"adjacent_to_{problem_id}_{idx}_{stroke_idx-1}")
+                    # Induce predicate for stroke
+                    
                     obj = {
                         'object_id': obj_id,
                         'parent_shape_id': parent_shape_id,
@@ -266,7 +297,7 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                         'global_stat': global_stat,
                         'compactness': compactness_stroke,
                         'motif_type': motif_type,
-                        'motif_membership': motif_membership_line,
+                        'motif_membership': motif_membership_line if motif_membership_line is not None else '',
                         'stroke_count': stroke_count,
                         'subcategory': subcategory,
                         'supercategory': supercategory,
@@ -292,8 +323,8 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                         'relationships': relationships_line,
                         'parent_id': parent_shape_id,
                         'fallback_geometry': fallback_geometry_line,
-                        'predicate': None,
-                        'source': None,
+                        'predicate': predicate_val,
+                        'source': 'action_program',
                     }
                     # Track diversity statistics
                     for k, v in obj.items():
@@ -301,7 +332,7 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                     missing = [f for f in required_fields if obj.get(f) is None]
                     if missing:
                         logging.warning(f"[LOGO] Node {obj['object_id']} is missing required fields: {missing}")
-                    objects.append(obj)
+                        objects.append(obj)
                     turtle_pos = list(new_pos)
                     prev_pos = list(turtle_pos)
                 elif cmd_type == 'arc':
@@ -341,6 +372,8 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                     relationships_arc = []
                     if stroke_idx > 0:
                         relationships_arc.append(f"adjacent_to_{problem_id}_{idx}_{stroke_idx-1}")
+                    # Induce predicate for arc
+                    
                     obj = {
                         'object_id': obj_id,
                         'parent_shape_id': parent_shape_id,
@@ -372,7 +405,7 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                         'global_stat': global_stat,
                         'compactness': compactness_stroke,
                         'motif_type': motif_type,
-                        'motif_membership': motif_membership_arc,
+                        'motif_membership': motif_membership_arc if motif_membership_arc is not None else '',
                         'stroke_count': stroke_count,
                         'subcategory': subcategory,
                         'supercategory': supercategory,
@@ -398,8 +431,8 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                         'relationships': relationships_arc,
                         'parent_id': parent_shape_id,
                         'fallback_geometry': fallback_geometry_arc,
-                        'predicate': None,
-                        'source': None,
+                        'predicate': predicate_val,
+                        'source': 'action_program',
                     }
                     for k, v in obj.items():
                         diversity_stats[k].add(str(v))
@@ -419,256 +452,116 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                 obj_id = f"{problem_id}_{idx}_fullpath"
                 geometry_reason = 'fullpath'
                 feature_valid = {'vertices': True, 'endpoints': True, 'length': True, 'orientation': True}
-                # Compute is_closed for this object
                 is_closed = False
-        bounding_box, centroid, area, perimeter, aspect_ratio, compactness_stroke = _calculate_stroke_geometry(verts_seq)
-        obj = {
-            'object_id': obj_id,
-            'parent_shape_id': parent_shape_id,
-            'action_index': -1,
-            'vertices': verts_seq,
-            'object_type': assign_object_type(verts_seq),
-            'turn_direction': None,
-            'action_command': None,
-            'command_type': None,
-            'command_mode': None,
-            'command_params': None,
-            'programmatic_label': programmatic_label,
-            'stroke_type': stroke_type,
-            'label': label,
-            'shape_label': shape_label,
-            'category': category,
-            'original_image_path': remap_path(rec.get('image_path', '')),
-            'image_path': image_path,
-            'original_record_idx': idx,
-            'action_program': action_program,
-            'endpoints': [verts_seq[0], verts_seq[-1]],
-            'length': float(np.sum([np.linalg.norm(np.array(verts_seq[i+1]) - np.array(verts_seq[i])) for i in range(len(verts_seq)-1)])),
-            'orientation': float(np.degrees(np.arctan2(verts_seq[-1][1] - verts_seq[0][1], verts_seq[-1][0] - verts_seq[0][0]))),
-            'object_color': object_color,
-            'component_index': component_index,
-            'cluster_label': cluster_label,
-            'clustered': clustered,
-            'kb_concept': kb_concept,
-            'global_stat': global_stat,
-            'compactness': compactness_stroke,
-            'motif_type': motif_type,
-            'motif_membership': motif_membership,
-            'stroke_count': stroke_count,
-            'subcategory': subcategory,
-            'supercategory': supercategory,
-            'semantic_type': semantic_type,
-            'instance_id': instance_id,
-            'group_id': group_id,
-            'part_of': part_of,
-            'relationship_type': relationship_type,
-            'symmetry_type': symmetry_type,
-            'diversity_stat': diversity_stat,
-            'geometry_reason': geometry_reason,
-            'is_valid': is_valid,
-            'feature_valid': feature_valid,
-            'is_closed': is_closed,
-            'fallback_geometry': verts_seq,
-            'bounding_box': bounding_box,
-            'centroid': centroid,
-            'area': area,
-            'perimeter': perimeter,
-            'aspect_ratio': aspect_ratio,
-            'curvature': 0.0,
-            'skeleton_length': perimeter,
-            'symmetry_axis': None,
-            'relationships': [],
-            'predicate': None,
-            'source': None,
-            'parent_id': parent_shape_id,
-        }
-        for k, v in obj.items():
-            diversity_stats[k].add(str(v))
-        missing = [f for f in required_fields if obj.get(f) is None]
-        if missing:
-            logging.warning(f"[LOGO] Full path node {obj['object_id']} is missing required fields: {missing}")
-        objects.append(obj)
-        # Fallback: If no objects created from action_program, use geometry
-        if not objects and (rec.get('geometry') and isinstance(rec.get('geometry'), list) and len(rec['geometry']) > 0):
-            verts = rec['geometry']
-            obj_id = f"{problem_id}_{idx}_geometry"
-            geometry_reason = 'geometry'
-            feature_valid = {'vertices': True, 'endpoints': True, 'length': True, 'orientation': True}
-            # Compute is_closed for this object
-            is_closed = False
-            if len(verts) >= 3:
-                arr = np.array(verts)
-            # Fix missing variables
-            obj_type = assign_object_type(verts)
-            relationships = ["derived_from_geometry"]
-            # Set predicate using induce_predicate_for_problem if in LOGO mode
-            predicate_val = None
-            try:
-                from src.scene_graphs_building.predicate_induction import induce_predicate_for_problem
-                if args is not None and hasattr(args, 'mode') and args.mode == 'logo':
-                    predicate_val, _ = induce_predicate_for_problem([rec])
-            except Exception:
-                predicate_val = None
-            obj = {
-                'object_id': obj_id,
-                'parent_shape_id': parent_shape_id,
-                'action_index': 0,
-                'vertices': verts,
-                'object_type': obj_type,
-                'turn_direction': turn_direction,
-                'action_command': action_command,
-                'command_type': command_type,
-                'command_mode': command_mode,
-                'command_params': command_params,
-                'programmatic_label': programmatic_label_fallback,
-                'stroke_type': stroke_type,
-                'label': label,
-                'shape_label': shape_label,
-                'category': category,
-                'original_image_path': remap_path(rec.get('image_path', '')),
-                'image_path': image_path,
-                'original_record_idx': idx,
-                'action_program': action_program_fallback,
-                'endpoints': [verts[0], verts[-1]] if len(verts) >= 2 else [],
-                'length': skeleton_length,
-                'orientation': float(np.degrees(np.arctan2(verts[-1][1] - verts[0][1], verts[-1][0] - verts[0][0]))) if len(verts) >= 2 else None,
-                'object_color': object_color,
-                'component_index': component_index,
-                'cluster_label': cluster_label,
-                'clustered': clustered,
-                'kb_concept': kb_concept,
-                'global_stat': global_stat,
-                'compactness': compactness,
-                'motif_type': motif_type,
-                'motif_membership': motif_membership,
-                'stroke_count': stroke_count,
-                'subcategory': subcategory,
-                'supercategory': supercategory,
-                'semantic_type': semantic_type,
-                'instance_id': instance_id,
-                'group_id': group_id,
-                'part_of': part_of,
-                'relationship_type': relationship_type,
-                'symmetry_type': symmetry_type,
-                'diversity_stat': diversity_stat,
-                'geometry_reason': geometry_reason,
-                'is_valid': is_valid,
-                'feature_valid': feature_valid,
-                'is_closed': is_closed,
-                'fallback_geometry': fallback_geometry,
-                'bounding_box': bounding_box,
-                'centroid': centroid,
-                'area': area,
-                'perimeter': perimeter,
-                'aspect_ratio': aspect_ratio,
-                'curvature': curvature,
-                'skeleton_length': skeleton_length,
-                'symmetry_axis': symmetry_axis,
-                # Relational/graph attributes (per object)
-                'relationships': relationships,
-                'predicate': predicate_val,
-                'source': 'action_program' if action_program_fallback else 'geometry',
-                'parent_id': parent_shape_id,
-            }
-
-            # --- LOGICAL PARSING FROM ACTION PROGRAM ---
-            symmetry_axis = None
-            turn_direction = None
-            action_command = None
-            command_type = None
-            command_mode = None
-            command_params = None
-            # Use action_program from record if available
-            action_program_fallback = rec.get('action_program', [])
-            if action_program_fallback:
-                # Find last non-None mode for turn_direction
-                for cmd in reversed(action_program_fallback):
-                    parsed = parse_action_command(cmd)
-                    if parsed and parsed.get('mode', None) is not None:
-                        turn_direction = parsed['mode']
-                        break
-                # Last command for action_command
-                action_command = action_program_fallback[-1]
-                # Last command type and mode
-                parsed_last = parse_action_command(action_program_fallback[-1])
-                if parsed_last:
-                    command_type = parsed_last.get('type', None)
-                    command_mode = parsed_last.get('mode', None)
-                    command_params = {k: v for k, v in parsed_last.items() if k not in ['type', 'mode']}
-            # programmatic_label fallback
-            programmatic_label_fallback = programmatic_label if programmatic_label else "fullpath"
-            obj = {
-                'object_id': obj_id,
-                'parent_shape_id': parent_shape_id,
-                'action_index': 0,
-                'vertices': verts,
-                'object_type': obj_type,
-                'turn_direction': turn_direction,
-                'action_command': action_command,
-                'command_type': command_type,
-                'command_mode': command_mode,
-                'command_params': command_params,
-                'programmatic_label': programmatic_label_fallback,
-                'stroke_type': stroke_type,
-                'label': label,
-                'shape_label': shape_label,
-                'category': category,
-                'original_image_path': remap_path(rec.get('image_path', '')),
-                'image_path': image_path,
-                'original_record_idx': idx,
-                'action_program': action_program_fallback,
-                'endpoints': [verts[0], verts[-1]] if len(verts) >= 2 else [],
-                'length': skeleton_length,
-                'orientation': float(np.degrees(np.arctan2(verts[-1][1] - verts[0][1], verts[-1][0] - verts[0][0]))) if len(verts) >= 2 else None,
-                'object_color': object_color,
-                'component_index': component_index,
-                'cluster_label': cluster_label,
-                'clustered': clustered,
-                'kb_concept': kb_concept,
-                'global_stat': global_stat,
-                'compactness': compactness,
-                'motif_type': motif_type,
-                'motif_membership': motif_membership,
-                'stroke_count': stroke_count,
-                'subcategory': subcategory,
-                'supercategory': supercategory,
-                'semantic_type': semantic_type,
-                'instance_id': instance_id,
-                'group_id': group_id,
-                'part_of': part_of,
-                'relationship_type': relationship_type,
-                'symmetry_type': symmetry_type,
-                'diversity_stat': diversity_stat,
-                'geometry_reason': geometry_reason,
-                'is_valid': is_valid,
-                'feature_valid': feature_valid,
-                'is_closed': is_closed,
-                'fallback_geometry': fallback_geometry,
-                'bounding_box': bounding_box,
-                'centroid': centroid,
-                'area': area,
-                'perimeter': perimeter,
-                'aspect_ratio': aspect_ratio,
-                'curvature': curvature,
-                'skeleton_length': skeleton_length,
-                'symmetry_axis': symmetry_axis,
-                # Relational/graph attributes (per object)
-                'relationships': relationships,
-                'predicate': None,
-                'source': None,
-                'parent_id': parent_shape_id,
-            }
-            for k, v in obj.items():
-                diversity_stats[k].add(str(v))
-            missing = [f for f in required_fields if obj.get(f) is None]
-            if missing:
-                logging.warning(f"[LOGO] Fallback geometry node {obj['object_id']} is missing required fields: {missing}")
+                # Induce turn_direction and action_command from action_program
+                turn_direction = None
+                action_command = None
+                if action_program:
+                    for cmd in reversed(action_program):
+                        parsed = parse_action_command(cmd)
+                        if parsed and parsed.get('mode', None) is not None:
+                            turn_direction = parsed['mode']
+                            break
+                    action_command = action_program[-1]
+                # Induce predicate for fullpath
+                
+                bounding_box, centroid, area, perimeter, aspect_ratio, compactness_stroke = _calculate_stroke_geometry(verts_seq)
+                obj = {
+                    'object_id': obj_id,
+                    'parent_shape_id': parent_shape_id,
+                    'action_index': -1,
+                    'vertices': verts_seq,
+                    'object_type': assign_object_type(verts_seq),
+                    'turn_direction': turn_direction,
+                    'action_command': action_command,
+                    'command_type': None,
+                    'command_mode': None,
+                    'command_params': None,
+                    'programmatic_label': programmatic_label,
+                    'stroke_type': stroke_type,
+                    'label': label,
+                    'shape_label': shape_label,
+                    'category': category,
+                    'original_image_path': remap_path(rec.get('image_path', '')),
+                    'image_path': image_path,
+                    'original_record_idx': idx,
+                    'action_program': action_program,
+                    'endpoints': [verts_seq[0], verts_seq[-1]],
+                    'length': float(np.sum([np.linalg.norm(np.array(verts_seq[i+1]) - np.array(verts_seq[i])) for i in range(len(verts_seq)-1)])),
+                    'orientation': float(np.degrees(np.arctan2(verts_seq[-1][1] - verts_seq[0][1], verts_seq[-1][0] - verts_seq[0][0]))),
+                    'object_color': object_color,
+                    'component_index': component_index,
+                    'cluster_label': cluster_label,
+                    'clustered': clustered,
+                    'kb_concept': kb_concept,
+                    'global_stat': global_stat,
+                    'compactness': compactness_stroke,
+                    'motif_type': motif_type,
+                    'motif_membership': motif_membership if motif_membership is not None else '',
+                    'stroke_count': stroke_count,
+                    'subcategory': subcategory,
+                    'supercategory': supercategory,
+                    'semantic_type': semantic_type,
+                    'instance_id': instance_id,
+                    'group_id': group_id,
+                    'part_of': part_of,
+                    'relationship_type': relationship_type,
+                    'symmetry_type': symmetry_type,
+                    'diversity_stat': diversity_stat,
+                    'geometry_reason': geometry_reason,
+                    'is_valid': is_valid,
+                    'feature_valid': feature_valid,
+                    'is_closed': is_closed,
+                    'fallback_geometry': verts_seq,
+                    'bounding_box': bounding_box,
+                    'centroid': centroid,
+                    'area': area,
+                    'perimeter': perimeter,
+                    'aspect_ratio': aspect_ratio,
+                    'curvature': 0.0,
+                    'skeleton_length': perimeter,
+                    'symmetry_axis': None,
+                    'relationships': [],
+                    'predicate': predicate_val,
+                    'source': 'action_program',
+                    'parent_id': parent_shape_id,
+                }
+                for k, v in obj.items():
+                    diversity_stats[k].add(str(v))
+                missing = [f for f in required_fields if obj.get(f) is None]
+                if missing:
+                    logging.warning(f"[LOGO] Full path node {obj['object_id']} is missing required fields: {missing}")
             objects.append(obj)
     # --- Category mapping and diversity extension ---
     import networkx as nx
-    G = nx.Graph()
+    from src.scene_graphs_building import graph_building
+    from src.scene_graphs_building.config import BASIC_LOGO_PREDICATES
+    G = nx.MultiDiGraph()
     for obj in objects:
+        # Guarantee required node keys for schema validation
+        obj.setdefault('predicate', None)
+        obj.setdefault('source', None)
+        obj.setdefault('symmetry_axis', None)
         G.add_node(obj['object_id'], **obj)
+
+    # ------------------------------------------------------------------
+    # 1. Build edges from node relationships / predicates
+    # ------------------------------------------------------------------
+    for u, data in G.nodes(data=True):
+        for rel in data.get('relationships', []):
+            if rel.startswith('adjacent_to_'):
+                v_id = rel.split('adjacent_to_')[1]
+                if G.has_node(v_id):
+                    G.add_edge(u, v_id, predicate='adjacent_endpoints', source='program')
+
+    # 2. Run the generic predicate engine as in the full pipeline
+    graph_building.add_predicate_edges(G, BASIC_LOGO_PREDICATES)
+
+    # 3. (optional) commonsense or VL edges
+    # graph_building.add_commonsense_edges(G, top_k=2)
+
+    # 4. Store edge count for later CSV export
+    G.graph['edge_count'] = G.number_of_edges()
     # Diversity statistics logging
     logging.info(f"[LOGO] Diversity statistics for problem_id={problem_id}:")
     for k, vset in diversity_stats.items():
