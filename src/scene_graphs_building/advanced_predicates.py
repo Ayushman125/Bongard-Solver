@@ -1018,9 +1018,513 @@ def exhibits_rule_compositionality(node_a, node_b, rule_context=None):
     except Exception:
         return False
 
+# BONGARD-SPECIFIC SEMANTIC PREDICATES
+def semantic_contains_triangle(node_a, node_b):
+    """Checks if the node semantically contains triangular elements."""
+    return node_a.get('semantic_features', {}).get('has_triangles', False)
+
+def semantic_contains_square(node_a, node_b):
+    """Checks if the node semantically contains square/rectangular elements."""
+    return node_a.get('semantic_features', {}).get('has_squares', False)
+
+def semantic_contains_circle(node_a, node_b):
+    """Checks if the node semantically contains circular elements."""
+    return node_a.get('semantic_features', {}).get('has_circles', False)
+
+def semantic_three_sided(node_a, node_b):
+    """Checks if the node represents a three-sided figure."""
+    return node_a.get('semantic_features', {}).get('has_three_sides', False)
+
+def semantic_four_sided(node_a, node_b):
+    """Checks if the node represents a four-sided figure."""
+    return node_a.get('semantic_features', {}).get('has_four_sides', False)
+
+def semantic_has_curves(node_a, node_b):
+    """Checks if the node has curved elements."""
+    return node_a.get('semantic_features', {}).get('has_curved_elements', False)
+
+def semantic_closed_shape(node_a, node_b):
+    """Checks if the node represents a closed shape."""
+    return node_a.get('semantic_features', {}).get('is_closed', False)
+
+def semantic_open_shape(node_a, node_b):
+    """Checks if the node represents an open shape."""
+    return node_a.get('semantic_features', {}).get('is_open', False)
+
+def semantic_simple_shape(node_a, node_b):
+    """Checks if the node is a simple (non-composite) shape."""
+    return not node_a.get('semantic_features', {}).get('is_composite', True)
+
+def semantic_complex_shape(node_a, node_b):
+    """Checks if the node is a complex (composite) shape."""
+    return node_a.get('semantic_features', {}).get('is_composite', False)
+
+# Comprehensive Bongard-specific predicate functions that integrate with the semantic action parser
+def is_circle(node_a, node_b=None):
+    """Checks if shape is a circle based on comprehensive features."""
+    try:
+        shape_type = node_a.get('semantic_features', {}).get('primary_shape_type')
+        return shape_type == 'circle'
+    except:
+        return False
+
+def is_triangle(node_a, node_b=None):
+    """Checks if shape is a triangle based on comprehensive features."""
+    try:
+        shape_type = node_a.get('semantic_features', {}).get('primary_shape_type')
+        return shape_type == 'triangle'
+    except:
+        return False
+
+def is_square(node_a, node_b=None):
+    """Checks if shape is a square based on comprehensive features."""
+    try:
+        shape_type = node_a.get('semantic_features', {}).get('primary_shape_type')
+        return shape_type == 'square'
+    except:
+        return False
+
+def is_rectangle(node_a, node_b=None):
+    """Checks if shape is a rectangle based on comprehensive features."""
+    try:
+        shape_type = node_a.get('semantic_features', {}).get('primary_shape_type')
+        return shape_type == 'rectangle'
+    except:
+        return False
+
+def is_pentagon(node_a, node_b=None):
+    """Checks if shape is a pentagon based on comprehensive features."""
+    try:
+        shape_type = node_a.get('semantic_features', {}).get('primary_shape_type')
+        return shape_type == 'pentagon'
+    except:
+        return False
+
+def is_hexagon(node_a, node_b=None):
+    """Checks if shape is a hexagon based on comprehensive features."""
+    try:
+        shape_type = node_a.get('semantic_features', {}).get('primary_shape_type')
+        return shape_type == 'hexagon'
+    except:
+        return False
+
+def is_octagon(node_a, node_b=None):
+    """Checks if shape is an octagon based on comprehensive features."""
+    try:
+        shape_type = node_a.get('semantic_features', {}).get('primary_shape_type')
+        return shape_type == 'octagon'
+    except:
+        return False
+
+def is_line(node_a, node_b=None):
+    """Checks if shape is a line based on comprehensive features."""
+    try:
+        shape_type = node_a.get('semantic_features', {}).get('primary_shape_type')
+        return shape_type == 'line'
+    except:
+        return False
+
+def is_arc(node_a, node_b=None):
+    """Checks if shape is an arc based on comprehensive features."""
+    try:
+        shape_type = node_a.get('semantic_features', {}).get('primary_shape_type')
+        return shape_type == 'arc'
+    except:
+        return False
+
+def is_star(node_a, node_b=None):
+    """Checks if shape is a star based on comprehensive features."""
+    try:
+        shape_type = node_a.get('semantic_features', {}).get('primary_shape_type')
+        return shape_type == 'star'
+    except:
+        return False
+
+def is_cross(node_a, node_b=None):
+    """Checks if shape is a cross based on comprehensive features."""
+    try:
+        shape_type = node_a.get('semantic_features', {}).get('primary_shape_type')
+        return shape_type == 'cross'
+    except:
+        return False
+
+def is_ellipse(node_a, node_b=None):
+    """Checks if shape is an ellipse based on comprehensive features."""
+    try:
+        shape_type = node_a.get('semantic_features', {}).get('primary_shape_type')
+        return shape_type == 'ellipse'
+    except:
+        return False
+
+def is_diamond(node_a, node_b=None):
+    """Checks if shape is a diamond based on comprehensive features."""
+    try:
+        shape_type = node_a.get('semantic_features', {}).get('primary_shape_type')
+        return shape_type == 'diamond'
+    except:
+        return False
+
+def is_arrow(node_a, node_b=None):
+    """Checks if shape is an arrow based on comprehensive features."""
+    try:
+        shape_type = node_a.get('semantic_features', {}).get('primary_shape_type')
+        return shape_type == 'arrow'
+    except:
+        return False
+
+def has_vertical_symmetry(node_a, node_b=None):
+    """Checks if shape has vertical symmetry."""
+    try:
+        symmetry = node_a.get('semantic_features', {}).get('symmetry_type')
+        return symmetry in ['vertical', 'bilateral']
+    except:
+        return False
+
+def has_horizontal_symmetry(node_a, node_b=None):
+    """Checks if shape has horizontal symmetry."""
+    try:
+        symmetry = node_a.get('semantic_features', {}).get('symmetry_type')
+        return symmetry in ['horizontal', 'bilateral']
+    except:
+        return False
+
+def has_rotational_symmetry(node_a, node_b=None):
+    """Checks if shape has rotational symmetry."""
+    try:
+        symmetry = node_a.get('semantic_features', {}).get('symmetry_type')
+        return symmetry == 'rotational'
+    except:
+        return False
+
+def has_point_symmetry(node_a, node_b=None):
+    """Checks if shape has point symmetry."""
+    try:
+        symmetry = node_a.get('semantic_features', {}).get('symmetry_type')
+        return symmetry == 'point'
+    except:
+        return False
+
+def is_convex(node_a, node_b=None):
+    """Checks if shape is convex."""
+    try:
+        topology = node_a.get('semantic_features', {}).get('topology_type')
+        return topology == 'convex'
+    except:
+        return False
+
+def is_concave(node_a, node_b=None):
+    """Checks if shape is concave."""
+    try:
+        topology = node_a.get('semantic_features', {}).get('topology_type')
+        return topology == 'concave'
+    except:
+        return False
+
+def is_closed_shape(node_a, node_b=None):
+    """Checks if shape is closed."""
+    try:
+        topology = node_a.get('semantic_features', {}).get('topology_type')
+        return topology in ['closed', 'convex', 'concave']
+    except:
+        return False
+
+def is_open_shape(node_a, node_b=None):
+    """Checks if shape is open."""
+    try:
+        topology = node_a.get('semantic_features', {}).get('topology_type')
+        return topology == 'open'
+    except:
+        return False
+
+def has_hole(node_a, node_b=None):
+    """Checks if shape has a hole."""
+    try:
+        topology = node_a.get('semantic_features', {}).get('topology_type')
+        return topology == 'hole'
+    except:
+        return False
+
+def has_three_sides(node_a, node_b=None):
+    """Checks if shape has three sides."""
+    try:
+        sides = node_a.get('semantic_features', {}).get('side_count', 0)
+        return sides == 3
+    except:
+        return False
+
+def has_four_sides(node_a, node_b=None):
+    """Checks if shape has four sides."""
+    try:
+        sides = node_a.get('semantic_features', {}).get('side_count', 0)
+        return sides == 4
+    except:
+        return False
+
+def has_five_sides(node_a, node_b=None):
+    """Checks if shape has five sides."""
+    try:
+        sides = node_a.get('semantic_features', {}).get('side_count', 0)
+        return sides == 5
+    except:
+        return False
+
+def has_six_sides(node_a, node_b=None):
+    """Checks if shape has six sides."""
+    try:
+        sides = node_a.get('semantic_features', {}).get('side_count', 0)
+        return sides == 6
+    except:
+        return False
+
+def has_eight_sides(node_a, node_b=None):
+    """Checks if shape has eight sides."""
+    try:
+        sides = node_a.get('semantic_features', {}).get('side_count', 0)
+        return sides == 8
+    except:
+        return False
+
+def is_regular_polygon(node_a, node_b=None):
+    """Checks if shape is a regular polygon."""
+    try:
+        shape_features = node_a.get('semantic_features', {})
+        regularity = shape_features.get('regularity_score', 0)
+        return regularity > 0.8  # High regularity threshold
+    except:
+        return False
+
+def is_irregular_polygon(node_a, node_b=None):
+    """Checks if shape is an irregular polygon."""
+    try:
+        shape_features = node_a.get('semantic_features', {})
+        regularity = shape_features.get('regularity_score', 0)
+        sides = shape_features.get('side_count', 0)
+        return sides >= 3 and regularity < 0.5  # Low regularity threshold
+    except:
+        return False
+
+def is_curved(node_a, node_b=None):
+    """Checks if shape contains curved elements."""
+    try:
+        curvature = node_a.get('semantic_features', {}).get('curvature_score', 0)
+        return curvature > 0.3
+    except:
+        return False
+
+def is_straight(node_a, node_b=None):
+    """Checks if shape contains only straight elements."""
+    try:
+        curvature = node_a.get('semantic_features', {}).get('curvature_score', 0)
+        return curvature < 0.1
+    except:
+        return False
+
+def is_composite(node_a, node_b=None):
+    """Checks if shape is composite (made of multiple parts)."""
+    try:
+        return node_a.get('semantic_features', {}).get('is_composite', False)
+    except:
+        return False
+
+def is_simple(node_a, node_b=None):
+    """Checks if shape is simple (single component)."""
+    try:
+        return not node_a.get('semantic_features', {}).get('is_composite', True)
+    except:
+        return False
+
+def has_acute_angles(node_a, node_b=None):
+    """Checks if shape has acute angles."""
+    try:
+        angles = node_a.get('semantic_features', {}).get('angle_types', [])
+        return 'acute' in angles
+    except:
+        return False
+
+def has_right_angles(node_a, node_b=None):
+    """Checks if shape has right angles."""
+    try:
+        angles = node_a.get('semantic_features', {}).get('angle_types', [])
+        return 'right' in angles
+    except:
+        return False
+
+def has_obtuse_angles(node_a, node_b=None):
+    """Checks if shape has obtuse angles."""
+    try:
+        angles = node_a.get('semantic_features', {}).get('angle_types', [])
+        return 'obtuse' in angles
+    except:
+        return False
+
+def is_thick(node_a, node_b=None):
+    """Checks if shape has thick lines/strokes."""
+    try:
+        thickness = node_a.get('semantic_features', {}).get('line_thickness', 0)
+        return thickness > 3.0
+    except:
+        return False
+
+def is_thin(node_a, node_b=None):
+    """Checks if shape has thin lines/strokes."""
+    try:
+        thickness = node_a.get('semantic_features', {}).get('line_thickness', 0)
+        return thickness <= 1.5
+    except:
+        return False
+
+def is_large(node_a, node_b=None):
+    """Checks if shape is large in size."""
+    try:
+        size_category = node_a.get('semantic_features', {}).get('size_category')
+        return size_category == 'large'
+    except:
+        return False
+
+def is_small(node_a, node_b=None):
+    """Checks if shape is small in size."""
+    try:
+        size_category = node_a.get('semantic_features', {}).get('size_category')
+        return size_category == 'small'
+    except:
+        return False
+
+def is_medium(node_a, node_b=None):
+    """Checks if shape is medium in size."""
+    try:
+        size_category = node_a.get('semantic_features', {}).get('size_category')
+        return size_category == 'medium'
+    except:
+        return False
+
+def is_tall(node_a, node_b=None):
+    """Checks if shape is tall (height > width)."""
+    try:
+        aspect_ratio = node_a.get('semantic_features', {}).get('aspect_ratio', 1.0)
+        return aspect_ratio > 1.5  # Height significantly larger than width
+    except:
+        return False
+
+def is_wide(node_a, node_b=None):
+    """Checks if shape is wide (width > height)."""
+    try:
+        aspect_ratio = node_a.get('semantic_features', {}).get('aspect_ratio', 1.0)
+        return aspect_ratio < 0.67  # Width significantly larger than height
+    except:
+        return False
+
+def is_centered(node_a, node_b=None):
+    """Checks if shape is centered in the frame."""
+    try:
+        position = node_a.get('semantic_features', {}).get('position_category')
+        return position == 'center'
+    except:
+        return False
+
+def is_left_positioned(node_a, node_b=None):
+    """Checks if shape is positioned on the left."""
+    try:
+        position = node_a.get('semantic_features', {}).get('position_category')
+        return position == 'left'
+    except:
+        return False
+
+def is_right_positioned(node_a, node_b=None):
+    """Checks if shape is positioned on the right."""
+    try:
+        position = node_a.get('semantic_features', {}).get('position_category')
+        return position == 'right'
+    except:
+        return False
+
+def is_top_positioned(node_a, node_b=None):
+    """Checks if shape is positioned at the top."""
+    try:
+        position = node_a.get('semantic_features', {}).get('position_category')
+        return position == 'top'
+    except:
+        return False
+
+def is_bottom_positioned(node_a, node_b=None):
+    """Checks if shape is positioned at the bottom."""
+    try:
+        position = node_a.get('semantic_features', {}).get('position_category')
+        return position == 'bottom'
+    except:
+        return False
+
 # Registry of advanced predicates to be applied to higher-level objects
 ADVANCED_PREDICATE_REGISTRY = {
-    # Low-level geometric predicates
+    # COMPREHENSIVE BONGARD SHAPE DETECTION PREDICATES
+    'is_circle': is_circle,
+    'is_triangle': is_triangle,
+    'is_square': is_square,
+    'is_rectangle': is_rectangle,
+    'is_pentagon': is_pentagon,
+    'is_hexagon': is_hexagon,
+    'is_octagon': is_octagon,
+    'is_line': is_line,
+    'is_arc': is_arc,
+    'is_star': is_star,
+    'is_cross': is_cross,
+    'is_ellipse': is_ellipse,
+    'is_diamond': is_diamond,
+    'is_arrow': is_arrow,
+    
+    # COMPREHENSIVE SYMMETRY PREDICATES
+    'has_vertical_symmetry': has_vertical_symmetry,
+    'has_horizontal_symmetry': has_horizontal_symmetry,
+    'has_rotational_symmetry': has_rotational_symmetry,
+    'has_point_symmetry': has_point_symmetry,
+    
+    # COMPREHENSIVE TOPOLOGY PREDICATES
+    'is_convex': is_convex,
+    'is_concave': is_concave,
+    'is_closed_shape': is_closed_shape,
+    'is_open_shape': is_open_shape,
+    'has_hole': has_hole,
+    
+    # COMPREHENSIVE SIDE COUNT PREDICATES
+    'has_three_sides': has_three_sides,
+    'has_four_sides': has_four_sides,
+    'has_five_sides': has_five_sides,
+    'has_six_sides': has_six_sides,
+    'has_eight_sides': has_eight_sides,
+    
+    # COMPREHENSIVE REGULARITY PREDICATES
+    'is_regular_polygon': is_regular_polygon,
+    'is_irregular_polygon': is_irregular_polygon,
+    
+    # COMPREHENSIVE CURVATURE PREDICATES
+    'is_curved': is_curved,
+    'is_straight': is_straight,
+    
+    # COMPREHENSIVE COMPOSITION PREDICATES
+    'is_composite': is_composite,
+    'is_simple': is_simple,
+    
+    # COMPREHENSIVE ANGLE PREDICATES
+    'has_acute_angles': has_acute_angles,
+    'has_right_angles': has_right_angles,
+    'has_obtuse_angles': has_obtuse_angles,
+    
+    # COMPREHENSIVE SIZE AND DIMENSION PREDICATES
+    'is_thick': is_thick,
+    'is_thin': is_thin,
+    'is_large': is_large,
+    'is_small': is_small,
+    'is_medium': is_medium,
+    'is_tall': is_tall,
+    'is_wide': is_wide,
+    
+    # COMPREHENSIVE POSITION PREDICATES
+    'is_centered': is_centered,
+    'is_left_positioned': is_left_positioned,
+    'is_right_positioned': is_right_positioned,
+    'is_top_positioned': is_top_positioned,
+    'is_bottom_positioned': is_bottom_positioned,
+    
+    # ORIGINAL LOW-LEVEL GEOMETRIC PREDICATES
     'intersects': intersects,
     'contains': contains,
     'is_above': is_above,
@@ -1032,7 +1536,7 @@ ADVANCED_PREDICATE_REGISTRY = {
     'same_orientation': same_orientation,
     'same_stroke_count': same_stroke_count,
     
-    # High-level semantic predicates for Bongard problems
+    # ORIGINAL HIGH-LEVEL SEMANTIC PREDICATES FOR BONGARD PROBLEMS
     'has_apex_at_left': has_apex_at_left,
     'has_asymmetric_base': has_asymmetric_base,
     'has_tilted_orientation': has_tilted_orientation,
@@ -1045,7 +1549,7 @@ ADVANCED_PREDICATE_REGISTRY = {
     'forms_bridge_pattern': forms_bridge_pattern,
     'has_curvature_distinction': has_curvature_distinction,
     
-    # Curvature and junction type predicates
+    # ORIGINAL CURVATURE AND JUNCTION TYPE PREDICATES
     'is_arc_of_circle': is_arc_of_circle,
     'shares_endpoint': shares_endpoint,
     'forms_apex': forms_apex,
@@ -1055,7 +1559,7 @@ ADVANCED_PREDICATE_REGISTRY = {
     'has_irregular_shape': has_irregular_shape,
     'exhibits_rotational_symmetry': exhibits_rotational_symmetry,
     
-    # STATE-OF-THE-ART: Program synthesis predicates
+    # ORIGINAL STATE-OF-THE-ART: PROGRAM SYNTHESIS PREDICATES
     'has_stroke_count_pattern': has_stroke_count_pattern,
     'has_convexity_distinction': has_convexity_distinction,
     'has_symmetry_axis': has_symmetry_axis,
@@ -1063,16 +1567,28 @@ ADVANCED_PREDICATE_REGISTRY = {
     'has_angle_count_pattern': has_angle_count_pattern,
     'has_intersection_count_pattern': has_intersection_count_pattern,
     
-    # STATE-OF-THE-ART: Contrastive analogical predicates
+    # ORIGINAL STATE-OF-THE-ART: CONTRASTIVE ANALOGICAL PREDICATES
     'forms_action_sequence_analogy': forms_action_sequence_analogy,
     'has_scaling_invariant_property': has_scaling_invariant_property,
     'exhibits_topological_invariance': exhibits_topological_invariance,
     
-    # STATE-OF-THE-ART: Context-dependent predicates
+    # ORIGINAL STATE-OF-THE-ART: CONTEXT-DEPENDENT PREDICATES
     'has_context_dependent_interpretation': has_context_dependent_interpretation,
     'forms_grouping_gestalt': forms_grouping_gestalt,
     
-    # STATE-OF-THE-ART: Program-semantic alignment predicates
+    # ORIGINAL STATE-OF-THE-ART: PROGRAM-SEMANTIC ALIGNMENT PREDICATES
     'aligns_with_logo_semantics': aligns_with_logo_semantics,
     'exhibits_rule_compositionality': exhibits_rule_compositionality,
+    
+    # ORIGINAL BONGARD-SPECIFIC: SEMANTIC SHAPE PREDICATES
+    'semantic_contains_triangle': semantic_contains_triangle,
+    'semantic_contains_square': semantic_contains_square, 
+    'semantic_contains_circle': semantic_contains_circle,
+    'semantic_three_sided': semantic_three_sided,
+    'semantic_four_sided': semantic_four_sided,
+    'semantic_has_curves': semantic_has_curves,
+    'semantic_closed_shape': semantic_closed_shape,
+    'semantic_open_shape': semantic_open_shape,
+    'semantic_simple_shape': semantic_simple_shape,
+    'semantic_complex_shape': semantic_complex_shape,
 }

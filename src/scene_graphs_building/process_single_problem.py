@@ -1,5 +1,6 @@
 import logging
 import os
+import math
 import numpy as np
 import traceback
 from typing import List, Dict, Any
@@ -10,6 +11,373 @@ from collections import defaultdict
 
 # Import the new advanced predicates
 from src.scene_graphs_building.advanced_predicates import ADVANCED_PREDICATE_REGISTRY
+
+# Import semantic parsing capabilities
+from src.scene_graphs_building.semantic_action_parser import (
+    SemanticActionParser, 
+    BongardPredicateEngine, 
+    enhance_node_with_semantic_features
+)
+
+def _detect_and_add_composite_shapes(graph, parent_shape_id):
+    """Detect quarter circles and other composite shapes from connected line segments"""
+    from typing import List, Tuple
+    
+    # Get all line nodes from the graph
+    line_nodes = []
+    for node_id, data in graph.nodes(data=True):
+        if data.get('object_type') == 'line' and data.get('vertices'):
+            line_nodes.append((node_id, data))
+    
+    if len(line_nodes) < 3:  # Need at least 3 lines for meaningful shapes
+        return graph
+    
+    # Group connected line segments
+    connected_groups = _find_connected_line_groups(line_nodes)
+    
+    for group in connected_groups:
+        if len(group) >= 3:  # Minimum for potential quarter circle
+            # Extract path points from connected lines
+            path_points = _extract_path_from_connected_lines(group)
+            
+            if len(path_points) >= 4:
+                # Analyze for quarter circle pattern
+                quarter_circle_result = _analyze_path_for_quarter_circle(path_points)
+                
+                if quarter_circle_result['is_quarter_circle']:
+                    # Create a new quarter circle node
+                    composite_node_id = f"{parent_shape_id}_quarter_circle_{len(group)}"
+                    
+                    # Calculate composite shape properties
+                    all_vertices = []
+                    for _, line_data in group:
+                        all_vertices.extend(line_data['vertices'])
+                    
+                    bbox = _calculate_bounding_box(all_vertices)
+                    centroid = _calculate_centroid(all_vertices)
+                    
+                    # Create quarter circle node
+                    quarter_circle_node = {
+                        'object_id': composite_node_id,
+                        'parent_shape_id': parent_shape_id,
+                        'object_type': 'quarter_circle',
+                        'shape_label': 'quarter_circle',
+                        'source': 'enhanced_shape_detection',
+                        'vertices': path_points,
+                        'original_vertices': path_points,
+                        'bounding_box': bbox,
+                        'centroid': centroid,
+                        'area': quarter_circle_result.get('estimated_area', 0.0),
+                        'perimeter': quarter_circle_result.get('estimated_perimeter', 0.0),
+                        'arc_angle': quarter_circle_result['arc_angle'],
+                        'radius': quarter_circle_result['radius'],
+                        'curvature_direction': quarter_circle_result['direction'],
+                        'detection_confidence': quarter_circle_result['confidence'],
+                        'composed_of': [node_id for node_id, _ in group],
+                        'relationships': [],
+                        'is_closed': False,
+                        'is_highly_curved': True,
+                        'semantic_is_simple_shape': True,
+                        'semantic_is_asymmetric': quarter_circle_result.get('is_asymmetric', False),
+                        'semantic_is_irregular': False,
+                        'semantic_low_complexity': True,
+                    }
+                    
+                    # Add the quarter circle node
+                    graph.add_node(composite_node_id, **quarter_circle_node)
+                    
+                    # Update original line nodes to indicate they're part of this composite
+                    for line_node_id, _ in group:
+                        if graph.has_node(line_node_id):
+                            graph.nodes[line_node_id]['part_of_composite'] = composite_node_id
+                            graph.nodes[line_node_id]['composite_type'] = 'quarter_circle'
+                            # Add edge to show part-of relationship
+                            graph.add_edge(composite_node_id, line_node_id, 
+                                         predicate='contains_part', source='enhanced_shape_detection')
+                    
+                    logging.info(f"Detected quarter circle: {composite_node_id} from {len(group)} connected lines "
+                               f"(confidence: {quarter_circle_result['confidence']:.2f}, "
+                               f"angle: {quarter_circle_result['arc_angle']:.1f}°)")
+                
+                # Check for semicircle if quarter circle detection failed
+                elif len(group) >= 5:  # More segments needed for semicircle
+                    semicircle_result = _analyze_path_for_semicircle(path_points)
+                    
+                    if semicircle_result['is_semicircle']:
+                        composite_node_id = f"{parent_shape_id}_semicircle_{len(group)}"
+                        
+                        # Similar logic for semicircle...
+                        # (Implementation similar to quarter circle but with semicircle properties)
+                        logging.info(f"Detected semicircle: {composite_node_id} from {len(group)} connected lines")
+                
+                # Check for general arc if other specific detections failed
+                else:
+                    arc_result = _analyze_path_for_arc(path_points)
+                    
+                    if arc_result['is_arc'] and arc_result['confidence'] > 0.6:
+                        composite_node_id = f"{parent_shape_id}_arc_{len(group)}"
+                        
+                        # Create arc node
+                        # (Implementation similar but for general arc)
+                        logging.info(f"Detected arc: {composite_node_id} from {len(group)} connected lines")
+    
+    return graph
+
+def _find_connected_line_groups(line_nodes):
+    """Find groups of connected line segments"""
+    groups = []
+    used_nodes = set()
+    
+    for i, (node_id, data) in enumerate(line_nodes):
+        if node_id in used_nodes:
+            continue
+            
+        # Start a new group with this line
+        current_group = [(node_id, data)]
+        used_nodes.add(node_id)
+        
+        # Find all lines connected to this group
+        group_expanded = True
+        while group_expanded:
+            group_expanded = False
+            for j, (other_node_id, other_data) in enumerate(line_nodes):
+                if other_node_id in used_nodes:
+                    continue
+                    
+                # Check if this line connects to any line in the current group
+                if _lines_are_connected(current_group, (other_node_id, other_data)):
+                    current_group.append((other_node_id, other_data))
+                    used_nodes.add(other_node_id)
+                    group_expanded = True
+        
+        if len(current_group) >= 2:  # Only keep groups with multiple lines
+            groups.append(current_group)
+    
+    return groups
+
+def _lines_are_connected(group, candidate_line):
+    """Check if a candidate line connects to any line in the group"""
+    candidate_id, candidate_data = candidate_line
+    candidate_vertices = candidate_data.get('vertices', [])
+    
+    if len(candidate_vertices) < 2:
+        return False
+    
+    candidate_start = tuple(candidate_vertices[0])
+    candidate_end = tuple(candidate_vertices[-1])
+    
+    tolerance = 0.01  # Small tolerance for floating point comparison
+    
+    for group_id, group_data in group:
+        group_vertices = group_data.get('vertices', [])
+        if len(group_vertices) < 2:
+            continue
+            
+        group_start = tuple(group_vertices[0])
+        group_end = tuple(group_vertices[-1])
+        
+        # Check all possible connection points
+        connections = [
+            (candidate_start, group_start),
+            (candidate_start, group_end),
+            (candidate_end, group_start),
+            (candidate_end, group_end)
+        ]
+        
+        for (p1, p2) in connections:
+            distance = math.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
+            if distance < tolerance:
+                return True
+    
+    return False
+
+def _extract_path_from_connected_lines(connected_lines):
+    """Extract ordered path points from connected line segments"""
+    if not connected_lines:
+        return []
+    
+    # Start with the first line
+    path_points = []
+    used_lines = set()
+    
+    # Find the starting line (one that has an unconnected endpoint)
+    start_line = None
+    for line_id, line_data in connected_lines:
+        vertices = line_data.get('vertices', [])
+        if len(vertices) >= 2:
+            start_line = (line_id, line_data)
+            break
+    
+    if not start_line:
+        return []
+    
+    current_line_id, current_line_data = start_line
+    current_vertices = current_line_data.get('vertices', [])
+    
+    # Add vertices from first line
+    path_points.extend(current_vertices)
+    used_lines.add(current_line_id)
+    
+    # Follow the connected path
+    while len(used_lines) < len(connected_lines):
+        current_end = tuple(path_points[-1])
+        
+        # Find next connected line
+        next_line = None
+        for line_id, line_data in connected_lines:
+            if line_id in used_lines:
+                continue
+                
+            vertices = line_data.get('vertices', [])
+            if len(vertices) < 2:
+                continue
+                
+            start_point = tuple(vertices[0])
+            end_point = tuple(vertices[-1])
+            
+            tolerance = 0.01
+            
+            # Check if this line connects to current end
+            if math.sqrt((current_end[0] - start_point[0])**2 + (current_end[1] - start_point[1])**2) < tolerance:
+                next_line = (line_id, line_data, False)  # False = use normal order
+                break
+            elif math.sqrt((current_end[0] - end_point[0])**2 + (current_end[1] - end_point[1])**2) < tolerance:
+                next_line = (line_id, line_data, True)  # True = use reverse order
+                break
+        
+        if not next_line:
+            break  # No more connected lines found
+            
+        next_line_id, next_line_data, reverse_order = next_line
+        next_vertices = next_line_data.get('vertices', [])
+        
+        if reverse_order:
+            # Add vertices in reverse order, skipping the connection point
+            path_points.extend(reversed(next_vertices[:-1]))
+        else:
+            # Add vertices in normal order, skipping the connection point
+            path_points.extend(next_vertices[1:])
+        
+        used_lines.add(next_line_id)
+    
+    return path_points
+
+def _analyze_path_for_quarter_circle(path_points):
+    """Analyze a path to determine if it represents a quarter circle"""
+    if len(path_points) < 4:
+        return {'is_quarter_circle': False, 'confidence': 0.0}
+    
+    # Calculate angles between consecutive segments
+    angles = []
+    total_length = 0.0
+    
+    for i in range(1, len(path_points) - 1):
+        p1, p2, p3 = path_points[i-1], path_points[i], path_points[i+1]
+        
+        # Vectors
+        v1 = (p2[0] - p1[0], p2[1] - p1[1])
+        v2 = (p3[0] - p2[0], p3[1] - p2[1])
+        
+        # Segment length
+        length = math.sqrt(v1[0]**2 + v1[1]**2)
+        total_length += length
+        
+        # Angle between vectors
+        angle = _angle_between_vectors(v1, v2)
+        angles.append(abs(angle))
+    
+    if not angles:
+        return {'is_quarter_circle': False, 'confidence': 0.0}
+    
+    total_angle = sum(angles)
+    avg_angle = total_angle / len(angles)
+    
+    # Quarter circle should have total angle around 90 degrees
+    angle_match = 1.0 - abs(total_angle - 90.0) / 90.0
+    angle_match = max(0.0, angle_match)
+    
+    # Check angle consistency (should be relatively uniform)
+    angle_variance = sum((a - avg_angle)**2 for a in angles) / len(angles)
+    angle_consistency = max(0.0, 1.0 - math.sqrt(angle_variance) / (avg_angle + 0.1))
+    
+    # Estimate radius consistency
+    estimated_radius = total_length / (total_angle * math.pi / 180.0) if total_angle > 0 else 0
+    
+    # Overall confidence
+    confidence = (angle_match * 0.5 + angle_consistency * 0.3 + (1.0 if total_angle > 60 and total_angle < 120 else 0.0) * 0.2)
+    
+    is_quarter_circle = confidence > 0.6 and total_angle > 60 and total_angle < 120
+    
+    return {
+        'is_quarter_circle': is_quarter_circle,
+        'confidence': confidence,
+        'arc_angle': total_angle,
+        'radius': estimated_radius,
+        'direction': 'clockwise' if total_angle > 0 else 'counterclockwise',
+        'estimated_area': 0.25 * math.pi * estimated_radius**2 if estimated_radius > 0 else 0.0,
+        'estimated_perimeter': 0.5 * math.pi * estimated_radius if estimated_radius > 0 else total_length
+    }
+
+def _analyze_path_for_semicircle(path_points):
+    """Analyze a path to determine if it represents a semicircle"""
+    # Similar logic to quarter circle but looking for ~180 degree total angle
+    if len(path_points) < 6:
+        return {'is_semicircle': False, 'confidence': 0.0}
+    
+    # Implementation similar to quarter circle analysis
+    # but with different angle targets (180 degrees)
+    return {'is_semicircle': False, 'confidence': 0.0}  # Placeholder
+
+def _analyze_path_for_arc(path_points):
+    """Analyze a path to determine if it represents a general arc"""
+    # General arc detection with lower thresholds
+    if len(path_points) < 3:
+        return {'is_arc': False, 'confidence': 0.0}
+    
+    # Implementation for general arc detection
+    return {'is_arc': False, 'confidence': 0.0}  # Placeholder
+
+def _angle_between_vectors(v1, v2):
+    """Calculate angle between two vectors in degrees"""
+    # Normalize vectors
+    len1 = math.sqrt(v1[0]**2 + v1[1]**2)
+    len2 = math.sqrt(v2[0]**2 + v2[1]**2)
+    
+    if len1 == 0 or len2 == 0:
+        return 0.0
+        
+    norm_v1 = (v1[0] / len1, v1[1] / len1)
+    norm_v2 = (v2[0] / len2, v2[1] / len2)
+    
+    # Dot product
+    dot_product = norm_v1[0] * norm_v2[0] + norm_v1[1] * norm_v2[1]
+    
+    # Clamp to avoid numerical errors
+    dot_product = max(-1.0, min(1.0, dot_product))
+    
+    # Angle in radians, then convert to degrees
+    angle_rad = math.acos(dot_product)
+    return math.degrees(angle_rad)
+
+def _calculate_bounding_box(vertices):
+    """Calculate bounding box from vertices"""
+    if not vertices:
+        return [0, 0, 0, 0]
+    
+    x_coords = [v[0] for v in vertices]
+    y_coords = [v[1] for v in vertices]
+    
+    return [min(x_coords), min(y_coords), max(x_coords), max(y_coords)]
+
+def _calculate_centroid(vertices):
+    """Calculate centroid from vertices"""
+    if not vertices:
+        return [0, 0]
+    
+    x_sum = sum(v[0] for v in vertices)
+    y_sum = sum(v[1] for v in vertices)
+    
+    return [x_sum / len(vertices), y_sum / len(vertices)]
 
 def _calculate_predicate_importance(graph, problem_id):
     """Calculate importance scores for predicates based on their discriminative power"""
@@ -761,6 +1129,10 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                 
                 enhanced_features['relationships'] = relationships
                 obj = enhanced_features
+                
+                # SEMANTIC ENHANCEMENT: Add semantic parsing to existing object
+                obj = enhance_node_with_semantic_features(obj, action_program)
+                
                 all_objects_by_image[parent_shape_id].append(obj)
                 last_stroke_obj = obj
 
@@ -839,6 +1211,10 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
         for obj in all_nodes_for_graph:
             G.add_node(obj['object_id'], **obj)
         
+        # === ENHANCED SHAPE DETECTION ===
+        # Detect quarter circles and other composite shapes from connected line segments
+        G = _detect_and_add_composite_shapes(G, parent_shape_id)
+        
         all_objects_for_return.extend(all_nodes_for_graph)
 
         # Add edges based on relationships defined during creation
@@ -863,6 +1239,9 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
         # Add advanced predicate edges between ALL relevant node pairs
         all_nodes = list(G.nodes(data=True))
         
+        # Initialize semantic predicate engine
+        semantic_engine = BongardPredicateEngine()
+        
         from itertools import combinations
         for (id_a, data_a), (id_b, data_b) in combinations(all_nodes, 2):
             # Apply advanced predicates to ALL node pairs (not just higher-level shapes)
@@ -875,6 +1254,22 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                     # Check B -> A for non-symmetric predicates
                     if pred_name in ['contains', 'is_above'] and pred_func(data_b, data_a):
                         G.add_edge(id_b, id_a, predicate=pred_name, source='advanced_geometry')
+                        
+                # SEMANTIC ENHANCEMENT: Add Bongard-relevant predicates
+                semantic_predicates_a = semantic_engine.evaluate_predicates(data_a)
+                semantic_predicates_b = semantic_engine.evaluate_predicates(data_b)
+                semantic_predicates_ab = semantic_engine.evaluate_predicates(data_a, data_b)
+                
+                # Add unary semantic predicates as node attributes
+                for pred in semantic_predicates_a:
+                    G.nodes[id_a][f'semantic_{pred}'] = True
+                for pred in semantic_predicates_b:
+                    G.nodes[id_b][f'semantic_{pred}'] = True
+                    
+                # Add binary semantic predicates as edges
+                for pred in semantic_predicates_ab:
+                    G.add_edge(id_a, id_b, predicate=pred, source='semantic_bongard')
+                    
             except Exception as e:
                 logging.warning(f"Failed to apply advanced predicates between {id_a} and {id_b}: {e}")
 
@@ -1277,10 +1672,55 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
         # 7. Calculate and store predicate importance scores for analysis
         importance_scores = _calculate_predicate_importance(G, problem_id)
         
+        # === SEMANTIC SCENE-LEVEL ANALYSIS ===
+        # Add comprehensive semantic features to the graph
+        semantic_parser = SemanticActionParser()
+        
+        # Collect all action programs from this image
+        all_action_programs = []
+        for rec in problem_records:
+            if rec.get('action_program') and parent_shape_id in str(rec.get('image_path', '')):
+                all_action_programs.extend(rec['action_program'])
+        
+        # Extract scene-level semantic features
+        if all_action_programs:
+            scene_semantic_info = semantic_parser.extract_semantic_intent(all_action_programs)
+            
+            # Add scene-level semantic metadata
+            G.graph.update({
+                'semantic_shapes': scene_semantic_info['shapes'],
+                'semantic_properties': scene_semantic_info['properties'],
+                'semantic_features': scene_semantic_info['semantic_features'],
+                'scene_complexity': scene_semantic_info['complexity'],
+                'bongard_relevant_features': {
+                    'total_triangles': sum(1 for s in scene_semantic_info['shapes'] if s['type'] == 'triangle'),
+                    'total_squares': sum(1 for s in scene_semantic_info['shapes'] if s['type'] == 'square'),
+                    'total_circles': sum(1 for s in scene_semantic_info['shapes'] if s['type'] == 'circle'),
+                    'total_lines': sum(1 for s in scene_semantic_info['shapes'] if s['type'] == 'line'),
+                    'shape_diversity': len(set(s['type'] for s in scene_semantic_info['shapes'])),
+                    'has_semantic_shapes': len(scene_semantic_info['shapes']) > 0,
+                    'semantic_complexity_score': scene_semantic_info['complexity']
+                }
+            })
+            
+            logging.info(f"Added scene-level semantic features: {len(scene_semantic_info['shapes'])} shapes, "
+                        f"complexity: {scene_semantic_info['complexity']}")
+        
+        # Calculate edge reduction metrics
+        original_edge_count = G.number_of_edges()
+        semantic_edge_count = len([1 for u, v, d in G.edges(data=True) if d.get('source') == 'semantic_bongard'])
+        
         # Add metadata to graph for analysis
         G.graph['predicate_importance'] = importance_scores
         G.graph['problem_id'] = problem_id
         G.graph['processing_mode'] = 'enhanced_semantic'
+        G.graph['edge_statistics'] = {
+            'total_edges': original_edge_count,
+            'semantic_edges': semantic_edge_count,
+            'geometric_edges': len([1 for u, v, d in G.edges(data=True) if d.get('source') == 'advanced_geometry']),
+            'edge_density': original_edge_count / max(1, G.number_of_nodes()),
+            'semantic_edge_ratio': semantic_edge_count / max(1, original_edge_count)
+        }
 
         final_graphs[parent_shape_id] = G
 

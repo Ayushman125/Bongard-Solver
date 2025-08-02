@@ -1313,6 +1313,7 @@ async def main(): # Main is now async because it calls async functions
     parser.add_argument('--mode', type=str, default='sota', choices=['sota', 'logo'], help='Pipeline mode: "sota" (default, all features) or "logo" (LOGO-only, NVLabs baseline)')
     parser.add_argument('--puzzles-list', type=str, required=False, help='Path to puzzle list for LOGO mode')
     parser.add_argument('--action-base-dir', type=str, required=False, help='Base directory for action program JSONs for LOGO mode')
+    parser.add_argument('--use-semantic', action='store_true', default=True, help='Enable semantic action parsing for Bongard-relevant features')
     args = parser.parse_args()
     # [LOGO] Log all input arguments and label values at the start
     if hasattr(args, 'mode') and args.mode == 'logo':
