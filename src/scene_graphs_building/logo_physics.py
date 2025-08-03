@@ -11,11 +11,12 @@ from shapely.geometry import Polygon, LineString, Point
 def compute_logo_physics_attributes(node_data):
     """
     LOGO MODE: Computes physics attributes directly from LOGO action program data.
-    Completely rewritten to use LOGO-derived geometry and action sequences.
+    Updated to handle all 5 discovered Bongard-LOGO shape types: normal, circle, square, triangle, zigzag
     """
     # LOGO MODE: Extract LOGO-specific data
     vertices = node_data.get('vertices', [])
     object_type = node_data.get('object_type', 'unknown')
+    shape_type = node_data.get('shape_type', 'unknown')  # One of 5 types: normal, circle, square, triangle, zigzag
     is_closed = node_data.get('is_closed', False)
     action_program = node_data.get('action_program', [])
     action_command = node_data.get('action_command', '')
@@ -28,11 +29,29 @@ def compute_logo_physics_attributes(node_data):
         'left_extent', 'right_extent', 'top_extent', 'bottom_extent', 'apex_x_position',
         'apex_relative_to_center', 'has_prominent_apex', 'principal_orientation',
         'orientation_variance', 'max_curvature', 'is_highly_curved', 'vertex_count',
-        'geometric_complexity'
+        'geometric_complexity', 'stroke_type', 'topology', 'num_connections'
     ]
     
     required_valid_flags = [f"{feat}_valid" for feat in required_features]
     feature_valid = {}
+    
+    # Shape-type specific properties based on the 5 discovered types
+    shape_properties = {
+        'normal': {'is_regular': False, 'expected_sides': 0, 'is_curved': False, 'complexity': 1},
+        'circle': {'is_regular': True, 'expected_sides': 0, 'is_curved': True, 'complexity': 2}, 
+        'square': {'is_regular': True, 'expected_sides': 4, 'is_curved': False, 'complexity': 2},
+        'triangle': {'is_regular': True, 'expected_sides': 3, 'is_curved': False, 'complexity': 2},
+        'zigzag': {'is_regular': False, 'expected_sides': 0, 'is_curved': True, 'complexity': 3}
+    }
+    
+    shape_props = shape_properties.get(shape_type, {'is_regular': False, 'expected_sides': 0, 'is_curved': False, 'complexity': 1})
+    
+    # Store shape type information
+    node_data['shape_type'] = shape_type
+    node_data['is_regular_shape'] = shape_props['is_regular']
+    node_data['expected_sides'] = shape_props['expected_sides']
+    node_data['is_curved_shape'] = shape_props['is_curved']
+    node_data['shape_complexity'] = shape_props['complexity']
     
     # LOGO MODE: Process vertices if available
     if vertices and len(vertices) >= 2:
@@ -68,9 +87,43 @@ def compute_logo_physics_attributes(node_data):
             feature_valid['cx_valid'] = True
             feature_valid['cy_valid'] = True
             
-            # Vertex count and geometric complexity
+            # Vertex count and shape-specific geometric complexity
             node_data['vertex_count'] = len(vertices)
-            node_data['geometric_complexity'] = len(vertices) + (2 if is_closed else 0)
+            
+            # Shape-specific geometric complexity using discovered shape properties
+            base_complexity = len(vertices) + (2 if is_closed else 0)
+            shape_complexity_factor = shape_props.get('complexity', 1)
+            
+            # Adjust complexity based on shape type characteristics
+            if shape_type == 'circle':
+                # Circles have inherent curvature complexity
+                node_data['geometric_complexity'] = base_complexity * shape_complexity_factor + 3
+            elif shape_type in ['square', 'triangle']:
+                # Regular polygons have structured complexity
+                expected_sides = shape_props.get('expected_sides', 0)
+                side_match_bonus = 1 if len(vertices) >= expected_sides else 0
+                node_data['geometric_complexity'] = base_complexity * shape_complexity_factor + side_match_bonus
+            elif shape_type == 'zigzag':
+                # Zigzag patterns have high irregularity complexity
+                # Count direction changes as additional complexity
+                direction_changes = 0
+                if len(vertices) >= 3:
+                    for i in range(2, len(vertices)):
+                        v1 = np.array(vertices[i-1]) - np.array(vertices[i-2])
+                        v2 = np.array(vertices[i]) - np.array(vertices[i-1])
+                        if np.linalg.norm(v1) > 1e-6 and np.linalg.norm(v2) > 1e-6:
+                            cos_angle = np.clip(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2)), -1, 1)
+                            angle = np.abs(np.arccos(cos_angle))
+                            if angle > np.pi / 4:  # Significant direction change
+                                direction_changes += 1
+                node_data['geometric_complexity'] = base_complexity * shape_complexity_factor + direction_changes
+            elif shape_type == 'normal':
+                # Normal lines have minimal complexity
+                node_data['geometric_complexity'] = base_complexity * shape_complexity_factor
+            else:
+                # Unknown shapes use base complexity
+                node_data['geometric_complexity'] = base_complexity
+                
             feature_valid['vertex_count_valid'] = True
             feature_valid['geometric_complexity_valid'] = True
             
@@ -265,58 +318,193 @@ def compute_logo_physics_attributes(node_data):
                 feature_valid['apex_relative_to_center_valid'] = False
                 feature_valid['has_prominent_apex_valid'] = False
             
-            # LOGO ACTION: Extract programmatic attributes from action command
-            if action_command:
-                # Parse LOGO command for symmetry and predicate info
-                if 'line_' in action_command:
-                    node_data['stroke_type'] = 'line'
-                    # Extract line parameters if available
-                    parts = action_command.split('_')
-                    if len(parts) >= 3:
-                        try:
-                            mode = parts[1]  # e.g., 'normal', 'long', 'short'
-                            coords = parts[2].split('-')
-                            if len(coords) == 2:
-                                length_param = float(coords[0])
-                                angle_param = float(coords[1])
-                                node_data['symmetry_axis'] = float(angle_param * 360)  # Convert to degrees
-                                feature_valid['symmetry_axis_valid'] = True
-                            else:
-                                node_data['symmetry_axis'] = node_data.get('orientation', 0.0)
-                                feature_valid['symmetry_axis_valid'] = False
-                        except:
-                            node_data['symmetry_axis'] = node_data.get('orientation', 0.0)
-                            feature_valid['symmetry_axis_valid'] = False
+            # LOGO ACTION: Extract programmatic attributes from action command and shape type
+            if action_command or shape_type != 'unknown':
+                # Determine stroke type from action command, not shape type
+                if action_command:
+                    if action_command.startswith('line_'):
+                        node_data['stroke_type'] = 'line'
+                    elif action_command.startswith('arc_'):
+                        node_data['stroke_type'] = 'arc'
                     else:
+                        node_data['stroke_type'] = 'unknown'
+                else:
+                    node_data['stroke_type'] = 'unknown'
+                    
+                # Shape-specific symmetry and geometric properties
+                if shape_type == 'normal':
+                    # Normal lines - straight, use orientation as symmetry axis
+                    node_data['symmetry_axis'] = node_data.get('orientation', 0.0)
+                    feature_valid['symmetry_axis_valid'] = True
+                    
+                elif shape_type == 'circle':
+                    # Circles have perfect rotational symmetry (360 degrees)
+                    node_data['symmetry_axis'] = 0.0  # No preferred axis
+                    node_data['rotational_symmetry'] = True
+                    feature_valid['symmetry_axis_valid'] = True
+                    
+                elif shape_type == 'square':
+                    # Squares have 4-fold rotational symmetry (90 degrees)
+                    node_data['symmetry_axis'] = 90.0
+                    node_data['rotational_symmetry'] = True
+                    node_data['reflection_symmetry'] = True
+                    feature_valid['symmetry_axis_valid'] = True
+                    
+                elif shape_type == 'triangle':
+                    # Triangles may have reflection symmetry
+                    node_data['symmetry_axis'] = node_data.get('orientation', 0.0)
+                    node_data['reflection_symmetry'] = True
+                    feature_valid['symmetry_axis_valid'] = True
+                    
+                elif shape_type == 'zigzag':
+                    # Zigzag patterns are irregular
+                    node_data['symmetry_axis'] = 0.0
+                    node_data['rotational_symmetry'] = False
+                    feature_valid['symmetry_axis_valid'] = False
+                    
+                # Extract parameters from action command if available
+                if action_command and ('line_' in action_command or 'arc_' in action_command):
+                        parts = action_command.split('_')
+                        if len(parts) >= 3:
+                            try:
+                                params = parts[2].split('-')
+                                if len(params) == 2:
+                                    size_param = float(params[0])
+                                    thickness_param = float(params[1])
+                                    
+                                    # Use parameters for additional geometry info
+                                    node_data['command_size'] = size_param
+                                    node_data['command_thickness'] = thickness_param
+                                    feature_valid['command_size_valid'] = True
+                                    feature_valid['command_thickness_valid'] = True
+                            except (ValueError, IndexError):
+                                pass
+                    
+                else:
+                    # Fallback for unknown shape types
+                    if 'line_' in action_command:
+                        node_data['stroke_type'] = 'line'
                         node_data['symmetry_axis'] = node_data.get('orientation', 0.0)
-                        feature_valid['symmetry_axis_valid'] = False
-                        
-                elif 'arc_' in action_command:
-                    node_data['stroke_type'] = 'arc'
-                    # Extract arc parameters if available
-                    parts = action_command.split('_')
-                    if len(parts) >= 4:
-                        try:
-                            mode = parts[1]  # e.g., 'normal', 'wide', 'tight'
-                            radius = float(parts[2])
-                            arc_span = float(parts[3])
-                            # Use arc span as a measure of symmetry
-                            node_data['symmetry_axis'] = float(arc_span * 180)  # Convert to degrees
-                            feature_valid['symmetry_axis_valid'] = True
-                        except:
-                            node_data['symmetry_axis'] = 0.0
-                            feature_valid['symmetry_axis_valid'] = False
+                        feature_valid['symmetry_axis_valid'] = True
+                    elif 'arc_' in action_command:
+                        node_data['stroke_type'] = 'arc'
+                        node_data['symmetry_axis'] = node_data.get('orientation', 0.0)
+                        feature_valid['symmetry_axis_valid'] = True
                     else:
+                        node_data['stroke_type'] = 'unknown'
                         node_data['symmetry_axis'] = 0.0
                         feature_valid['symmetry_axis_valid'] = False
-                else:
-                    node_data['stroke_type'] = 'composite'
-                    node_data['symmetry_axis'] = 0.0
-                    feature_valid['symmetry_axis_valid'] = False
             else:
                 node_data['stroke_type'] = 'unknown'
                 node_data['symmetry_axis'] = 0.0
                 feature_valid['symmetry_axis_valid'] = False
+            
+            # Compute topology features based on connectivity and shape type
+            metadata = node_data.get('metadata', {})
+            if 'connectivity' in metadata:
+                connectivity = metadata['connectivity']
+                num_connections = len(connectivity) if connectivity else 0
+                node_data['num_connections'] = num_connections
+                feature_valid['num_connections_valid'] = True
+                
+                # Shape-type specific topology classification
+                current_shape_type = node_data.get('stroke_type', 'unknown')
+                
+                if current_shape_type == 'circle':
+                    # Circles are closed loops - should have self-connections or no endpoints
+                    if num_connections == 0:
+                        node_data['topology'] = 'closed_loop'
+                    else:
+                        node_data['topology'] = 'open_arc'  # Incomplete circle
+                        
+                elif current_shape_type == 'square':
+                    # Squares should have 4 connections (4 sides) or be complete rectangles
+                    if num_connections >= 4:
+                        node_data['topology'] = 'closed_polygon'
+                    elif num_connections >= 2:
+                        node_data['topology'] = 'partial_polygon'
+                    else:
+                        node_data['topology'] = 'isolated_line'
+                        
+                elif current_shape_type == 'triangle':
+                    # Triangles should have 3 connections
+                    if num_connections >= 3:
+                        node_data['topology'] = 'closed_polygon'
+                    elif num_connections >= 2:
+                        node_data['topology'] = 'partial_polygon'
+                    else:
+                        node_data['topology'] = 'isolated_line'
+                        
+                elif current_shape_type == 'zigzag':
+                    # Zigzag patterns are usually open with multiple segments
+                    if num_connections >= 3:
+                        node_data['topology'] = 'multi_segment'
+                    elif num_connections == 2:
+                        node_data['topology'] = 'line_segment'
+                    else:
+                        node_data['topology'] = 'isolated_point'
+                        
+                elif current_shape_type == 'normal':
+                    # Normal lines are typically straight segments
+                    if num_connections >= 2:
+                        node_data['topology'] = 'line_segment'
+                    elif num_connections == 1:
+                        node_data['topology'] = 'endpoint'
+                    else:
+                        node_data['topology'] = 'isolated_point'
+                        
+                else:
+                    # Generic topology classification for unknown types
+                    if num_connections == 0:
+                        node_data['topology'] = 'isolated'
+                    elif num_connections == 1:
+                        node_data['topology'] = 'endpoint'
+                    elif num_connections == 2:
+                        node_data['topology'] = 'segment'
+                    else:
+                        node_data['topology'] = 'junction'
+                        
+                feature_valid['topology_valid'] = True
+            else:
+                # Use vertex-based connectivity estimation for LOGO shapes
+                current_shape_type = node_data.get('stroke_type', 'unknown')
+                num_vertices = len(vertices)
+                
+                # Estimate connections based on shape type and vertex count
+                if current_shape_type == 'circle':
+                    # Circles are typically closed
+                    node_data['topology'] = 'closed_loop'
+                    node_data['num_connections'] = 0  # No explicit connections needed
+                elif current_shape_type in ['square', 'triangle']:
+                    # Polygons should be closed
+                    if num_vertices >= 4:  # Sufficient for closure
+                        node_data['topology'] = 'closed_polygon'
+                        node_data['num_connections'] = num_vertices
+                    else:
+                        node_data['topology'] = 'partial_polygon'
+                        node_data['num_connections'] = max(0, num_vertices - 1)
+                elif current_shape_type == 'zigzag':
+                    # Zigzag is multi-segment open shape
+                    node_data['topology'] = 'multi_segment' if num_vertices > 3 else 'line_segment'
+                    node_data['num_connections'] = max(0, num_vertices - 1)
+                elif current_shape_type == 'normal':
+                    # Normal lines are straight segments
+                    node_data['topology'] = 'line_segment'
+                    node_data['num_connections'] = max(0, num_vertices - 1)
+                else:
+                    # Unknown type - basic classification
+                    if num_vertices <= 1:
+                        node_data['topology'] = 'isolated_point'
+                        node_data['num_connections'] = 0
+                    elif num_vertices == 2:
+                        node_data['topology'] = 'line_segment'
+                        node_data['num_connections'] = 1
+                    else:
+                        node_data['topology'] = 'multi_segment'
+                        node_data['num_connections'] = num_vertices - 1
+                
+                feature_valid['num_connections_valid'] = True
+                feature_valid['topology_valid'] = True
             
             # Orientation variance (for complex shapes)
             if len(vertices) > 2:

@@ -4,16 +4,16 @@ import math
 import numpy as np
 import traceback
 from typing import List, Dict, Any
-from src.scene_graphs_building.data_loading import remap_path
+from .data_loading import remap_path
 import networkx as nx
 from shapely.geometry import Polygon, LineString
 from collections import defaultdict
 
 # Import the new advanced predicates
-from src.scene_graphs_building.advanced_predicates import ADVANCED_PREDICATE_REGISTRY
+from .advanced_predicates import ADVANCED_PREDICATE_REGISTRY
 
 # Import semantic parsing capabilities
-from src.scene_graphs_building.semantic_action_parser import (
+from .semantic_action_parser import (
     SemanticActionParser, 
     BongardPredicateEngine, 
     enhance_node_with_semantic_features
@@ -32,95 +32,8 @@ def _detect_and_add_composite_shapes(graph, parent_shape_id):
     if len(line_nodes) < 3:  # Need at least 3 lines for meaningful shapes
         return graph
     
-    # Group connected line segments
-    connected_groups = _find_connected_line_groups(line_nodes)
-    
-    for group in connected_groups:
-        if len(group) >= 3:  # Minimum for potential quarter circle
-            # Extract path points from connected lines
-            path_points = _extract_path_from_connected_lines(group)
-            
-            if len(path_points) >= 4:
-                # Analyze for quarter circle pattern
-                quarter_circle_result = _analyze_path_for_quarter_circle(path_points)
-                
-                if quarter_circle_result['is_quarter_circle']:
-                    # Create a new quarter circle node
-                    composite_node_id = f"{parent_shape_id}_quarter_circle_{len(group)}"
-                    
-                    # Calculate composite shape properties
-                    all_vertices = []
-                    for _, line_data in group:
-                        all_vertices.extend(line_data['vertices'])
-                    
-                    bbox = _calculate_bounding_box(all_vertices)
-                    centroid = _calculate_centroid(all_vertices)
-                    
-                    # Create quarter circle node
-                    quarter_circle_node = {
-                        'object_id': composite_node_id,
-                        'parent_shape_id': parent_shape_id,
-                        'object_type': 'quarter_circle',
-                        'shape_label': 'quarter_circle',
-                        'source': 'enhanced_shape_detection',
-                        'vertices': path_points,
-                        'original_vertices': path_points,
-                        'bounding_box': bbox,
-                        'centroid': centroid,
-                        'area': quarter_circle_result.get('estimated_area', 0.0),
-                        'perimeter': quarter_circle_result.get('estimated_perimeter', 0.0),
-                        'arc_angle': quarter_circle_result['arc_angle'],
-                        'radius': quarter_circle_result['radius'],
-                        'curvature_direction': quarter_circle_result['direction'],
-                        'detection_confidence': quarter_circle_result['confidence'],
-                        'composed_of': [node_id for node_id, _ in group],
-                        'relationships': [],
-                        'is_closed': False,
-                        'is_highly_curved': True,
-                        'semantic_is_simple_shape': True,
-                        'semantic_is_asymmetric': quarter_circle_result.get('is_asymmetric', False),
-                        'semantic_is_irregular': False,
-                        'semantic_low_complexity': True,
-                    }
-                    
-                    # Add the quarter circle node
-                    graph.add_node(composite_node_id, **quarter_circle_node)
-                    
-                    # Update original line nodes to indicate they're part of this composite
-                    for line_node_id, _ in group:
-                        if graph.has_node(line_node_id):
-                            graph.nodes[line_node_id]['part_of_composite'] = composite_node_id
-                            graph.nodes[line_node_id]['composite_type'] = 'quarter_circle'
-                            # Add edge to show part-of relationship
-                            graph.add_edge(composite_node_id, line_node_id, 
-                                         predicate='contains_part', source='enhanced_shape_detection')
-                    
-                    logging.info(f"Detected quarter circle: {composite_node_id} from {len(group)} connected lines "
-                               f"(confidence: {quarter_circle_result['confidence']:.2f}, "
-                               f"angle: {quarter_circle_result['arc_angle']:.1f}°)")
-                
-                # Check for semicircle if quarter circle detection failed
-                elif len(group) >= 5:  # More segments needed for semicircle
-                    semicircle_result = _analyze_path_for_semicircle(path_points)
-                    
-                    if semicircle_result['is_semicircle']:
-                        composite_node_id = f"{parent_shape_id}_semicircle_{len(group)}"
-                        
-                        # Similar logic for semicircle...
-                        # (Implementation similar to quarter circle but with semicircle properties)
-                        logging.info(f"Detected semicircle: {composite_node_id} from {len(group)} connected lines")
-                
-                # Check for general arc if other specific detections failed
-                else:
-                    arc_result = _analyze_path_for_arc(path_points)
-                    
-                    if arc_result['is_arc'] and arc_result['confidence'] > 0.6:
-                        composite_node_id = f"{parent_shape_id}_arc_{len(group)}"
-                        
-                        # Create arc node
-                        # (Implementation similar but for general arc)
-                        logging.info(f"Detected arc: {composite_node_id} from {len(group)} connected lines")
-    
+    # ACTION PROGRAMS ONLY: No artificial shape detection needed
+    # All shape information comes from action commands
     return graph
 
 def _find_connected_line_groups(line_nodes):
@@ -262,79 +175,8 @@ def _extract_path_from_connected_lines(connected_lines):
     
     return path_points
 
-def _analyze_path_for_quarter_circle(path_points):
-    """Analyze a path to determine if it represents a quarter circle"""
-    if len(path_points) < 4:
-        return {'is_quarter_circle': False, 'confidence': 0.0}
-    
-    # Calculate angles between consecutive segments
-    angles = []
-    total_length = 0.0
-    
-    for i in range(1, len(path_points) - 1):
-        p1, p2, p3 = path_points[i-1], path_points[i], path_points[i+1]
-        
-        # Vectors
-        v1 = (p2[0] - p1[0], p2[1] - p1[1])
-        v2 = (p3[0] - p2[0], p3[1] - p2[1])
-        
-        # Segment length
-        length = math.sqrt(v1[0]**2 + v1[1]**2)
-        total_length += length
-        
-        # Angle between vectors
-        angle = _angle_between_vectors(v1, v2)
-        angles.append(abs(angle))
-    
-    if not angles:
-        return {'is_quarter_circle': False, 'confidence': 0.0}
-    
-    total_angle = sum(angles)
-    avg_angle = total_angle / len(angles)
-    
-    # Quarter circle should have total angle around 90 degrees
-    angle_match = 1.0 - abs(total_angle - 90.0) / 90.0
-    angle_match = max(0.0, angle_match)
-    
-    # Check angle consistency (should be relatively uniform)
-    angle_variance = sum((a - avg_angle)**2 for a in angles) / len(angles)
-    angle_consistency = max(0.0, 1.0 - math.sqrt(angle_variance) / (avg_angle + 0.1))
-    
-    # Estimate radius consistency
-    estimated_radius = total_length / (total_angle * math.pi / 180.0) if total_angle > 0 else 0
-    
-    # Overall confidence
-    confidence = (angle_match * 0.5 + angle_consistency * 0.3 + (1.0 if total_angle > 60 and total_angle < 120 else 0.0) * 0.2)
-    
-    is_quarter_circle = confidence > 0.6 and total_angle > 60 and total_angle < 120
-    
-    return {
-        'is_quarter_circle': is_quarter_circle,
-        'confidence': confidence,
-        'arc_angle': total_angle,
-        'radius': estimated_radius,
-        'direction': 'clockwise' if total_angle > 0 else 'counterclockwise',
-        'estimated_area': 0.25 * math.pi * estimated_radius**2 if estimated_radius > 0 else 0.0,
-        'estimated_perimeter': 0.5 * math.pi * estimated_radius if estimated_radius > 0 else total_length
-    }
-
-def _analyze_path_for_semicircle(path_points):
-    """Analyze a path to determine if it represents a semicircle"""
-    # Similar logic to quarter circle but looking for ~180 degree total angle
-    if len(path_points) < 6:
-        return {'is_semicircle': False, 'confidence': 0.0}
-    
-    # Implementation similar to quarter circle analysis
-    # but with different angle targets (180 degrees)
-    return {'is_semicircle': False, 'confidence': 0.0}  # Placeholder
-
-def _analyze_path_for_arc(path_points):
-    """Analyze a path to determine if it represents a general arc"""
-    # General arc detection with lower thresholds
-    if len(path_points) < 3:
-        return {'is_arc': False, 'confidence': 0.0}
-    
-    # Implementation for general arc detection
+# REMOVED: All artificial shape detection functions
+# Action programs provide all shape information directly
     return {'is_arc': False, 'confidence': 0.0}  # Placeholder
 
 def _angle_between_vectors(v1, v2):
@@ -538,58 +380,114 @@ def are_points_collinear(verts, tol=1e-6):
             return False
     return True
 
-def assign_object_type(verts):
-    arr = np.asarray(verts)
-    if len(arr) == 1 or np.allclose(np.std(arr, axis=0), 0, atol=1e-8):
-        return "point"
-    elif len(arr) == 2 or are_points_collinear(arr):
-        return "line"
-    elif len(arr) >= 3 and not are_points_collinear(arr):
-        return "polygon"
-    else:
-        # SOTA: treat degenerate/ambiguous as 'curve' if possible
-        return "curve" if len(arr) > 1 else "unknown"
+def assign_object_type(verts, action_command=None):
+    """ACTION PROGRAMS ONLY: Assign object type based on action command only"""
+    
+    # ACTION PROGRAMS ONLY: Only use action command for type information
+    if action_command and isinstance(action_command, str):
+        if action_command.startswith('arc_'):
+            return "arc"
+        elif action_command.startswith('line_'):
+            return "line"
+    
+    # ACTION PROGRAMS ONLY: No fallback geometry analysis
+    # If no action command, return unknown - all types must come from action programs
+    return "unknown"
 
 def parse_action_command(cmd):
+    """Parse LOGO action command string for all 5 discovered shape types, handling both old and new formats"""
     if isinstance(cmd, dict):
         return cmd
     if not isinstance(cmd, str):
         return None
-    parts = cmd.split('_', 2)
-    # Handle formats like "line_normal_0.2-0.3" (3 parts) and "start_0.1-0.2" (2 parts)
-    if len(parts) == 3:
-        shape, mode, rest = parts
-    elif len(parts) == 2:
-        shape, rest = parts
-        mode = None # No mode specified
-    else:
+    
+    parts = cmd.split('_')
+    
+    # Handle different command formats based on discovered patterns
+    if len(parts) < 2:
         return None
-
-    if shape == "line" and '-' in rest:
-        try:
-            a, b = rest.split('-',1)
-            return {'type':'line', 'mode':mode, 'x':float(a), 'y':float(b)}
-        except Exception:
-            return None
-    elif shape == "start" and '-' in rest:
-        try:
-            a, b = rest.split('-',1)
-            return {'type':'start', 'x':float(a), 'y':float(b)}
-        except Exception:
-            return None
-    elif shape == "arc" and '-' in rest:
-        try:
-            radius, angle = rest.split('-',1)
-            return {'type':'arc', 'mode':mode, 'radius':float(radius), 'angle':float(angle)}
-        except Exception:
-            return None
-    elif shape == "turn" and '-' in rest:
-        try:
-            angle = rest
-            return {'type':'turn', 'mode':mode, 'angle':float(angle)}
-        except Exception:
-            return None
-    # Extend for other commands as needed
+    
+    command_type = parts[0]  # 'line', 'arc', 'start', 'turn'
+    
+    if command_type in ['line', 'arc']:
+        # Handle both formats:
+        # New format: line_<shape>_<size>_<thickness>-<y> or arc_<shape>_<radius>_<angle>-<y>
+        # Old format: line_<shape>_<params> or arc_<shape>_<params>
+        if len(parts) >= 4:
+            # New format: arc_normal_0.500_0.542-0.750
+            shape_type = parts[1]  # One of: normal, circle, square, triangle, zigzag
+            size_or_radius = parts[2]
+            thickness_or_angle_part = parts[3]
+            
+            # Validate shape type is one of the 5 discovered types
+            if shape_type not in ['normal', 'circle', 'square', 'triangle', 'zigzag']:
+                return None
+            
+            # Parse the final parameter with dash
+            if '-' in thickness_or_angle_part:
+                try:
+                    first_param, second_param = thickness_or_angle_part.split('-', 1)
+                    
+                    if command_type == 'line':
+                        return {
+                            'type': command_type,
+                            'shape': shape_type, 
+                            'size': float(size_or_radius),
+                            'thickness': float(first_param),
+                            'x': float(size_or_radius),  # Use size as x-component
+                            'y': float(first_param),     # Use thickness as y-component
+                            'mode': shape_type
+                        }
+                    elif command_type == 'arc':
+                        return {
+                            'type': command_type,
+                            'shape': shape_type,
+                            'radius': float(size_or_radius), 
+                            'angle': float(first_param),
+                            'mode': shape_type
+                        }
+                except (ValueError, IndexError):
+                    return None
+        elif len(parts) == 3:
+            # Old format: line_normal_0.2-0.3 or arc_normal_1.0-45.0
+            shape_type = parts[1]
+            params = parts[2]
+            
+            if shape_type not in ['normal', 'circle', 'square', 'triangle', 'zigzag']:
+                return None
+                
+            if '-' in params:
+                try:
+                    a, b = params.split('-', 1)
+                    if command_type == 'line':
+                        return {'type':'line', 'mode':shape_type, 'shape':shape_type, 'x':float(a), 'y':float(b)}
+                    elif command_type == 'arc':
+                        return {'type':'arc', 'mode':shape_type, 'shape':shape_type, 'radius':float(a), 'angle':float(b)}
+                except Exception:
+                    return None
+                    
+    elif command_type == "start":
+        # Format: start_x_y or start_x-y
+        if len(parts) >= 3:
+            try:
+                return {'type': 'start', 'x': float(parts[1]), 'y': float(parts[2])}
+            except (ValueError, IndexError):
+                pass
+        elif len(parts) == 2 and '-' in parts[1]:
+            try:
+                a, b = parts[1].split('-',1)
+                return {'type':'start', 'x':float(a), 'y':float(b)}
+            except Exception:
+                return None
+                
+    elif command_type == "turn":
+        # Format: turn_angle
+        if len(parts) >= 2:
+            try:
+                return {'type': 'turn', 'angle': float(parts[1])}
+            except (ValueError, IndexError):
+                return None
+    
     return None
 
 
@@ -905,14 +803,56 @@ def _group_strokes_into_shapes(stroke_objects: List[Dict[str, Any]], parent_shap
 
         shape_id = f"{parent_shape_id}_shape_{i}"
         is_closed = len(all_verts) > 2 and np.allclose(all_verts[0], all_verts[-1], atol=1e-5)
-        object_type = 'polygon' if is_closed else 'open_curve'
+        # ACTION PROGRAMS ONLY: Object type comes from action commands only
+        # Get object_type from the first constituent stroke that has it
+        object_type = None
+        for obj in component_primitives:
+            if obj.get('object_type'):
+                object_type = obj['object_type']
+                break
+        
+        # Fallback if no object_type found
+        if not object_type:
+            is_closed = len(all_verts) > 2 and np.allclose(all_verts[0], all_verts[-1], atol=1e-5)
+            object_type = 'polygon' if is_closed else 'line'  # Use 'line' instead of 'open_curve'
+        
+        # CRITICAL FIX: Determine shape_type from constituent strokes for composite shapes
+        # Priority: use the most common discovered Bongard-LOGO shape type from constituent strokes
+        discovered_types = ['normal', 'circle', 'square', 'triangle', 'zigzag']
+        constituent_shape_types = [obj.get('shape_type') for obj in component_primitives if obj.get('shape_type') in discovered_types]
+        
+        composite_shape_type = None
+        if constituent_shape_types:
+            # Use the most common shape type from constituent strokes
+            from collections import Counter
+            shape_type_counts = Counter(constituent_shape_types)
+            composite_shape_type = shape_type_counts.most_common(1)[0][0]
+        else:
+            # ACTION PROGRAMS ONLY: No fallback to object type inference
+            # All shape types must come from action programs only
+            composite_shape_type = None
+        
+        # ACTION PROGRAMS ONLY: No default shape type assignment
+        # If no shape type found in action programs, leave as None
         
         # Calculate enhanced geometric properties for the new composite shape
         base_obj = sorted_primitives[0]
+        
+        # Determine composite stroke type from constituent strokes
+        constituent_stroke_types = [obj.get('stroke_type') for obj in component_primitives if obj.get('stroke_type')]
+        if constituent_stroke_types:
+            from collections import Counter
+            stroke_type_counts = Counter(constituent_stroke_types)
+            composite_stroke_type = stroke_type_counts.most_common(1)[0][0]
+        else:
+            composite_stroke_type = 'unknown'
+        
         enhanced_features = _calculate_enhanced_geometry_features(all_verts, {
             'object_id': shape_id, 
             'parent_shape_id': parent_shape_id,
             'object_type': object_type, 
+            'shape_type': composite_shape_type,  # CRITICAL: Preserve shape_type for composite shapes
+            'stroke_type': composite_stroke_type,  # CRITICAL: Preserve stroke_type for composite shapes
             'source': 'geometric_grouping',
             'vertices': all_verts, 
             'is_closed': is_closed, 
@@ -1030,13 +970,14 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
         logging.info(f"LOGO physics computation processed {len(all_objects_by_image)} images with enhanced attributes")
         
     except Exception as e:
-        logging.warning(f"LOGO physics computation failed, falling back to basic processing: {e}")
-        # Fallback to basic processing
-        all_objects_by_image = defaultdict(list)
-
+        logging.error(f"LOGO physics computation failed: {e}")
+        # ACTION PROGRAMS ONLY: Fallback to manual processing if LOGO physics fails
+        logging.info("Falling back to manual action program processing...")
+        
         for idx, rec in enumerate(problem_records):
             parent_shape_id = f"{problem_id}_{idx}"
-            action_program = rec.get('action_program', [])
+            # Use flattened_actions instead of nested action_program
+            action_program = rec.get('flattened_actions', rec.get('action_program', []))
             # Common attributes for all objects in this record
             common_attrs = {
                 'label': rec.get('label', ''), 'shape_label': rec.get('shape_label', ''),
@@ -1111,13 +1052,17 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                     'action_index': stroke_idx,
                     'vertices': regularized_verts, 
                     'original_vertices': verts,  # Keep original for debugging
-                    'object_type': assign_object_type(regularized_verts), 
+                    'object_type': assign_object_type(regularized_verts, cmd), 
                     'action_command': cmd,
                     'endpoints': [regularized_verts[0], regularized_verts[-1]], 
                     'length': length, 
                     'orientation': orientation,
                     'source': 'action_program', 
                     'is_closed': len(verts) > 2 and np.allclose(verts[0], verts[-1], atol=1e-5),
+                    # CRITICAL: Assign stroke_type based on action_command for proper arc vs line differentiation
+                    'stroke_type': 'arc' if cmd and cmd.startswith('arc_') else 'line' if cmd and cmd.startswith('line_') else 'unknown',
+                    # CRITICAL: Assign shape_type from parsed command for proper normal/triangle/square/circle/zigzag differentiation
+                    'shape_type': parsed_cmd.get('shape', 'unknown') if parsed_cmd else 'unknown',
                     **common_attrs
                 })
                 
@@ -1129,10 +1074,22 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                 
                 enhanced_features['relationships'] = relationships
                 obj = enhanced_features
-                
                 # SEMANTIC ENHANCEMENT: Add semantic parsing to existing object
                 obj = enhance_node_with_semantic_features(obj, action_program)
-                
+                # Ensure shape_type is set to discovered Bongard-LOGO type if detected
+                # Priority: shape_type from semantic enhancement > object_type
+                discovered_types = ['normal', 'circle', 'square', 'triangle', 'zigzag']
+                shape_type = obj.get('shape_type')
+                if shape_type not in discovered_types:
+                    # Try to infer from action_command if possible
+                    cmd_str = str(obj.get('action_command', ''))
+                    for t in discovered_types:
+                        if t in cmd_str:
+                            obj['shape_type'] = t
+                            break
+                # If still not set, fallback to object_type if it's a discovered type
+                if obj.get('shape_type') not in discovered_types and obj.get('object_type') in discovered_types:
+                    obj['shape_type'] = obj['object_type']
                 all_objects_by_image[parent_shape_id].append(obj)
                 last_stroke_obj = obj
 
@@ -1140,40 +1097,44 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
     final_graphs = {}
     all_objects_for_return = []
     
-    # STATE-OF-THE-ART: Contrastive predicate induction for BONGARD-LOGO style reasoning
-    chosen_predicate = "same_shape"  # Default fallback
+    # ACTION PROGRAMS ONLY: No default predicate assignment
+    # Predicates must be derived from action program analysis
+    chosen_predicate = None  # Will be set from action program analysis only
     predicate_params = None
     
     # Separate positive and negative examples for contrastive analysis
     positive_objects = []
     negative_objects = []
-    
     for parent_shape_id, objects_in_image in all_objects_by_image.items():
         for obj in objects_in_image:
             all_objects_for_return.append(obj)
             
-            # Categorize objects for contrastive analysis
-            category = str(obj.get('category', obj.get('label', ''))).lower()
-            image_path = obj.get('image_path', parent_shape_id)
+            # Fix categorization: Use label field instead of category field
+            # The category field contains 'bd' (dataset category), but we need positive/negative classification
+            label = str(obj.get('label', '')).lower()
+            image_path = obj.get('image_path', '')
             
-            # Enhanced categorization logic - Fixed for Bongard LOGO dataset structure
-            is_positive = (
-                category in ['positive', '1', '1.0', 'pos'] or
-                'A' in str(image_path) or 'pos' in str(image_path) or
-                'category_1' in str(image_path) or  # Added Bongard LOGO positive pattern
-                any(marker in str(image_path).lower() for marker in ['positive', '_a_', '/a/', '_a.'])
-            )
-            is_negative = (
-                category in ['negative', '0', '0.0', 'neg'] or
-                'B' in str(image_path) or 'neg' in str(image_path) or
-                'category_0' in str(image_path) or  # Fixed: category_0 is negative, not category_2
-                any(marker in str(image_path).lower() for marker in ['negative', '_b_', '/b/', '_b.'])
-            )
+            # Determine if this is positive or negative based on label or image path
+            is_positive = False
+            is_negative = False
+            
+            if label in ['positive', 'category_1']:
+                is_positive = True
+            elif label in ['negative', 'category_0']:
+                is_negative = True
+            elif 'category_1' in image_path or 'positive' in image_path:
+                is_positive = True
+            elif 'category_0' in image_path or 'negative' in image_path:
+                is_negative = True
             
             if is_positive:
                 positive_objects.append(obj)
+                logging.info(f"Categorized as POSITIVE: {obj.get('object_id')} (label={label}, path={image_path})")
             elif is_negative:
                 negative_objects.append(obj)
+                logging.info(f"Categorized as NEGATIVE: {obj.get('object_id')} (label={label}, path={image_path})")
+            else:
+                logging.info(f"NOT CATEGORIZED: {obj.get('object_id')} (label={label}, category={obj.get('category')}, path={image_path})")
     
     # Perform contrastive predicate induction if we have both positive and negative examples
     if positive_objects and negative_objects:
@@ -1198,6 +1159,11 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
             logging.debug(traceback.format_exc())
     else:
         logging.info(f"No contrastive analysis for {problem_id}: {len(positive_objects)} pos, {len(negative_objects)} neg objects")
+        # Debug: Show a sample of objects to understand categorization issue
+        if all_objects_for_return:
+            sample_objects = all_objects_for_return[:3]  # Show first 3 objects
+            for obj in sample_objects:
+                logging.info(f"Sample object: {obj.get('object_id')} - category='{obj.get('category')}', label='{obj.get('label')}', image_path='{obj.get('image_path')}'")
 
     for parent_shape_id, objects_in_image in all_objects_by_image.items():
         # --- Hierarchical Grouping Step ---
@@ -1206,9 +1172,20 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
         
         # Combine primitives and new composite shapes
         all_nodes_for_graph = objects_in_image + newly_created_shapes
-        
         G = nx.MultiDiGraph()
         for obj in all_nodes_for_graph:
+            # Ensure composite shapes get correct shape_type if possible
+            discovered_types = ['normal', 'circle', 'square', 'triangle', 'zigzag']
+            shape_type = obj.get('shape_type')
+            if shape_type not in discovered_types:
+                # Try to infer from shape_label or object_type
+                label = str(obj.get('shape_label', ''))
+                for t in discovered_types:
+                    if t in label:
+                        obj['shape_type'] = t
+                        break
+            if obj.get('shape_type') not in discovered_types and obj.get('object_type') in discovered_types:
+                obj['shape_type'] = obj['object_type']
             G.add_node(obj['object_id'], **obj)
         
         # === ENHANCED SHAPE DETECTION ===
@@ -1633,25 +1610,77 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                 # Ensure all nodes have proper shape_label and kb_concept for ConceptNet
                 logging.info(f"Preparing {G.number_of_nodes()} nodes for ConceptNet integration")
                 for node_id, node_data in G.nodes(data=True):
-                    # Use shape_label if available, otherwise use object_type
-                    raw_label = node_data.get('shape_label', node_data.get('object_type', 'unknown'))
-                    if raw_label in (None, '', 'positive', 'negative'):
-                        raw_label = node_data.get('object_type', 'unknown')
+                    # ENHANCED FIX: Support both basic Bongard-LOGO types AND enhanced shape types
+                    object_type = node_data.get('object_type')
+                    shape_type = node_data.get('shape_type')
+                    shape_label = node_data.get('shape_label')
                     
-                    # Normalize and map to ConceptNet concepts
-                    normalized_label = str(raw_label).lower().replace('_', ' ').replace('-', ' ').strip()
-                    kb_concept = COMMONSENSE_LABEL_MAP.get(normalized_label, normalized_label)
+                    logging.info(f"[process_single_problem kb_concept] Node {node_id}: object_type='{object_type}', shape_type='{shape_type}', shape_label='{shape_label}'")
                     
-                    # Update node data
-                    node_data['shape_label'] = normalized_label
-                    node_data['kb_concept'] = kb_concept
+                    # Enhanced mapping to support both basic and composite shape types
+                    kb_concept = None
+                    normalized_label = None
                     
-                    logging.debug(f"Node {node_id}: raw='{raw_label}' -> normalized='{normalized_label}' -> kb_concept='{kb_concept}'")
+                    # Priority 1: Use discovered Bongard-LOGO shape types from shape_type
+                    if shape_type and shape_type in ['normal', 'circle', 'square', 'triangle', 'zigzag']:
+                        kb_concept = shape_type
+                        normalized_label = shape_type
+                        logging.info(f"[process_single_problem kb_concept] Node {node_id}: Using shape_type '{shape_type}' as kb_concept")
+                    
+                    # Priority 2: Use discovered Bongard-LOGO shape types from object_type
+                    elif object_type and object_type in ['normal', 'circle', 'square', 'triangle', 'zigzag']:
+                        kb_concept = object_type
+                        normalized_label = object_type
+                        logging.info(f"[process_single_problem kb_concept] Node {node_id}: Using object_type '{object_type}' as kb_concept")
+                    
+                    # Priority 3: Use action program derived types (arc, line)
+                    elif object_type and object_type in ['arc', 'line']:
+                        if object_type == 'arc':
+                            kb_concept = 'arc'  # Map arc to arc concept
+                            normalized_label = 'arc'
+                        else:  # line
+                            kb_concept = 'line'  # Map line to line concept  
+                            normalized_label = 'line'
+                        logging.info(f"[process_single_problem kb_concept] Node {node_id}: Mapping object_type '{object_type}' to '{kb_concept}'")
+                        
+                    # REMOVED: No more open_curve, quarter_circle, etc. mappings
+                    # All object types come from action programs only
+                        
+                    elif object_type and object_type in ['segment', 'ray']:
+                        kb_concept = 'normal'  # Map lines to normal (most common type)
+                        normalized_label = 'normal'
+                        logging.info(f"[process_single_problem kb_concept] Node {node_id}: Mapping object_type '{object_type}' to 'normal'")
+                        
+                    elif object_type and object_type in ['polygon', 'quadrilateral']:
+                        kb_concept = 'square'  # Map polygons to square (closest regular shape)
+                        normalized_label = 'square'
+                        logging.info(f"[process_single_problem kb_concept] Node {node_id}: Mapping object_type '{object_type}' to 'square'")
+                        
+                    elif object_type and object_type in ['motif', 'cluster', 'group']:
+                        kb_concept = 'pattern'  # Map motifs to pattern concept
+                        normalized_label = 'pattern'
+                        logging.info(f"[process_single_problem kb_concept] Node {node_id}: Mapping object_type '{object_type}' to 'pattern'")
+                        
+                    else:
+                        # Final fallback: mark as unmapped but continue processing
+                        kb_concept = None
+                        normalized_label = None
+                        logging.info(f"[process_single_problem kb_concept] Node {node_id}: Skipping - no mapping available (object_type='{object_type}', shape_type='{shape_type}')")
+                    
+                    # Update node data only if we have a valid kb_concept
+                    if kb_concept is not None:
+                        node_data['shape_label'] = normalized_label
+                        node_data['kb_concept'] = kb_concept
+                    else:
+                        # Mark node as unmapped for ConceptNet but preserve other data
+                        node_data['shape_label'] = 'unmapped'
+                        node_data['kb_concept'] = None
                 
                 logging.info(f"Adding ConceptNet commonsense edges to graph with {G.number_of_nodes()} nodes")
                 add_commonsense_edges(G, top_k=3, kb=kb)
                 
                 # Count ConceptNet edges added
+
                 kb_edges = [data for u, v, data in G.edges(data=True) if data.get('source') == 'kb']
                 logging.info(f"ConceptNet integration completed for {parent_shape_id}: {len(kb_edges)} KB edges added")
             except Exception as e:

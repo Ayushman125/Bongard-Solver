@@ -5,8 +5,20 @@ from PIL import Image
 import numpy as np
 
 class CLIPEmbedder:
+    """Singleton CLIPEmbedder to prevent repeated model loading"""
+    _instance = None
+    _initialized = False
+
+    def __new__(cls, device=None):
+        if cls._instance is None:
+            cls._instance = super(CLIPEmbedder, cls).__new__(cls)
+        return cls._instance
 
     def __init__(self, device=None):
+        # Only initialize once
+        if CLIPEmbedder._initialized:
+            return
+            
         # Auto-select GPU if available, fallback to CPU
         if device is None:
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -14,13 +26,15 @@ class CLIPEmbedder:
             self.model, self.preprocess = clip.load("ViT-B/32", device=device)
             self.device = device
             self._feature_cache = {}  # (path, bbox tuple) -> feature
-            logging.info(f"CLIP model loaded successfully on device: {device}")
+            logging.info(f"CLIP model loaded successfully on device: {device} (singleton instance)")
+            CLIPEmbedder._initialized = True
         except Exception as e:
             logging.error(f"Failed to load CLIP model: {e}")
             self.model = None
             self.preprocess = None
             self.device = device
             self._feature_cache = {}
+            CLIPEmbedder._initialized = True
 
     def embed_image(self, image_or_path, bounding_box=None, mask=None, fallback_global=True, logo_object_data=None):
         """
@@ -35,6 +49,11 @@ class CLIPEmbedder:
             logo_object_data: Dictionary containing LOGO-specific object data (vertices, stroke_type, etc.)
         """
         try:
+            # Handle None image paths for action program objects
+            if image_or_path is None:
+                logging.debug("No image path provided for action program object, skipping CLIP embedding")
+                return np.random.normal(0, 0.1, 512)  # Small random values for action program objects
+            
             # Handle both PIL Image objects and file paths with robust path mapping
             if isinstance(image_or_path, str):
                 from src.scene_graphs_building.data_loading import remap_path, robust_image_open
@@ -790,7 +809,7 @@ class CLIPEmbedder:
     
     def find_analogical_patterns(self, objects_set_a, objects_set_b):
         """
-        Find analogical patterns between two sets of objects
+        Find analogical patterns between two sets of objects using discovered Bongard-LOGO shape types
         (e.g., "triangle is to square as arc is to line")
         """
         try:
@@ -800,51 +819,8 @@ class CLIPEmbedder:
             analogies = []
             
             # Extract abstract patterns from each set
-            def extract_abstract_pattern(objects):
-                pattern = {
-                    'shape_types': [],
-                    'closure_types': [],
-                    'size_categories': [],
-                    'orientation_categories': [],
-                    'complexity_levels': []
-                }
-                
-                for obj in objects:
-                    # Shape type
-                    object_type = obj.get('object_type', 'unknown')
-                    pattern['shape_types'].append(object_type)
-                    
-                    # Closure
-                    is_closed = obj.get('is_closed', False)
-                    pattern['closure_types'].append('closed' if is_closed else 'open')
-                    
-                    # Size category
-                    size = obj.get('area', 0) if obj.get('area', 0) > 0 else obj.get('length', 0)
-                    size_category = 'large' if size > 50 else 'small'
-                    pattern['size_categories'].append(size_category)
-                    
-                    # Orientation category
-                    orientation = obj.get('orientation', 0)
-                    if abs(orientation % 90) < 15:
-                        orient_category = 'cardinal'
-                    else:
-                        orient_category = 'tilted'
-                    pattern['orientation_categories'].append(orient_category)
-                    
-                    # Complexity
-                    stroke_count = obj.get('stroke_count', len(obj.get('vertices', [])))
-                    if stroke_count <= 3:
-                        complexity = 'simple'
-                    elif stroke_count <= 6:
-                        complexity = 'moderate'
-                    else:
-                        complexity = 'complex'
-                    pattern['complexity_levels'].append(complexity)
-                
-                return pattern
-            
-            pattern_a = extract_abstract_pattern(objects_set_a)
-            pattern_b = extract_abstract_pattern(objects_set_b)
+            pattern_a = self.extract_abstract_pattern(objects_set_a)
+            pattern_b = self.extract_abstract_pattern(objects_set_b)
             
             # Find analogical transformations
             for feature_type in pattern_a.keys():
@@ -888,6 +864,102 @@ class CLIPEmbedder:
         except Exception as e:
             logging.error(f"Error finding analogical patterns: {e}")
             return []
+    def extract_abstract_pattern(self, objects):
+        """Extract abstract patterns using the 5 discovered Bongard-LOGO shape types"""
+        pattern = {
+            'shape_types': [],
+            'closure_types': [],
+            'size_categories': [],
+            'orientation_categories': [],
+            'complexity_levels': [],
+            'discovered_shape_distribution': {
+                'normal': 0, 'circle': 0, 'square': 0, 'triangle': 0, 'zigzag': 0
+            }
+        }
+        
+        for obj in objects:
+            # Shape type - prioritize discovered Bongard-LOGO types
+            shape_type = obj.get('shape_type', 'unknown')
+            object_type = obj.get('object_type', 'unknown')
+            
+            # Use discovered shape types if available
+            if shape_type in ['normal', 'circle', 'square', 'triangle', 'zigzag']:
+                pattern['shape_types'].append(shape_type)
+                pattern['discovered_shape_distribution'][shape_type] += 1
+            else:
+                # Fallback to object type
+                pattern['shape_types'].append(object_type)
+            
+            # Closure
+            is_closed = obj.get('is_closed', False)
+            pattern['closure_types'].append('closed' if is_closed else 'open')
+            
+            # Size category - enhanced with shape-specific considerations
+            size = obj.get('area', 0) if obj.get('area', 0) > 0 else obj.get('length', 0)
+            
+            # Adjust size thresholds based on shape type
+            if shape_type == 'normal':
+                # Lines use length as primary measure
+                size_category = 'large' if size > 100 else 'medium' if size > 30 else 'small'
+            elif shape_type in ['circle', 'square', 'triangle']:
+                # Closed shapes use area
+                size_category = 'large' if size > 50 else 'medium' if size > 15 else 'small'
+            elif shape_type == 'zigzag':
+                # Zigzag uses path length
+                size_category = 'large' if size > 80 else 'medium' if size > 25 else 'small'
+            else:
+                # Generic fallback
+                size_category = 'large' if size > 50 else 'medium' if size > 20 else 'small'
+                
+            pattern['size_categories'].append(size_category)
+            
+            # Orientation category
+            orientation = obj.get('orientation', 0)
+            if abs(orientation % 90) < 15:
+                orient_category = 'cardinal'
+            else:
+                orient_category = 'tilted'
+            pattern['orientation_categories'].append(orient_category)
+            
+            # Complexity based on discovered shape types and geometry
+            complexity = self._compute_shape_complexity(obj, shape_type)
+            pattern['complexity_levels'].append(complexity)
+        
+        return pattern
+    
+    def _compute_shape_complexity(self, obj, shape_type):
+        """Compute complexity level based on discovered shape type and geometric properties"""
+        # Base complexity from shape type
+        base_complexity = {
+            'normal': 1,    # Simple lines
+            'circle': 2,    # Regular curves
+            'square': 2,    # Regular polygons  
+            'triangle': 2,  # Regular polygons
+            'zigzag': 3     # Irregular patterns
+        }.get(shape_type, 1)
+        
+        # Adjust based on geometric properties
+        stroke_count = obj.get('stroke_count', len(obj.get('vertices', [])))
+        if stroke_count <= 3:
+            stroke_complexity = 0
+        elif stroke_count <= 8:
+            stroke_complexity = 1
+        else:
+            stroke_complexity = 2
+            
+        # Curvature consideration
+        curvature_score = obj.get('curvature_score', 0)
+        curvature_complexity = 1 if curvature_score > 0.3 else 0
+        
+        # Total complexity
+        total_complexity = base_complexity + stroke_complexity + curvature_complexity
+        
+        if total_complexity <= 2:
+            return 'simple'
+        elif total_complexity <= 4:
+            return 'moderate'
+        else:
+            return 'complex'
     
     # === STATE-OF-THE-ART: PROGRAM SYNTHESIS FOR RULE EXTRACTION ===
     

@@ -44,8 +44,8 @@ from src.scene_graphs_building.knowledge_fusion import MultiSourceKnowledgeFusio
 from src.scene_graphs_building.sgcore_validator import SGScoreValidator
 from src.scene_graphs_building.hierarchical_predicates import HierarchicalPredicatePredictor
 from src.scene_graphs_building.feature_extractors import RealFeatureExtractor
-from src.scene_graphs_building.feature_extraction import get_real_feature_extractor, compute_physics_attributes, extract_line_segments
-from src.scene_graphs_building.data_loading import remap_path, load_data, load_action_programs, get_problem_data
+from src.scene_graphs_building.feature_extraction import compute_physics_attributes, extract_line_segments
+from src.scene_graphs_building.data_loading import remap_path, load_action_programs, get_problem_data, load_json_data
 from src.scene_graphs_building.predicate_induction import induce_predicate_for_problem
 from src.scene_graphs_building.graph_building import build_graph_unvalidated, add_commonsense_edges
 from src.scene_graphs_building.visualization import save_feedback_images
@@ -63,6 +63,10 @@ from src.data_pipeline.adaptive_thresholds import AdaptiveThresholds
 from src.commonsense_kb_api import ConceptNetAPI
 from integration.task_profiler import TaskProfiler
 
+def get_real_feature_extractor():
+    """Create and return a RealFeatureExtractor instance"""
+    return RealFeatureExtractor()
+
 # --- ConceptNetAPI Singleton Wrapper ---
 class ConceptNetClient:
     _instance = None
@@ -77,27 +81,96 @@ class ConceptNetClient:
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Bongard LOGO dataset main entry ---
-def run_bongard_logo_scene_graph_pipeline(args):
-    # Load data
-    aug_data = load_data(args.aug)
-    derived_labels = load_data(args.labels)
-    # Load puzzle list
-    with open(args.puzzles_list, 'r') as f:
-        puzzle_ids = [line.strip() for line in f if line.strip()]
-    # Load action programs
-    action_programs = load_action_programs(args.action_base_dir)
+async def run_bongard_logo_scene_graph_pipeline(args):
+    """Enhanced LOGO mode pipeline with proper action program handling - ACTION PROGRAMS ONLY MODE"""
+    
+    # Load action programs from the correct directory structure
+    action_base_dir = args.action_base_dir or "data/raw/ShapeBongard_V2"
+    action_programs = load_action_programs(action_base_dir)
+    
+    if not action_programs:
+        logging.error(f"No action programs loaded from {action_base_dir}")
+        return
+    
+    logging.info(f"[LOGO] ACTION-ONLY MODE: Loaded {len(action_programs)} action programs")
+    
+    # Optional: Load derived labels as fallback, but not required
+    derived_labels = None
+    try:
+        if args.labels and os.path.exists(args.labels):
+            derived_labels = load_json_data(args.labels)
+            logging.info(f"[LOGO] Loaded {len(derived_labels)} derived labels as optional fallback")
+        else:
+            logging.info(f"[LOGO] No derived labels provided or file not found. Using ACTION PROGRAMS ONLY.")
+    except Exception as e:
+        logging.warning(f"[LOGO] Could not load derived labels: {e}. Using ACTION PROGRAMS ONLY.")
+        derived_labels = None
 
-    # For each problem, fetch all relevant data and process
-    for problem_id in tqdm(puzzle_ids, desc="Processing LOGO Problems"):
-        pdata = get_problem_data(problem_id, derived_labels, action_programs)
+    # Handle puzzle list - check if it's from split file or manual list
+    puzzle_ids = []
+    if args.puzzles_list:
+        if args.puzzles_list.endswith('.json'):
+            # It's a split file
+            from src.scene_graphs_building.data_loading import load_split_file, get_problem_ids_from_split
+            split_data = load_split_file(args.puzzles_list)
+            if split_data:
+                # Use validation split by default, limit to 50 for testing
+                puzzle_ids = get_problem_ids_from_split(split_data, 'val', max_problems=50)
+        else:
+            # It's a text file with problem IDs or paths
+            with open(args.puzzles_list, 'r') as f:
+                lines = [line.strip() for line in f if line.strip()]
+                
+            # If lines contain paths, extract problem IDs
+            puzzle_ids = []
+            for line in lines:
+                if '/' in line or '\\' in line:
+                    # Extract problem ID from path
+                    problem_id = os.path.basename(line)
+                    puzzle_ids.append(problem_id)
+                else:
+                    # Assume it's already a problem ID
+                    puzzle_ids.append(line)
+    else:
+        # Use all available action programs
+        puzzle_ids = list(action_programs.keys())[:50]  # Limit for testing
+    
+    logging.info(f"[LOGO] Processing {len(puzzle_ids)} puzzles from action programs")
+    
+    # Process each problem
+    processed_count = 0
+    total_examples = 0
+    command_type_stats = {'line': 0, 'arc': 0, 'unknown': 0}
+    shape_type_stats = {}
+    
+    for problem_id in tqdm(puzzle_ids, desc="Processing LOGO Problems (Action-Only)"):
+        if problem_id not in action_programs:
+            logging.warning(f"Problem {problem_id} not found in action_programs.")
+            continue
+            
+        # ACTION PROGRAMS ONLY: No derived_labels needed
+        pdata = get_problem_data(problem_id, action_programs)
         if pdata is None:
-            logging.warning(f"Problem {problem_id} not found in derived_labels or action_programs.")
+            logging.warning(f"Failed to get problem data for {problem_id}")
             continue
 
         try:
             problem_records = pdata['records']
+            total_examples += len(problem_records)
+            
+            # Collect statistics about action commands
+            for record in problem_records:
+                if 'features' in record and 'command_type_counts' in record['features']:
+                    for cmd_type, count in record['features']['command_type_counts'].items():
+                        command_type_stats[cmd_type] = command_type_stats.get(cmd_type, 0) + count
+                if 'features' in record and 'shape_type_counts' in record['features']:
+                    for shape_type, count in record['features']['shape_type_counts'].items():
+                        shape_type_stats[shape_type] = shape_type_stats.get(shape_type, 0) + count
+            
+            logging.info(f"[LOGO] Processing {problem_id}: {len(problem_records)} records ({pdata['total_positive']} pos, {pdata['total_negative']} neg)")
+            
             # The new function returns a dictionary containing the scene graphs and all objects
-            processed_data = asyncio.run(_process_single_problem(problem_id, problem_records, None, args=args))
+            processed_data = await _process_single_problem(problem_id, problem_records, None, args=args)
             
             if not processed_data or not processed_data.get('scene_graphs'):
                 logging.warning(f"[LOGO] No scene graphs were generated for problem {problem_id}. Skipping.")
@@ -107,11 +180,24 @@ def run_bongard_logo_scene_graph_pipeline(args):
             # This script's role is primarily to orchestrate the calls and save outputs.
             final_graphs = processed_data['scene_graphs']
             logging.info(f"[LOGO] Successfully processed problem {problem_id}, generated {len(final_graphs)} scene graphs.")
+            processed_count += 1
 
         except Exception as e:
             logging.error(f"Error processing problem {problem_id}: {e}")
             logging.error(traceback.format_exc())
             continue
+    
+    # Log comprehensive statistics
+    logging.info(f"[LOGO] ===== ACTION-ONLY PIPELINE COMPLETED =====")
+    logging.info(f"[LOGO] Successfully processed {processed_count} out of {len(puzzle_ids)} problems")
+    logging.info(f"[LOGO] Total examples processed: {total_examples}")
+    logging.info(f"[LOGO] Command type statistics: {command_type_stats}")
+    logging.info(f"[LOGO] Shape type statistics: {shape_type_stats}")
+    logging.info(f"[LOGO] All action command categories parsed: {list(command_type_stats.keys())}")
+    logging.info(f"[LOGO] All shape categories parsed: {list(shape_type_stats.keys())}")
+    logging.info(f"[LOGO] ==============================================")
+    
+    return processed_count, total_examples, command_type_stats, shape_type_stats
 
 # --- Global Constants and Utilities ---
 EPS = 1e-6 # Increased precision for epsilon
@@ -860,412 +946,8 @@ def are_points_collinear(verts, tol=1e-6):
             return False
     return True
 
-def assign_object_type(verts):
-    arr = np.asarray(verts)
-    if len(arr) == 1 or np.allclose(np.std(arr, axis=0), 0, atol=1e-8):
-        return "point"
-    elif len(arr) == 2 or are_points_collinear(arr):
-        return "line"
-    elif len(arr) >= 3 and not are_points_collinear(arr):
-        return "polygon"
-    else:
-        # SOTA: treat degenerate/ambiguous as 'curve' if possible
-        return "curve" if len(arr) > 1 else "unknown"
-
-
-
-    # --- SOTA mode below ---
-    # 1. Merge all image records into one list of objects
-    merged_record = {'objects': []}
-    representative_image_path = None
-
-    from src.scene_graphs_building.clip_embedder import CLIPEmbedder
-    from src.scene_graphs_building.predicate_miner import PredicateMiner
-    from src.scene_graphs_building.motif_miner import MotifMiner
-    from src.reasoner.gnn_reasoner import GNNReasoner
-    from integration.rule_inducer import RuleInducer
-
-    # 1. Build objects with enriched features
-    clip_embedder = CLIPEmbedder()
-    objects = []
-    for idx, rec in enumerate(problem_records):
-        if representative_image_path is None:
-            representative_image_path = remap_path(rec.get('image_path', ''))
-        verts = rec.get('vertices') or rec.get('geometry') or []
-        obj_type = assign_object_type(verts)
-        arr = np.array(verts)
-        obj = {
-            'object_id': f"{problem_id}_{idx}",
-            'vertices': verts,
-            'object_type': obj_type,
-            'is_closed': (len(verts) > 2 and np.allclose(verts[0], verts[-1], atol=1e-6)),
-            'fallback_geometry': False, # will update below
-            'bounding_box': [float(np.min(arr[:,0])) if verts else 0.0,
-                             float(np.min(arr[:,1])) if verts else 0.0,
-                             float(np.max(arr[:,0])) if verts else 0.0,
-                             float(np.max(arr[:,1])) if verts else 0.0],
-            'centroid': [0.0, 0.0], # will update below
-            'area': 0.0,
-            'perimeter': 0.0,
-            'orientation': 0.0,
-            'aspect_ratio': 1.0,
-            'curvature': 0.0,
-            'skeleton_length': 0.0,
-            'shape_label': rec.get('label', ''),
-            'action_program': rec.get('action_program', []),
-            'stroke_type': rec.get('stroke_type', ''),
-            'symmetry_axis': 0.0,
-            'component_index': idx,
-            'is_valid': True,
-            'geometry_reason': '',
-            'object_color': rec.get('object_color', ''),
-            'category': rec.get('category'),
-            'label': rec.get('label'),
-            'image_path': rec.get('image_path'),
-            'feature_valid': {},
-        }
-        # SOTA: Feature validity and geometry for all types
-        if obj_type == "polygon":
-            try:
-                poly = Polygon(arr)
-                obj['centroid'] = list(poly.centroid.coords[0])
-                obj['area'] = float(poly.area)
-                obj['perimeter'] = float(poly.length)
-                obj['orientation'] = float(np.degrees(np.arctan2(arr[-1][1]-arr[0][1], arr[-1][0]-arr[0][0])))
-                obj['aspect_ratio'] = (obj['bounding_box'][2] - obj['bounding_box'][0]) / max(obj['bounding_box'][3] - obj['bounding_box'][1], 1e-6)
-                obj['curvature'] = 0.0 # can be updated with more logic
-                obj['skeleton_length'] = 0.0 # can be updated with more logic
-                obj['symmetry_axis'] = obj['orientation']
-                obj['is_valid'] = poly.is_valid and obj['area'] > 1e-6
-                obj['geometry_reason'] = "polygon" if obj['is_valid'] else "degenerate"
-                obj['fallback_geometry'] = not obj['is_valid']
-                for feat in ['curvature', 'skeleton_length', 'symmetry_axis', 'centroid', 'orientation', 'area', 'perimeter', 'aspect_ratio']:
-                    obj['feature_valid'][feat] = True if obj['is_valid'] else False
-            except Exception as e:
-                obj['is_valid'] = False
-                obj['geometry_reason'] = f"polygon_error: {e}"
-                obj['fallback_geometry'] = True
-                for feat in ['curvature', 'skeleton_length', 'symmetry_axis', 'centroid', 'orientation', 'area', 'perimeter', 'aspect_ratio']:
-                    obj['feature_valid'][feat] = False
-        elif obj_type in ["line", "curve"]:
-            # SOTA: Always set geometry for lines/curves
-            if arr.shape[0] > 1:
-                centroid = np.mean(arr, axis=0)
-                obj['centroid'] = centroid.tolist()
-                obj['perimeter'] = float(np.sum(np.linalg.norm(arr[1:] - arr[:-1], axis=1)))
-                obj['orientation'] = float(np.degrees(np.arctan2(arr[-1][1]-arr[0][1], arr[-1][0]-arr[0][0])))
-                obj['skeleton_length'] = obj['perimeter']
-                obj['curvature'] = None # can be updated if needed
-                obj['area'] = 0.0
-                obj['aspect_ratio'] = (obj['bounding_box'][2] - obj['bounding_box'][0]) / max(obj['bounding_box'][3] - obj['bounding_box'][1], 1e-6)
-                obj['symmetry_axis'] = None
-                obj['is_valid'] = True
-                obj['geometry_reason'] = obj_type
-                obj['fallback_geometry'] = False
-                for feat in ['centroid', 'orientation', 'perimeter', 'skeleton_length', 'aspect_ratio']:
-                    obj['feature_valid'][feat] = True
-                for feat in ['area', 'curvature', 'symmetry_axis']:
-                    obj['feature_valid'][feat] = False
-            else:
-                obj['is_valid'] = False
-                obj['geometry_reason'] = f"{obj_type}_degenerate"
-                obj['fallback_geometry'] = True
-                for feat in ['centroid', 'orientation', 'perimeter', 'skeleton_length', 'aspect_ratio', 'area', 'curvature', 'symmetry_axis']:
-                    obj['feature_valid'][feat] = False
-        elif obj_type == "point":
-            obj['centroid'] = arr[0].tolist() if len(arr) == 1 else [0.0, 0.0]
-            obj['area'] = 0.0
-            obj['perimeter'] = 0.0
-            obj['orientation'] = 0.0
-            obj['aspect_ratio'] = 1.0
-            obj['curvature'] = None
-            obj['skeleton_length'] = None
-            obj['symmetry_axis'] = None
-            obj['is_valid'] = True
-            obj['geometry_reason'] = "point"
-            obj['fallback_geometry'] = True
-            for feat in ['centroid', 'area', 'perimeter', 'orientation', 'aspect_ratio', 'curvature', 'skeleton_length', 'symmetry_axis']:
-                obj['feature_valid'][feat] = feat == 'centroid'
-        else:
-            obj['is_valid'] = False
-            obj['geometry_reason'] = "unknown"
-            obj['fallback_geometry'] = True
-            for feat in ['centroid', 'area', 'perimeter', 'orientation', 'aspect_ratio', 'curvature', 'skeleton_length', 'symmetry_axis']:
-                obj['feature_valid'][feat] = False
-        # Logging for interpretability
-        logging.info(f"Object {obj['object_id']}: type={obj['object_type']}, valid={obj['is_valid']}, fallback={obj['fallback_geometry']}, reason={obj['geometry_reason']}, feature_valid={obj['feature_valid']}")
-        # SOTA: Vision-language and motif fields
-        obj['clip_sim'] = None
-        obj['vl_sim'] = None
-        obj['motif_score'] = None
-        if getattr(args, 'use_vl', False) and obj.get('image_path'):
-            try:
-                from src.scene_graphs_building.data_loading import robust_image_open
-                img = robust_image_open(obj['image_path'])
-                # SOTA: Use ROI/mask-based embedding for lines/curves
-                if obj_type in ["line", "curve"] and arr.shape[0] > 1:
-                    x1, y1, x2, y2 = [int(round(x)) for x in obj['bounding_box']]
-                    img_crop = img.crop((x1, y1, x2, y2))
-                    obj['vl_embed'] = clip_embedder.embed_image(img_crop)
-                else:
-                    obj['vl_embed'] = clip_embedder.embed_image(img)
-            except Exception as e:
-                try:
-                    # Attempt VL embedding with CLIPEmbedder
-                    if clip_embedder and clip_embedder.model is not None:
-                        img_path = obj.get('image_path')
-                        bbox = obj.get('bounding_box')
-                        if img_path and os.path.exists(img_path):
-                            vl_embed = clip_embedder.embed_image(img_path, bounding_box=bbox)
-                            if vl_embed is not None and not np.allclose(vl_embed, 0):
-                                obj['vl_embed'] = vl_embed
-                                logging.info(f"VL embedding computed for {obj['object_id']}")
-                            else:
-                                obj['vl_embed'] = np.zeros(512)
-                                logging.warning(f"VL embedding returned zeros for {obj['object_id']}")
-                        else:
-                            obj['vl_embed'] = np.zeros(512)
-                            logging.warning(f"No valid image path for VL embedding: {obj['object_id']}")
-                    else:
-                        obj['vl_embed'] = np.zeros(512)
-                        logging.warning(f"CLIPEmbedder not available for {obj['object_id']}")
-                except Exception as e:
-                    logging.error(f"VL embedding failed for {obj['object_id']}: {e}")
-                    obj['vl_embed'] = np.zeros(512)
-        # Log non-polygon objects for feedback
-        if obj_type != "polygon":
-            logging.warning(f"Inserted non-polygon object: id={obj['object_id']}, type={obj['object_type']}, vertices={verts}")
-        objects.append(obj)
-    merged_record['objects'] = objects
-    # 2. Motif mining and super-nodes (SOTA: graph-based, type-aware)
-    logging.info(f"[LOG] Objects passed to MotifMiner: count={len(objects)}")
-    for obj in objects:
-        logging.info(f"[LOG] Motif input object: id={obj.get('object_id')}, type={obj.get('object_type')}, is_valid={obj.get('is_valid')}, vertices_len={len(obj.get('vertices',[]))}")
-    motif_nodes = []
-    motif_edges = []
-    if getattr(args, 'use_motifs', False):
-        motif_dict, motif_nodes = MotifMiner().cluster_motifs(objects, method='graph+type')
-        logging.info(f"[LOG] MotifMiner output: motif_nodes count={len(motif_nodes)}")
-        for motif_node in motif_nodes:
-            logging.info(f"[LOG] Motif node: id={motif_node.get('id')}, type={motif_node.get('motif_type','unknown')}, member_nodes={motif_node.get('member_nodes',[])}")
-        for motif_node in motif_nodes:
-            supernode_id = motif_node['id']
-            member_nodes = [obj for obj in objects if obj.get('object_id', obj.get('id')) in motif_node['member_nodes']]
-            # SOTA: Aggregate motif features (stroke count, mean direction, etc.)
-            motif_node['stroke_count'] = len(member_nodes)
-            motif_node['mean_orientation'] = float(np.mean([o['orientation'] for o in member_nodes if o['feature_valid'].get('orientation')])) if member_nodes else 0.0
-            motif_node['motif_type'] = motif_dict.get(supernode_id, 'unknown')
-            # Add part_of_motif edges
-            for nid in motif_node['member_nodes']:
-                motif_edges.append((nid, supernode_id, {'predicate': 'part_of', 'source': 'motif'}))
-    merged_record['geometry'] = objects + motif_nodes
-    # Compute mean VL embedding and assign clip_sim/vl_sim for all nodes
-    all_embeds = [obj.get('vl_embed') for obj in objects + motif_nodes if obj.get('vl_embed') is not None]
-    if all_embeds:
-        mean_embed = np.mean(np.array(all_embeds), axis=0)
-        def cosine_sim(a, b):
-            a = np.array(a)
-            b = np.array(b)
-            if np.linalg.norm(a) == 0 or np.linalg.norm(b) == 0:
-                return 0.0
-            return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
-        for obj in objects + motif_nodes:
-            if obj.get('vl_embed') is not None:
-                obj['clip_sim'] = cosine_sim(obj['vl_embed'], mean_embed)
-                obj['vl_sim'] = cosine_sim(obj['vl_embed'], mean_embed)
-    # SOTA: log node/edge type and feature coverage
-    n_poly = sum(1 for o in objects if o['object_type'] == 'polygon')
-    n_line = sum(1 for o in objects if o['object_type'] == 'line')
-    n_curve = sum(1 for o in objects if o['object_type'] == 'curve')
-    n_point = sum(1 for o in objects if o['object_type'] == 'point')
-    logging.info(f"Node type counts: polygon={n_poly}, line={n_line}, curve={n_curve}, point={n_point}")
-    n_valid_geom = sum(1 for o in objects if o['is_valid'])
-    logging.info(f"Valid geometry nodes: {n_valid_geom}/{len(objects)}")
-    # 3. Adaptive predicate mining (SOTA: branch by type, ensure all pairs get at least one predicate)
-    pred_miner = PredicateMiner()
-    learned_thresholds = pred_miner.fit(objects)
-    dynamic_predicates = pred_miner.build_edge_fn(type_aware=True)  # SOTA: type-aware branching
-    for k, v in dynamic_predicates.items():
-        logging.info(f"Predicate '{k}' type: {type(v)}")
-    # SOTA: ensure every node pair gets at least one predicate (esp. for lines/curves)
-    for i, a in enumerate(objects):
-        for j, b in enumerate(objects):
-            if i >= j: continue
-            found = any(fn(a, b) for fn in dynamic_predicates.values())
-            if not found:
-                logging.warning(f"No predicate found for node pair {a['object_id']} ({a['object_type']}), {b['object_id']} ({b['object_type']})")
-    # 4. VLM edges (SOTA: include lines/curves, use ROI/mask)
-    vl_edges = []
-    if getattr(args, 'use_vl', False):
-        vl_edges = clip_embedder.contrastive_edges(objects, use_roi=getattr(args, 'use_roi', False))
-    # 5. Build graph
-    base_graph_nx = build_graph_unvalidated(merged_record, dynamic_predicates, TOP_K, extra_edges=vl_edges, kb=kb)
-    logging.info(f"[LOG] After build_graph_unvalidated: type={type(base_graph_nx)}, nodes={getattr(base_graph_nx, 'number_of_nodes', lambda: 'NA')()}, edges={getattr(base_graph_nx, 'number_of_edges', lambda: 'NA')()}")
-    if base_graph_nx is not None:
-        node_list = list(base_graph_nx.nodes(data=True))
-        edge_list = list(base_graph_nx.edges(data=True))
-        logging.info(f"[LOG] Graph nodes: count={len(node_list)}")
-        for i, (nid, ndata) in enumerate(node_list[:5]):
-            logging.info(f"[LOG] Node {i}: id={nid}, keys={list(ndata.keys())}, type={ndata.get('object_type')}, is_valid={ndata.get('is_valid')}, vertices_len={len(ndata.get('vertices',[]))}")
-        logging.info(f"[LOG] Graph edges: count={len(edge_list)}")
-        for i, (u, v, edata) in enumerate(edge_list[:5]):
-            logging.info(f"[LOG] Edge {i}: {u}->{v}, predicate={edata.get('predicate')}, source={edata.get('source', '')}, keys={list(edata.keys())}")
-    # ...existing code...
-    # After physics computation and object creation
-    logging.info(f"[LOG] Physics/geometry step: objects produced count={len(objects)}")
-    for obj in objects:
-        logging.info(f"[LOG] Physics output object: id={obj.get('object_id')}, type={obj.get('object_type')}, is_valid={obj.get('is_valid')}, vertices_len={len(obj.get('vertices',[]))}")
-    # Before graph construction
-    logging.info(f"[LOG] Objects passed to build_graph_unvalidated: count={len(objects)}")
-    for obj in objects:
-        logging.info(f"[LOG] Graph input object: id={obj.get('object_id')}, type={obj.get('object_type')}, is_valid={obj.get('is_valid')}, vertices_len={len(obj.get('vertices',[]))}")
-    base_graph_nx = build_graph_unvalidated(merged_record, dynamic_predicates, TOP_K, extra_edges=vl_edges, kb=kb)
-    logging.info(f"[LOG] After build_graph_unvalidated: type={type(base_graph_nx)}, nodes={getattr(base_graph_nx, 'number_of_nodes', lambda: 'NA')()}, edges={getattr(base_graph_nx, 'number_of_edges', lambda: 'NA')()}")
-    if base_graph_nx is not None:
-        node_list = list(base_graph_nx.nodes(data=True))
-        edge_list = list(base_graph_nx.edges(data=True))
-        logging.info(f"[LOG] Graph nodes: count={len(node_list)}")
-        for i, (nid, ndata) in enumerate(node_list[:5]):
-            logging.info(f"[LOG] Node {i}: id={nid}, keys={list(ndata.keys())}, type={ndata.get('object_type')}, is_valid={ndata.get('is_valid')}, vertices_len={len(ndata.get('vertices',[]))}")
-        logging.info(f"[LOG] Graph edges: count={len(edge_list)}")
-        for i, (u, v, edata) in enumerate(edge_list[:5]):
-            logging.info(f"[LOG] Edge {i}: {u}->{v}, predicate={edata.get('predicate')}, source={edata.get('source', '')}, keys={list(edata.keys())}")
-    # ...existing code...
-    base_scene_graph_for_enhanced = {
-        'objects': merged_record['objects'], # These are the node data for the graph
-        'relationships': [], # Relationships will be filled by add_predicate_edges and enhanced_builder
-        'graph': base_graph_nx # Pass the networkx graph directly
-    }
-
-    # 4. Enhance the scene graph (knowledge fusion, hierarchical predicates)
-    import asyncio
-    async def run_enhanced_scene_graph():
-        return await enhanced_builder.build_enhanced_scene_graph(representative_image_path, base_scene_graph_for_enhanced)
-    scene_graph_data = asyncio.run(run_enhanced_scene_graph())
-    final_scene_graph = scene_graph_data['scene_graph']
-    quality_metrics = scene_graph_data['quality_metrics']
-    
-    # STATE-OF-THE-ART: Get the chosen predicate from the scene graph processing
-    chosen_predicate = final_scene_graph.get('chosen_predicate', 'same_shape')
-    if not chosen_predicate or chosen_predicate == 'unknown':
-        chosen_predicate = 'same_shape'
-
-    # 6. Iterative Rule Refinement & Human-in-the-Loop (Ambiguity check & trigger)
-    rels = final_scene_graph.get('relationships', [])
-    preds = [r['predicate'] for r in rels]
-    support_rate = preds.count(chosen_predicate) / len(preds) if preds else 0
-
-    if support_rate < 0.95 and chosen_predicate != 'same_shape': # Only flag if not the fallback and support is low
-        queue_file = os.path.join(feedback_dir, 'review_queue.jsonl')
-        os.makedirs(os.path.dirname(queue_file), exist_ok=True) # Ensure directory exists
-        with open(queue_file, 'a') as q:
-            q.write(json.dumps({
-                'problem_id': problem_id,
-                'induced_predicate': chosen_predicate,
-                'support_rate': support_rate,
-                'timestamp': time.time()
-            }) + "\n")
-        logging.info(f"Problem {problem_id}: Ambiguous case detected for predicate '{chosen_predicate}' (support: {support_rate:.2f}). Added to review queue.")
-
-
-    # 5. Save feedback images (always, if enabled)
-    if feedback_dir and representative_image_path:
-        try:
-            from src.scene_graphs_building.data_loading import robust_image_open
-            img = robust_image_open(representative_image_path)
-            logging.info(f"[Feedback Save] Problem {problem_id}: representative_image_path={representative_image_path}, img type={type(img)}, img shape={getattr(img, 'size', None)}")
-            # Log scene graph summary
-            if final_scene_graph is not None and 'graph' in final_scene_graph:
-                G = final_scene_graph['graph']
-                logging.info(f"[Feedback Save] Problem {problem_id}: scene_graph type={type(G)}, num_nodes={getattr(G, 'number_of_nodes', lambda: 'NA')()}, num_edges={getattr(G, 'number_of_edges', lambda: 'NA')()}")
-            else:
-                logging.info(f"[Feedback Save] Problem {problem_id}: scene_graph missing or invalid.")
-            if img is not None:
-                # Enhanced feedback saving with comprehensive analysis
-                save_feedback_images(img, None, problem_id, feedback_dir, scene_graph=final_scene_graph)
-                
-                # Generate enhanced visualizations if scene graph available
-                if final_scene_graph is not None and 'graph' in final_scene_graph:
-                    try:
-                        from scripts.scene_graph_visualization import save_enhanced_scene_graph_visualization
-                        G = final_scene_graph['graph']
-                        
-                        # Save enhanced visualization
-                        enhanced_viz_path = save_enhanced_scene_graph_visualization(
-                            G, representative_image_path, feedback_dir, problem_id,
-                            show_missing_data=True, show_patterns=True
-                        )
-                        
-                        # Save enhanced CSV with all calculated fields
-                        save_scene_graph_csv(G, feedback_dir, problem_id)
-                        
-                        logging.info(f"Generated enhanced visualization and CSV: {enhanced_viz_path}")
-                        
-                    except Exception as e:
-                        logging.warning(f"Failed to generate enhanced visualization for {problem_id}: {e}")
-            else:
-                logging.warning(f"Could not read representative image for feedback: {representative_image_path}")
-        except Exception as e:
-            logging.warning(f"Failed to save feedback images for problem {problem_id} ({representative_image_path}): {e}")
-
-    # 6. Batch validation (if enabled)
-    if batch_validator:
-        try:
-            from src.scene_graphs_building.data_loading import robust_image_open
-            img_pil = robust_image_open(representative_image_path)
-            import asyncio
-            async def run_batch_validation():
-                return await batch_validator.validate_scene_graph_batch(
-                    [(img_pil, final_scene_graph)]
-                )
-            validation_result = asyncio.run(run_batch_validation())
-            final_scene_graph['validation'] = validation_result[0] if validation_result else None
-        except Exception as e:
-            logging.error(f"Batch validation failed for problem {problem_id} ({representative_image_path}): {e}")
-            final_scene_graph['validation'] = {'error': str(e)}
-
-    # 7. Recall evaluation (if ground_truth is available)
-    metrics = None
-    # Check if problem_records[0] exists and has 'ground_truth' key
-    if problem_records and 'ground_truth' in problem_records[0] and recall_evaluator:
-        try:
-            gt = problem_records[0]['ground_truth']
-            metrics = recall_evaluator.evaluate_scene_graph(
-                final_scene_graph['relationships'],
-                gt['relationships'],
-                final_scene_graph['objects'],
-                gt['objects']
-            )
-            final_scene_graph['metrics'] = metrics
-        except Exception as e:
-            logging.error(f"Recall evaluation failed for problem {problem_id}: {e}")
-            final_scene_graph['metrics'] = {'error': str(e)}
-
-    # 8. Drift visualization (if enabled)
-    if drift_visualizer:
-        perf_val = None
-        # Check if metrics object has 'overall_statistics' and 'recall'
-        if metrics and hasattr(metrics, 'overall_statistics') and 'recall' in metrics.overall_statistics:
-            perf_val = metrics.overall_statistics['recall']
-        else:
-            # Fallback to knowledge confidence if recall metrics are not available
-            perf_val = quality_metrics.get('knowledge_confidence', 0.5)
-
-        for rel in final_scene_graph.get('relationships', []):
-            predicate = rel['predicate']
-            confidence = rel.get('final_confidence', quality_metrics.get('knowledge_confidence', 0.5))
-            drift_visualizer.add_threshold_data(predicate, confidence, perf_val)
-
-    # [LOGO] Log all output objects and edges for this problem
-    if args is not None and hasattr(args, 'mode') and args.mode == 'logo':
-        
-        # Output objects
-        if 'objects' in output:
-            logging.info(f"[LOGO] Output objects for problem_id={problem_id}: {json.dumps(output['objects'], indent=2, ensure_ascii=False)[:2000]}{'...TRUNCATED...' if len(json.dumps(output['objects']))>2000 else ''}")
-        # Output edges
-        if 'edges' in output:
-            logging.info(f"[LOGO] Output edges for problem_id={problem_id}: {json.dumps(output['edges'], indent=2, ensure_ascii=False)[:2000]}{'...TRUNCATED...' if len(json.dumps(output['edges']))>2000 else ''}")
-    return output
+# REMOVED: assign_object_type function that used vertices without action programs
+# All object type assignment now happens in process_single_problem.py using action commands only
 
 def process_problem_batch_sync_wrapper(list_of_problem_records: List[List[Dict[str, Any]]], feature_cache, batch_validator, recall_evaluator, drift_visualizer, enhanced_builder, feedback_dir, feedback_rate, decompose_polygons: bool, adaptive_thresholds: AdaptivePredicateThresholds, args=None):
     # Synchronous wrapper to run async processing for a batch of problems.
@@ -1435,7 +1117,7 @@ async def main(): # Main is now async because it calls async functions
     # Load data
     logging.info(f"Loading data from {args.aug}")
     try:
-        augmented_data = load_data(args.aug)
+        augmented_data = load_json_data(args.aug)
         logging.info(f"Loaded {len(augmented_data)} records from {args.aug}")
         if len(augmented_data) > 0:
             logging.info(f"Sample augmented record keys: {list(augmented_data[0].keys()) if isinstance(augmented_data[0], dict) else type(augmented_data[0])}")
@@ -1448,7 +1130,7 @@ async def main(): # Main is now async because it calls async functions
 
     logging.info(f"Loading labels from {args.labels}")
     try:
-        derived_labels = load_data(args.labels)
+        derived_labels = load_json_data(args.labels)
         logging.info(f"Loaded labels.")
     except (FileNotFoundError, ValueError) as e:
         logging.warning(f"Labels file not found or invalid at {args.labels}: {e}. Continuing without them.")
@@ -1497,6 +1179,13 @@ async def main(): # Main is now async because it calls async functions
     logging.info(f"Grouped records into {len(grouped_problems)} problems.")
     
     # --- END Merge labels and group by problem_id ---
+    
+    # Check if we should use LOGO mode pipeline
+    if args.mode == 'logo':
+        logging.info("Using specialized LOGO mode pipeline")
+        await run_bongard_logo_scene_graph_pipeline(args)
+        return  # Exit after LOGO pipeline completes
+    
     use_dask = args.batch_size > 2
     graphs = []  # Always define graphs before branching
     gnn_model = None

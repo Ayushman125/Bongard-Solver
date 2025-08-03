@@ -8,16 +8,46 @@ from torch_geometric.nn import GCNConv
 import networkx as nx
 import numpy as np
 
+# Discovered Bongard-LOGO shape types for enhanced reasoning
+BONGARD_SHAPE_TYPES = {
+    'normal': 0,    # 24,107 occurrences - straight lines
+    'circle': 1,    # 6,256 occurrences - circular shapes/arcs  
+    'square': 2,    # 6,519 occurrences - square-based shapes
+    'triangle': 3,  # 5,837 occurrences - triangular shapes
+    'zigzag': 4,    # 6,729 occurrences - zigzag patterns
+    # REMOVED: 'unknown': 5 fallback - action programs only
+}
+
+class BongardShapeEmbedding(nn.Module):
+    """Shape-type aware embedding layer for the 5 discovered Bongard-LOGO shape types"""
+    def __init__(self, hidden_dim=64):
+        super().__init__()
+        self.shape_embedding = nn.Embedding(len(BONGARD_SHAPE_TYPES), hidden_dim)
+        self.shape_projection = nn.Linear(hidden_dim, hidden_dim)
+        
+    def forward(self, shape_types):
+        """
+        Args:
+            shape_types: Tensor of shape type indices [num_nodes]
+        Returns:
+            Shape embeddings [num_nodes, hidden_dim]
+        """
+        embeddings = self.shape_embedding(shape_types)
+        return self.shape_projection(embeddings)
+
 class BongardGNN(nn.Module):
     def __init__(self, input_dim=20, hidden_dim=64, output_dim=32, model_cfg=None):
         super().__init__()
-        # Enhanced architecture for Bongard problem reasoning
+        # Enhanced architecture for Bongard problem reasoning with shape-type awareness
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.output_dim = output_dim
         
-        # Multi-layer GCN with residual connections
-        self.conv1 = GCNConv(input_dim, hidden_dim)
+        # Shape-type embedding for the 5 discovered types
+        self.shape_embedding = BongardShapeEmbedding(hidden_dim)
+        
+        # Multi-layer GCN with residual connections and shape fusion
+        self.conv1 = GCNConv(input_dim + hidden_dim, hidden_dim)  # +hidden_dim for shape embedding
         self.conv2 = GCNConv(hidden_dim, hidden_dim)
         self.conv3 = GCNConv(hidden_dim, output_dim)
         
@@ -28,28 +58,48 @@ class BongardGNN(nn.Module):
         # Dropout for regularization
         self.dropout = nn.Dropout(0.2)
         
-        # Skip connections
-        self.skip1 = nn.Linear(input_dim, hidden_dim) if input_dim != hidden_dim else nn.Identity()
+        # Skip connections adjusted for shape embedding
+        self.skip1 = nn.Linear(input_dim + hidden_dim, hidden_dim)
         self.skip2 = nn.Linear(hidden_dim, output_dim) if hidden_dim != output_dim else nn.Identity()
+        
+        # Shape-specific attention mechanism
+        self.shape_attention = nn.MultiheadAttention(hidden_dim, num_heads=4, batch_first=True)
 
-    def forward(self, x, edge_index, edge_attr=None):
+    def forward(self, x, edge_index, edge_attr=None, shape_types=None):
         """
-        Forward pass through the GNN
+        Forward pass through the GNN with shape-type awareness
         
         Args:
             x: Node features [num_nodes, input_dim]
             edge_index: Edge connectivity [2, num_edges]
             edge_attr: Edge features [num_edges, edge_dim] (optional)
+            shape_types: Shape type indices [num_nodes] for the 5 discovered types
         
         Returns:
             Enhanced node representations [num_nodes, output_dim]
         """
+        # Handle shape types
+        if shape_types is None:
+            # Default to 'unknown' shape type if not provided
+            shape_types = torch.full((x.size(0),), BONGARD_SHAPE_TYPES['unknown'], 
+                                   dtype=torch.long, device=x.device)
+        
+        # Get shape embeddings for the 5 discovered Bongard-LOGO types
+        shape_emb = self.shape_embedding(shape_types)
+        
+        # Fuse geometric features with shape-type embeddings
+        x_fused = torch.cat([x, shape_emb], dim=-1)
+        
         # First GCN layer with skip connection
-        x1 = self.conv1(x, edge_index)
+        x1 = self.conv1(x_fused, edge_index)
         x1 = self.ln1(x1)
         x1 = F.relu(x1)
-        x1 = x1 + self.skip1(x)  # Skip connection
+        x1 = x1 + self.skip1(x_fused)  # Skip connection
         x1 = self.dropout(x1)
+        
+        # Shape-aware attention mechanism
+        x1_att, _ = self.shape_attention(x1.unsqueeze(0), shape_emb.unsqueeze(0), shape_emb.unsqueeze(0))
+        x1 = x1 + x1_att.squeeze(0)  # Residual connection with attention
         
         # Second GCN layer with skip connection
         x2 = self.conv2(x1, edge_index)
@@ -63,6 +113,10 @@ class BongardGNN(nn.Module):
         x3 = x3 + self.skip2(x1)  # Long skip connection
         
         return x3
+    
+    def encode_shape_type(self, shape_type_str):
+        """Convert shape type string to index for the 5 discovered types"""
+        return BONGARD_SHAPE_TYPES.get(shape_type_str.lower(), BONGARD_SHAPE_TYPES['unknown'])
 class SimpleGCN(nn.Module):
     def __init__(self, in_dim, hidden_dim=64, out_dim=1, dropout=0.2, use_layernorm=True, graph_head=True):
         super().__init__()

@@ -1,13 +1,23 @@
 import re
 from math import cos, sin, radians
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Optional
 import math
+
+# Discovered Bongard-LOGO shape types from dataset analysis
+BONGARD_SHAPE_TYPES = {
+    'normal': {'count': 24107, 'description': 'Straight lines, most common'},
+    'circle': {'count': 6256, 'description': 'Circular shapes and arcs'},
+    'square': {'count': 6519, 'description': 'Square-based shapes'},
+    'triangle': {'count': 5837, 'description': 'Triangular shapes'},
+    'zigzag': {'count': 6729, 'description': 'Zigzag patterns'}
+}
 
 class LogoParser:
     def parse_logo_script_from_lines(self, lines):
         """
         Accepts a list of LOGO command strings (as lines), returns ordered vertex list.
         This is used for Bongard-LOGO JSON action programs, where each image's program is a list of command strings.
+        Enhanced to detect the 5 discovered shape types during parsing.
         """
         import re
         from math import cos, sin, radians
@@ -15,6 +25,12 @@ class LogoParser:
         x, y = 0, 0
         angle = 0
         vertices = [(x, y)]
+        
+        # Track patterns to infer shape type
+        direction_changes = 0
+        total_distance = 0
+        angles_turned = []
+        
         for line in lines:
             line = line.strip()
             if not line or line.startswith('#'):
@@ -27,28 +43,219 @@ class LogoParser:
                 rad = radians(angle)
                 x += val * cos(rad)
                 y += val * sin(rad)
+                total_distance += val
             elif cmd == 'B':
                 rad = radians(angle)
                 x -= val * cos(rad)
                 y -= val * sin(rad)
+                total_distance += val
             elif cmd == 'R':
                 angle -= val
                 angle %= 360
+                angles_turned.append(-val)
+                direction_changes += 1
             elif cmd == 'L':
                 angle += val
                 angle %= 360
+                angles_turned.append(val)
+                direction_changes += 1
             vertices.append((x, y))
-        return vertices
+        
+        # Infer shape type from parsing patterns
+        shape_type = self._infer_shape_type(vertices, direction_changes, angles_turned, total_distance)
+        
+        return vertices, shape_type
+    
+    def _infer_shape_type(self, vertices: List[Tuple[float, float]], 
+                         direction_changes: int, angles_turned: List[float], 
+                         total_distance: float) -> str:
+        """Infer one of the 5 discovered Bongard-LOGO shape types from parsing patterns"""
+        
+        # Check for closed shape (start and end points close)
+        if len(vertices) >= 2:
+            start, end = vertices[0], vertices[-1]
+            is_closed = abs(start[0] - end[0]) < 1.0 and abs(start[1] - end[1]) < 1.0
+        else:
+            is_closed = False
+        
+        # Analyze angle patterns
+        if angles_turned:
+            avg_angle = sum(abs(a) for a in angles_turned) / len(angles_turned)
+            angle_variance = sum((abs(a) - avg_angle) ** 2 for a in angles_turned) / len(angles_turned)
+        else:
+            avg_angle = 0
+            angle_variance = 0
+        
+        # Shape type inference based on discovered patterns
+        if direction_changes == 0:
+            return 'normal'  # Straight line, no turns
+        elif is_closed and len(set(abs(a) for a in angles_turned if abs(a) > 1)) == 1:
+            # Regular angles suggest geometric shapes
+            if avg_angle > 85 and avg_angle < 95:
+                return 'square'  # 90-degree turns
+            elif avg_angle > 110 and avg_angle < 130:
+                return 'triangle'  # ~120-degree turns
+        elif is_closed and avg_angle < 45:
+            return 'circle'  # Many small turns suggest circular arc
+        elif angle_variance > 1000:  # High variance in turn angles
+            return 'zigzag'  # Irregular zigzag pattern
+        else:
+            return 'normal'  # Default to normal for unclassified patterns
     
 class BongardLogoParser:
     def __init__(self):
         self.x = 0.0
         self.y = 0.0
         self.angle = 0.0  # degrees
+        self.shape_patterns = {
+            'normal': 0,
+            'circle': 0, 
+            'square': 0,
+            'triangle': 0,
+            'zigzag': 0
+        }
 
     def reset(self):
         self.x = 0.0
         self.y = 0.0
+        self.angle = 0.0
+        # Reset shape pattern counters
+        self.shape_patterns = {k: 0 for k in self.shape_patterns}
+    
+    def detect_shape_type(self, action_sequence: List[str]) -> str:
+        """Detect one of the 5 discovered Bongard-LOGO shape types from action sequence"""
+        # Parse the action sequence to get vertices and patterns
+        vertices = self.parse_action_sequence(action_sequence)
+        
+        # Analyze the parsed vertices for shape characteristics
+        return self._classify_shape_from_vertices(vertices)
+    
+    def _classify_shape_from_vertices(self, vertices: List[Tuple[float, float]]) -> str:
+        """Classify vertices into one of the 5 discovered shape types"""
+        if len(vertices) < 2:
+            return 'normal'
+        
+        # Calculate geometric properties
+        is_closed = self._is_closed_shape(vertices)
+        angles = self._calculate_internal_angles(vertices)
+        curvature = self._calculate_curvature(vertices)
+        symmetry_score = self._calculate_symmetry_score(vertices)
+        
+        # Classification logic based on discovered patterns
+        if not is_closed and len(vertices) == 2:
+            return 'normal'  # Simple straight line
+        elif is_closed and len(set(round(a, 0) for a in angles if abs(a) > 10)) == 1:
+            # Regular polygon with consistent angles
+            avg_angle = sum(angles) / len(angles)
+            if 85 <= avg_angle <= 95:
+                return 'square'
+            elif 55 <= avg_angle <= 65:
+                return 'triangle'
+        elif curvature > 0.8:  # High curvature suggests circle
+            return 'circle'
+        elif self._has_zigzag_pattern(vertices):
+            return 'zigzag'
+        else:
+            return 'normal'  # Default fallback
+    
+    def _is_closed_shape(self, vertices: List[Tuple[float, float]]) -> bool:
+        """Check if shape is closed (start and end points are close)"""
+        if len(vertices) < 3:
+            return False
+        start, end = vertices[0], vertices[-1]
+        return abs(start[0] - end[0]) < 2.0 and abs(start[1] - end[1]) < 2.0
+    
+    def _calculate_internal_angles(self, vertices: List[Tuple[float, float]]) -> List[float]:
+        """Calculate internal angles at each vertex"""
+        angles = []
+        n = len(vertices)
+        for i in range(1, n - 1):
+            p1, p2, p3 = vertices[i-1], vertices[i], vertices[i+1]
+            v1 = (p1[0] - p2[0], p1[1] - p2[1])
+            v2 = (p3[0] - p2[0], p3[1] - p2[1])
+            
+            # Calculate angle between vectors
+            dot_product = v1[0] * v2[0] + v1[1] * v2[1]
+            mag1 = (v1[0]**2 + v1[1]**2) ** 0.5
+            mag2 = (v2[0]**2 + v2[1]**2) ** 0.5
+            
+            if mag1 > 0 and mag2 > 0:
+                cos_angle = dot_product / (mag1 * mag2)
+                cos_angle = max(-1, min(1, cos_angle))  # Clamp to valid range
+                angle = math.degrees(math.acos(cos_angle))
+                angles.append(angle)
+        
+        return angles
+    
+    def _calculate_curvature(self, vertices: List[Tuple[float, float]]) -> float:
+        """Calculate average curvature of the path"""
+        if len(vertices) < 3:
+            return 0.0
+        
+        curvatures = []
+        for i in range(1, len(vertices) - 1):
+            p1, p2, p3 = vertices[i-1], vertices[i], vertices[i+1]
+            
+            # Calculate curvature using the menger curvature formula
+            area = abs((p2[0] - p1[0]) * (p3[1] - p1[1]) - (p3[0] - p1[0]) * (p2[1] - p1[1]))
+            d1 = ((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2) ** 0.5
+            d2 = ((p3[0] - p2[0])**2 + (p3[1] - p2[1])**2) ** 0.5
+            d3 = ((p3[0] - p1[0])**2 + (p3[1] - p1[1])**2) ** 0.5
+            
+            if d1 * d2 * d3 > 0:
+                curvature = 4 * area / (d1 * d2 * d3)
+                curvatures.append(curvature)
+        
+        return sum(curvatures) / len(curvatures) if curvatures else 0.0
+    
+    def _calculate_symmetry_score(self, vertices: List[Tuple[float, float]]) -> float:
+        """Calculate symmetry score for the shape"""
+        if len(vertices) < 4:
+            return 0.0
+        
+        # Simple symmetry test - check if shape is symmetric about centroid
+        cx = sum(v[0] for v in vertices) / len(vertices)
+        cy = sum(v[1] for v in vertices) / len(vertices)
+        
+        symmetry_score = 0.0
+        for x, y in vertices:
+            reflected_x = 2 * cx - x
+            reflected_y = 2 * cy - y
+            
+            # Find closest point to reflection
+            min_dist = float('inf')
+            for vx, vy in vertices:
+                dist = ((vx - reflected_x)**2 + (vy - reflected_y)**2) ** 0.5
+                min_dist = min(min_dist, dist)
+            
+            symmetry_score += 1.0 / (1.0 + min_dist)
+        
+        return symmetry_score / len(vertices)
+    
+    def _has_zigzag_pattern(self, vertices: List[Tuple[float, float]]) -> bool:
+        """Detect if vertices form a zigzag pattern"""
+        if len(vertices) < 4:
+            return False
+        
+        # Check for alternating direction changes
+        direction_changes = 0
+        for i in range(2, len(vertices) - 1):
+            p1, p2, p3, p4 = vertices[i-2:i+2]
+            
+            # Calculate direction vectors
+            v1 = (p2[0] - p1[0], p2[1] - p1[1])
+            v2 = (p3[0] - p2[0], p3[1] - p2[1])
+            v3 = (p4[0] - p3[0], p4[1] - p3[1])
+            
+            # Check for direction changes
+            cross1 = v1[0] * v2[1] - v1[1] * v2[0]
+            cross2 = v2[0] * v3[1] - v2[1] * v3[0]
+            
+            if cross1 * cross2 < 0:  # Opposite signs indicate direction change
+                direction_changes += 1
+        
+        # Zigzag has frequent direction changes
+        return direction_changes >= len(vertices) * 0.3
         self.angle = 0.0
 
     def parse_action_program(self, action_list: List[str], scale: float = 100.0) -> List[Tuple[float, float]]:

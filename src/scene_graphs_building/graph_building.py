@@ -50,10 +50,29 @@ def add_predicate_edges(G, predicates):
         G.graph['clustering_coeff'] = 0.0
 
     # --- Map kb_concept for all nodes using COMMONSENSE_LABEL_MAP ---
-    for _, data in G.nodes(data=True):
+    for node_id, data in G.nodes(data=True):
+        # CRITICAL FIX: Use object_type (discovered Bongard-LOGO shape types) instead of shape_label
+        object_type = data.get('object_type')
+        shape_type = data.get('shape_type')  # Also check shape_type field
         shape_label = data.get('shape_label')
-        if shape_label:
+        
+        # DEBUG: Log the actual values to understand what we're working with
+        logging.info(f"[kb_concept mapping] Node {node_id}: object_type='{object_type}', shape_type='{shape_type}', shape_label='{shape_label}'")
+        
+        # Prioritize shape_type (LOGO semantics) > object_type > shape_label for kb_concept
+        if shape_type and shape_type in ['normal', 'circle', 'square', 'triangle', 'zigzag']:
+            # Use discovered Bongard-LOGO shape types directly
+            data['kb_concept'] = shape_type
+            logging.info(f"[kb_concept mapping] Node {node_id}: Using shape_type '{shape_type}' as kb_concept")
+        elif object_type:
+            data['kb_concept'] = COMMONSENSE_LABEL_MAP.get(object_type, object_type)
+            logging.info(f"[kb_concept mapping] Node {node_id}: Using object_type '{object_type}' -> kb_concept '{data['kb_concept']}'")
+        elif shape_label:
             data['kb_concept'] = COMMONSENSE_LABEL_MAP.get(shape_label, shape_label)
+            logging.info(f"[kb_concept mapping] Node {node_id}: Using shape_label '{shape_label}' -> kb_concept '{data['kb_concept']}'")
+        else:
+            data['kb_concept'] = 'shape'  # Default fallback
+            logging.info(f"[kb_concept mapping] Node {node_id}: Using default fallback 'shape' as kb_concept")
 
     # --- Add global predicates for rule induction (restore nodes/num_lines logic) ---
     nodes = [d for _, d in G.nodes(data=True)]
@@ -88,30 +107,23 @@ def add_commonsense_edges(G, top_k, kb=None):
             d['shape_label'] = SHAPE_MAP.get(lbl, lbl)
     all_shape_labels = [d.get('kb_concept') for _, d in nodes_with_data]
     logging.info(f"[add_commonsense_edges] All node kb_concepts: {all_shape_labels}")
-    for _, d in nodes_with_data:
-        # Use shape semantics, not just positive/negative
-        raw_label = d.get('shape_label')
-        if raw_label in (None, '', 'positive', 'negative'):
-            # Try to use object_type or other semantic field
-            raw_label = d.get('object_type', None)
-        # Map to commonsense concept
-        kb_concept = COMMONSENSE_LABEL_MAP.get(raw_label, raw_label)
-        d['kb_concept'] = kb_concept
+    # CRITICAL FIX: Don't override kb_concept - it's already set correctly in the graph building step
+    # The kb_concept should use the Bongard-LOGO shape types (normal, circle, square, triangle, zigzag)
     edge_count = 0
     for u, data_u in nodes_with_data:
-        raw = data_u.get('shape_label', '')
-        concept = normalize_shape_label(raw)
+        # Use kb_concept directly instead of processing shape_label
+        concept = data_u.get('kb_concept')
         if not concept:
-            logging.debug(f"Node {u}: no valid concept found (raw='{raw}')")
+            logging.debug(f"Node {u}: no valid kb_concept found")
             continue
-        logging.debug(f"Node {u}: processing concept '{concept}' (from raw='{raw}')")
+        logging.debug(f"Node {u}: processing kb_concept '{concept}'")
         try:
             related = kb.related(concept) if hasattr(kb, 'related') else []
             logging.info(f"ConceptNet query for concept '{concept}': found {len(related)} relations")
             if related:
                 logging.debug(f"Relations for '{concept}': {related[:5]}")  # Log first 5 for debugging
         except Exception as e:
-            logging.warning(f"Commonsense KB query failed for label '{concept}': {e}")
+            logging.warning(f"Commonsense KB query failed for concept '{concept}': {e}")
             continue
         # Prune to allowed relations and top_k
         added = 0
@@ -120,15 +132,20 @@ def add_commonsense_edges(G, top_k, kb=None):
                 continue
             if added >= top_k:
                 break
-            # Find matching node v
+            # Find matching node v by checking kb_concept
+            # FIXED: Handle ConceptNet concept mapping - look for nodes whose mapped concept equals 'other'
             for v, data_v in nodes_with_data:
-                v_concept = normalize_shape_label(data_v.get('shape_label', ''))
-                if u != v and v_concept == other:
-                    G.add_edge(u, v, predicate=rel, source='kb')
-                    edge_count += 1
-                    added += 1
-                    logging.debug(f"[add_commonsense_edges] Added KB edge: {u}->{v} predicate={rel}")
-                    break
+                v_concept = data_v.get('kb_concept')
+                if u != v and v_concept:
+                    # Get the mapped concept for comparison
+                    v_mapped_concept = kb.concept_map.get(v_concept, v_concept) if hasattr(kb, 'concept_map') else v_concept
+                    # Match if either the raw concept or mapped concept equals the relation target
+                    if v_concept == other or v_mapped_concept == other:
+                        G.add_edge(u, v, predicate=rel, source='kb')
+                        edge_count += 1
+                        added += 1
+                        logging.debug(f"[add_commonsense_edges] Added KB edge: {u}->{v} predicate={rel} (matched {v_concept}->{v_mapped_concept} to {other})")
+                        break
     logging.info(f"[add_commonsense_edges] Finished: KB edges added={edge_count}")
 
 def build_graph_unvalidated(record, predicates, top_k, extra_edges=None, kb=None):

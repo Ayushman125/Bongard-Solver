@@ -5,16 +5,35 @@ from typing import List, Dict, Optional, Any, Tuple
 from urllib.parse import quote
 import time
 
+# Import stroke-specific knowledge
+try:
+    from src.scene_graphs_building.stroke_specific_kb import stroke_kb, get_stroke_knowledge
+    STROKE_KB_AVAILABLE = True
+except ImportError:
+    STROKE_KB_AVAILABLE = False
+    print("Warning: Stroke-specific knowledge base not available")
+
 class ConceptNetAPI:
     """
-    Direct ConceptNet API interface using REST requests.
-    Avoids the LMDB limitations of conceptnet-lite.
+    Singleton ConceptNet API interface using REST requests.
+    Avoids repeated initialization and LMDB limitations of conceptnet-lite.
     """
+    _instance = None
+    _initialized = False
+    
+    def __new__(cls, base_url: str = "http://api.conceptnet.io", cache_size: int = 1000, rate_limit: float = 0.1):
+        if cls._instance is None:
+            cls._instance = super(ConceptNetAPI, cls).__new__(cls)
+        return cls._instance
     
     def __init__(self, 
                  base_url: str = "http://api.conceptnet.io",
                  cache_size: int = 1000,
                  rate_limit: float = 0.1):
+        # Only initialize once
+        if ConceptNetAPI._initialized:
+            return
+            
         self.base_url = base_url
         self.cache = {}
         self.cache_size = cache_size
@@ -23,7 +42,43 @@ class ConceptNetAPI:
         
         # Initialize concept normalization mapping for geometric terms
         self.concept_map = {
-            "open_curve": "curve",
+            # CRITICAL: Enhanced mappings for 5 discovered Bongard-LOGO shape types
+            # Map to more diverse ConceptNet concepts for richer relationships
+            "normal": "line",  # Keep line mapping for normal
+            "circle": "circle",
+            "square": "square", 
+            "triangle": "triangle",
+            "zigzag": "pattern",  # Map zigzag to pattern for more semantic richness
+            
+            # Enhanced mapping for 5 discovered Bongard-LOGO shape types
+            "bongard_normal": "line",
+            "bongard_circle": "circle", 
+            "bongard_square": "square",
+            "bongard_triangle": "triangle",
+            "bongard_zigzag": "pattern",
+            "normal_line": "line",
+            "circle_shape": "circle",
+            "square_shape": "square", 
+            "triangle_shape": "triangle",
+            "zigzag_pattern": "zigzag",
+            "detected_normal": "line",
+            "detected_circle": "circle",
+            "detected_square": "square",
+            "detected_triangle": "triangle", 
+            "detected_zigzag": "zigzag",
+            
+            # ENHANCED: Support for composite and enhanced shape types
+            "curve": "curve",
+            "pattern": "pattern",
+            # REMOVED: "quarter_circle": "arc", - Use action program types only
+            "semicircle": "arc", 
+            "arc": "arc",
+            "motif": "pattern",
+            "cluster": "group",
+            "group": "group",
+            
+            # Original mappings
+            # REMOVED: "open_curve": "curve", - Use action program types only
             "closed_curve": "curve", 
             "open curve": "curve",
             "closed curve": "curve",
@@ -32,11 +87,8 @@ class ConceptNetAPI:
             "spline_curve": "curve", 
             "spline curve": "curve",
             "quadrilateral": "polygon",
-            "pentagon": "polygon",
-            "hexagon": "polygon",
-            "heptagon": "polygon",
-            "octagon": "polygon",
-            "zigzag": "line",
+            # Note: Only valid Bongard-LOGO shape types supported
+            # Pentagon, hexagon, octagon not discovered in dataset analysis
             "straight_line": "line",
             "straight line": "line",
             "curved_line": "curve",
@@ -56,34 +108,22 @@ class ConceptNetAPI:
             'Accept': 'application/json',
             'User-Agent': 'BongardSolver/1.0'
         })
-        logging.info(f"ConceptNetAPI initialized with REST interface. base_url={self.base_url}, cache_size={self.cache_size}, rate_limit={self.rate_limit}")
+        ConceptNetAPI._initialized = True
+        logging.info(f"ConceptNetAPI initialized with REST interface (singleton instance). base_url={self.base_url}, cache_size={self.cache_size}, rate_limit={self.rate_limit}")
     
     def _normalize_concept(self, concept: str) -> str:
-        """Normalize geometric concepts to ConceptNet-friendly terms."""
+        """Normalize geometric concepts to ConceptNet-friendly terms, NO FALLBACKS."""
         if not concept:
-            return "shape"
+            return None  # Return None instead of fallback
         
         concept_lower = concept.lower().strip()
         
-        # Use explicit mapping first
+        # ONLY use explicit mapping - NO FALLBACKS
         if concept_lower in self.concept_map:
             return self.concept_map[concept_lower]
         
-        # Default normalization rules
-        if "curve" in concept_lower:
-            return "curve"
-        elif "line" in concept_lower:
-            return "line"
-        elif "polygon" in concept_lower:
-            return "polygon"
-        elif "angle" in concept_lower:
-            return "angle"
-        elif "junction" in concept_lower or "intersection" in concept_lower:
-            return "junction"
-        elif "point" in concept_lower or "dot" in concept_lower:
-            return "point"
-        else:
-            return concept_lower
+        # NO OTHER MAPPINGS OR FALLBACKS - return None if not in explicit mapping
+        return None
     
     def _rate_limit_wait(self):
         """Implement rate limiting to be respectful to the API."""
@@ -116,6 +156,11 @@ class ConceptNetAPI:
         # Normalize concepts before querying
         subject_norm = self._normalize_concept(subject)
         obj_norm = self._normalize_concept(obj)
+        
+        # Skip if either concept is None (no fallback)
+        if subject_norm is None or obj_norm is None:
+            logging.info(f"ConceptNetAPI: Skipping query for unmapped concepts: {subject} -> {subject_norm}, {obj} -> {obj_norm}")
+            return []
         
         cache_key = f"direct_{subject_norm}_{obj_norm}"
         if cache_key in self.cache:
@@ -154,8 +199,15 @@ class ConceptNetAPI:
     
     def query_relations_for_concept(self, concept: str, rel: Optional[str] = None) -> List[Dict]:
         """Query all outgoing relations for a concept."""
+    def query_relations_for_concept(self, concept: str, rel: Optional[str] = None) -> List[Dict]:
+        """Query all outgoing relations for a concept."""
         # Normalize concept before querying
         concept_norm = self._normalize_concept(concept)
+        
+        # Skip if concept is None (no fallback)
+        if concept_norm is None:
+            logging.info(f"ConceptNetAPI: Skipping query for unmapped concept: {concept} -> {concept_norm}")
+            return []
         
         cache_key = f"concept_{concept_norm}_{rel or 'all'}"
         if cache_key in self.cache:
@@ -188,7 +240,6 @@ class ConceptNetAPI:
             del self.cache[oldest_key]
         self.cache[cache_key] = relations
         return relations
-        return relations
     
     def find_relationship_paths(self, subject: str, obj: str, max_hops: int = 2) -> List[List[Dict]]:
         """Find relationship paths between concepts (simplified version)."""
@@ -205,17 +256,25 @@ class ConceptNetAPI:
     
     def get_related_concepts(self, concept: str, limit: int = 20) -> List[Dict]:
         """Get concepts related to the input concept."""
-        concept_encoded = quote(concept, safe='')
+        # Normalize concept before querying 
+        concept_norm = self._normalize_concept(concept)
+        
+        # Skip if concept is None (no fallback)
+        if concept_norm is None:
+            logging.info(f"ConceptNetAPI: Skipping get_related_concepts for unmapped concept: {concept} -> {concept_norm}")
+            return []
+        
+        concept_encoded = quote(concept_norm, safe='')
         endpoint = f"/related/c/en/{concept_encoded}"
         params = {'limit': limit}
-        logging.info(f"ConceptNetAPI: get_related_concepts for concept={concept}, limit={limit}")
+        logging.info(f"ConceptNetAPI: get_related_concepts for concept={concept} (norm: {concept_norm}), limit={limit}")
         data = self._make_request(endpoint, params)
         related = []
         if data is None:
-            logging.warning(f"ConceptNetAPI: No data returned for get_related_concepts: concept={concept}")
+            logging.warning(f"ConceptNetAPI: No data returned for get_related_concepts: concept={concept_norm}")
         if data and 'related' in data:
             if not data['related']:
-                logging.warning(f"ConceptNetAPI: No related concepts found for concept={concept}")
+                logging.warning(f"ConceptNetAPI: No related concepts found for concept={concept_norm}")
             for item in data['related']:
                 if '@id' in item:
                     concept_id = item['@id']
@@ -232,8 +291,15 @@ class ConceptNetAPI:
         """
         Get related concepts in the format expected by graph_building.py.
         Returns a list of (relation, other_concept) tuples.
+        NO FALLBACKS - only returns legitimate ConceptNet relations.
         """
         logging.info(f"ConceptNetAPI.related: Querying for concept '{concept}'")
+        
+        # Skip unmapped concepts completely - NO FALLBACKS
+        concept_norm = self._normalize_concept(concept)
+        if concept_norm is None:
+            logging.info(f"ConceptNetAPI.related: Skipping unmapped concept '{concept}' - no fallback")
+            return []
         
         # Get all outgoing relations for the concept
         relations = self.query_relations_for_concept(concept)
@@ -259,5 +325,9 @@ class ConceptNetAPI:
                 result.append(('RelatedTo', other_concept))
                 logging.debug(f"ConceptNetAPI.related: Adding related concept (RelatedTo, {other_concept})")
         
+        # NO ENHANCED GEOMETRIC RELATIONS FALLBACK - removed completely
+        
         logging.info(f"ConceptNetAPI.related: Found {len(result)} total relations for concept '{concept}'")
         return result
+    
+    # Enhanced geometric relations method REMOVED - no fallbacks allowed

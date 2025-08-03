@@ -7,42 +7,15 @@ from dataclasses import dataclass
 from enum import Enum
 import logging
 
-# Comprehensive Bongard Shape Categories
+# Real Bongard Shape Categories - Only the 5 discovered types
 class BongardShapeType(Enum):
-    # Basic Geometric Shapes
-    TRIANGLE = "triangle"
-    SQUARE = "square"
-    RECTANGLE = "rectangle"
-    CIRCLE = "circle"
-    OVAL = "oval"
-    
-    # Polygons by sides
-    PENTAGON = "pentagon"
-    HEXAGON = "hexagon"
-    HEPTAGON = "heptagon"  
-    OCTAGON = "octagon"
-    DECAGON = "decagon"
-    POLYGON = "polygon"
-    
-    # Curves and Arcs
-    ARC = "arc"
-    SPIRAL = "spiral"
-    CRESCENT = "crescent"
-    SEMICIRCLE = "semicircle"
-    
-    # Lines and Segments
-    LINE = "line"
-    RAY = "ray"
-    SEGMENT = "segment"
-    ZIGZAG = "zigzag"
-    
-    # Complex Composite Shapes
-    STAR = "star"
-    CROSS = "cross"
-    DIAMOND = "diamond"
-    TRAPEZOID = "trapezoid"
-    PARALLELOGRAM = "parallelogram"
-    RHOMBUS = "rhombus"
+    # DISCOVERED BONGARD-LOGO SHAPE TYPES (5 total from dataset analysis)
+    # These are the actual shape types found in the dataset with frequencies:
+    NORMAL = "normal"        # 24,107 occurrences - most common, straight lines
+    CIRCLE = "circle"        # 6,256 occurrences - circular shapes/arcs  
+    SQUARE = "square"        # 6,519 occurrences - square-based shapes
+    TRIANGLE = "triangle"    # 5,837 occurrences - triangular shapes
+    ZIGZAG = "zigzag"        # 6,729 occurrences - zigzag patterns
     
     # Irregular and Abstract
     BLOB = "blob"
@@ -120,96 +93,304 @@ class ComprehensiveShapeFeatures:
     symmetry_score: float
 
 class SemanticActionParser:
-    """Enhanced comprehensive parser for Bongard problem solving"""
+    """Enhanced comprehensive parser for Bongard problem solving with singleton pattern"""
+    _instance = None
+    _initialized = False
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(SemanticActionParser, cls).__new__(cls)
+        return cls._instance
     
     def __init__(self):
-        # Comprehensive shape pattern matching
-        self.shape_patterns = {
-            # Basic shapes
-            'triangle': re.compile(r'triangle|tri(?:angle)?|three.*side|3.*side', re.IGNORECASE),
-            'square': re.compile(r'square|quad(?:rangle)?|four.*side|4.*side', re.IGNORECASE),
-            'rectangle': re.compile(r'rectangle|rect|oblong', re.IGNORECASE),
-            'circle': re.compile(r'circle|round|disc|disk', re.IGNORECASE),
-            'oval': re.compile(r'oval|ellipse|egg', re.IGNORECASE),
+        # Only initialize once
+        if SemanticActionParser._initialized:
+            return
             
-            # Polygons
-            'pentagon': re.compile(r'pentagon|penta|five.*side|5.*side', re.IGNORECASE),
-            'hexagon': re.compile(r'hexagon|hex|six.*side|6.*side', re.IGNORECASE),
-            'heptagon': re.compile(r'heptagon|seven.*side|7.*side', re.IGNORECASE),
-            'octagon': re.compile(r'octagon|eight.*side|8.*side', re.IGNORECASE),
-            'decagon': re.compile(r'decagon|ten.*side|10.*side', re.IGNORECASE),
-            'polygon': re.compile(r'polygon|poly|many.*side', re.IGNORECASE),
+        # Enhanced comprehensive shape pattern matching for Bongard LOGO dataset
+        # Updated to handle all 5 discovered shape types: normal, circle, square, triangle, zigzag
+        self.shape_patterns = {
+            # Discovered Bongard-LOGO shape types (exact matches from dataset analysis)
+            'normal': re.compile(r'normal|straight|line|regular', re.IGNORECASE),
+            'circle': re.compile(r'circle|round|disc|disk|circular|o-shape', re.IGNORECASE), 
+            'square': re.compile(r'square|quad(?:rangle)?|four.*side|4.*side', re.IGNORECASE),
+            'triangle': re.compile(r'triangle|tri(?:angle)?|three.*side|3.*side|equilateral|isosceles|scalene', re.IGNORECASE),
+            'zigzag': re.compile(r'zigzag|zig.*zag|jagged|serrated|wavy|irregular', re.IGNORECASE),
+            'normal': re.compile(r'normal|standard|basic|regular|simple', re.IGNORECASE),
             
             # Curves and arcs
-            'arc': re.compile(r'arc|curve|curved|bend', re.IGNORECASE),
-            'spiral': re.compile(r'spiral|coil|twist', re.IGNORECASE),
-            'crescent': re.compile(r'crescent|moon|c.*shape', re.IGNORECASE),
-            'semicircle': re.compile(r'semicircle|half.*circle', re.IGNORECASE),
+            'arc': re.compile(r'arc|curve|curved|bend|bow|arch', re.IGNORECASE),
+            'spiral': re.compile(r'spiral|coil|twist|helix|vortex', re.IGNORECASE),
+            'crescent': re.compile(r'crescent|moon|c.*shape|sickle', re.IGNORECASE),
+            'semicircle': re.compile(r'semicircle|half.*circle|half.*round', re.IGNORECASE),
+            # REMOVED: 'quarter_circle' pattern - use action program types only
             
-            # Lines
-            'line': re.compile(r'line|straight|linear', re.IGNORECASE),
-            'ray': re.compile(r'ray|beam', re.IGNORECASE),
-            'segment': re.compile(r'segment|seg', re.IGNORECASE),
-            'zigzag': re.compile(r'zigzag|zig.*zag|jagged', re.IGNORECASE),
+            # Lines and segments
+            'line': re.compile(r'line|straight|linear|stroke', re.IGNORECASE),
+            'ray': re.compile(r'ray|beam|half.*line', re.IGNORECASE),
+            'segment': re.compile(r'segment|seg|line.*segment', re.IGNORECASE),
+            'zigzag': re.compile(r'zigzag|zig.*zag|jagged|sawtooth', re.IGNORECASE),
             
-            # Complex shapes
-            'star': re.compile(r'star|asterisk|\*', re.IGNORECASE),
-            'cross': re.compile(r'cross|\+|plus', re.IGNORECASE),
-            'diamond': re.compile(r'diamond|rhomb', re.IGNORECASE),
-            'trapezoid': re.compile(r'trapezoid|trap', re.IGNORECASE),
-            'parallelogram': re.compile(r'parallelogram|parallel', re.IGNORECASE),
+            # Valid Bongard shape types only - discovered from dataset analysis
+            'normal': re.compile(r'normal|line|straight|linear|simple', re.IGNORECASE),
+            'circle': re.compile(r'circle|round|circular|sphere|oval|ellipse', re.IGNORECASE),
+            'square': re.compile(r'square|rectangle|rect|box|quadrilateral', re.IGNORECASE),
+            'triangle': re.compile(r'triangle|triangular|tri.*angle|three.*side', re.IGNORECASE),
+            'zigzag': re.compile(r'zigzag|zig.*zag|jagged|sawtooth|wave', re.IGNORECASE),
             
-            # Special shapes
-            'house': re.compile(r'house|home|building', re.IGNORECASE),
-            'arrow': re.compile(r'arrow|pointer|direction', re.IGNORECASE),
-            'heart': re.compile(r'heart|love', re.IGNORECASE),
-            'flower': re.compile(r'flower|petal|bloom', re.IGNORECASE),
+            # Complex geometric shapes (NOT Bongard shape types)
+            'diamond': re.compile(r'diamond|rhomb|lozenge', re.IGNORECASE),
+            'trapezoid': re.compile(r'trapezoid|trap|trapez', re.IGNORECASE),
+            'parallelogram': re.compile(r'parallelogram|parallel.*quad', re.IGNORECASE),
+            'rhombus': re.compile(r'rhombus|rhomb', re.IGNORECASE),
+            
+            # Composite geometric patterns
+            'house': re.compile(r'house|home|building|roof|shelter', re.IGNORECASE),
+            'arrow': re.compile(r'arrow|pointer|direction|chevron', re.IGNORECASE),
+            'flower': re.compile(r'flower|petal|bloom|blossom|flora', re.IGNORECASE),
+            'crown': re.compile(r'crown|tiara|royal.*hat|jagged.*top', re.IGNORECASE),
+            'bridge': re.compile(r'bridge|span|arch.*connect|connect.*arch', re.IGNORECASE),
+            'funnel': re.compile(r'funnel|cone|taper|narrow.*wide', re.IGNORECASE),
+            'lamp': re.compile(r'lamp|light|bulb.*stand|stand.*bulb', re.IGNORECASE),
+            'jar': re.compile(r'jar|container|vessel|pot', re.IGNORECASE),
+            'sector': re.compile(r'sector|pie.*slice|wedge|fan.*shape', re.IGNORECASE),
+            'bird': re.compile(r'bird|wing|avian|flying.*shape', re.IGNORECASE),
+            
+            # Abstract and irregular shapes
+            'blob': re.compile(r'blob|amorphous|shapeless|organic', re.IGNORECASE),
+            'freeform': re.compile(r'freeform|free.*form|organic|irregular.*curve', re.IGNORECASE),
+            'irregular': re.compile(r'irregular|uneven|asymmetric.*shape|deformed', re.IGNORECASE),
+            'unbala': re.compile(r'unbala|unbalanced|asymmetric|lopsided', re.IGNORECASE),
+            'mismatch': re.compile(r'mismatch|mixed|combination|hybrid', re.IGNORECASE),
+            
+            # Curved variations
+            'threequarter_circle': re.compile(r'threequarter.*circle|three.*quarter.*circle|270.*degree.*arc', re.IGNORECASE),
+            # REMOVED: 'open_curve' pattern - use action program types only
+            'closed_curve': re.compile(r'closed.*curve|complete.*curve|full.*arc', re.IGNORECASE),
+            
+            # Special geometric patterns
+            'intersect': re.compile(r'intersect|cross.*lines|overlap|intersection', re.IGNORECASE),
+            'parallel': re.compile(r'parallel|side.*by.*side|equidistant', re.IGNORECASE),
+            'concentric': re.compile(r'concentric|nested|inside.*outside', re.IGNORECASE),
+            'tangent': re.compile(r'tangent|touching|adjacent', re.IGNORECASE),
         }
         
-        # Enhanced property patterns
+        # Enhanced property patterns for complex shape analysis
         self.property_patterns = {
+            # Size and scale patterns
             'size': re.compile(r'(\d+\.?\d*)-(\d+\.?\d*)', re.IGNORECASE),
-            'open': re.compile(r'open|incomplete|partial|broken', re.IGNORECASE),
-            'closed': re.compile(r'closed|complete|full|solid', re.IGNORECASE),
-            'deformed': re.compile(r'deform|irregular|distort|bent|warped', re.IGNORECASE),
-            'symmetric': re.compile(r'symm|regular|balanced|even', re.IGNORECASE),
-            'asymmetric': re.compile(r'asymm|irregular|unbalanced|uneven', re.IGNORECASE),
-            'convex': re.compile(r'convex|bulging|outward', re.IGNORECASE),
-            'concave': re.compile(r'concave|dented|inward', re.IGNORECASE),
-            'thick': re.compile(r'thick|fat|wide|bold', re.IGNORECASE),
-            'thin': re.compile(r'thin|narrow|skinny|fine', re.IGNORECASE),
-            'large': re.compile(r'large|big|huge|giant', re.IGNORECASE),
-            'small': re.compile(r'small|tiny|little|mini', re.IGNORECASE),
-            'rotated': re.compile(r'rotat|turn|spin|angled', re.IGNORECASE),
-            'inverted': re.compile(r'invert|flip|upside|reverse', re.IGNORECASE),
-            'connected': re.compile(r'connect|join|link|attach', re.IGNORECASE),
-            'separate': re.compile(r'separate|apart|disconnect|isolated', re.IGNORECASE),
+            'large': re.compile(r'large|big|huge|giant|massive|wide', re.IGNORECASE),
+            'small': re.compile(r'small|tiny|little|mini|narrow', re.IGNORECASE),
+            'medium': re.compile(r'medium|average|normal|standard', re.IGNORECASE),
+            'thick': re.compile(r'thick|fat|wide|bold|heavy', re.IGNORECASE),
+            'thin': re.compile(r'thin|narrow|skinny|fine|slim', re.IGNORECASE),
+            
+            # Topological properties
+            'open': re.compile(r'open|incomplete|partial|broken|cut|gap', re.IGNORECASE),
+            'closed': re.compile(r'closed|complete|full|solid|sealed', re.IGNORECASE),
+            'connected': re.compile(r'connect|join|link|attach|continuous', re.IGNORECASE),
+            'separate': re.compile(r'separate|apart|disconnect|isolated|detached', re.IGNORECASE),
+            'intersecting': re.compile(r'intersect|cross|overlap|meet|collision', re.IGNORECASE),
+            'parallel': re.compile(r'parallel|side.*by.*side|equidistant', re.IGNORECASE),
+            'nested': re.compile(r'nested|inside|within|concentric|enclosed', re.IGNORECASE),
+            
+            # Geometric deformations
+            'deformed': re.compile(r'deform|irregular|distort|bent|warped|skewed', re.IGNORECASE),
+            'stretched': re.compile(r'stretch|elongated|extended|pulled', re.IGNORECASE),
+            'compressed': re.compile(r'compress|squeezed|flattened|squashed', re.IGNORECASE),
+            'rotated': re.compile(r'rotat|turn|spin|angled|tilted', re.IGNORECASE),
+            'inverted': re.compile(r'invert|flip|upside|reverse|mirror', re.IGNORECASE),
+            'scaled': re.compile(r'scaled|resized|enlarged|shrunk', re.IGNORECASE),
+            
+            # Symmetry and regularity
+            'symmetric': re.compile(r'symm|regular|balanced|even|uniform', re.IGNORECASE),
+            'asymmetric': re.compile(r'asymm|irregular|unbalanced|uneven|lopsided', re.IGNORECASE),
+            'bilateral': re.compile(r'bilateral|mirror.*symm|reflection', re.IGNORECASE),
+            'radial': re.compile(r'radial|rotational.*symm|circular.*symm', re.IGNORECASE),
+            
+            # Convexity and curvature
+            'convex': re.compile(r'convex|bulging|outward|rounded.*out', re.IGNORECASE),
+            'concave': re.compile(r'concave|dented|inward|rounded.*in', re.IGNORECASE),
+            'curved': re.compile(r'curved|round|circular|bent|arc', re.IGNORECASE),
+            'angular': re.compile(r'angular|sharp|pointed|edged|cornered', re.IGNORECASE),
+            'smooth': re.compile(r'smooth|flowing|continuous|seamless', re.IGNORECASE),
+            'jagged': re.compile(r'jagged|rough|serrated|zigzag', re.IGNORECASE),
+            
+            # Complexity indicators
+            'simple': re.compile(r'simple|basic|plain|clean|minimal', re.IGNORECASE),
+            'complex': re.compile(r'complex|complicated|intricate|detailed|elaborate', re.IGNORECASE),
+            'composite': re.compile(r'composite|combined|multiple|compound|mixed', re.IGNORECASE),
+            'multi_part': re.compile(r'multi.*part|several.*part|multiple.*element', re.IGNORECASE),
+            
+            # Positional and orientational
+            'horizontal': re.compile(r'horizontal|sideways|lying.*down', re.IGNORECASE),
+            'vertical': re.compile(r'vertical|upright|standing', re.IGNORECASE),
+            'diagonal': re.compile(r'diagonal|slanted|angled|tilted', re.IGNORECASE),
+            'centered': re.compile(r'centered|middle|central|balanced', re.IGNORECASE),
+            'offset': re.compile(r'offset|shifted|displaced|moved', re.IGNORECASE),
+            
+            # Specific Bongard patterns
+            'has_hole': re.compile(r'hole|hollow|empty.*inside|void', re.IGNORECASE),
+            'has_parts': re.compile(r'parts|pieces|segments|components', re.IGNORECASE),
+            'mismatch': re.compile(r'mismatch|different|varying|mixed', re.IGNORECASE),
+            'necked': re.compile(r'necked|narrow.*connection|bottleneck', re.IGNORECASE),
+            'acute': re.compile(r'acute|sharp.*angle|pointed', re.IGNORECASE),
+            'obtuse': re.compile(r'obtuse|wide.*angle|blunt', re.IGNORECASE),
+            'right_angle': re.compile(r'right.*angle|90.*degree|perpendicular', re.IGNORECASE),
         }
         
-        # Topology classification patterns
+        # Enhanced topology classification patterns
         self.topology_patterns = {
-            'closed': re.compile(r'closed|complete|loop|cycle', re.IGNORECASE),
-            'open': re.compile(r'open|incomplete|partial|broken', re.IGNORECASE),
-            'connected': re.compile(r'connect|continuous|unbroken', re.IGNORECASE),
-            'simple': re.compile(r'simple|basic|plain|clean', re.IGNORECASE),
-            'complex': re.compile(r'complex|complicated|intricate', re.IGNORECASE),
+            # Basic topology
+            'closed': re.compile(r'closed|complete|loop|cycle|sealed|full.*circuit', re.IGNORECASE),
+            'open': re.compile(r'open|incomplete|partial|broken|cut|gap', re.IGNORECASE),
+            'connected': re.compile(r'connect|continuous|unbroken|linked|joined', re.IGNORECASE),
+            'disconnected': re.compile(r'disconnect|separate|isolated|split|broken.*apart', re.IGNORECASE),
+            
+            # Complexity topology
+            'simple': re.compile(r'simple|basic|plain|clean|minimal|elementary', re.IGNORECASE),
+            'complex': re.compile(r'complex|complicated|intricate|elaborate|multi.*part', re.IGNORECASE),
+            'compound': re.compile(r'compound|composite|combined|multiple.*shape', re.IGNORECASE),
+            'nested': re.compile(r'nested|inside|within|concentric|layered', re.IGNORECASE),
+            
+            # Geometric topology
+            'convex': re.compile(r'convex|outward.*curve|bulging|rounded.*out', re.IGNORECASE),
+            'concave': re.compile(r'concave|inward.*curve|dented|rounded.*in', re.IGNORECASE),
+            'self_intersecting': re.compile(r'self.*intersect|cross.*itself|overlap.*itself', re.IGNORECASE),
+            
+            # Connectivity patterns
+            'branching': re.compile(r'branch|fork|tree.*like|radiating', re.IGNORECASE),
+            'linear': re.compile(r'linear|straight.*line|sequential|chain', re.IGNORECASE),
+            'circular': re.compile(r'circular|round|ring.*like|cyclic', re.IGNORECASE),
+            'mesh': re.compile(r'mesh|grid|network|interconnected', re.IGNORECASE),
+            
+            # Hole and genus topology
+            'hole': re.compile(r'hole|hollow|void|empty.*space|donut.*like', re.IGNORECASE),
+            'no_hole': re.compile(r'solid|filled|no.*hole|complete', re.IGNORECASE),
+            'multi_hole': re.compile(r'multi.*hole|several.*hole|many.*hole', re.IGNORECASE),
+            
+            # Boundary properties
+            'smooth_boundary': re.compile(r'smooth.*boundary|curved.*edge|flowing.*border', re.IGNORECASE),
+            'rough_boundary': re.compile(r'rough.*boundary|jagged.*edge|serrated.*border', re.IGNORECASE),
+            'mixed_boundary': re.compile(r'mixed.*boundary|curved.*and.*straight|varying.*edge', re.IGNORECASE),
         }
         
-        # Symmetry detection patterns
+        # Enhanced symmetry detection patterns
         self.symmetry_patterns = {
-            'bilateral': re.compile(r'bilateral|mirror|reflection|symmetric', re.IGNORECASE),
-            'rotational': re.compile(r'rotational|circular|radial', re.IGNORECASE),
-            'point': re.compile(r'point.*symmetry|central', re.IGNORECASE),
-            'none': re.compile(r'asymmetric|irregular|random', re.IGNORECASE),
+            # Bilateral symmetry
+            'bilateral': re.compile(r'bilateral|mirror|reflection|symmetric|left.*right.*symm', re.IGNORECASE),
+            'vertical_symmetry': re.compile(r'vertical.*symm|up.*down.*symm|mirror.*vertical', re.IGNORECASE),
+            'horizontal_symmetry': re.compile(r'horizontal.*symm|left.*right.*symm|mirror.*horizontal', re.IGNORECASE),
+            'diagonal_symmetry': re.compile(r'diagonal.*symm|slanted.*symm|tilted.*symm', re.IGNORECASE),
+            
+            # Rotational symmetry
+            'rotational': re.compile(r'rotational|circular|radial|spinning.*symm', re.IGNORECASE),
+            'point_symmetry': re.compile(r'point.*symmetry|central.*symm|180.*degree.*symm', re.IGNORECASE),
+            'three_fold': re.compile(r'three.*fold|triple|120.*degree.*symm', re.IGNORECASE),
+            'four_fold': re.compile(r'four.*fold|quadruple|90.*degree.*symm', re.IGNORECASE),
+            
+            # Asymmetry
+            'none': re.compile(r'asymmetric|irregular|random|no.*symm|unbalanced', re.IGNORECASE),
+            'broken_symmetry': re.compile(r'broken.*symm|partial.*symm|almost.*symm', re.IGNORECASE),
+            
+            # Complex symmetry patterns
+            'multiple_axes': re.compile(r'multiple.*axes|several.*symm|many.*symm.*line', re.IGNORECASE),
+            'fractal': re.compile(r'fractal|self.*similar|recursive.*pattern', re.IGNORECASE),
+            'translational': re.compile(r'translational|repeated|periodic|tiled', re.IGNORECASE),
+            'glide_reflection': re.compile(r'glide.*reflection|sliding.*mirror', re.IGNORECASE),
         }
+        
+        SemanticActionParser._initialized = True
+    
+    def identify_stroke_specific_shape(self, node: Dict[str, Any]) -> str:
+        """
+        Identify stroke-specific shape combining shape type and stroke type.
+        
+        Returns format: '{stroke_type}_{shape_type}' for valid Bongard shapes.
+        Examples: 'line_triangle', 'arc_circle', 'line_normal', etc.
+        """
+        stroke_type = node.get('stroke_type', 'unknown')
+        shape_type = node.get('shape_type', 'unknown')
+        
+        # Only combine if both are valid
+        if stroke_type in ['line', 'arc'] and shape_type in ['normal', 'circle', 'square', 'triangle', 'zigzag']:
+            return f"{stroke_type}_{shape_type}"
+        
+        # Fallback to individual types
+        if stroke_type in ['line', 'arc']:
+            return stroke_type
+        if shape_type in ['normal', 'circle', 'square', 'triangle', 'zigzag']:
+            return shape_type
+            
+        return 'unknown'
+    
+    def get_stroke_specific_properties(self, stroke_shape_combo: str) -> Dict[str, Any]:
+        """Get properties specific to stroke+shape combination"""
+        properties = {
+            'line_normal': {'curvature': 0.0, 'angular': True, 'smooth': False, 'corners': True},
+            'arc_normal': {'curvature': 'variable', 'angular': False, 'smooth': True, 'corners': False},
+            'line_triangle': {'curvature': 0.0, 'angular': True, 'corners': 3, 'angle_sum': 180},
+            'arc_triangle': {'curvature': 'variable', 'angular': False, 'corners': 0, 'smooth_edges': 3},
+            'line_square': {'curvature': 0.0, 'angular': True, 'corners': 4, 'angle_sum': 360},
+            'arc_square': {'curvature': 'variable', 'angular': False, 'corners': 0, 'smooth_edges': 4},
+            'line_circle': {'curvature': 0.0, 'angular': True, 'approximation': True},  # Polygonal approximation
+            'arc_circle': {'curvature': 'constant', 'angular': False, 'smooth': True, 'perfect_round': True},
+            'line_zigzag': {'curvature': 0.0, 'angular': True, 'jagged': True, 'irregular': True},
+            'arc_zigzag': {'curvature': 'variable', 'angular': False, 'wave_like': True, 'smooth_irregular': True}
+        }
+        
+        return properties.get(stroke_shape_combo, {})
+    
+    def differentiate_stroke_types_in_reasoning(self, node_a: Dict, node_b: Dict = None) -> List[str]:
+        """Generate predicates that differentiate stroke types"""
+        predicates = []
+        
+        if node_b is None:
+            # Single node analysis
+            stroke_shape = self.identify_stroke_specific_shape(node_a)
+            if 'line_' in stroke_shape:
+                predicates.extend(['has_angular_features', 'has_sharp_edges', 'is_linear_based'])
+            elif 'arc_' in stroke_shape:
+                predicates.extend(['has_curved_features', 'has_smooth_edges', 'is_arc_based'])
+        else:
+            # Comparative analysis
+            stroke_shape_a = self.identify_stroke_specific_shape(node_a)
+            stroke_shape_b = self.identify_stroke_specific_shape(node_b)
+            
+            stroke_a = stroke_shape_a.split('_')[0] if '_' in stroke_shape_a else 'unknown'
+            stroke_b = stroke_shape_b.split('_')[0] if '_' in stroke_shape_b else 'unknown'
+            
+            if stroke_a != stroke_b:
+                if stroke_a == 'line' and stroke_b == 'arc':
+                    predicates.extend(['different_stroke_types', 'angular_vs_curved', 'sharp_vs_smooth'])
+                elif stroke_a == 'arc' and stroke_b == 'line':
+                    predicates.extend(['different_stroke_types', 'curved_vs_angular', 'smooth_vs_sharp'])
+            else:
+                predicates.append('same_stroke_type')
+                
+            # Check for shape differences within same stroke type
+            if stroke_a == stroke_b:
+                shape_a = stroke_shape_a.split('_')[1] if '_' in stroke_shape_a else stroke_shape_a
+                shape_b = stroke_shape_b.split('_')[1] if '_' in stroke_shape_b else stroke_shape_b
+                if shape_a != shape_b:
+                    predicates.append(f'same_{stroke_a}_different_shapes')
+        
+        return predicates
     
     def extract_semantic_intent(self, action_program: List[str]) -> Dict[str, Any]:
         """Extract comprehensive semantic shape intent from action program"""
         if not action_program:
             return {'shapes': [], 'properties': {}, 'comprehensive_features': None}
+
+        # Handle nested action program structure from Bongard-LOGO dataset
+        # Action programs can be: List[str] or nested structure
+        flattened_commands = self._flatten_action_program(action_program)
         
+        if not flattened_commands:
+            return {'shapes': [], 'properties': {}, 'comprehensive_features': None}
+
         # Analyze program name and structure
-        program_name = str(action_program) if isinstance(action_program, list) else action_program
+        program_name = str(flattened_commands) if isinstance(flattened_commands, list) else str(action_program)
         
         semantic_shapes = []
         global_properties = defaultdict(int)
@@ -219,7 +400,7 @@ class SemanticActionParser:
         topology_features = defaultdict(int)
         symmetry_features = defaultdict(int)
         
-        for cmd in action_program:
+        for cmd in flattened_commands:
             if not isinstance(cmd, str):
                 continue
                 
@@ -249,22 +430,22 @@ class SemanticActionParser:
                 semantic_shapes.append({
                     'type': shape_type,
                     'count': count,
-                    'confidence': min(1.0, count / len(action_program))
+                    'confidence': min(1.0, count / len(flattened_commands))
                 })
         
         # If no explicit shapes found, infer from geometric structure
         if not semantic_shapes:
-            inferred_shapes = self._infer_shapes_from_structure(action_program)
+            inferred_shapes = self._infer_shapes_from_structure(flattened_commands)
             semantic_shapes.extend(inferred_shapes)
         
         # For unknown or low-confidence shapes, perform geometric analysis
         if not semantic_shapes or any(s.get('confidence', 0) < 0.5 for s in semantic_shapes):
-            geometric_analysis = self._perform_geometric_analysis(action_program)
+            geometric_analysis = self._perform_geometric_analysis(flattened_commands)
             semantic_shapes = self._merge_geometric_analysis(semantic_shapes, geometric_analysis)
         
         # Compute comprehensive features
         comprehensive_features = self._compute_comprehensive_features(
-            semantic_shapes, global_properties, topology_features, symmetry_features, action_program
+            semantic_shapes, global_properties, topology_features, symmetry_features, flattened_commands
         )
         
         # Apply commonsense knowledge for unknown shapes
@@ -279,12 +460,43 @@ class SemanticActionParser:
             'properties': dict(global_properties),
             'topology': dict(topology_features),
             'symmetry': dict(symmetry_features),
-            'complexity': len(action_program),
+            'complexity': len(flattened_commands),
             'semantic_features': self._compute_semantic_features(semantic_shapes, global_properties),
             'comprehensive_features': comprehensive_features,
-            'geometric_analysis': self._extract_detailed_geometric_attributes(semantic_shapes, action_program),
+            'geometric_analysis': self._extract_detailed_geometric_attributes(semantic_shapes, flattened_commands),
             'commonsense_analysis': commonsense_analysis
         }
+    
+    def _flatten_action_program(self, action_program) -> List[str]:
+        """
+        Flatten nested action program structure to a list of command strings.
+        Handles Bongard-LOGO dataset structure where action_program can be nested.
+        """
+        flattened = []
+        
+        def flatten_recursive(item):
+            if isinstance(item, str):
+                flattened.append(item)
+            elif isinstance(item, list):
+                for sub_item in item:
+                    flatten_recursive(sub_item)
+            # Skip non-string, non-list items
+        
+        try:
+            flatten_recursive(action_program)
+        except Exception as e:
+            logging.warning(f"Error flattening action program: {e}")
+            # Fallback to simple conversion
+            if isinstance(action_program, list):
+                flattened = [str(cmd) for cmd in action_program if cmd is not None]
+            else:
+                flattened = [str(action_program)]
+        
+        # Filter out empty strings and normalize commands
+        flattened = [cmd.strip() for cmd in flattened if cmd and str(cmd).strip()]
+        
+        logging.debug(f"Flattened action program: {len(flattened)} commands from input {type(action_program)}")
+        return flattened
     
     def _perform_geometric_analysis(self, action_program: List[str]) -> Dict[str, Any]:
         """Perform detailed geometric analysis for unknown shapes"""
@@ -363,13 +575,13 @@ class SemanticActionParser:
             has_curves = geometric_analysis.get('curve_count', 0) > 0
             
             if has_curves and is_closed:
-                shape_type = 'circle' if geometric_analysis.get('regularity_score', 0) > 0.7 else 'oval'
+                shape_type = 'circle' if geometric_analysis.get('regularity_score', 0) > 0.7 else 'normal'
             elif is_closed and vertex_count >= 3:
-                shape_type = {3: 'triangle', 4: 'square', 5: 'pentagon', 6: 'hexagon', 8: 'octagon'}.get(vertex_count, 'polygon')
+                shape_type = {3: 'triangle', 4: 'square'}.get(vertex_count, 'normal')
             elif not is_closed and vertex_count >= 2:
-                shape_type = 'line' if vertex_count == 2 else 'path'
+                shape_type = 'zigzag' if vertex_count > 2 else 'normal'
             else:
-                shape_type = 'unknown'
+                shape_type = 'normal'
             
             semantic_shapes = [{
                 'type': shape_type,
@@ -450,8 +662,8 @@ class SemanticActionParser:
             attributes['dominant_shape_type'] = shape_type_counts.most_common(1)[0][0]
         
         # Analyze regularity
-        regular_shapes = {'triangle', 'square', 'circle', 'pentagon', 'hexagon', 'octagon'}
-        irregular_shapes = {'irregular', 'blob', 'freeform', 'unknown'}
+        regular_shapes = {'triangle', 'square', 'circle'}
+        irregular_shapes = {'normal', 'zigzag', 'unknown'}
         
         for shape in shapes:
             if shape.get('type') in regular_shapes:
@@ -461,7 +673,7 @@ class SemanticActionParser:
         
         # Detect mixed content
         curve_shapes = sum(1 for s in shapes if s.get('type') in ['circle', 'arc', 'oval', 'spiral'])
-        line_shapes = sum(1 for s in shapes if s.get('type') in ['triangle', 'square', 'rectangle', 'polygon', 'line'])
+        line_shapes = sum(1 for s in shapes if s.get('type') in ['triangle', 'square', 'normal', 'zigzag'])
         attributes['contains_curves_and_lines'] = curve_shapes > 0 and line_shapes > 0
         
         # Estimate complexity
@@ -491,10 +703,31 @@ class SemanticActionParser:
     def _compute_comprehensive_features(self, shapes: List[Dict], properties: Dict, 
                                       topology: Dict, symmetry: Dict, action_program: List[str]) -> ComprehensiveShapeFeatures:
         """Compute comprehensive features for Bongard reasoning"""
-        # Determine primary shape type
+        # Determine primary shape type - prioritize discovered Bongard-LOGO shape types
         primary_shape = BongardShapeType.UNKNOWN
         if shapes:
-            primary_shape_name = shapes[0]['type']
+            # Priority order: discovered Bongard-LOGO shape types first
+            bongard_priorities = ['circle', 'triangle', 'square', 'zigzag', 'normal']
+            
+            # Find the highest priority shape type
+            primary_shape_name = None
+            for priority_shape in bongard_priorities:
+                for shape in shapes:
+                    if shape['type'] == priority_shape:
+                        primary_shape_name = priority_shape
+                        break
+                if primary_shape_name:
+                    break
+            
+            # If no Bongard priority shape found, default to first available shape
+            if not primary_shape_name and shapes:
+                primary_shape_name = shapes[0]['type']
+            
+            # Final fallback to first shape
+            if not primary_shape_name and shapes:
+                primary_shape_name = shapes[0]['type']
+            
+            # Convert to BongardShapeType enum
             try:
                 primary_shape = BongardShapeType(primary_shape_name)
             except ValueError:
@@ -554,8 +787,8 @@ class SemanticActionParser:
             is_composite=len(shapes) > 1,
             component_shapes=[s['type'] for s in shapes],
             spatial_arrangement='linear',  # TODO: implement arrangement detection
-            contains_curves=any(s['type'] in ['circle', 'arc', 'oval', 'spiral', 'crescent'] for s in shapes),
-            contains_angles=any(s['type'] in ['triangle', 'square', 'rectangle', 'polygon'] for s in shapes),
+            contains_curves=any(s['type'] in ['circle'] for s in shapes),
+            contains_angles=any(s['type'] in ['triangle', 'square'] for s in shapes),
             regularity_score=regularity,
             symmetry_score=1.0 if symm != BongardSymmetry.NONE else 0.0
         )
@@ -567,11 +800,7 @@ class SemanticActionParser:
         
         # Map shape types to side counts
         side_count_map = {
-            'triangle': 3, 'pentagon': 5, 'hexagon': 6, 'heptagon': 7,
-            'octagon': 8, 'decagon': 10, 'square': 4, 'rectangle': 4,
-            'diamond': 4, 'rhombus': 4, 'parallelogram': 4, 'trapezoid': 4,
-            'circle': 0, 'oval': 0, 'arc': 0, 'spiral': 0, 'crescent': 0,
-            'line': 0, 'ray': 0, 'segment': 0
+            'triangle': 3, 'square': 4, 'circle': 0, 'normal': 0, 'zigzag': 0
         }
         
         for shape in shapes:
@@ -594,7 +823,7 @@ class SemanticActionParser:
             return 0.0
         else:
             # Default estimation based on shape type
-            convex_shapes = {'circle', 'oval', 'triangle', 'square', 'rectangle'}
+            convex_shapes = {'circle', 'triangle', 'square'}
             for shape in shapes:
                 if shape['type'] in convex_shapes:
                     return 0.8
@@ -607,7 +836,7 @@ class SemanticActionParser:
         elif properties.get('asymmetric', 0) > 0 or properties.get('deformed', 0) > 0:
             return 0.1
         else:
-            regular_shapes = {'circle', 'square', 'triangle', 'pentagon', 'hexagon', 'octagon'}
+            regular_shapes = {'circle', 'square', 'triangle'}
             for shape in shapes:
                 if shape['type'] in regular_shapes:
                     return 0.7
@@ -617,7 +846,8 @@ class SemanticActionParser:
         """Compute complexity score based on shapes and actions"""
         base_complexity = len(shapes) * 0.3
         action_complexity = len(action_program) * 0.1
-        shape_complexity = sum(0.2 if s['type'] in ['star', 'flower', 'heart'] else 0.1 for s in shapes)
+        # Only consider valid Bongard shape types - higher complexity for zigzag
+        shape_complexity = sum(0.3 if s['type'] == 'zigzag' else 0.1 for s in shapes)
         return min(1.0, base_complexity + action_complexity + shape_complexity)
     
     def _categorize_size(self, properties: Dict) -> str:
@@ -635,11 +865,9 @@ class SemanticActionParser:
             rotation_orders = {
                 BongardShapeType.TRIANGLE: 3,
                 BongardShapeType.SQUARE: 4,
-                BongardShapeType.PENTAGON: 5,
-                BongardShapeType.HEXAGON: 6,
-                BongardShapeType.OCTAGON: 8,
-                BongardShapeType.STAR: 5,
-                BongardShapeType.CIRCLE: 360
+                BongardShapeType.CIRCLE: 360,
+                BongardShapeType.NORMAL: 1,
+                BongardShapeType.ZIGZAG: 1
             }
             return rotation_orders.get(shape, 1)
         return 1
@@ -652,31 +880,63 @@ class SemanticActionParser:
         arc_count = sum(1 for cmd in action_program if isinstance(cmd, str) and 'arc' in cmd.lower())
         turn_count = sum(1 for cmd in action_program if isinstance(cmd, str) and any(word in cmd.lower() for word in ['turn', 'angle', 'bend', 'corner']))
         
-        # Comprehensive shape inference with unknown shape handling
+        # First, check for the 5 discovered Bongard-LOGO shape types directly
+        shape_type_indicators = []
+        for cmd in action_program:
+            if isinstance(cmd, str):
+                cmd_lower = cmd.lower()
+                if 'normal' in cmd_lower:
+                    shape_type_indicators.append('normal')
+                elif 'circle' in cmd_lower:
+                    shape_type_indicators.append('circle') 
+                elif 'square' in cmd_lower:
+                    shape_type_indicators.append('square')
+                elif 'triangle' in cmd_lower:
+                    shape_type_indicators.append('triangle')
+                elif 'zigzag' in cmd_lower:
+                    shape_type_indicators.append('zigzag')
+        
+        # If we found direct shape type indicators, use them
+        if shape_type_indicators:
+            most_common_type = max(set(shape_type_indicators), key=shape_type_indicators.count)
+            confidence = shape_type_indicators.count(most_common_type) / len(shape_type_indicators)
+            
+            # Shape-specific properties based on discovered types
+            shape_properties = {
+                'normal': {'sides': 0, 'angles': 0, 'is_closed': False, 'complexity': 1},
+                'circle': {'sides': 0, 'angles': 0, 'is_closed': True, 'complexity': 2},
+                'square': {'sides': 4, 'angles': 4, 'is_closed': True, 'complexity': 2},
+                'triangle': {'sides': 3, 'angles': 3, 'is_closed': True, 'complexity': 2},
+                'zigzag': {'sides': 0, 'angles': 0, 'is_closed': False, 'complexity': 3}
+            }
+            
+            props = shape_properties.get(most_common_type, {'sides': 0, 'angles': 0, 'is_closed': None, 'complexity': 1})
+            inferred.append({
+                'type': most_common_type, 
+                'count': 1, 
+                'confidence': confidence, 
+                'sides': props['sides'], 
+                'angles': props['angles'], 
+                'is_closed': props['is_closed'],
+                'shape_complexity': props['complexity'],
+                'detection_method': 'direct_shape_type'
+            })
+            return inferred
+        
+        # Fall back to structural inference if no direct indicators
+        # Comprehensive shape inference based on discovered Bongard-LOGO shape types
         if line_count == 3:  # Likely triangle
             inferred.append({'type': 'triangle', 'count': 1, 'confidence': 0.8, 'sides': 3, 'angles': 3, 'is_closed': True})
-        elif line_count == 4:  # Likely square/rectangle
-            shape_type = 'square' if turn_count == 4 else 'rectangle'
-            inferred.append({'type': shape_type, 'count': 1, 'confidence': 0.8, 'sides': 4, 'angles': 4, 'is_closed': True})
-        elif line_count == 5:  # Pentagon
-            inferred.append({'type': 'pentagon', 'count': 1, 'confidence': 0.7, 'sides': 5, 'angles': 5, 'is_closed': True})
-        elif line_count == 6:  # Hexagon
-            inferred.append({'type': 'hexagon', 'count': 1, 'confidence': 0.7, 'sides': 6, 'angles': 6, 'is_closed': True})
-        elif line_count == 8:  # Octagon
-            inferred.append({'type': 'octagon', 'count': 1, 'confidence': 0.7, 'sides': 8, 'angles': 8, 'is_closed': True})
-        elif line_count > 8:  # Complex polygon
-            inferred.append({'type': 'polygon', 'count': 1, 'confidence': 0.6, 'sides': line_count, 'angles': line_count, 'is_closed': True})
-        elif arc_count > 0 and line_count == 0:  # Likely circle or arc
-            if arc_count == 1:
-                inferred.append({'type': 'circle', 'count': 1, 'confidence': 0.8, 'sides': 0, 'angles': 0, 'is_closed': True})
-            else:
-                inferred.append({'type': 'arc', 'count': arc_count, 'confidence': 0.7, 'sides': 0, 'angles': 0, 'is_closed': False})
-        elif line_count > 0 and arc_count > 0:  # Mixed shape - complex
-            inferred.append({'type': 'irregular', 'count': 1, 'confidence': 0.5, 'sides': line_count, 'angles': turn_count, 'is_closed': None})
-        elif line_count == 1:  # Single line
-            inferred.append({'type': 'line', 'count': 1, 'confidence': 0.9, 'sides': 0, 'angles': 0, 'is_closed': False})
-        elif line_count == 2:  # Two lines - could be angle or separate
-            inferred.append({'type': 'angle', 'count': 1, 'confidence': 0.6, 'sides': 2, 'angles': 1, 'is_closed': False})
+        elif line_count == 4:  # Likely square
+            inferred.append({'type': 'square', 'count': 1, 'confidence': 0.8, 'sides': 4, 'angles': 4, 'is_closed': True})
+        elif arc_count > 0 and line_count == 0:  # Likely circle
+            inferred.append({'type': 'circle', 'count': 1, 'confidence': 0.8, 'sides': 0, 'angles': 0, 'is_closed': True})
+        elif line_count > 4:  # Irregular multi-line shape - map to zigzag
+            inferred.append({'type': 'zigzag', 'count': 1, 'confidence': 0.6, 'sides': line_count, 'angles': turn_count, 'is_closed': False})
+        elif line_count > 0 and arc_count > 0:  # Mixed shape - map to normal
+            inferred.append({'type': 'normal', 'count': 1, 'confidence': 0.5, 'sides': line_count, 'angles': turn_count, 'is_closed': None})
+        elif line_count <= 2:  # Simple lines - map to normal
+            inferred.append({'type': 'normal', 'count': 1, 'confidence': 0.7, 'sides': line_count, 'angles': 0, 'is_closed': False})
         else:
             # Unknown shape - analyze pattern
             unknown_analysis = self._analyze_unknown_shape_pattern(action_program)
@@ -685,7 +945,7 @@ class SemanticActionParser:
         return inferred
 
     def _analyze_unknown_shape_pattern(self, action_program: List[str]) -> Dict[str, Any]:
-        """Comprehensive analysis for unknown shapes with enhanced arc detection"""
+        """Comprehensive analysis for unknown shapes with enhanced complex shape detection"""
         pattern_analysis = {
             'type': 'unknown',
             'count': 1,
@@ -700,24 +960,27 @@ class SemanticActionParser:
         move_commands = sum(1 for cmd in action_program if isinstance(cmd, str) and any(word in cmd.lower() for word in ['move', 'goto', 'jump']))
         draw_commands = sum(1 for cmd in action_program if isinstance(cmd, str) and any(word in cmd.lower() for word in ['line', 'draw', 'stroke']))
         curve_commands = sum(1 for cmd in action_program if isinstance(cmd, str) and any(word in cmd.lower() for word in ['arc', 'curve', 'circle', 'round']))
-        special_commands = sum(1 for cmd in action_program if isinstance(cmd, str) and any(word in cmd.lower() for word in ['star', 'cross', 'heart', 'flower']))
+        # Only count commands for valid Bongard shape types
+        complex_commands = sum(1 for cmd in action_program if isinstance(cmd, str) and any(word in cmd.lower() for word in ['zigzag', 'jagged', 'wave']))
         
-        # Enhanced: Check for quarter circle patterns from connected line segments
-        quarter_circle_analysis = self._detect_quarter_circle_from_lines(action_program)
-        if quarter_circle_analysis['is_quarter_circle']:
+        # Enhanced: Check for complex composite shapes first
+        composite_analysis = self._detect_complex_composite_shapes(action_program)
+        if composite_analysis['is_composite']:
             pattern_analysis.update({
-                'type': 'quarter_circle',
-                'confidence': quarter_circle_analysis['confidence'],
-                'sides': 0,  # Quarter circle has no discrete sides
-                'angles': 0,  # Curved shape
-                'is_closed': False,  # Quarter circle is open
-                'analysis_method': 'quarter_circle_detection',
-                'arc_angle': quarter_circle_analysis['arc_angle'],
-                'radius_estimate': quarter_circle_analysis['radius'],
-                'curvature_direction': quarter_circle_analysis['direction']
+                'type': composite_analysis['composite_type'],
+                'confidence': composite_analysis['confidence'],
+                'sides': 0,  # Composite shapes don't have simple side counts
+                'angles': 0,
+                'is_closed': True,  # Most composite shapes are closed
+                'analysis_method': 'composite_shape_detection',
+                'composite_components': composite_analysis['components'],
+                'pattern_characteristics': composite_analysis['pattern_characteristics']
             })
             return pattern_analysis
         
+        # REMOVED: quarter_circle detection from line segments - use action program types only
+        # All quarter_circle detection should come from action commands
+
         # Enhanced: Check for semicircle patterns
         semicircle_analysis = self._detect_semicircle_from_lines(action_program)
         if semicircle_analysis['is_semicircle']:
@@ -748,16 +1011,31 @@ class SemanticActionParser:
             })
             return pattern_analysis
         
+        # Enhanced: Check for irregular complex shapes
+        irregular_analysis = self._detect_irregular_complex_shapes(action_program)
+        if irregular_analysis['is_irregular']:
+            pattern_analysis.update({
+                'type': irregular_analysis['irregular_type'],
+                'confidence': irregular_analysis['confidence'],
+                'sides': 0,
+                'angles': 0,
+                'is_closed': None,
+                'analysis_method': 'irregular_shape_detection',
+                'complexity_metrics': irregular_analysis['complexity_metrics'],
+                'pattern_analysis': irregular_analysis['pattern_analysis']
+            })
+            return pattern_analysis
+        
         # Analyze pattern complexity
         complexity_score = len(action_program) / 10.0  # Normalize by typical program length
         
         # Determine shape characteristics
-        if special_commands > 0:
+        if complex_commands > 0:
             pattern_analysis.update({
-                'type': 'special',
+                'type': 'zigzag',
                 'confidence': 0.6,
                 'complexity_score': complexity_score,
-                'special_elements': special_commands
+                'complex_elements': complex_commands
             })
         elif curve_commands > draw_commands:
             pattern_analysis.update({
@@ -768,7 +1046,7 @@ class SemanticActionParser:
             })
         elif draw_commands > 0:
             pattern_analysis.update({
-                'type': 'polygonal',
+                'type': 'normal',
                 'confidence': 0.4,
                 'sides': draw_commands,
                 'angles': max(0, draw_commands - 1)
@@ -782,54 +1060,8 @@ class SemanticActionParser:
         
         return pattern_analysis
     
-    def _detect_quarter_circle_from_lines(self, action_program: List[str]) -> Dict[str, Any]:
-        """Detect quarter circle patterns from connected line segments"""
-        result = {
-            'is_quarter_circle': False,
-            'confidence': 0.0,
-            'arc_angle': 0.0,
-            'radius': 0.0,
-            'direction': 'unknown'
-        }
-        
-        # Extract line coordinates from action program
-        line_coords = self._extract_line_coordinates(action_program)
-        if len(line_coords) < 3:  # Need at least 3 connected segments
-            return result
-            
-        # Check if lines form a connected path
-        if not self._are_lines_connected(line_coords):
-            return result
-            
-        # Extract all points from connected path
-        path_points = self._extract_path_points(line_coords)
-        if len(path_points) < 4:
-            return result
-            
-        # Analyze path for quarter circle characteristics
-        analysis = self._analyze_path_curvature(path_points)
-        
-        # More permissive quarter circle checks for line segment approximations
-        # Allow wider angle range (50-160°) and lower consistency thresholds
-        if analysis['total_angle'] >= 50 and analysis['total_angle'] <= 160:  # Very wide range for approximations
-            if analysis['curvature_consistency'] > 0.3:  # More permissive consistency
-                if analysis['radius_consistency'] > 0.15:  # Lower radius consistency threshold
-                    # Calculate confidence based on how close to ideal quarter circle
-                    angle_score = 1.0 - abs(analysis['total_angle'] - 90) / 90.0  # Best at 90°
-                    angle_score = max(0.1, angle_score)
-                    
-                    base_confidence = analysis['curvature_consistency'] * analysis['radius_consistency']
-                    adjusted_confidence = min(0.85, base_confidence * angle_score)
-                    
-                    result.update({
-                        'is_quarter_circle': True,
-                        'confidence': adjusted_confidence,
-                        'arc_angle': analysis['total_angle'],
-                        'radius': analysis['estimated_radius'],
-                        'direction': analysis['direction']
-                    })
-        
-        return result
+    # REMOVED: _detect_quarter_circle_from_lines - Use action program types only
+    # All quarter_circle detection should come from action commands, not line approximations
     
     def _detect_semicircle_from_lines(self, action_program: List[str]) -> Dict[str, Any]:
         """Detect semicircle patterns from connected line segments"""
@@ -1073,30 +1305,71 @@ class SemanticActionParser:
         
         return features
 
+    def _detect_complex_composite_shapes(self, action_program: List[str]) -> Dict[str, Any]:
+        """Detect complex composite shapes like stars, crosses, houses, etc."""
+        result = {
+            'is_composite': False,
+            'composite_type': 'unknown',
+            'confidence': 0.0,
+            'components': [],
+            'pattern_characteristics': {}
+        }
+        
+        # For now, return basic analysis until full implementation
+        # Check for common composite shape indicators
+        special_commands = sum(1 for cmd in action_program if isinstance(cmd, str) and any(word in cmd.lower() for word in ['star', 'cross', 'house', 'arrow', 'flower']))
+        
+        if special_commands > 0:
+            result.update({
+                'is_composite': True,
+                'composite_type': 'special',
+                'confidence': 0.6,
+                'components': special_commands,
+                'pattern_characteristics': {'special_elements': special_commands}
+            })
+        
+        return result
+
+    def _detect_irregular_complex_shapes(self, action_program: List[str]) -> Dict[str, Any]:
+        """Detect irregular complex shapes like blobs, freeform shapes, etc."""
+        result = {
+            'is_irregular': False,
+            'irregular_type': 'unknown',
+            'confidence': 0.0,
+            'complexity_metrics': {},
+            'pattern_analysis': {}
+        }
+        
+        # Check for irregular shape indicators
+        irregular_commands = sum(1 for cmd in action_program if isinstance(cmd, str) and any(word in cmd.lower() for word in ['blob', 'freeform', 'irregular', 'random', 'wiggle']))
+        
+        if irregular_commands > 0:
+            result.update({
+                'is_irregular': True,
+                'irregular_type': 'freeform',
+                'confidence': 0.7,
+                'complexity_metrics': {'irregular_elements': irregular_commands},
+                'pattern_analysis': {'randomness': irregular_commands / len(action_program)}
+            })
+        
+        return result
+
 
 class BongardPredicateEngine:
     """Comprehensive predicate engine for Bongard problem reasoning"""
     
     def __init__(self):
         self.predicates = {
-            # Core shape predicates
+            # Core shape predicates - only Bongard-LOGO discovered shapes
             'contains_triangle': self._contains_triangle,
             'contains_square': self._contains_square,
             'contains_circle': self._contains_circle,
-            'contains_pentagon': self._contains_pentagon,
-            'contains_hexagon': self._contains_hexagon,
-            'contains_polygon': self._contains_polygon,
-            'contains_line': self._contains_line,
-            'contains_arc': self._contains_arc,
-            'contains_star': self._contains_star,
-            'contains_cross': self._contains_cross,
+            'contains_normal': self._contains_normal,
+            'contains_zigzag': self._contains_zigzag,
             
             # Side count predicates
             'has_three_sides': self._has_three_sides,
             'has_four_sides': self._has_four_sides,
-            'has_five_sides': self._has_five_sides,
-            'has_six_sides': self._has_six_sides,
-            'has_many_sides': self._has_many_sides,
             'has_no_sides': self._has_no_sides,
             
             # Topology predicates
@@ -1165,6 +1438,26 @@ class BongardPredicateEngine:
             'has_nested_shapes': self._has_nested_shapes,
             'forms_pattern': self._forms_pattern,
             'breaks_pattern': self._breaks_pattern,
+            
+            # Stroke-specific predicates for arc vs line differentiation
+            'is_line_based': self._is_line_based,
+            'is_arc_based': self._is_arc_based,
+            'contains_line_normal': self._contains_line_normal,
+            'contains_arc_normal': self._contains_arc_normal,
+            'contains_line_triangle': self._contains_line_triangle,
+            'contains_arc_triangle': self._contains_arc_triangle,
+            'contains_line_square': self._contains_line_square,
+            'contains_arc_square': self._contains_arc_square,
+            'contains_line_circle': self._contains_line_circle,
+            'contains_arc_circle': self._contains_arc_circle,
+            'contains_line_zigzag': self._contains_line_zigzag,
+            'contains_arc_zigzag': self._contains_arc_zigzag,
+            'has_angular_features': self._has_angular_features,
+            'has_curved_features': self._has_curved_features,
+            'has_sharp_edges': self._has_sharp_edges,
+            'has_smooth_edges': self._has_smooth_edges,
+            'different_stroke_types': self._different_stroke_types,
+            'same_stroke_type': self._same_stroke_type,
         }
         
         # Initialize comprehensive commonsense knowledge base
@@ -1188,6 +1481,21 @@ class BongardPredicateEngine:
                 logging.debug(f"Predicate {predicate_name} failed: {e}")
                 continue
         
+        # Add stroke-specific differentiation predicates
+        if node_b is not None:
+            try:
+                stroke_diff_predicates = self.differentiate_stroke_types_in_reasoning(node_a, node_b)
+                applicable_predicates.extend(stroke_diff_predicates)
+            except Exception as e:
+                logging.debug(f"Stroke differentiation failed: {e}")
+        else:
+            # Add single-node stroke-specific predicates
+            try:
+                stroke_predicates = self.differentiate_stroke_types_in_reasoning(node_a)
+                applicable_predicates.extend(stroke_predicates)
+            except Exception as e:
+                logging.debug(f"Single node stroke analysis failed: {e}")
+        
         return applicable_predicates
     
     # Shape detection predicates
@@ -1209,47 +1517,17 @@ class BongardPredicateEngine:
             return features.shape_type == BongardShapeType.CIRCLE
         return node.get('semantic_features', {}).get('has_circles', False)
     
-    def _contains_pentagon(self, node):
+    def _contains_normal(self, node):
         features = node.get('comprehensive_features')
         if features:
-            return features.shape_type == BongardShapeType.PENTAGON or features.side_count == 5
-        return any(s['type'] == 'pentagon' for s in node.get('semantic_shapes', []))
+            return features.shape_type == BongardShapeType.NORMAL
+        return any(s['type'] == 'normal' for s in node.get('semantic_shapes', []))
     
-    def _contains_hexagon(self, node):
+    def _contains_zigzag(self, node):
         features = node.get('comprehensive_features')
         if features:
-            return features.shape_type == BongardShapeType.HEXAGON or features.side_count == 6
-        return any(s['type'] == 'hexagon' for s in node.get('semantic_shapes', []))
-    
-    def _contains_polygon(self, node):
-        features = node.get('comprehensive_features')
-        if features:
-            return features.side_count > 4
-        return node.get('semantic_features', {}).get('has_polygons', False)
-    
-    def _contains_line(self, node):
-        features = node.get('comprehensive_features')
-        if features:
-            return features.shape_type in [BongardShapeType.LINE, BongardShapeType.RAY, BongardShapeType.SEGMENT]
-        return node.get('semantic_features', {}).get('has_lines', False)
-    
-    def _contains_arc(self, node):
-        features = node.get('comprehensive_features')
-        if features:
-            return features.shape_type in [BongardShapeType.ARC, BongardShapeType.CRESCENT, BongardShapeType.SEMICIRCLE]
-        return any(s['type'] in ['arc', 'crescent', 'semicircle'] for s in node.get('semantic_shapes', []))
-    
-    def _contains_star(self, node):
-        features = node.get('comprehensive_features')
-        if features:
-            return features.shape_type == BongardShapeType.STAR
-        return any(s['type'] == 'star' for s in node.get('semantic_shapes', []))
-    
-    def _contains_cross(self, node):
-        features = node.get('comprehensive_features')
-        if features:
-            return features.shape_type == BongardShapeType.CROSS
-        return any(s['type'] == 'cross' for s in node.get('semantic_shapes', []))
+            return features.shape_type == BongardShapeType.ZIGZAG
+        return any(s['type'] == 'zigzag' for s in node.get('semantic_shapes', []))
     
     # Side count predicates
     def _has_three_sides(self, node):
@@ -1263,24 +1541,6 @@ class BongardPredicateEngine:
         if features:
             return features.side_count == 4
         return node.get('semantic_features', {}).get('has_four_sides', False)
-    
-    def _has_five_sides(self, node):
-        features = node.get('comprehensive_features')
-        if features:
-            return features.side_count == 5
-        return any(s['type'] == 'pentagon' for s in node.get('semantic_shapes', []))
-    
-    def _has_six_sides(self, node):
-        features = node.get('comprehensive_features')
-        if features:
-            return features.side_count == 6
-        return any(s['type'] == 'hexagon' for s in node.get('semantic_shapes', []))
-    
-    def _has_many_sides(self, node):
-        features = node.get('comprehensive_features')
-        if features:
-            return features.side_count > 6
-        return any(s['type'] in ['octagon', 'decagon', 'polygon'] for s in node.get('semantic_shapes', []))
     
     def _has_no_sides(self, node):
         features = node.get('comprehensive_features')
@@ -1566,6 +1826,123 @@ class BongardPredicateEngine:
         # TODO: implement pattern breaking detection
         return False
 
+    # Stroke-specific predicates for arc vs line differentiation
+    def _is_line_based(self, node):
+        """Check if shape is primarily line-based (angular)"""
+        stroke_type = node.get('stroke_type', 'unknown')
+        return stroke_type == 'line'
+    
+    def _is_arc_based(self, node):
+        """Check if shape is primarily arc-based (curved)"""
+        stroke_type = node.get('stroke_type', 'unknown')
+        return stroke_type == 'arc'
+    
+    def _contains_line_normal(self, node):
+        """Check for line-based normal shapes (straight lines)"""
+        stroke_type = node.get('stroke_type', 'unknown')
+        shape_type = node.get('shape_type', 'unknown')
+        return stroke_type == 'line' and shape_type == 'normal'
+    
+    def _contains_arc_normal(self, node):
+        """Check for arc-based normal shapes (curved lines)"""
+        stroke_type = node.get('stroke_type', 'unknown')
+        shape_type = node.get('shape_type', 'unknown')
+        return stroke_type == 'arc' and shape_type == 'normal'
+    
+    def _contains_line_triangle(self, node):
+        """Check for line-based triangular shapes (sharp-cornered triangles)"""
+        stroke_type = node.get('stroke_type', 'unknown')
+        shape_type = node.get('shape_type', 'unknown')
+        return stroke_type == 'line' and shape_type == 'triangle'
+    
+    def _contains_arc_triangle(self, node):
+        """Check for arc-based triangular shapes (rounded triangles)"""
+        stroke_type = node.get('stroke_type', 'unknown')
+        shape_type = node.get('shape_type', 'unknown')
+        return stroke_type == 'arc' and shape_type == 'triangle'
+    
+    def _contains_line_square(self, node):
+        """Check for line-based square shapes (sharp-cornered squares)"""
+        stroke_type = node.get('stroke_type', 'unknown')
+        shape_type = node.get('shape_type', 'unknown')
+        return stroke_type == 'line' and shape_type == 'square'
+    
+    def _contains_arc_square(self, node):
+        """Check for arc-based square shapes (rounded squares)"""
+        stroke_type = node.get('stroke_type', 'unknown')
+        shape_type = node.get('shape_type', 'unknown')
+        return stroke_type == 'arc' and shape_type == 'square'
+    
+    def _contains_line_circle(self, node):
+        """Check for line-based circular shapes (polygonal approximation)"""
+        stroke_type = node.get('stroke_type', 'unknown')
+        shape_type = node.get('shape_type', 'unknown')
+        return stroke_type == 'line' and shape_type == 'circle'
+    
+    def _contains_arc_circle(self, node):
+        """Check for arc-based circular shapes (smooth circles)"""
+        stroke_type = node.get('stroke_type', 'unknown')
+        shape_type = node.get('shape_type', 'unknown')
+        return stroke_type == 'arc' and shape_type == 'circle'
+    
+    def _contains_line_zigzag(self, node):
+        """Check for line-based zigzag shapes (sharp jagged patterns)"""
+        stroke_type = node.get('stroke_type', 'unknown')
+        shape_type = node.get('shape_type', 'unknown')
+        return stroke_type == 'line' and shape_type == 'zigzag'
+    
+    def _contains_arc_zigzag(self, node):
+        """Check for arc-based zigzag shapes (smooth wave patterns)"""
+        stroke_type = node.get('stroke_type', 'unknown')
+        shape_type = node.get('shape_type', 'unknown')
+        return stroke_type == 'arc' and shape_type == 'zigzag'
+    
+    def _has_angular_features(self, node):
+        """Check if shape has angular/sharp features"""
+        stroke_type = node.get('stroke_type', 'unknown')
+        if stroke_type == 'line':
+            return True
+        
+        features = node.get('comprehensive_features')
+        if features:
+            return (features.angle_count > 0 or 
+                    features.num_junctions > 0 or
+                    features.orientation_variance > 30)
+        return False
+    
+    def _has_curved_features(self, node):
+        """Check if shape has curved/smooth features"""
+        stroke_type = node.get('stroke_type', 'unknown')
+        if stroke_type == 'arc':
+            return True
+        
+        features = node.get('comprehensive_features')
+        if features:
+            return (features.curvature_score > 0.1 or 
+                    features.max_curvature > 0.1 or
+                    features.is_highly_curved)
+        return False
+    
+    def _has_sharp_edges(self, node):
+        """Check if shape has sharp edges (line-based)"""
+        return self._is_line_based(node) and self._has_angular_features(node)
+    
+    def _has_smooth_edges(self, node):
+        """Check if shape has smooth edges (arc-based)"""
+        return self._is_arc_based(node) and self._has_curved_features(node)
+    
+    def _different_stroke_types(self, node_a, node_b):
+        """Check if two nodes have different stroke types"""
+        stroke_a = node_a.get('stroke_type', 'unknown')
+        stroke_b = node_b.get('stroke_type', 'unknown')
+        return stroke_a != stroke_b and stroke_a != 'unknown' and stroke_b != 'unknown'
+    
+    def _same_stroke_type(self, node_a, node_b):
+        """Check if two nodes have the same stroke type"""
+        stroke_a = node_a.get('stroke_type', 'unknown')
+        stroke_b = node_b.get('stroke_type', 'unknown')
+        return stroke_a == stroke_b and stroke_a != 'unknown'
+
     # Unknown shape analysis predicates
     def _is_recognizable_shape(self, node):
         """Check if shape is recognizable from standard categories"""
@@ -1685,9 +2062,9 @@ class BongardPredicateEngine:
         if features:
             return features.symmetry_type == BongardSymmetry.ROTATIONAL
         
-        # Check for star-like or cross-like patterns
+        # Check for zigzag patterns that might exhibit radial properties
         semantic_shapes = node.get('semantic_shapes', [])
-        return any(s.get('type') in ['star', 'cross', 'flower'] for s in semantic_shapes)
+        return any(s.get('type') == 'zigzag' for s in semantic_shapes)
     
     def _has_fractal_properties(self, node):
         """Check if shape exhibits fractal-like properties"""
@@ -1769,17 +2146,13 @@ class BongardPredicateEngine:
             regularity = geometric_analysis.get('geometric_regularity', 0.5)
             convexity = geometric_analysis.get('geometric_convexity', 0.5)
             
-            # Side count predicates for unknown shapes
+            # Side count predicates for discovered shapes only
             if vertex_count == 3:
                 applicable_predicates.extend(['has_three_sides', 'contains_triangle'])
             elif vertex_count == 4:
                 applicable_predicates.extend(['has_four_sides', 'contains_square'])
-            elif vertex_count == 5:
-                applicable_predicates.extend(['has_five_sides', 'contains_pentagon'])
-            elif vertex_count == 6:
-                applicable_predicates.extend(['has_six_sides', 'contains_hexagon'])
-            elif vertex_count > 6:
-                applicable_predicates.extend(['has_many_sides', 'has_more_than_six_sides'])
+            elif vertex_count > 4:
+                applicable_predicates.extend(['has_many_sides', 'has_more_than_four_sides'])
             elif vertex_count == 0:
                 applicable_predicates.extend(['has_no_sides', 'contains_circle'])
             
@@ -1901,28 +2274,43 @@ class BongardPredicateEngine:
         """Initialize comprehensive commonsense knowledge base for Bongard reasoning"""
         return {
             'shape_hierarchies': {
-                'regular_polygons': ['triangle', 'square', 'pentagon', 'hexagon', 'octagon'],
-                'curved_shapes': ['circle', 'oval', 'arc', 'spiral', 'crescent'],
-                'linear_shapes': ['line', 'ray', 'segment', 'zigzag'],
-                'complex_shapes': ['star', 'cross', 'diamond', 'house', 'arrow'],
-                'irregular_shapes': ['blob', 'freeform', 'irregular']
+                # DISCOVERED BONGARD-LOGO SHAPE TYPES (prioritized)
+                'bongard_logo_shapes': ['normal', 'circle', 'square', 'triangle', 'zigzag'],
+                'regular_polygons': ['triangle', 'square'],  # Only discovered regular polygons
+                'curved_shapes': ['circle', 'zigzag'],  # Only discovered curved types
+                'linear_shapes': ['normal'],  # Only discovered linear types
+                'complex_shapes': ['zigzag'],  # Complex patterns from discovered types
+                'irregular_shapes': ['zigzag'],  # Irregular patterns from discovered types
+                
+                # STROKE-SPECIFIC SHAPE HIERARCHIES
+                'line_stroke_shapes': ['line_normal', 'line_triangle', 'line_square', 'line_zigzag'],
+                'arc_stroke_shapes': ['arc_normal', 'arc_triangle', 'arc_square', 'arc_circle', 'arc_zigzag'],
+                'angular_shapes': ['line_triangle', 'line_square'],  # Shapes with sharp corners
+                'curved_shapes_detailed': ['arc_triangle', 'arc_square', 'arc_circle', 'arc_zigzag'],  # Shapes with curved edges
+                'hybrid_shapes': []  # No hybrid stroke types in pure Bongard system
+            },
+            'bongard_shape_properties': {
+                # Properties for the 5 discovered shape types
+                'normal': {'sides': 0, 'regularity': 'linear', 'closure': 'open', 'complexity': 1, 'frequency': 24107},
+                'circle': {'sides': 0, 'regularity': 'perfect', 'closure': 'closed', 'complexity': 2, 'frequency': 6256},
+                'square': {'sides': 4, 'regularity': 'regular', 'closure': 'closed', 'complexity': 2, 'frequency': 6519},
+                'triangle': {'sides': 3, 'regularity': 'regular', 'closure': 'closed', 'complexity': 2, 'frequency': 5837},
+                'zigzag': {'sides': 0, 'regularity': 'irregular', 'closure': 'open', 'complexity': 3, 'frequency': 6729}
             },
             'side_count_properties': {
                 3: {'name': 'triangle', 'angle_sum': 180, 'min_angles': 3},
                 4: {'name': 'quadrilateral', 'angle_sum': 360, 'min_angles': 4},
-                5: {'name': 'pentagon', 'angle_sum': 540, 'min_angles': 5},
-                6: {'name': 'hexagon', 'angle_sum': 720, 'min_angles': 6},
-                8: {'name': 'octagon', 'angle_sum': 1080, 'min_angles': 8}
+                # Note: Only discovered shapes (triangle, square) have validated side counts
             },
             'symmetry_rules': {
-                'bilateral': ['triangle', 'square', 'rectangle', 'pentagon', 'hexagon', 'oval'],
-                'rotational': ['square', 'pentagon', 'hexagon', 'octagon', 'star', 'cross'],
-                'point': ['oval', 'diamond', 'parallelogram'],
-                'none': ['irregular', 'freeform', 'blob', 'zigzag']
+                'bilateral': ['triangle', 'square', 'circle'],  # Only real Bongard shapes that have bilateral symmetry
+                'rotational': ['square', 'circle'],  # Only discovered shapes with rotational symmetry
+                'point': [],  # No discovered shapes have point symmetry
+                'none': ['normal', 'zigzag']  # Linear and irregular discovered shapes
             },
             'topological_categories': {
-                'simple_closed': ['triangle', 'square', 'circle', 'pentagon', 'hexagon'],
-                'simple_open': ['line', 'ray', 'segment', 'arc'],
+                'simple_closed': ['triangle', 'square', 'circle'],  # Only discovered closed shapes
+                'simple_open': ['normal', 'zigzag'],  # Only discovered open shapes
                 'complex_closed': ['star', 'cross', 'house'],
                 'complex_open': ['zigzag', 'spiral'],
                 'compound': ['multiple_shapes', 'nested_shapes']
@@ -1984,12 +2372,35 @@ def enhance_node_with_semantic_features(node_data: Dict[str, Any], action_progra
         'semantic_properties': semantic_info['properties']
     })
     
-    # Check for quarter circle or other composite shape detection
+    # SET SHAPE_TYPE BASED ON DISCOVERED BONGARD-LOGO SHAPE TYPES
     shapes = semantic_info.get('shapes', [])
+    if shapes:
+        # Priority order: discovered Bongard-LOGO shape types first
+        bongard_priorities = ['circle', 'triangle', 'square', 'zigzag', 'normal']
+        shape_type_set = False
+        
+        # Find the highest priority Bongard-LOGO shape type
+        for priority_shape in bongard_priorities:
+            for shape in shapes:
+                if shape.get('type') == priority_shape:
+                    enhanced_node['shape_type'] = priority_shape
+                    print(f"🎯 Set shape_type to '{priority_shape}' based on semantic detection")
+                    shape_type_set = True
+                    break
+            if shape_type_set:
+                break
+                
+        # If no Bongard priority shape found, use the first detected shape
+        if not shape_type_set and shapes:
+            first_shape_type = shapes[0].get('type', 'normal')
+            enhanced_node['shape_type'] = first_shape_type
+            print(f"🎯 Set shape_type to '{first_shape_type}' as fallback from semantic detection")
+    
+    # REMOVED: quarter_circle composite shape detection - use action program types only
     for shape in shapes:
         shape_type = shape.get('type', '')
         print(f"🔍 Found shape type: {shape_type}")
-        if shape_type in ['quarter_circle', 'semicircle', 'arc']:
+        if shape_type in ['semicircle', 'arc']:  # Removed quarter_circle - action programs only
             enhanced_node['composite_type'] = shape_type
             enhanced_node['composite_confidence'] = shape.get('confidence', 0.0)
             enhanced_node['composite_properties'] = {
@@ -2002,3 +2413,4 @@ def enhance_node_with_semantic_features(node_data: Dict[str, Any], action_progra
             break
     
     return enhanced_node
+

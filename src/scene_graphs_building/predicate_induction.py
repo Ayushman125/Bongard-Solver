@@ -8,17 +8,21 @@ from collections import Counter, defaultdict
 from typing import List, Dict, Any, Tuple, Optional
 def extract_abstract_shape_features(objects: List[Dict[str, Any]]) -> Dict[str, List[float]]:
     """
-    Extract abstract shape features for BONGARD-LOGO style reasoning:
+    Extract abstract shape features for BONGARD-LOGO style reasoning using the 5 discovered shape types:
     - Convexity measures
     - Symmetry detection
     - Hole/enclosure detection
     - Line count, intersection count
     - Angle distribution patterns
+    - Shape type classification for discovered types: normal, circle, square, triangle, zigzag
     """
     abstract_features = defaultdict(list)
     
     for obj in objects:
         vertices = obj.get('vertices', [])
+        shape_type = obj.get('shape_type', 'unknown')
+        stroke_type = obj.get('stroke_type', 'unknown')
+        
         if len(vertices) < 3:
             # Default values for insufficient geometry
             abstract_features['convexity'].append(0.0)
@@ -28,6 +32,19 @@ def extract_abstract_shape_features(objects: List[Dict[str, Any]]) -> Dict[str, 
             abstract_features['intersection_count'].append(0.0)
             abstract_features['angle_variance'].append(0.0)
             abstract_features['stroke_complexity'].append(0.0)
+            
+            # Shape type features for discovered types
+            abstract_features['is_normal_type'].append(1.0 if shape_type == 'normal' else 0.0)
+            abstract_features['is_circle_type'].append(1.0 if shape_type == 'circle' else 0.0)
+            abstract_features['is_square_type'].append(1.0 if shape_type == 'square' else 0.0)
+            abstract_features['is_triangle_type'].append(1.0 if shape_type == 'triangle' else 0.0)
+            abstract_features['is_zigzag_type'].append(1.0 if shape_type == 'zigzag' else 0.0)
+            
+            # Stroke type features for arc vs line differentiation
+            abstract_features['is_arc_stroke'].append(1.0 if stroke_type == 'arc' else 0.0)
+            abstract_features['is_line_stroke'].append(1.0 if stroke_type == 'line' else 0.0)
+            abstract_features['shape_regularity'].append(0.0)
+            abstract_features['shape_complexity_level'].append(1.0)
             continue
             
         try:
@@ -67,9 +84,60 @@ def extract_abstract_shape_features(objects: List[Dict[str, Any]]) -> Dict[str, 
             stroke_complexity = _calculate_stroke_complexity(obj)
             abstract_features['stroke_complexity'].append(stroke_complexity)
             
+            # 8. Shape Type Features for Discovered Bongard-LOGO Types
+            abstract_features['is_normal_type'].append(1.0 if shape_type == 'normal' else 0.0)
+            abstract_features['is_circle_type'].append(1.0 if shape_type == 'circle' else 0.0)
+            abstract_features['is_square_type'].append(1.0 if shape_type == 'square' else 0.0)
+            abstract_features['is_triangle_type'].append(1.0 if shape_type == 'triangle' else 0.0)
+            abstract_features['is_zigzag_type'].append(1.0 if shape_type == 'zigzag' else 0.0)
+            
+            # 9. Shape Regularity Score (based on discovered type properties)
+            regularity_scores = {
+                'normal': 1.0,    # Straight lines are perfectly regular
+                'circle': 1.0,    # Circles are perfectly regular
+                'square': 1.0,    # Squares are perfectly regular
+                'triangle': 0.8,  # Triangles are mostly regular
+                'zigzag': 0.2     # Zigzag is highly irregular
+            }
+            shape_regularity = regularity_scores.get(shape_type, 0.5)
+            abstract_features['shape_regularity'].append(shape_regularity)
+            
+            # 10. Shape Complexity Level (based on discovered type analysis)
+            complexity_scores = {
+                'normal': 1.0,    # Simple lines
+                'circle': 2.0,    # Regular curves
+                'square': 2.0,    # Regular polygons  
+                'triangle': 2.0,  # Regular polygons
+                'zigzag': 3.0     # Irregular patterns
+            }
+            complexity_level = complexity_scores.get(shape_type, 1.0)
+            abstract_features['shape_complexity_level'].append(complexity_level)
+            
+            # 11. Stroke Type Features for Arc vs Line differentiation
+            abstract_features['is_arc_stroke'].append(1.0 if stroke_type == 'arc' else 0.0)
+            abstract_features['is_line_stroke'].append(1.0 if stroke_type == 'line' else 0.0)
+            
+            # 12. Stroke+Shape combination features (key insight for Bongard reasoning)
+            stroke_shape_combo = f"{stroke_type}_{shape_type}" if stroke_type != 'unknown' and shape_type != 'unknown' else 'unknown'
+            combo_features = {
+                'line_normal': [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],     # [line_normal, line_circle, ..., arc_normal, arc_circle, ...]
+                'line_circle': [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                'line_square': [0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                'line_triangle': [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                'line_zigzag': [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                'arc_normal': [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+                'arc_circle': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+                'arc_square': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                'arc_triangle': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                'arc_zigzag': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+            }
+            combo_vector = combo_features.get(stroke_shape_combo, [0.0] * 10)
+            for i, val in enumerate(combo_vector):
+                abstract_features[f'stroke_shape_combo_{i}'].append(val)
+            
         except Exception as e:
             logging.warning(f"Failed to extract abstract features for object {obj.get('object_id', 'unknown')}: {e}")
-            # Default neutral values
+            # Default neutral values for all features including discovered shape types
             abstract_features['convexity'].append(0.5)
             abstract_features['symmetry_score'].append(0.0)
             abstract_features['hole_count'].append(0.0)
@@ -77,6 +145,23 @@ def extract_abstract_shape_features(objects: List[Dict[str, Any]]) -> Dict[str, 
             abstract_features['intersection_count'].append(0.0)
             abstract_features['angle_variance'].append(0.5)
             abstract_features['stroke_complexity'].append(0.5)
+            
+            # Default shape type features
+            abstract_features['is_normal_type'].append(0.0)
+            abstract_features['is_circle_type'].append(0.0)
+            abstract_features['is_square_type'].append(0.0)
+            abstract_features['is_triangle_type'].append(0.0)
+            abstract_features['is_zigzag_type'].append(0.0)
+            abstract_features['shape_regularity'].append(0.5)
+            abstract_features['shape_complexity_level'].append(1.0)
+            
+            # Default stroke type features
+            abstract_features['is_arc_stroke'].append(0.0)
+            abstract_features['is_line_stroke'].append(0.0)
+            
+            # Default stroke+shape combo features
+            for i in range(10):
+                abstract_features[f'stroke_shape_combo_{i}'].append(0.0)
     
     return dict(abstract_features)
 
@@ -405,13 +490,25 @@ def induce_program_semantic_predicate(positive_objects: List[Dict[str, Any]],
     return best_predicate, best_params
 
 def _extract_action_type(action: str) -> str:
-    """Extract the semantic type from an action command"""
+    """Extract the semantic type from an action command for all 5 discovered Bongard-LOGO shape types"""
     if isinstance(action, dict):
         action = action.get('action', str(action))
     
     action_str = str(action).lower()
     
-    if 'line' in action_str:
+    # Check for the 5 discovered Bongard-LOGO shape types first
+    if 'normal' in action_str:
+        return 'normal'
+    elif 'circle' in action_str:
+        return 'circle'
+    elif 'square' in action_str:
+        return 'square'
+    elif 'triangle' in action_str:
+        return 'triangle'
+    elif 'zigzag' in action_str:
+        return 'zigzag'
+    # Command types
+    elif 'line' in action_str:
         return 'line'
     elif 'arc' in action_str:
         return 'arc'
@@ -419,8 +516,6 @@ def _extract_action_type(action: str) -> str:
         return 'turn'
     elif 'start' in action_str:
         return 'start'
-    elif 'zigzag' in action_str:
-        return 'zigzag'
     elif 'curve' in action_str:
         return 'curve'
     else:
@@ -640,6 +735,9 @@ def induce_predicate_automl(objects, automl_type='tpot', max_time_mins=None, gen
         program_le = LabelEncoder().fit(program_labels)
         kb_le = LabelEncoder().fit(kb_labels)
         for obj in objects:
+            # Get shape type for discovered Bongard-LOGO types
+            shape_type = obj.get('shape_type', 'unknown')
+            
             features.append([
                 obj.get('area', 0),
                 obj.get('aspect_ratio', 1),
@@ -649,13 +747,26 @@ def induce_predicate_automl(objects, automl_type='tpot', max_time_mins=None, gen
                 obj.get('cx', 0),
                 obj.get('cy', 0),
                 program_le.transform([obj.get('programmatic_label', '')])[0],
-                kb_le.transform([obj.get('kb_concept', '')])[0]
+                kb_le.transform([obj.get('kb_concept', '')])[0],
+                # Add discovered shape type features
+                1.0 if shape_type == 'normal' else 0.0,
+                1.0 if shape_type == 'circle' else 0.0,
+                1.0 if shape_type == 'square' else 0.0,
+                1.0 if shape_type == 'triangle' else 0.0,
+                1.0 if shape_type == 'zigzag' else 0.0,
+                obj.get('shape_regularity', 0.5),
+                obj.get('shape_complexity_level', 1.0)
             ])
             labels.append(obj.get('category', 0))
         import numpy as np
         features = np.array(features)
         labels = np.array(labels)
-        feature_names = ['area', 'aspect_ratio', 'compactness', 'orientation', 'length', 'cx', 'cy', 'programmatic_label', 'kb_concept']
+        feature_names = [
+            'area', 'aspect_ratio', 'compactness', 'orientation', 'length', 'cx', 'cy', 
+            'programmatic_label', 'kb_concept',
+            'is_normal_type', 'is_circle_type', 'is_square_type', 'is_triangle_type', 'is_zigzag_type',
+            'shape_regularity', 'shape_complexity_level'
+        ]
         if automl_type == 'tpot':
             try:
                 from tpot import TPOTClassifier

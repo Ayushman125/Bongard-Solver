@@ -117,6 +117,25 @@ class MotifMiner:
                     all_vertices.extend(obj.get('vertices', []))
                 
                 if all_vertices:
+                    # CRITICAL FIX: Determine shape_type for motif from constituent objects
+                    # Get shape types from member objects
+                    discovered_types = ['normal', 'circle', 'square', 'triangle', 'zigzag']
+                    member_shape_types = [obj.get('shape_type') for obj in member_objects if obj.get('shape_type') in discovered_types]
+                    
+                    # Determine motif shape_type based on constituents
+                    motif_shape_type = None
+                    if member_shape_types:
+                        # Use the most common shape type from members
+                        from collections import Counter
+                        shape_type_counts = Counter(member_shape_types)
+                        motif_shape_type = shape_type_counts.most_common(1)[0][0]
+                    else:
+                        # Fallback: check if all members are the same object type
+                        member_object_types = [obj.get('object_type') for obj in member_objects if obj.get('object_type') in discovered_types]
+                        if member_object_types:
+                            object_type_counts = Counter(member_object_types)
+                            motif_shape_type = object_type_counts.most_common(1)[0][0]
+
                     # Compute motif properties from LOGO data
                     motif_node = {
                         'object_id': f'motif_{motif_id}',
@@ -124,6 +143,7 @@ class MotifMiner:
                         'is_motif': True,
                         'node_type': 'motif',
                         'object_type': 'motif',
+                        'shape_type': motif_shape_type,  # CRITICAL: Add shape_type for motifs
                         'source': 'logo_motif',
                         'vertices': all_vertices,
                         'member_count': len(member_objects),
@@ -147,8 +167,11 @@ class MotifMiner:
                     
                     # LOGO MODE: Add VL similarity computation using actual image data
                     try:
-                        from src.scene_graphs_building.vl_features import CLIPEmbedder
-                        clip_embedder = CLIPEmbedder()
+                        # Use cached CLIPEmbedder instance to avoid repeated model loading
+                        if not hasattr(self, '_clip_embedder') or self._clip_embedder is None:
+                            from src.scene_graphs_building.vl_features import CLIPEmbedder
+                            self._clip_embedder = CLIPEmbedder()
+                        clip_embedder = self._clip_embedder
                         
                         # Use first member's image path for motif embedding
                         image_path = next((obj.get('image_path') for obj in member_objects if obj.get('image_path')), None)
@@ -199,21 +222,72 @@ class MotifMiner:
         return motif_dict, motif_nodes
     
     def _classify_logo_motif(self, member_objects):
-        """Classify motif type based on LOGO action patterns"""
-        object_types = [obj.get('object_type', 'unknown') for obj in member_objects]
-        action_commands = [obj.get('action_command', '') for obj in member_objects]
+        """Classify LOGO motif based on the 5 discovered Bongard-LOGO shape types"""
+        if not member_objects:
+            return 'unknown'
         
-        # Analyze action pattern
-        if all('line_' in cmd for cmd in action_commands):
-            return 'line_sequence'
-        elif all('arc_' in cmd for cmd in action_commands):
-            return 'arc_sequence'
-        elif any('line_' in cmd for cmd in action_commands) and any('arc_' in cmd for cmd in action_commands):
-            return 'mixed_sequence'
-        elif len(set(object_types)) == 1:
-            return f"{object_types[0]}_cluster"
+        # Extract relevant attributes
+        shape_types = [obj.get('shape_type', 'unknown') for obj in member_objects]
+        action_commands = [obj.get('action_command', '') for obj in member_objects]
+        object_types = [obj.get('object_type', 'unknown') for obj in member_objects]
+        
+        # Count occurrences of the 5 discovered shape types
+        discovered_types = ['normal', 'circle', 'square', 'triangle', 'zigzag']
+        type_counts = {shape_type: shape_types.count(shape_type) for shape_type in discovered_types}
+        
+        # Determine dominant shape type
+        dominant_type = max(type_counts.items(), key=lambda x: x[1])[0] if any(type_counts.values()) else 'unknown'
+        
+        # Classify motif based on composition and patterns
+        total_discovered = sum(type_counts.values())
+        
+        if total_discovered == 0:
+            # No discovered types found - use legacy classification
+            if all('line_' in cmd for cmd in action_commands):
+                return 'line_sequence'
+            elif all('arc_' in cmd for cmd in action_commands):
+                return 'arc_sequence'
+            elif any('line_' in cmd for cmd in action_commands) and any('arc_' in cmd for cmd in action_commands):
+                return 'mixed_sequence'
+            elif len(set(object_types)) == 1:
+                return f"{object_types[0]}_cluster"
+            else:
+                return 'composite_shape'
+        
+        # Classification based on discovered shape types
+        elif len(set(shape_types)) == 1 and dominant_type in discovered_types:
+            # Homogeneous motif - all same discovered shape type
+            return f'uniform_{dominant_type}'
+        
+        elif len(member_objects) >= 3:
+            # Multi-element motif - analyze patterns
+            if type_counts['normal'] > len(member_objects) // 2:
+                return 'line_dominant_pattern'
+            elif type_counts['circle'] > 0 and type_counts['square'] > 0:
+                return 'circle_square_combination'
+            elif type_counts['triangle'] > 0 and any(t > 0 for t in [type_counts['circle'], type_counts['square']]):
+                return 'triangle_shape_combination'
+            elif type_counts['zigzag'] > 0:
+                return 'zigzag_textured_pattern'
+            else:
+                return 'mixed_discovered_shapes'
+        
+        elif len(member_objects) == 2:
+            # Two-element motif
+            unique_types = [t for t in discovered_types if type_counts[t] > 0]
+            if len(unique_types) == 1:
+                return f'pair_{unique_types[0]}'
+            elif len(unique_types) == 2:
+                return f'pair_{unique_types[0]}_{unique_types[1]}'
+            else:
+                return 'pair_mixed'
+        
         else:
-            return 'composite_shape'
+            # Single element
+            if dominant_type in discovered_types and type_counts[dominant_type] > 0:
+                return f'single_{dominant_type}'
+            else:
+                return 'single_element'
     
     def _analyze_logo_connectivity(self, member_objects):
         """Analyze connectivity pattern from LOGO action sequence"""
@@ -265,6 +339,99 @@ class MotifMiner:
             # For more complex symmetry detection, could add more analysis
         
         return 'asymmetric'
+    
+    def _extract_logo_features(self, obj):
+        """Extract LOGO-specific features for clustering using discovered shape types"""
+        vertices = obj.get('vertices', [])
+        if len(vertices) < 2:
+            return None
+        
+        # Basic geometric features
+        centroid = [sum(v[0] for v in vertices) / len(vertices), 
+                   sum(v[1] for v in vertices) / len(vertices)]
+        
+        # Action sequence context
+        action_index = obj.get('action_index', -1)
+        parent_shape_id = obj.get('parent_shape_id', '')
+        
+        # Shape type information (one of the 5 discovered types)
+        shape_type = obj.get('shape_type', 'unknown')
+        discovered_types = ['normal', 'circle', 'square', 'triangle', 'zigzag']
+        
+        # Encode shape type as one-hot vector for the 5 discovered types
+        shape_type_vector = [1 if shape_type == t else 0 for t in discovered_types]
+        
+        # Geometric properties
+        bbox = self._compute_simple_bbox(vertices)
+        width = bbox[2] - bbox[0] if bbox else 0
+        height = bbox[3] - bbox[1] if bbox else 0
+        aspect_ratio = width / height if height > 1e-6 else 1.0
+        
+        # Length/perimeter estimation
+        total_length = sum(
+            np.linalg.norm(np.array(vertices[i+1]) - np.array(vertices[i]))
+            for i in range(len(vertices) - 1)
+        )
+        
+        # Orientation estimation
+        if len(vertices) >= 2:
+            start, end = vertices[0], vertices[-1]
+            orientation = np.degrees(np.arctan2(end[1] - start[1], end[0] - start[0]))
+        else:
+            orientation = 0.0
+        
+        # Curvature estimation for discovered shape types
+        if shape_type in ['circle', 'zigzag']:
+            curvature = self._estimate_curvature(vertices)
+        else:
+            curvature = 0.0
+        
+        # Combine all features
+        feature_vector = [
+            centroid[0], centroid[1],  # Position
+            action_index,              # Sequence position
+            width, height,             # Size
+            aspect_ratio,              # Shape
+            total_length,              # Length
+            orientation,               # Orientation
+            curvature,                 # Curvature
+            *shape_type_vector         # One-hot encoded shape type (5 dimensions)
+        ]
+        
+        return feature_vector
+    
+    def _compute_simple_bbox(self, vertices):
+        """Compute simple bounding box for vertices"""
+        if not vertices:
+            return [0, 0, 0, 0]
+        
+        x_coords = [v[0] for v in vertices]
+        y_coords = [v[1] for v in vertices]
+        
+        return [min(x_coords), min(y_coords), max(x_coords), max(y_coords)]
+    
+    def _estimate_curvature(self, vertices):
+        """Estimate curvature for curved shapes"""
+        if len(vertices) < 3:
+            return 0.0
+        
+        total_curvature = 0.0
+        valid_points = 0
+        
+        for i in range(1, len(vertices) - 1):
+            v1 = np.array(vertices[i]) - np.array(vertices[i-1])
+            v2 = np.array(vertices[i+1]) - np.array(vertices[i])
+            
+            norm1, norm2 = np.linalg.norm(v1), np.linalg.norm(v2)
+            if norm1 > 1e-10 and norm2 > 1e-10:
+                cos_angle = np.dot(v1, v2) / (norm1 * norm2)
+                cos_angle = np.clip(cos_angle, -1, 1)
+                curvature = np.arccos(cos_angle)
+                total_curvature += curvature
+                valid_points += 1
+        
+        return total_curvature / valid_points if valid_points > 0 else 0.0
+        
         valid_objects = []
         logo_features = []
         
@@ -308,24 +475,79 @@ class MotifMiner:
         for obj, label in zip(valid_objects, clustering_labels):
             obj['motif_label'] = int(label)
             
-            # LOGO MODE: Enhanced semantic labeling using action commands
+            # ENHANCED SEMANTIC LABELING: Use sophisticated semantic action parser
             action_cmd = obj.get('action_command', '')
-            stroke_type = obj.get('stroke_type', '')
+            action_program = obj.get('action_program', [action_cmd] if action_cmd else [])
             object_type = obj.get('object_type', 'unknown')
             
-            # Determine semantic label from LOGO action context
-            if 'line' in action_cmd or object_type == 'line':
-                semantic_label = 'line_stroke'
-            elif 'arc' in action_cmd or object_type == 'curve':
-                semantic_label = 'arc_stroke'
-            elif object_type == 'polygon':
-                semantic_label = 'polygon_shape'
-            else:
-                semantic_label = f"logo_{object_type}"
+            # Use SemanticActionParser for sophisticated shape classification
+            try:
+                from src.scene_graphs_building.semantic_action_parser import SemanticActionParser
+                if not hasattr(self, '_semantic_parser'):
+                    self._semantic_parser = SemanticActionParser()
+                
+                # Extract sophisticated semantic information
+                semantic_info = self._semantic_parser.extract_semantic_intent(action_program)
+                shapes = semantic_info.get('shapes', [])
+                
+                # Determine semantic label from sophisticated shape analysis
+                if shapes:
+                    # Use the primary detected shape type from semantic parser
+                    primary_shape = shapes[0]
+                    shape_type = primary_shape.get('type', 'unknown')
+                    bongard_type = primary_shape.get('bongard_type', 'UNKNOWN')
+                    
+                    # Map sophisticated shape types to semantic labels
+                    sophisticated_label_map = {
+                        'BongardShapeType.NORMAL': 'normal_line',
+                        'BongardShapeType.CIRCLE': 'circle_shape', 
+                        'BongardShapeType.SQUARE': 'square_shape',
+                        'BongardShapeType.TRIANGLE': 'triangle_shape',
+                        'BongardShapeType.ZIGZAG': 'zigzag_pattern',
+                        # REMOVED: 'quarter_circle': 'quarter_circle_arc', - Use action program types only
+                        'semicircle': 'semicircle_arc',
+                        'composite': 'composite_shape'
+                    }
+                    
+                    # Extract shape type string for mapping
+                    bongard_type_str = str(bongard_type) if bongard_type else shape_type
+                    semantic_label = sophisticated_label_map.get(bongard_type_str, f'detected_{shape_type}')
+                    
+                    # Add sophisticated shape properties to object
+                    obj['detected_shape_type'] = bongard_type_str
+                    obj['shape_confidence'] = primary_shape.get('confidence', 0.0)
+                    obj['shape_properties'] = primary_shape.get('properties', {})
+                    
+                    print(f"🔍 Sophisticated classification: {bongard_type_str} -> {semantic_label}")
+                    
+                else:
+                    # Fallback to basic classification when semantic parser doesn't detect shapes
+                    if 'line' in action_cmd or object_type == 'line':
+                        semantic_label = 'line_stroke'
+                    elif 'arc' in action_cmd or object_type in ['curve', 'arc']:
+                        semantic_label = 'arc_stroke' 
+                    elif object_type == 'polygon':
+                        semantic_label = 'polygon_shape'
+                    else:
+                        semantic_label = f"logo_{object_type}"
+                    
+                    print(f"🔍 Fallback classification: {object_type} -> {semantic_label}")
+                
+            except Exception as e:
+                logging.warning(f"Semantic parser failed for object: {e}")
+                # Fallback to basic classification
+                if 'line' in action_cmd or object_type == 'line':
+                    semantic_label = 'line_stroke'
+                elif 'arc' in action_cmd or object_type in ['curve', 'arc']:
+                    semantic_label = 'arc_stroke'
+                elif object_type == 'polygon':
+                    semantic_label = 'polygon_shape' 
+                else:
+                    semantic_label = f"logo_{object_type}"
             
             obj['shape_label'] = semantic_label
-            obj['semantic_label'] = COMMONSENSE_LABEL_MAP.get(semantic_label.split('_')[0], semantic_label)
-            obj['kb_concept'] = obj['semantic_label']
+            obj['semantic_label'] = semantic_label  # Keep sophisticated labels instead of mapping to generic terms
+            obj['kb_concept'] = semantic_label  # Use sophisticated kb_concept for richer ConceptNet connections
             
             clusters.setdefault(int(label), []).append(obj)
             motif_dict.setdefault(int(label), []).append(obj.get('object_id', obj.get('id')))
@@ -341,11 +563,31 @@ class MotifMiner:
             motif_vertices = self._aggregate_logo_vertices(members)
             # Analyze LOGO action sequence for motif classification
             motif_type = self._classify_logo_motif(members)
+            
+            # CRITICAL FIX: Determine shape_type for motif from constituent objects
+            discovered_types = ['normal', 'circle', 'square', 'triangle', 'zigzag']
+            member_shape_types = [obj.get('shape_type') for obj in members if obj.get('shape_type') in discovered_types]
+            
+            # Determine motif shape_type based on constituents
+            motif_shape_type = None
+            if member_shape_types:
+                # Use the most common shape type from members
+                from collections import Counter
+                shape_type_counts = Counter(member_shape_types)
+                motif_shape_type = shape_type_counts.most_common(1)[0][0]
+            else:
+                # Fallback: check if all members are the same object type
+                member_object_types = [obj.get('object_type') for obj in members if obj.get('object_type') in discovered_types]
+                if member_object_types:
+                    object_type_counts = Counter(member_object_types)
+                    motif_shape_type = object_type_counts.most_common(1)[0][0]
+            
             # Create enhanced motif node with LOGO context
             motif_node = {
                 'id': motif_id,  # Ensure 'id' key is present for downstream compatibility
                 'object_id': motif_id,  # Also add 'object_id' for compatibility
                 'object_type': 'motif',
+                'shape_type': motif_shape_type,  # CRITICAL: Add shape_type for motifs
                 'motif_type': motif_type,
                 'member_nodes': member_ids,
                 'vertices': motif_vertices,

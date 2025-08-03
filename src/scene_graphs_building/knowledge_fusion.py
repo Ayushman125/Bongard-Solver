@@ -18,7 +18,10 @@ class MultiSourceKnowledgeFusion:
     """
     def __init__(self, cache_size: int = 10000, conceptnet_api_url: str = "http://api.conceptnet.io"):
         # Use ConceptNet REST API for robust, up-to-date KB queries
-        self.conceptnet_kb = ConceptNetAPI(base_url=conceptnet_api_url, cache_size=cache_size, rate_limit=0.1)
+        # Use cached ConceptNetAPI instance to avoid repeated initialization
+        if not hasattr(self, '_conceptnet_kb') or self._conceptnet_kb is None:
+            self._conceptnet_kb = ConceptNetAPI(base_url=conceptnet_api_url, cache_size=cache_size, rate_limit=0.1)
+        self.conceptnet_kb = self._conceptnet_kb
         self.knowledge_cache = {}
         self.relationship_hierarchy = self._build_relationship_hierarchy()
         self.commonsense_validator = CommonsenseValidator()

@@ -12,77 +12,87 @@ CONCEPTNET_KEEP_RELS = {
 
 
 # Map raw labels (from NV-Logo metadata or motif miner) to normalized shapes
+# UPDATED: Only support the 5 discovered Bongard-LOGO shape types + basic geometric primitives
 SHAPE_MAP = {
-    "line": "line",
-    "circle": "circle",
-    "arc": "arc",
-    "point": "point",
-    "dot": "dot",
+    # === DISCOVERED BONGARD-LOGO SHAPE TYPES (5 total) ===
+    "normal": "normal",     # 24,107 occurrences (48.7%) - straight lines, most common
+    "circle": "circle",     # 6,256 occurrences (12.6%) - circular shapes/arcs
+    "square": "square",     # 6,519 occurrences (13.2%) - square-based shapes
+    "triangle": "triangle", # 5,837 occurrences (11.8%) - triangular shapes
+    "zigzag": "zigzag",     # 6,729 occurrences (13.6%) - zigzag patterns
+    
+    # === BASIC GEOMETRIC PRIMITIVES (for action programs) ===
+    "line": "line",         # Basic line primitive
+    "arc": "arc",           # Basic arc primitive
+    "point": "point",       # Basic point primitive
+    "dot": "point",         # Alias for point
+    
+    # === LEGACY MAPPINGS (map to discovered types only) ===
     "tri": "triangle",
-    "triangle": "triangle",
-    "quad": "quadrilateral",
-    "rectangle": "rectangle",
-    "square": "square",
-    "pentagon": "pentagon",
-    "hexagon": "hexagon",
-    "heptagon": "heptagon",
-    "octagon": "octagon",
-    "polygon": "polygon",
-    "parabola": "parabola",
-    "bezier": "bezier curve",
-    "curve": "curve",
-    "spline": "spline",
-    "zigzag": "zigzag",
-    "star": "star",
-    "cross": "cross",
-    "hook": "hook",
-    "y shape": "Y-shape",
-    "t junction": "T-junction",
-    "fork": "fork",
-    "spiral": "spiral",
-    "cluster": "cluster",
-    "ring": "ring",
-    "chain": "chain",
-    "grid": "grid",
-    "segment": "segment",
-    "junction": "junction",
-    "vertex": "vertex",
-    # Add more as needed
+    "quad": "square",       # Map quadrilateral to square (closest discovered type)
+    "rectangle": "square",  # Map rectangle to square (closest discovered type)
+    "polygon": "normal",    # Map generic polygon to normal (most common type)
+    "curve": "circle",      # Map curve to circle (closest curved type)
+    "segment": "line",      # Map segment to line
+    "vertex": "point",      # Map vertex to point
+    
+    # Remove all non-discovered shape types - they will be filtered out
 }
 
-# Commonsense label mapping for KB edge creation
+# Commonsense label mapping for KB edge creation - UPDATED for discovered Bongard-LOGO shape types only
 COMMONSENSE_LABEL_MAP = {
-    "line": "line",
-    "arc": "curve",
-    "point": "point",
-    "dot": "point",
-    "triangle": "triangle",
-    "quad": "quadrilateral",
-    "quadrilateral": "quadrilateral",
-    "polygon": "polygon",
-    "circle": "circle",
-    "cluster": "group",
-    "ring": "circle",
-    "chain": "sequence",
-    "grid": "grid",
-    "star": "star",
-    "rectangle": "rectangle",
+    # === DISCOVERED BONGARD-LOGO SHAPE TYPES ===
+    "normal": "normal_line",     # Most common - straight line patterns
+    "circle": "circle_shape",    # Circular/curved patterns
+    "square": "square_shape",    # Square-based patterns
+    "triangle": "triangle_shape", # Triangular patterns
+    "zigzag": "zigzag_pattern",  # Zigzag/irregular patterns
+    
+    # === BASIC GEOMETRIC PRIMITIVES ===
+    "line": "line_segment",
+    "arc": "arc_segment",
+    "point": "point_location",
+    "dot": "point_location",
+    
+    # === STROKE TYPE MAPPINGS ===
+    "line_normal": "normal_line_stroke",
+    "line_square": "square_line_stroke",
+    "line_triangle": "triangle_line_stroke",
+    "line_circle": "circle_line_stroke",
+    "line_zigzag": "zigzag_line_stroke",
+    "arc_normal": "normal_arc_stroke",
+    "arc_circle": "circle_arc_stroke",
+    "arc_square": "square_arc_stroke",
+    "arc_triangle": "triangle_arc_stroke",
+    "arc_zigzag": "zigzag_arc_stroke",
+    
+    # === COMPOSITE PATTERNS ===
+    "motif": "composite_pattern",
+    "cluster": "grouped_elements",
+    
+    # Additional discovered shape mappings
+    "detected_normal": "normal_line",
+    "detected_circle": "circle_shape",
+    "detected_square": "square_shape", 
+    "detected_triangle": "triangle_shape",
+    "detected_zigzag": "zigzag_pattern",
+    "BongardShapeType.NORMAL": "normal_line",
+    "BongardShapeType.CIRCLE": "circle_shape",
+    "BongardShapeType.SQUARE": "square_shape",
+    "BongardShapeType.TRIANGLE": "triangle_shape", 
+    "BongardShapeType.ZIGZAG": "zigzag_pattern",
+    
+    # CRITICAL: Map the 5 discovered Bongard-LOGO shape types directly
+    "normal": "normal",
+    "circle": "circle", 
     "square": "square",
-    "arrow": "arrow",
-    "curve": "curve",
-    "spiral": "spiral",
-    "cross": "cross",
-    "hook": "hook",
-    "vertex": "point",
-    "junction": "intersection",
-    "segment": "line",
-    "open_curve": "curve",  # Map open_curve to generic curve for ConceptNet
-    "closed_curve": "curve",
-    "bezier_curve": "curve",
-    "spline": "curve",
-    "zigzag": "line",
-    "unknown": "shape",
-    # Extend as you add more motif/shape computing
+    "triangle": "triangle",
+    "zigzag": "zigzag",
+    
+    # Stroke type mappings - preserve arc vs line distinction  
+    "line_stroke": "line",
+    "arc_stroke": "arc",  # Changed from "curve" to "arc" to preserve stroke type
+    "polygon_shape": "polygon",
 }
 
 # Motif categories and semantic types (for supernodes)
@@ -120,6 +130,7 @@ BASIC_LOGO_PREDICATES = {
 }
 
 # STATE-OF-THE-ART: Abstract predicates for BONGARD-LOGO style reasoning
+# Updated to handle all 5 discovered shape types: normal, circle, square, triangle, zigzag
 ABSTRACT_PREDICATES = {
     # Convexity-based predicates
     'is_convex': lambda a, b=None: _is_convex_shape(a),
@@ -133,6 +144,18 @@ ABSTRACT_PREDICATES = {
     'same_line_count': lambda a, b: _same_stroke_count(a, b, 'line'),
     'same_arc_count': lambda a, b: _same_stroke_count(a, b, 'arc'),
     'same_intersection_count': lambda a, b: _same_intersection_count(a, b),
+    
+    # Shape type predicates for discovered Bongard-LOGO types
+    'contains_normal_lines': lambda a, b=None: _contains_shape_type(a, 'normal'),
+    'contains_circles': lambda a, b=None: _contains_shape_type(a, 'circle'),
+    'contains_squares': lambda a, b=None: _contains_shape_type(a, 'square'),
+    'contains_triangles': lambda a, b=None: _contains_shape_type(a, 'triangle'),
+    'contains_zigzag': lambda a, b=None: _contains_shape_type(a, 'zigzag'),
+    
+    # Shape complexity predicates
+    'is_simple_shape': lambda a, b=None: _get_shape_complexity(a) <= 1,
+    'is_moderate_shape': lambda a, b=None: _get_shape_complexity(a) == 2,
+    'is_complex_shape': lambda a, b=None: _get_shape_complexity(a) >= 3,
     
     # Topological predicates
     'has_holes': lambda a, b=None: _has_holes(a),
@@ -285,6 +308,64 @@ def _program_complexity_similar(obj_a: dict, obj_b: dict) -> bool:
 
 def _forms_enclosure(obj_a: dict, obj_b: dict) -> bool:
     """Check if one object encloses the other"""
+    # Implementation would require spatial analysis
+    return False
+
+def _contains_shape_type(obj: dict, shape_type: str) -> bool:
+    """Check if object contains a specific shape type from the 5 discovered Bongard-LOGO types"""
+    if obj is None:
+        return False
+    
+    # Check shape_type field directly
+    obj_shape_type = obj.get('shape_type', '').lower()
+    if obj_shape_type == shape_type.lower():
+        return True
+    
+    # Check action program for shape type indicators
+    action_program = obj.get('action_program', [])
+    for action in action_program:
+        if isinstance(action, str) and shape_type.lower() in action.lower():
+            return True
+    
+    # Check semantic shapes
+    semantic_shapes = obj.get('semantic_shapes', [])
+    for shape in semantic_shapes:
+        if shape.get('type', '').lower() == shape_type.lower():
+            return True
+    
+    return False
+
+def _get_shape_complexity(obj: dict) -> int:
+    """Get shape complexity level based on discovered Bongard-LOGO complexity categories"""
+    if obj is None:
+        return 0
+    
+    # Check if complexity is already computed
+    complexity = obj.get('complexity_level')
+    if complexity is not None:
+        return complexity
+    
+    # Check shape-specific complexity
+    shape_type = obj.get('shape_type', '').lower()
+    shape_complexity_map = {
+        'normal': 1,      # Simplest - straight lines
+        'circle': 2,      # Simple geometric shape
+        'square': 2,      # Simple geometric shape  
+        'triangle': 2,    # Simple geometric shape
+        'zigzag': 3       # Most complex - irregular pattern
+    }
+    
+    if shape_type in shape_complexity_map:
+        return shape_complexity_map[shape_type]
+    
+    # Fallback: estimate complexity from action program length
+    action_program = obj.get('action_program', [])
+    if len(action_program) <= 3:
+        return 1  # Simple
+    elif len(action_program) <= 8:
+        return 2  # Moderate
+    else:
+        return 3  # Complex
     vertices_a = obj_a.get('vertices', [])
     vertices_b = obj_b.get('vertices', [])
     

@@ -8,8 +8,17 @@ with semantic LOGO-derived computation for accurate scene graph generation.
 Key Features:
 - LOGO action program parsing and vertex extraction
 - Comprehensive physics attribute computation (area, perimeter, asymmetry, etc.)
-- Enhanced geometric analysis (curvature, apex detection, orientation)
+- Enhanced geometric analysis (curvature, apex detection, orientation)  
+- Support for the 5 discovered Bongard-LOGO shape types: normal, circle, square, triangle, zigzag
 - Seamless integration with advanced scene graph techniques
+
+Shape Type Discovery Results:
+- normal: 24,107 occurrences (48.7%) - straight lines, most common
+- circle: 6,256 occurrences (12.6%) - circular shapes/arcs
+- square: 6,519 occurrences (13.2%) - square-based shapes
+- triangle: 5,837 occurrences (11.8%) - triangular shapes
+- zigzag: 6,729 occurrences (13.6%) - zigzag patterns
+Total: 49,448 action commands analyzed
 """
 
 import numpy as np
@@ -17,13 +26,51 @@ import logging
 from typing import Dict, List, Any, Tuple, Optional
 from collections import defaultdict
 
+# Discovered Bongard-LOGO shape types with properties
+BONGARD_SHAPE_TYPES = {
+    'normal': {
+        'frequency': 24107,
+        'percentage': 48.7,
+        'properties': {'is_regular': False, 'is_curved': False, 'complexity': 1}
+    },
+    'circle': {
+        'frequency': 6256, 
+        'percentage': 12.6,
+        'properties': {'is_regular': True, 'is_curved': True, 'complexity': 2}
+    },
+    'square': {
+        'frequency': 6519,
+        'percentage': 13.2, 
+        'properties': {'is_regular': True, 'is_curved': False, 'complexity': 2}
+    },
+    'triangle': {
+        'frequency': 5837,
+        'percentage': 11.8,
+        'properties': {'is_regular': True, 'is_curved': False, 'complexity': 2}
+    },
+    'zigzag': {
+        'frequency': 6729,
+        'percentage': 13.6,
+        'properties': {'is_regular': False, 'is_curved': True, 'complexity': 3}
+    }
+}
+
 class LOGOPhysicsComputation:
     """
-    Comprehensive physics computation module for LOGO mode integration
+    Comprehensive physics computation module for LOGO mode integration with 5 shape type support
     """
     
     def __init__(self):
         self.logger = logging.getLogger(__name__)
+        self.shape_type_stats = BONGARD_SHAPE_TYPES.copy()
+    
+    def get_shape_type_properties(self, shape_type: str) -> Dict[str, Any]:
+        """Get properties for one of the 5 discovered shape types"""
+        return self.shape_type_stats.get(shape_type, {
+            'frequency': 0, 
+            'percentage': 0.0,
+            'properties': {'is_regular': False, 'is_curved': False, 'complexity': 1}
+        })
     
     def process_problem_records(self, problem_id: str, problem_records: List[Dict[str, Any]], use_enhanced_features: bool = True) -> Dict[str, List[Dict[str, Any]]]:
         """
@@ -33,7 +80,8 @@ class LOGOPhysicsComputation:
 
         for idx, rec in enumerate(problem_records):
             parent_shape_id = f"{problem_id}_{idx}"
-            action_program = rec.get('action_program', [])
+            # Use flattened_actions for proper command processing
+            action_program = rec.get('flattened_actions', rec.get('action_program', []))
             
             # Common attributes for all objects in this record
             common_attrs = {
@@ -44,6 +92,9 @@ class LOGOPhysicsComputation:
                 'image_path': rec.get('image_path'), 
                 'original_record_idx': idx,
             }
+            
+            # Debug logging for categorization
+            self.logger.info(f"Processing record {idx} for {problem_id}: category='{rec.get('category')}', label='{rec.get('label')}', image_path='{rec.get('image_path')}'")
             
             if not action_program:
                 continue
@@ -91,16 +142,24 @@ class LOGOPhysicsComputation:
             start_pos_for_stroke = list(turtle_pos)
 
             if cmd_type == 'line':
+                # Scale coordinates properly - these are normalized values that need scaling
                 dx, dy = parsed_cmd['x'], parsed_cmd['y']
-                new_pos = [turtle_pos[0] + dx, turtle_pos[1] + dy]
+                
+                # Apply proper scaling factor for LOGO coordinate system
+                LOGO_SCALE_FACTOR = 100.0  # Scale up from normalized coordinates
+                dx_scaled = dx * LOGO_SCALE_FACTOR
+                dy_scaled = dy * LOGO_SCALE_FACTOR
+                
+                new_pos = [turtle_pos[0] + dx_scaled, turtle_pos[1] + dy_scaled]
                 verts = [start_pos_for_stroke, list(new_pos)]
                 length = np.linalg.norm(np.array(new_pos) - np.array(turtle_pos))
-                orientation = np.degrees(np.arctan2(dy, dx))
+                orientation = np.degrees(np.arctan2(dy_scaled, dx_scaled))
                 turtle_pos = new_pos
                 
             elif cmd_type == 'arc':
-                radius = parsed_cmd.get('radius', 1.0)
-                angle = parsed_cmd.get('angle', 0.0)
+                # Scale arc parameters properly
+                radius = parsed_cmd.get('radius', 1.0) * 50.0  # Scale radius
+                angle = parsed_cmd.get('angle', 0.0) * 360.0  # Scale angle to degrees
                 num_points = max(6, int(abs(angle) // 10))
                 verts = [start_pos_for_stroke]
                 start_angle_rad = np.radians(turtle_heading)
@@ -132,6 +191,12 @@ class LOGOPhysicsComputation:
             
             obj_id = f"{problem_id}_{record_idx}_{stroke_idx}"
             
+            # Extract shape type from parsed command for better type assignment
+            shape_type = parsed_cmd.get('shape', None)
+            
+            # CRITICAL FIX: Pass cmd_type to preserve arc vs line distinction
+            cmd_type = parsed_cmd.get('type', None)
+            
             # LOGO MODE: Calculate enhanced geometric features with LOGO physics
             base_obj = {
                 'object_id': obj_id, 
@@ -139,13 +204,15 @@ class LOGOPhysicsComputation:
                 'action_index': stroke_idx,
                 'vertices': regularized_verts, 
                 'original_vertices': verts,
-                'object_type': self._assign_object_type(regularized_verts), 
+                'object_type': self._assign_object_type(regularized_verts, shape_type, cmd_type), 
+                'shape_type': shape_type,  # Store the Bongard-LOGO shape type
                 'action_command': cmd,
                 'endpoints': [regularized_verts[0], regularized_verts[-1]], 
                 'length': length, 
                 'orientation': orientation,
                 'source': 'action_program', 
-                'is_closed': len(verts) > 2 and np.allclose(verts[0], verts[-1], atol=1e-5),
+                'is_closed': len(verts) > 2 and self._is_closed_shape(verts),
+                'is_valid': True,  # Mark as valid if we have meaningful geometry
                 **common_attrs
             }
             
@@ -160,6 +227,10 @@ class LOGOPhysicsComputation:
                     relationships.append(f"adjacent_to_{last_stroke_obj['object_id']}")
             
             enhanced_features['relationships'] = relationships
+            
+            # Debug logging for object categorization
+            self.logger.info(f"Created object {enhanced_features.get('object_id')} with category='{enhanced_features.get('category')}', label='{enhanced_features.get('label')}', image_path='{enhanced_features.get('image_path')}'")
+            
             objects.append(enhanced_features)
             last_stroke_obj = enhanced_features
         
@@ -230,55 +301,108 @@ class LOGOPhysicsComputation:
             'is_highly_curved': bool(is_highly_curved),
             'bounding_box': bbox.tolist() if hasattr(bbox, 'tolist') else list(bbox),
             'centroid': centroid.tolist() if hasattr(centroid, 'tolist') else list(centroid),
-            'compactness': float(compactness)
+            'compactness': float(compactness),
+            'is_valid': True,  # Mark as valid since we computed meaningful features
+            'geometry_reason': 'logo_physics'
         })
         
         return enhanced_obj
 
     def _parse_action_command(self, cmd: Any) -> Optional[Dict[str, Any]]:
-        """Parse LOGO action command string"""
+        """Parse LOGO action command string for all 5 discovered shape types"""
         if isinstance(cmd, dict):
             return cmd
         if not isinstance(cmd, str):
             return None
         
-        parts = cmd.split('_', 2)
+        parts = cmd.split('_')
         
-        # Handle formats like "line_normal_0.2-0.3" (3 parts) and "start_0.1-0.2" (2 parts)
-        if len(parts) == 3:
-            shape, mode, rest = parts
-        elif len(parts) == 2:
-            shape, rest = parts
-            mode = None # No mode specified
-        else:
+        # Handle different command formats based on discovered patterns
+        if len(parts) < 2:
             return None
-
-        if shape == "line" and '-' in rest:
-            try:
-                a, b = rest.split('-', 1)
-                return {'type': 'line', 'mode': mode, 'x': float(a), 'y': float(b)}
-            except (ValueError, IndexError):
-                return None
-        elif shape == "start" and '-' in rest:
-            try:
-                a, b = rest.split('-', 1)
-                return {'type': 'start', 'x': float(a), 'y': float(b)}
-            except (ValueError, IndexError):
-                return None
-        elif shape == "arc" and '-' in rest:
-            try:
-                radius, angle = rest.split('-', 1)
-                return {'type': 'arc', 'mode': mode, 'radius': float(radius), 'angle': float(angle)}
-            except (ValueError, IndexError):
-                return None
-        elif shape == "turn" and '-' in rest:
-            try:
-                angle = rest
-                return {'type': 'turn', 'mode': mode, 'angle': float(angle)}
-            except (ValueError, IndexError):
-                return None
         
-        # Extend for other commands as needed
+        command_type = parts[0]  # 'line', 'arc', 'start', 'turn'
+        
+        if command_type in ['line', 'arc']:
+            # Handle both 3-part and 4-part formats:
+            # 3-part: line_<shape>_<params> or arc_<shape>_<params> 
+            # 4-part: line_<shape>_<size>_<thickness-y> or arc_<shape>_<radius>_<angle-y>
+            if len(parts) >= 4:
+                # 4-part format: arc_normal_0.500_0.542-0.750
+                shape_type = parts[1]
+                size_or_radius = parts[2] 
+                thickness_or_angle_part = parts[3]
+                
+                # Validate shape type
+                if shape_type not in ['normal', 'circle', 'square', 'triangle', 'zigzag']:
+                    return None
+                
+                # Parse the final parameter with dash
+                if '-' in thickness_or_angle_part:
+                    try:
+                        first_param, second_param = thickness_or_angle_part.split('-', 1)
+                        
+                        if command_type == 'line':
+                            return {
+                                'type': command_type,
+                                'shape': shape_type, 
+                                'size': float(size_or_radius),
+                                'thickness': float(first_param),
+                                'x': float(size_or_radius),
+                                'y': float(first_param)
+                            }
+                        elif command_type == 'arc':
+                            return {
+                                'type': command_type,
+                                'shape': shape_type,
+                                'radius': float(size_or_radius), 
+                                'angle': float(first_param),
+                                'size': float(size_or_radius),  # For compatibility
+                                'thickness': float(first_param)  # For compatibility
+                            }
+                    except (ValueError, IndexError):
+                        return None
+                        
+            elif len(parts) >= 3:
+                # 3-part format: line_normal_0.5-45.0 or arc_normal_1.0-45.0
+                shape_type = parts[1]  # One of: normal, circle, square, triangle, zigzag
+                params = parts[2]
+                
+                # Validate shape type is one of the 5 discovered types
+                if shape_type not in ['normal', 'circle', 'square', 'triangle', 'zigzag']:
+                    return None
+                
+                # Parse parameters (format: size-thickness)
+                if '-' in params:
+                    try:
+                        size, thickness = params.split('-', 1)
+                        return {
+                            'type': command_type,
+                            'shape': shape_type, 
+                            'size': float(size),
+                            'thickness': float(thickness),
+                            'x': float(size),  # Use size as x-component for compatibility
+                            'y': float(thickness)  # Use thickness as y-component
+                        }
+                    except (ValueError, IndexError):
+                        return None
+            
+        elif command_type == "start":
+            # Format: start_x_y
+            if len(parts) >= 3:
+                try:
+                    return {'type': 'start', 'x': float(parts[1]), 'y': float(parts[2])}
+                except (ValueError, IndexError):
+                    return None
+                    
+        elif command_type == "turn":
+            # Format: turn_angle
+            if len(parts) >= 2:
+                try:
+                    return {'type': 'turn', 'angle': float(parts[1])}
+                except (ValueError, IndexError):
+                    return None
+        
         return None
 
     def _regularize_stroke_vertices(self, verts: List[List[float]], tolerance: float = 3.0) -> List[List[float]]:
@@ -298,36 +422,50 @@ class LOGOPhysicsComputation:
             
         return regularized
 
-    def _assign_object_type(self, verts: List[List[float]]) -> str:
-        """Assign object type based on vertex analysis"""
+    def _assign_object_type(self, verts: List[List[float]], shape_type: str = None, cmd_type: str = None) -> str:
+        """Assign object type based on vertex analysis and Bongard-LOGO shape types"""
         if len(verts) < 2:
             return 'point'
         elif len(verts) == 2:
             return 'line'
-        elif len(verts) > 2:
-            # Check if closed
-            if np.allclose(verts[0], verts[-1], atol=1e-5):
-                return 'polygon'
-            else:
-                # Check curvature to distinguish between line and curve
-                if len(verts) > 3:
-                    # Simple curvature check based on direction changes
-                    angles = []
-                    for i in range(1, len(verts) - 1):
-                        v1 = np.array(verts[i]) - np.array(verts[i-1])
-                        v2 = np.array(verts[i+1]) - np.array(verts[i])
-                        if np.linalg.norm(v1) > 0 and np.linalg.norm(v2) > 0:
-                            cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
-                            cos_angle = np.clip(cos_angle, -1, 1)
-                            angle = np.arccos(cos_angle)
-                            angles.append(angle)
-                    
-                    if angles and np.mean(angles) > 0.1:  # More than ~6 degrees average deviation
-                        return 'curve'
-                
-                return 'open_line'
         
+        # CRITICAL FIX: Check cmd_type first to preserve arc vs line distinction
+        if cmd_type == 'arc':
+            return 'arc'  # All arc commands should get object_type = 'arc'
+        elif cmd_type == 'line':
+            # For line commands, use shape type mapping
+            if shape_type in ['normal', 'circle', 'square', 'triangle', 'zigzag']:
+                shape_to_object = {
+                    'normal': 'line',
+                    'circle': 'polygon' if self._is_closed_shape(verts) else 'curve',
+                    'square': 'polygon',
+                    'triangle': 'polygon',
+                    'zigzag': 'curve'
+                }
+                return shape_to_object.get(shape_type, 'line')
+            return 'line'
+        
+        # Use shape type from action command if available (one of 5 discovered types)
+        if shape_type in ['normal', 'circle', 'square', 'triangle', 'zigzag']:
+            # Map shape types to object types
+            shape_to_object = {
+                'normal': 'line',  # Normal lines are straight lines
+                'circle': 'polygon' if self._is_closed_shape(verts) else 'curve',  # Circles are curved
+                'square': 'polygon',  # Squares are closed polygons
+                'triangle': 'polygon',  # Triangles are closed polygons  
+                'zigzag': 'curve'  # Zigzag patterns are curves
+            }
+            return shape_to_object.get(shape_type, 'unknown')
+        
+        # ACTION PROGRAMS ONLY: No fallback geometric analysis
+        # All object types must be derived from action commands
         return 'unknown'
+    
+    def _is_closed_shape(self, verts: List[List[float]]) -> bool:
+        """Check if shape is closed based on endpoint proximity"""
+        if len(verts) < 3:
+            return False
+        return np.allclose(verts[0], verts[-1], atol=1e-5)
 
     def _compute_bounding_box(self, verts_array: np.ndarray) -> np.ndarray:
         """Compute bounding box [min_x, min_y, max_x, max_y]"""

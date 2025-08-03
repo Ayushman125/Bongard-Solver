@@ -1,6 +1,29 @@
 import numpy as np
 from shapely.geometry import Polygon, LineString
 
+# Import stroke-specific predicates
+try:
+    from .stroke_specific_predicates import (
+        ALL_STROKE_PREDICATES, 
+        get_applicable_predicates,
+        analyze_stroke_distribution
+    )
+    from .stroke_specific_kb import stroke_kb, get_stroke_knowledge
+    STROKE_PREDICATES_AVAILABLE = True
+except ImportError:
+    print("Warning: Stroke-specific predicates not available")
+    ALL_STROKE_PREDICATES = {}
+    STROKE_PREDICATES_AVAILABLE = False
+
+# Import config predicates
+try:
+    from .config import ABSTRACT_PREDICATES as CONFIG_PREDICATES
+    CONFIG_PREDICATES_AVAILABLE = True
+except ImportError:
+    print("Warning: Config predicates not available")
+    CONFIG_PREDICATES = {}
+    CONFIG_PREDICATES_AVAILABLE = False
+
 def intersects(node_a, node_b):
     """Checks if the geometries of two nodes intersect without merely touching."""
     try:
@@ -675,39 +698,26 @@ def has_hole_distinction(node_a, node_b):
         return False
 
 def has_angle_count_pattern(node_a, node_b):
-    """Checks for specific angle count patterns (triangle vs square vs pentagon)"""
+    """Checks for specific angle count patterns - now supports only real Bongard shapes"""
     try:
-        def count_significant_angles(vertices):
-            if len(vertices) < 3:
-                return 0
-            
-            angles = []
-            n = len(vertices)
-            for i in range(n):
-                v1 = np.array(vertices[i])
-                v2 = np.array(vertices[(i + 1) % n])
-                v3 = np.array(vertices[(i + 2) % n])
-                
-                # Calculate angle at v2
-                vec1 = v1 - v2
-                vec2 = v3 - v2
-                
-                if np.linalg.norm(vec1) > 1e-6 and np.linalg.norm(vec2) > 1e-6:
-                    cos_angle = np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
-                    cos_angle = np.clip(cos_angle, -1, 1)
-                    angle = np.degrees(np.arccos(cos_angle))
-                    
-                    # Count significant angles (not near 180 degrees)
-                    if abs(angle - 180) > 30:  # Significant turn
-                        angles.append(angle)
-            
-            return len(angles)
+        # For Bongard shapes, use the direct shape type
+        shape_type_a = node_a.get('shape_type')
+        shape_type_b = node_b.get('shape_type')
         
-        angles_a = count_significant_angles(node_a.get('vertices', []))
-        angles_b = count_significant_angles(node_b.get('vertices', []))
+        # Define expected angle counts for real Bongard shapes
+        shape_angle_counts = {
+            'triangle': 3,
+            'square': 4,
+            'circle': 0,  # Smooth curve, no distinct angles
+            'normal': 0,  # Straight line, no angles
+            'zigzag': -1  # Variable number of angles
+        }
         
-        # Common patterns: 3 (triangle), 4 (square), 5 (pentagon), 6 (hexagon)
-        return angles_a != angles_b and min(angles_a, angles_b) >= 3
+        angles_a = shape_angle_counts.get(shape_type_a, -1)
+        angles_b = shape_angle_counts.get(shape_type_b, -1)
+        
+        # Return True if shapes have different angle patterns
+        return angles_a != angles_b and angles_a >= 0 and angles_b >= 0
     except Exception:
         return False
 
@@ -1018,18 +1028,99 @@ def exhibits_rule_compositionality(node_a, node_b, rule_context=None):
     except Exception:
         return False
 
-# BONGARD-SPECIFIC SEMANTIC PREDICATES
+# BONGARD-SPECIFIC SEMANTIC PREDICATES - Updated for 5 discovered shape types
 def semantic_contains_triangle(node_a, node_b):
     """Checks if the node semantically contains triangular elements."""
-    return node_a.get('semantic_features', {}).get('has_triangles', False)
+    if node_a is None:
+        return False
+    
+    # Check for triangle shape type from discovered types
+    shape_type = node_a.get('shape_type', '').lower()
+    if shape_type == 'triangle':
+        return True
+    
+    # Check action program for triangle indicators
+    action_program = node_a.get('action_program', [])
+    for action in action_program:
+        if isinstance(action, str) and 'triangle' in action.lower():
+            return True
+    
+    # ACTION PROGRAMS ONLY: No fallback to semantic features
+    return False
 
 def semantic_contains_square(node_a, node_b):
     """Checks if the node semantically contains square/rectangular elements."""
-    return node_a.get('semantic_features', {}).get('has_squares', False)
+    if node_a is None:
+        return False
+    
+    # Check for square shape type from discovered types
+    shape_type = node_a.get('shape_type', '').lower()
+    if shape_type == 'square':
+        return True
+    
+    # Check action program for square indicators
+    action_program = node_a.get('action_program', [])
+    for action in action_program:
+        if isinstance(action, str) and 'square' in action.lower():
+            return True
+    
+    # ACTION PROGRAMS ONLY: No fallback to semantic features
+    return False
 
 def semantic_contains_circle(node_a, node_b):
     """Checks if the node semantically contains circular elements."""
+    if node_a is None:
+        return False
+    
+    # Check for circle shape type from discovered types
+    shape_type = node_a.get('shape_type', '').lower()
+    if shape_type == 'circle':
+        return True
+    
+    # Check action program for circle indicators
+    action_program = node_a.get('action_program', [])
+    for action in action_program:
+        if isinstance(action, str) and ('circle' in action.lower() or 'arc' in action.lower()):
+            return True
+    
+    # Check semantic features (fallback)
     return node_a.get('semantic_features', {}).get('has_circles', False)
+
+def semantic_contains_normal_line(node_a, node_b):
+    """Checks if the node semantically contains normal line elements (most common type)."""
+    if node_a is None:
+        return False
+    
+    # Check for normal shape type from discovered types
+    shape_type = node_a.get('shape_type', '').lower()
+    if shape_type == 'normal':
+        return True
+    
+    # Check action program for normal line indicators
+    action_program = node_a.get('action_program', [])
+    for action in action_program:
+        if isinstance(action, str) and 'normal' in action.lower():
+            return True
+    
+    return False
+
+def semantic_contains_zigzag(node_a, node_b):
+    """Checks if the node semantically contains zigzag elements."""
+    if node_a is None:
+        return False
+    
+    # Check for zigzag shape type from discovered types
+    shape_type = node_a.get('shape_type', '').lower()
+    if shape_type == 'zigzag':
+        return True
+    
+    # Check action program for zigzag indicators
+    action_program = node_a.get('action_program', [])
+    for action in action_program:
+        if isinstance(action, str) and 'zigzag' in action.lower():
+            return True
+    
+    return False
 
 def semantic_three_sided(node_a, node_b):
     """Checks if the node represents a three-sided figure."""
@@ -1084,43 +1175,65 @@ def is_square(node_a, node_b=None):
     except:
         return False
 
-def is_rectangle(node_a, node_b=None):
-    """Checks if shape is a rectangle based on comprehensive features."""
+# --- Real Bongard Shape Detection Predicates (5 discovered types only) ---
+
+def is_normal(node_a, node_b=None):
+    """Checks if shape is a normal line based on Bongard-LOGO shape types."""
     try:
-        shape_type = node_a.get('semantic_features', {}).get('primary_shape_type')
-        return shape_type == 'rectangle'
+        shape_type = node_a.get('shape_type')
+        return shape_type == 'normal'
     except:
         return False
 
-def is_pentagon(node_a, node_b=None):
-    """Checks if shape is a pentagon based on comprehensive features."""
+def is_circle(node_a, node_b=None):
+    """Checks if shape is a circle based on Bongard-LOGO shape types."""
     try:
-        shape_type = node_a.get('semantic_features', {}).get('primary_shape_type')
-        return shape_type == 'pentagon'
+        shape_type = node_a.get('shape_type')
+        return shape_type == 'circle'
     except:
         return False
 
-def is_hexagon(node_a, node_b=None):
-    """Checks if shape is a hexagon based on comprehensive features."""
+def is_square(node_a, node_b=None):
+    """Checks if shape is a square based on Bongard-LOGO shape types."""
     try:
-        shape_type = node_a.get('semantic_features', {}).get('primary_shape_type')
-        return shape_type == 'hexagon'
+        shape_type = node_a.get('shape_type')
+        return shape_type == 'square'
     except:
         return False
 
-def is_octagon(node_a, node_b=None):
-    """Checks if shape is an octagon based on comprehensive features."""
+def is_triangle(node_a, node_b=None):
+    """Checks if shape is a triangle based on Bongard-LOGO shape types."""
     try:
-        shape_type = node_a.get('semantic_features', {}).get('primary_shape_type')
-        return shape_type == 'octagon'
+        shape_type = node_a.get('shape_type')
+        return shape_type == 'triangle'
     except:
         return False
 
-def is_line(node_a, node_b=None):
-    """Checks if shape is a line based on comprehensive features."""
+def is_zigzag(node_a, node_b=None):
+    """Checks if shape is a zigzag pattern based on Bongard-LOGO shape types."""
     try:
-        shape_type = node_a.get('semantic_features', {}).get('primary_shape_type')
-        return shape_type == 'line'
+        shape_type = node_a.get('shape_type')
+        return shape_type == 'zigzag'
+    except:
+        return False
+
+# --- Arc vs Line stroke type predicates ---
+
+def is_arc_stroke(node_a, node_b=None):
+    """Checks if shape uses arc strokes."""
+    try:
+        stroke_type = node_a.get('stroke_type')
+        curvature_type = node_a.get('curvature_type')
+        return stroke_type == 'arc' or curvature_type == 'arc'
+    except:
+        return False
+
+def is_line_stroke(node_a, node_b=None):
+    """Checks if shape uses line strokes."""
+    try:
+        stroke_type = node_a.get('stroke_type')
+        curvature_type = node_a.get('curvature_type')
+        return stroke_type == 'line' or curvature_type == 'line'
     except:
         return False
 
@@ -1455,21 +1568,16 @@ def is_bottom_positioned(node_a, node_b=None):
 
 # Registry of advanced predicates to be applied to higher-level objects
 ADVANCED_PREDICATE_REGISTRY = {
-    # COMPREHENSIVE BONGARD SHAPE DETECTION PREDICATES
+    # REAL BONGARD SHAPE DETECTION PREDICATES (5 discovered types only)
+    'is_normal': is_normal,
     'is_circle': is_circle,
     'is_triangle': is_triangle,
     'is_square': is_square,
-    'is_rectangle': is_rectangle,
-    'is_pentagon': is_pentagon,
-    'is_hexagon': is_hexagon,
-    'is_octagon': is_octagon,
-    'is_line': is_line,
-    'is_arc': is_arc,
-    'is_star': is_star,
-    'is_cross': is_cross,
-    'is_ellipse': is_ellipse,
-    'is_diamond': is_diamond,
-    'is_arrow': is_arrow,
+    'is_zigzag': is_zigzag,
+    
+    # STROKE TYPE DETECTION PREDICATES
+    'is_arc_stroke': is_arc_stroke,
+    'is_line_stroke': is_line_stroke,
     
     # COMPREHENSIVE SYMMETRY PREDICATES
     'has_vertical_symmetry': has_vertical_symmetry,
@@ -1592,3 +1700,46 @@ ADVANCED_PREDICATE_REGISTRY = {
     'semantic_simple_shape': semantic_simple_shape,
     'semantic_complex_shape': semantic_complex_shape,
 }
+
+# Add stroke-specific predicates if available
+if STROKE_PREDICATES_AVAILABLE:
+    ADVANCED_PREDICATE_REGISTRY.update(ALL_STROKE_PREDICATES)
+    print(f"Added {len(ALL_STROKE_PREDICATES)} stroke-specific predicates to registry")
+
+def get_stroke_aware_predicates(node1, node2=None):
+    """Get all predicates applicable to nodes, including stroke-specific ones"""
+    predicates = dict(ADVANCED_PREDICATE_REGISTRY)
+    
+    if STROKE_PREDICATES_AVAILABLE:
+        # Add stroke-specific predicates based on node types
+        applicable_stroke_predicates = get_applicable_predicates(node1, node2)
+        predicates.update(applicable_stroke_predicates)
+    
+    return predicates
+
+def evaluate_with_stroke_awareness(node1, node2, predicate_name):
+    """Evaluate predicate with stroke-type awareness"""
+    if predicate_name in ALL_STROKE_PREDICATES and STROKE_PREDICATES_AVAILABLE:
+        # Use stroke-specific predicate
+        predicate_func = ALL_STROKE_PREDICATES[predicate_name]
+        return predicate_func(node1, node2)
+    elif predicate_name in ADVANCED_PREDICATE_REGISTRY:
+        # Use standard predicate
+        predicate_func = ADVANCED_PREDICATE_REGISTRY[predicate_name]
+        return predicate_func(node1, node2)
+    else:
+        return False
+
+def get_stroke_type_summary(scene_graph):
+    """Get summary of stroke types in scene graph for debugging"""
+    if STROKE_PREDICATES_AVAILABLE:
+        return analyze_stroke_distribution(scene_graph)
+    else:
+        return {"error": "Stroke analysis not available"}
+
+def get_stroke_specific_knowledge(stroke_type):
+    """Get commonsense knowledge for specific stroke type"""
+    if STROKE_PREDICATES_AVAILABLE:
+        return get_stroke_knowledge(stroke_type)
+    else:
+        return {}

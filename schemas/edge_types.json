@@ -52,5 +52,15 @@
   {"predicate": "forms_x_junction", "description": "Objects intersect to form an X-junction (crossing).", "source": "junction"},
   {"predicate": "forms_bridge_arc", "description": "Objects form a bridge-like arc structure.", "source": "pattern"},
   {"predicate": "has_irregular_shape", "description": "Shape has irregular, non-geometric form.", "source": "pattern"},
-  {"predicate": "exhibits_rotational_symmetry", "description": "Shape exhibits rotational symmetry.", "source": "pattern"}
+  {"predicate": "exhibits_rotational_symmetry", "description": "Shape exhibits rotational symmetry.", "source": "pattern"},
+  
+  {"predicate": "contains_normal_shapes", "description": "Contains shapes of normal type (straight lines, most common Bongard-LOGO type).", "source": "bongard_types"},
+  {"predicate": "contains_circle_shapes", "description": "Contains shapes of circle type (circular shapes/arcs, Bongard-LOGO type).", "source": "bongard_types"},
+  {"predicate": "contains_square_shapes", "description": "Contains shapes of square type (square-based shapes, Bongard-LOGO type).", "source": "bongard_types"},
+  {"predicate": "contains_triangle_shapes", "description": "Contains shapes of triangle type (triangular shapes, Bongard-LOGO type).", "source": "bongard_types"},
+  {"predicate": "contains_zigzag_shapes", "description": "Contains shapes of zigzag type (zigzag patterns, Bongard-LOGO type).", "source": "bongard_types"},
+  {"predicate": "same_bongard_shape_type", "description": "Both objects belong to the same discovered Bongard-LOGO shape type.", "source": "bongard_types"},
+  {"predicate": "different_bongard_shape_type", "description": "Objects belong to different discovered Bongard-LOGO shape types.", "source": "bongard_types"},
+  {"predicate": "bongard_shape_complexity_similar", "description": "Objects have similar complexity levels among the 5 discovered Bongard-LOGO shape types.", "source": "bongard_types"},
+  {"predicate": "bongard_shape_frequency_pattern", "description": "Objects follow frequency patterns of the 5 discovered Bongard-LOGO shape types.", "source": "bongard_types"}
 ]
