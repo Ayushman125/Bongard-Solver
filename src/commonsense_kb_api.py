@@ -45,10 +45,13 @@ class ConceptNetAPI:
             # CRITICAL: Enhanced mappings for 5 discovered Bongard-LOGO shape types
             # Map to more diverse ConceptNet concepts for richer relationships
             "normal": "line",  # Keep line mapping for normal
+            "line": "line",    # Direct line mapping
+            "arc": "arc",      # Direct arc mapping
             "circle": "circle",
             "square": "square", 
             "triangle": "triangle",
             "zigzag": "pattern",  # Map zigzag to pattern for more semantic richness
+            "motif": "pattern", # Map motif to pattern
             
             # Enhanced mapping for 5 discovered Bongard-LOGO shape types
             "bongard_normal": "line",

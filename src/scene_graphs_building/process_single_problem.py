@@ -1621,40 +1621,68 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                     kb_concept = None
                     normalized_label = None
                     
-                    # Priority 1: Use discovered Bongard-LOGO shape types from shape_type
-                    if shape_type and shape_type in ['normal', 'circle', 'square', 'triangle', 'zigzag']:
-                        kb_concept = shape_type
-                        normalized_label = shape_type
-                        logging.info(f"[process_single_problem kb_concept] Node {node_id}: Using shape_type '{shape_type}' as kb_concept")
-                    
-                    # Priority 2: Use discovered Bongard-LOGO shape types from object_type
-                    elif object_type and object_type in ['normal', 'circle', 'square', 'triangle', 'zigzag']:
-                        kb_concept = object_type
-                        normalized_label = object_type
-                        logging.info(f"[process_single_problem kb_concept] Node {node_id}: Using object_type '{object_type}' as kb_concept")
-                    
-                    # Priority 3: Use action program derived types (arc, line)
-                    elif object_type and object_type in ['arc', 'line']:
-                        if object_type == 'arc':
-                            kb_concept = 'arc'  # Map arc to arc concept
-                            normalized_label = 'arc'
-                        else:  # line
-                            kb_concept = 'line'  # Map line to line concept  
-                            normalized_label = 'line'
-                        logging.info(f"[process_single_problem kb_concept] Node {node_id}: Mapping object_type '{object_type}' to '{kb_concept}'")
+                    # CRITICAL FIX: Stroke-specific KB concept mapping
+                    # Combine object_type and shape_type for proper ConceptNet differentiation
+                    if object_type and shape_type:
+                        # Line objects with different shape types
+                        if object_type == 'line':
+                            if shape_type == 'normal':
+                                kb_concept = 'line'
+                                normalized_label = 'line'
+                            elif shape_type == 'circle':
+                                kb_concept = 'circle'
+                                normalized_label = 'circle'
+                            elif shape_type in ['square', 'triangle', 'zigzag']:
+                                kb_concept = shape_type
+                                normalized_label = shape_type
+                            else:
+                                kb_concept = 'line'  # Default for unknown line types
+                                normalized_label = 'line'
+                            logging.info(f"[process_single_problem kb_concept] Node {node_id}: Line object with shape_type '{shape_type}' -> kb_concept '{kb_concept}'")
                         
-                    # REMOVED: No more open_curve, quarter_circle, etc. mappings
-                    # All object types come from action programs only
+                        # Arc objects with different shape types  
+                        elif object_type == 'arc':
+                            if shape_type == 'normal':
+                                kb_concept = 'arc'
+                                normalized_label = 'arc'
+                            elif shape_type == 'circle':
+                                kb_concept = 'circle'
+                                normalized_label = 'circle'
+                            elif shape_type in ['square', 'triangle', 'zigzag']:
+                                kb_concept = shape_type
+                                normalized_label = shape_type
+                            else:
+                                kb_concept = 'arc'  # Default for unknown arc types
+                                normalized_label = 'arc'
+                            logging.info(f"[process_single_problem kb_concept] Node {node_id}: Arc object with shape_type '{shape_type}' -> kb_concept '{kb_concept}'")
                         
+                        # Pure shape types without object_type context
+                        elif shape_type in ['circle', 'square', 'triangle', 'zigzag']:
+                            kb_concept = shape_type
+                            normalized_label = shape_type
+                            logging.info(f"[process_single_problem kb_concept] Node {node_id}: Pure shape_type '{shape_type}' -> kb_concept '{kb_concept}'")
+                        
+                        # Object type without specific shape_type
+                        elif object_type in ['circle', 'square', 'triangle', 'zigzag']:
+                            kb_concept = object_type
+                            normalized_label = object_type
+                            logging.info(f"[process_single_problem kb_concept] Node {node_id}: Object_type '{object_type}' -> kb_concept '{kb_concept}'")
+                        
+                        else:
+                            # Fall back to object_type if available
+                            kb_concept = object_type
+                            normalized_label = object_type
+                            logging.info(f"[process_single_problem kb_concept] Node {node_id}: Fallback object_type '{object_type}' -> kb_concept '{kb_concept}'")
+                    # Legacy fallback mappings for other object types
                     elif object_type and object_type in ['segment', 'ray']:
-                        kb_concept = 'normal'  # Map lines to normal (most common type)
-                        normalized_label = 'normal'
-                        logging.info(f"[process_single_problem kb_concept] Node {node_id}: Mapping object_type '{object_type}' to 'normal'")
+                        kb_concept = 'line'  # Map line segments to line concept
+                        normalized_label = 'line'
+                        logging.info(f"[process_single_problem kb_concept] Node {node_id}: Mapping legacy object_type '{object_type}' to 'line'")
                         
                     elif object_type and object_type in ['polygon', 'quadrilateral']:
-                        kb_concept = 'square'  # Map polygons to square (closest regular shape)
-                        normalized_label = 'square'
-                        logging.info(f"[process_single_problem kb_concept] Node {node_id}: Mapping object_type '{object_type}' to 'square'")
+                        kb_concept = 'polygon'  # Map polygons to polygon concept
+                        normalized_label = 'polygon'
+                        logging.info(f"[process_single_problem kb_concept] Node {node_id}: Mapping object_type '{object_type}' to 'polygon'")
                         
                     elif object_type and object_type in ['motif', 'cluster', 'group']:
                         kb_concept = 'pattern'  # Map motifs to pattern concept
@@ -1665,7 +1693,7 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                         # Final fallback: mark as unmapped but continue processing
                         kb_concept = None
                         normalized_label = None
-                        logging.info(f"[process_single_problem kb_concept] Node {node_id}: Skipping - no mapping available (object_type='{object_type}', shape_type='{shape_type}')")
+                        logging.info(f"[process_single_problem kb_concept] Node {node_id}: No mapping available (object_type='{object_type}', shape_type='{shape_type}')")
                     
                     # Update node data only if we have a valid kb_concept
                     if kb_concept is not None:
