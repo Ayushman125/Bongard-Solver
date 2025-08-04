@@ -72,19 +72,22 @@ class DataLoaderWrapper:
         return result
 
 class ActionMaskGenerator:
-    """Generates synthetic masks from action programs."""
+    """Generates synthetic masks from action programs with corrected coordinate handling."""
     
     def __init__(self, image_size=(64, 64)):
         self.image_size = image_size
+        # CRITICAL FIX: Use the corrected UnifiedActionParser with proper coordinate system
         self.action_parser = UnifiedActionParser()
+        logging.debug(f"ActionMaskGenerator: Initialized with image_size={image_size}")
+        logging.debug(f"ActionMaskGenerator: Parser scale_factor={self.action_parser.scale_factor}")
     
     def generate_mask_from_actions(self, action_commands: List[str]) -> np.ndarray:
-        """Generate a binary mask from action commands."""
+        """Generate a binary mask from action commands with corrected coordinate handling."""
         try:
             logging.debug(f"ActionMaskGenerator: Processing {len(action_commands)} action commands")
             logging.debug(f"ActionMaskGenerator: Commands preview: {action_commands[:3] if action_commands else 'Empty'}")
             
-            # Parse the action commands using the UnifiedActionParser
+            # Parse the action commands using the corrected UnifiedActionParser
             parsed_program = self.action_parser._parse_single_image(
                 action_commands, 
                 image_id="temp", 
@@ -107,7 +110,7 @@ class ActionMaskGenerator:
                         logging.debug(f"ActionMaskGenerator: Vertex ranges - X: [{min(x_coords):.1f}, {max(x_coords):.1f}], "
                                      f"Y: [{min(y_coords):.1f}, {max(y_coords):.1f}]")
                 
-                # Use the vertices from the parsed program
+                # CRITICAL FIX: Use the high-quality rendering from the corrected parser
                 mask = self._render_vertices_to_mask(parsed_program.vertices)
             else:
                 logging.warning("ActionMaskGenerator: No vertices in parsed program, using fallback")
@@ -127,41 +130,79 @@ class ActionMaskGenerator:
             return self._generate_fallback_mask()
     
     def _render_vertices_to_mask(self, vertices: List[Tuple[float, float]]) -> np.ndarray:
-        """Render parsed vertices to a binary mask. Transform from centered coordinates to pixel space."""
+        """
+        Render parsed vertices to a binary mask with CORRECTED coordinate transformation.
+        Uses the same high-quality rendering as the fixed logo_parser.
+        """
         mask = np.zeros(self.image_size, dtype=np.uint8)
         try:
             if len(vertices) < 2:
                 return mask
             
-            # Transform vertices from centered coordinate system to pixel space
-            # The parser uses a centered coordinate system where (0,0) is at the center
-            # We need to transform to pixel coordinates (0,0) at top-left
-            center_x = self.image_size[1] // 2  # 32 for 64x64 image
-            center_y = self.image_size[0] // 2  # 32 for 64x64 image
+            # CRITICAL FIX: Use the same rendering method as the corrected parser
+            # This ensures consistency between parsing and augmentation
+            mask = self.action_parser._render_vertices_to_image(vertices, self.image_size)
             
-            points = []
-            for vertex in vertices:
-                # Transform from centered coordinates to pixel coordinates
-                pixel_x = center_x + vertex[0]
-                pixel_y = center_y - vertex[1]  # Flip Y axis (turtle Y+ is up, pixel Y+ is down)
-                
-                # Round to integers and clamp to valid range
-                x = int(round(pixel_x))
-                y = int(round(pixel_y))
-                x = max(0, min(self.image_size[1] - 1, x))
-                y = max(0, min(self.image_size[0] - 1, y))
-                points.append([x, y])
+            logging.debug(f"Final mask: {np.count_nonzero(mask)}/{mask.size} pixels ({100*np.count_nonzero(mask)/mask.size:.1f}%)")
             
-            logging.debug(f"Coordinate transformation: vertices {vertices[:3]}... -> pixels {points[:3]}...")
-            
-            if len(points) > 2:
-                points_array = np.array(points, dtype=np.int32)
-                cv2.fillPoly(mask, [points_array], 255)
-            else:
-                for i in range(len(points) - 1):
-                    cv2.line(mask, tuple(points[i]), tuple(points[i+1]), 255, 2)
         except Exception as e:
             logging.warning(f"Failed to render vertices to mask: {e}")
+            import traceback
+            logging.debug(f"Full traceback: {traceback.format_exc()}")
+            
+            # Fallback to manual rendering if parser method fails
+            mask = self._manual_render_fallback(vertices)
+        
+        return mask
+    
+    def _manual_render_fallback(self, vertices: List[Tuple[float, float]]) -> np.ndarray:
+        """
+        Fallback manual rendering method with corrected coordinate transformation.
+        """
+        mask = np.zeros(self.image_size, dtype=np.uint8)
+        
+        if len(vertices) < 2:
+            return mask
+        
+        # Create high-resolution canvas for anti-aliasing
+        scale_factor = 4  # 4x supersampling for anti-aliasing
+        high_res_size = (self.image_size[0] * scale_factor, self.image_size[1] * scale_factor)
+        high_res_mask = np.zeros(high_res_size, dtype=np.uint8)
+        
+        # CRITICAL FIX: Use the same coordinate transformation as the parser
+        center_x = self.image_size[1] // 2  # 32 for 64x64 image
+        center_y = self.image_size[0] // 2  # 32 for 64x64 image
+        
+        points = []
+        for vertex in vertices:
+            if len(vertex) >= 2 and isinstance(vertex[0], (int, float)) and isinstance(vertex[1], (int, float)):
+                # CORRECTED: Transform from world coordinates to canvas coordinates
+                # Turtle coordinates are centered at (0,0), canvas coordinates start at top-left
+                pixel_x = (vertex[0] + center_x) * scale_factor  # Center and scale
+                pixel_y = (vertex[1] + center_y) * scale_factor  # Center and scale (no Y flip needed)
+                
+                # Clamp to valid range
+                pixel_x = max(0, min(high_res_size[1] - 1, int(round(pixel_x))))
+                pixel_y = max(0, min(high_res_size[0] - 1, int(round(pixel_y))))
+                points.append([pixel_x, pixel_y])
+        
+        logging.debug(f"Fallback coordinate transformation: {len(vertices)} vertices -> {len(points)} valid points")
+        
+        # Render at high resolution with proper thickness
+        if len(points) >= 2:
+            points_array = np.array(points, dtype=np.int32)
+            cv2.polylines(high_res_mask, [points_array], False, 255, thickness=2*scale_factor, lineType=cv2.LINE_AA)
+            
+            # Draw vertices as small circles for better connectivity
+            for point in points:
+                cv2.circle(high_res_mask, tuple(point), scale_factor, 255, -1)
+        
+        # Downsample with anti-aliasing to target resolution
+        mask = cv2.resize(high_res_mask, self.image_size, interpolation=cv2.INTER_AREA)
+        
+        # Apply threshold to create clean binary image
+        _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
+        
         return mask
     
     def _render_simple_commands_to_mask(self, action_commands: List[str]) -> np.ndarray:

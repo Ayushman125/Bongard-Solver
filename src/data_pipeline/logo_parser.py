@@ -13,6 +13,7 @@ import json
 import logging
 import math
 import numpy as np
+import cv2  # Added for high-quality rendering
 from typing import List, Dict, Tuple, Optional, Any
 from dataclasses import dataclass
 from enum import Enum
@@ -75,18 +76,25 @@ class UnifiedActionParser:
     """
     
     def __init__(self):
-        self.turtle_x = 0.0
-        self.turtle_y = 0.0
+        # CRITICAL FIX: Start turtle at canvas center for proper positioning
+        self.canvas_size = 64
+        self.canvas_center = self.canvas_size // 2  # 32 for 64x64
+        self.turtle_x = 0.0  # Will be centered in canvas coordinates during rendering
+        self.turtle_y = 0.0  # Will be centered in canvas coordinates during rendering
         self.turtle_heading = 0.0  # degrees
-        self.scale_factor = 32.0  # Convert normalized coordinates to pixel space (64x64 image)
+        
+        # CRITICAL FIX: Corrected scale factor for proper 64x64 image rendering
+        # Bongard-LOGO uses normalized [0,1] coordinates, scale to ~25 for good visibility
+        self.scale_factor = 25.0  # Optimized for 64x64 images with proper margins
         
         # Enhanced precision settings
         self.high_precision_mode = True
         self.connectivity_tolerance = 0.1  # For detecting stroke connections
         self.adaptive_segmentation = True  # Use adaptive vertex density
         
-        logging.debug(f"PARSER INIT: Enhanced UnifiedActionParser initialized with scale_factor={self.scale_factor}")
-        logging.debug(f"PARSER INIT: High precision mode: {self.high_precision_mode}, adaptive segmentation: {self.adaptive_segmentation}")
+        logging.debug(f"PARSER INIT: CORRECTED UnifiedActionParser initialized with scale_factor={self.scale_factor}")
+        logging.debug(f"PARSER INIT: Canvas center: {self.canvas_center}, High precision mode: {self.high_precision_mode}")
+        logging.debug(f"PARSER INIT: Turtle starts at world origin (0,0), will be centered during rendering")
         
     def parse_action_file(self, json_file_path: str) -> Dict[str, List[ImageProgram]]:
         """
@@ -281,16 +289,16 @@ class UnifiedActionParser:
     
     def _parse_stroke_command(self, command: str) -> Optional[StrokeCommand]:
         """
-        Parse a single stroke command string.
+        Parse a single stroke command string with corrected parameter interpretation.
         Handles all expected formats robustly and logs parsing failures.
         """
         if not isinstance(command, str):
-            print(f"[PARSE ERROR] Command not a string: {command}")
+            logging.warning(f"[PARSE ERROR] Command not a string: {command}")
             return None
 
         parts = command.split('_')
         if len(parts) < 3:
-            print(f"[PARSE ERROR] Not enough parts: {command}")
+            logging.warning(f"[PARSE ERROR] Not enough parts: {command}")
             return None
 
         stroke_type_str = parts[0]
@@ -299,60 +307,69 @@ class UnifiedActionParser:
         elif stroke_type_str == 'arc':
             stroke_type = StrokeType.ARC
         else:
-            print(f"[PARSE ERROR] Unknown stroke type: {command}")
+            logging.warning(f"[PARSE ERROR] Unknown stroke type: {command}")
             return None
 
         shape_modifier_str = parts[1]
         try:
             shape_modifier = ShapeModifier(shape_modifier_str)
         except ValueError:
-            print(f"[PARSE ERROR] Unknown shape modifier: {command}")
+            logging.warning(f"[PARSE ERROR] Unknown shape modifier: {command}")
             shape_modifier = ShapeModifier.UNKNOWN
 
         parameters = {}
 
         if stroke_type == StrokeType.LINE:
             # Format: line_shape_param1-param2
+            # param1 = length (normalized [0,1]), param2 = angle (normalized [0,1])
             if len(parts) >= 3 and '-' in parts[2]:
                 try:
                     param1, param2 = parts[2].split('-', 1)
                     parameters = {
-                        'length': float(param1),
-                        'angle': float(param2)
+                        'length': float(param1),  # Normalized length [0,1]
+                        'angle': float(param2)    # Normalized angle [0,1] -> [0,2π] radians
                     }
                 except ValueError:
-                    print(f"[PARSE ERROR] Line param parse failed: {command}")
+                    logging.warning(f"[PARSE ERROR] Line param parse failed: {command}")
                     return None
             else:
-                print(f"[PARSE ERROR] Line format unexpected: {command}")
+                logging.warning(f"[PARSE ERROR] Line format unexpected: {command}")
                 return None
 
         elif stroke_type == StrokeType.ARC:
-            # Format: arc_shape_radius_span_angle-end_angle
-            # Example: "arc_normal_0.500_0.542-0.167"
-            param_section = '_'.join(parts[2:])
+            # CORRECTED Format: arc_shape_radius_span_angle-end_angle
+            # All parameters are normalized [0,1]
             try:
-                # Expect: radius_span-end
-                underscore_parts = param_section.split('_', 1)
-                if len(underscore_parts) != 2:
-                    print(f"[PARSE ERROR] Arc missing underscore: {command}")
-                    print(f"[DIAGNOSTIC] Failed arc command: {command}")
+                # Join parts 2 onwards to handle multiple underscores correctly
+                param_section = '_'.join(parts[2:])
+                
+                # CRITICAL FIX: Split by underscore first to separate radius from span-end part
+                underscore_split = param_section.split('_')
+                if len(underscore_split) < 2:
+                    logging.warning(f"[PARSE ERROR] Arc missing underscore separation: {command}")
                     return None
-                radius = float(underscore_parts[0])
-                span_end = underscore_parts[1]
-                if '-' not in span_end:
-                    print(f"[PARSE ERROR] Arc missing dash: {command}")
-                    print(f"[DIAGNOSTIC] Failed arc command: {command}")
+                    
+                radius = float(underscore_split[0])  # Normalized radius [0,1]
+                
+                # CRITICAL FIX: Handle remaining parts that may contain underscores and dashes
+                span_end_part = '_'.join(underscore_split[1:])  # Join remaining parts
+                
+                # Now split by dash to get span and end angles
+                if '-' not in span_end_part:
+                    logging.warning(f"[PARSE ERROR] Arc missing dash separation: {command}")
                     return None
-                span_str, end_str = span_end.split('-', 1)
+                    
+                span_str, end_str = span_end_part.split('-', 1)
                 parameters = {
-                    'radius': radius,
-                    'span_angle': float(span_str),
-                    'end_angle': float(end_str)
+                    'radius': radius,                    # Normalized radius [0,1]
+                    'span_angle': float(span_str),       # Normalized span [0,1] -> [0,2π] radians
+                    'end_angle': float(end_str)          # Normalized end [0,1] -> [0,2π] radians
                 }
+                
+                logging.debug(f"[PARSE SUCCESS] Arc parsed: radius={radius:.3f}, span={float(span_str):.3f}, end={float(end_str):.3f}")
+                
             except Exception as e:
-                print(f"[PARSE ERROR] Arc param parse failed: {command} ({e})")
-                print(f"[DIAGNOSTIC] Failed arc command: {command}")
+                logging.warning(f"[PARSE ERROR] Arc param parse failed: {command} ({e})")
                 return None
 
         return StrokeCommand(
@@ -401,27 +418,28 @@ class UnifiedActionParser:
     
     def _execute_line_stroke(self, stroke: StrokeCommand) -> List[Tuple[float, float]]:
         """
-        Execute a line stroke command with enhanced precision and detailed shape modifiers.
+        Execute a line stroke command with corrected coordinate system and parameter interpretation.
         Generates high-quality geometric patterns with accurate angles and smooth connections.
         """
-        length = stroke.parameters.get('length', 1.0) * self.scale_factor
-        angle_param = stroke.parameters.get('angle', 0.0)  # Keep original range (likely 0-1)
+        # Extract normalized parameters [0,1]
+        length_norm = stroke.parameters.get('length', 1.0)
+        angle_norm = stroke.parameters.get('angle', 0.0)
         
-        logging.debug(f"LINE EXEC: Enhanced processing - length: {stroke.parameters.get('length', 1.0)}, angle: {angle_param}")
-        logging.debug(f"LINE EXEC: Scaled length: {length}, scale_factor: {self.scale_factor}")
+        # Convert to actual values
+        length = length_norm * self.scale_factor  # Scale to canvas size
+        angle_rad = angle_norm * 2 * math.pi      # Convert [0,1] to [0,2π] radians
         
-        # Convert normalized angle to radians with higher precision
-        angle_rad = angle_param * 2 * math.pi
+        logging.debug(f"LINE EXEC: Corrected processing - length_norm: {length_norm:.3f}, angle_norm: {angle_norm:.3f}")
+        logging.debug(f"LINE EXEC: Converted - length: {length:.3f}, angle_rad: {angle_rad:.3f} ({math.degrees(angle_rad):.1f}°)")
+        
+        # Calculate movement vector
         dx = length * math.cos(angle_rad)
         dy = length * math.sin(angle_rad)
-        
-        logging.debug(f"LINE EXEC: Precise angle conversion - param: {angle_param} -> radians: {angle_rad:.6f} -> degrees: {math.degrees(angle_rad):.3f}")
-        logging.debug(f"LINE EXEC: Movement vector - dx: {dx:.6f}, dy: {dy:.6f}")
         
         end_x = self.turtle_x + dx
         end_y = self.turtle_y + dy
         
-        logging.debug(f"LINE EXEC: End position calculated - ({end_x:.6f}, {end_y:.6f})")
+        logging.debug(f"LINE EXEC: Movement from ({self.turtle_x:.3f}, {self.turtle_y:.3f}) to ({end_x:.3f}, {end_y:.3f})")
         
         # Generate enhanced vertices with high-quality shape modifiers
         vertices = self._generate_enhanced_line_vertices(
@@ -430,144 +448,119 @@ class UnifiedActionParser:
             stroke.shape_modifier
         )
         
-        logging.debug(f"LINE EXEC: Generated {len(vertices)} enhanced vertices with modifier '{stroke.shape_modifier}': {vertices}")
+        logging.debug(f"LINE EXEC: Generated {len(vertices)} enhanced vertices")
         
-        # Update turtle position (heading follows the movement direction for better continuity)
+        # Update turtle position and heading
         self.turtle_x = end_x
         self.turtle_y = end_y
-        self.turtle_heading = angle_param * 360  # Convert to degrees for heading
+        self.turtle_heading = math.degrees(angle_rad)  # Store heading in degrees
         
         return vertices
     
     def _execute_arc_stroke(self, stroke: StrokeCommand) -> List[Tuple[float, float]]:
         """
-        Execute an arc stroke command with enhanced precision and detailed shape analysis.
+        Execute an arc stroke command with corrected parameter interpretation and coordinate system.
         Generates high-density, smooth curves with precise shape modifier implementations.
         """
-        # Parameters are normalized (0-1) - use higher precision
-        radius = stroke.parameters.get('radius', 1.0) * self.scale_factor
+        # Extract normalized parameters [0,1]
+        radius_norm = stroke.parameters.get('radius', 1.0)
         span_angle_norm = stroke.parameters.get('span_angle', 0.25)
         end_angle_norm = stroke.parameters.get('end_angle', 0.0)
-
-        # Convert normalized span to degrees with higher precision
-        span_angle_deg = span_angle_norm * 360.0
-        end_angle_deg = end_angle_norm * 360.0
-
-        # Enhanced arc generation with adaptive density based on curvature
-        arc_length = abs(span_angle_deg) * math.pi * radius / 180.0
-        # Adaptive segmentation: more segments for longer arcs and smaller radii
-        base_segments = max(16, int(arc_length / 2.0))  # Doubled from original
-        curvature_factor = min(2.0, radius / self.scale_factor)  # More segments for tighter curves
-        num_segments = int(base_segments * curvature_factor)
-        num_segments = max(16, min(128, num_segments))  # Clamp between 16-128 segments
-
+        
+        # Convert to actual values
+        radius = radius_norm * self.scale_factor
+        span_angle_rad = span_angle_norm * 2 * math.pi  # Convert [0,1] to [0,2π]
+        end_angle_rad = end_angle_norm * 2 * math.pi
+        
+        logging.debug(f"ARC EXEC: Corrected params - radius_norm: {radius_norm:.3f}, span_norm: {span_angle_norm:.3f}, end_norm: {end_angle_norm:.3f}")
+        logging.debug(f"ARC EXEC: Converted - radius: {radius:.3f}, span_rad: {span_angle_rad:.3f}, end_rad: {end_angle_rad:.3f}")
+        
+        # Calculate arc center relative to turtle position
+        # The turtle is at the start point of the arc
+        center_x = self.turtle_x
+        center_y = self.turtle_y
+        
+        # Calculate number of segments for smooth arc (adaptive based on span)
+        span_degrees = abs(math.degrees(span_angle_rad))
+        num_segments = max(8, int(span_degrees / 5))  # At least 8 segments, more for larger arcs
+        
+        logging.debug(f"ARC EXEC: Arc center at ({center_x:.3f}, {center_y:.3f}), {num_segments} segments for {span_degrees:.1f}° span")
+        
         vertices = []
-        start_angle_deg = self.turtle_heading
-        start_angle_rad = math.radians(start_angle_deg)
-
-        # More precise arc center calculation
-        center_x = self.turtle_x - radius * math.sin(start_angle_rad)
-        center_y = self.turtle_y + radius * math.cos(start_angle_rad)
-
-        logging.debug(f"ARC EXEC: Enhanced arc - radius: {radius:.3f}, span: {span_angle_deg:.3f}°, "
-                     f"segments: {num_segments}, center: ({center_x:.3f}, {center_y:.3f})")
-
-        # Generate high-precision arc vertices
+        
+        # Generate arc vertices
         for i in range(1, num_segments + 1):
-            t = i / num_segments  # Parameter from 0 to 1
-            sweep_deg = start_angle_deg + t * span_angle_deg
-            sweep_rad = math.radians(sweep_deg)
+            t = i / num_segments
+            # Current angle along the arc
+            current_angle = end_angle_rad + t * span_angle_rad
             
-            # Base arc position
-            x = center_x + radius * math.cos(sweep_rad - math.pi/2)
-            y = center_y + radius * math.sin(sweep_rad - math.pi/2)
-
-            # Enhanced shape modifiers with better geometric accuracy
+            # Calculate position on arc
+            x = center_x + radius * math.cos(current_angle)
+            y = center_y + radius * math.sin(current_angle)
+            
+            # Apply shape modifier effects
             if stroke.shape_modifier == ShapeModifier.ZIGZAG:
-                # Higher frequency, smoother zigzag pattern
+                # Zigzag pattern along the arc
                 zigzag_freq = 8.0  # Number of zigzag cycles
-                zigzag_amplitude = radius * 0.08  # Slightly larger amplitude
+                zigzag_amplitude = radius * 0.08
                 zigzag_phase = math.sin(t * zigzag_freq * 2 * math.pi)
                 
                 # Apply zigzag perpendicular to arc direction
-                perp_x = -math.sin(sweep_rad - math.pi/2)
-                perp_y = math.cos(sweep_rad - math.pi/2)
-                x += zigzag_amplitude * zigzag_phase * perp_x
-                y += zigzag_amplitude * zigzag_phase * perp_y
+                perp_angle = current_angle + math.pi/2
+                x += zigzag_amplitude * zigzag_phase * math.cos(perp_angle)
+                y += zigzag_amplitude * zigzag_phase * math.sin(perp_angle)
                 
             elif stroke.shape_modifier == ShapeModifier.SQUARE:
-                # Sharp square corners at regular intervals
-                square_freq = 4.0  # Number of square corners
+                # Square corners at regular intervals
+                square_freq = 4.0
                 corner_phase = (t * square_freq) % 1.0
+                square_offset = radius * 0.1
                 
-                if corner_phase < 0.1 or corner_phase > 0.9:  # Near corners
-                    square_offset = radius * 0.15
-                    # Alternate inward/outward corners
+                if corner_phase < 0.1 or corner_phase > 0.9:
                     direction = 1 if int(t * square_freq) % 2 == 0 else -1
-                    offset_x = direction * square_offset * math.cos(sweep_rad)
-                    offset_y = direction * square_offset * math.sin(sweep_rad)
-                    x += offset_x
-                    y += offset_y
+                    offset_angle = current_angle + math.pi/2
+                    x += direction * square_offset * math.cos(offset_angle)
+                    y += direction * square_offset * math.sin(offset_angle)
                     
             elif stroke.shape_modifier == ShapeModifier.TRIANGLE:
                 # Sharp triangular protrusions
-                triangle_freq = 6.0  # Number of triangular peaks
+                triangle_freq = 6.0
                 peak_phase = (t * triangle_freq) % 1.0
                 
                 if 0.3 < peak_phase < 0.7:  # Peak region
                     peak_intensity = math.sin((peak_phase - 0.3) / 0.4 * math.pi)
                     triangle_offset = radius * 0.12 * peak_intensity
-                    offset_x = triangle_offset * math.cos(sweep_rad + math.pi/2)
-                    offset_y = triangle_offset * math.sin(sweep_rad + math.pi/2)
-                    x += offset_x
-                    y += offset_y
+                    offset_angle = current_angle + math.pi/2
+                    x += triangle_offset * math.cos(offset_angle)
+                    y += triangle_offset * math.sin(offset_angle)
                     
             elif stroke.shape_modifier == ShapeModifier.CIRCLE:
                 # Circular beading effect along the arc
-                bead_freq = 10.0  # Number of circular beads
+                bead_freq = 10.0
                 bead_phase = t * bead_freq * 2 * math.pi
                 bead_amplitude = radius * 0.06
                 bead_offset = bead_amplitude * (0.5 + 0.5 * math.cos(bead_phase))
                 
                 # Apply beading radially outward
-                offset_x = bead_offset * math.cos(sweep_rad)
-                offset_y = bead_offset * math.sin(sweep_rad)
-                x += offset_x
-                y += offset_y
-                
-            # NORMAL: smooth, precise arc (no modifications)
-
+                offset_angle = current_angle + math.pi/2
+                x += bead_offset * math.cos(offset_angle)
+                y += bead_offset * math.sin(offset_angle)
+            
             vertices.append((x, y))
-
-        # Precise turtle state update
+        
+        # Update turtle position to the end of the arc
         if vertices:
             self.turtle_x, self.turtle_y = vertices[-1]
-            self.turtle_heading += span_angle_deg
+            self.turtle_heading = math.degrees(end_angle_rad + span_angle_rad)
+            
             # Normalize heading to 0-360 range
             while self.turtle_heading >= 360:
                 self.turtle_heading -= 360
             while self.turtle_heading < 0:
                 self.turtle_heading += 360
 
-        # Enhanced diagnostics
-        if len(vertices) < 2:
-            logging.warning(f"ARC WARNING: Degenerate arc with {len(vertices)} vertices: {stroke.raw_command}")
-        else:
-            logging.debug(f"ARC EXEC: Generated {len(vertices)} high-precision vertices, "
-                         f"final turtle: ({self.turtle_x:.3f}, {self.turtle_y:.3f}), heading: {self.turtle_heading:.1f}°")
+        logging.debug(f"ARC EXEC: Generated {len(vertices)} vertices, final turtle: ({self.turtle_x:.3f}, {self.turtle_y:.3f}), heading: {self.turtle_heading:.1f}°")
 
-        return vertices
-        
-        # Update turtle position and heading
-        if vertices:
-            self.turtle_x, self.turtle_y = vertices[-1]
-            self.turtle_heading += span_angle_deg
-            # Normalize heading to 0-360 range
-            while self.turtle_heading >= 360:
-                self.turtle_heading -= 360
-            while self.turtle_heading < 0:
-                self.turtle_heading += 360
-        
         return vertices
     
     def _generate_enhanced_line_vertices(self, start: Tuple[float, float], end: Tuple[float, float], 
@@ -1033,78 +1026,67 @@ class UnifiedActionParser:
         }
 
 
-    def visualize_image_program(self, image_program: ImageProgram, save_path: str = None) -> None:
+    def visualize_image_program(self, image_program: ImageProgram, save_path: str = None) -> np.ndarray:
         """
-        Visualize the parsed image program using matplotlib.
-        Highlights arc/circle strokes with distinct colors and overlays for diagnostics.
+        Render the parsed image program using high-quality anti-aliased rendering.
+        Returns a 64x64 binary image that matches the real Bongard-LOGO dataset quality.
         """
-        import matplotlib.pyplot as plt
-
         if not image_program or not image_program.vertices:
             print("No vertices to visualize")
-            return
+            return np.zeros((self.canvas_size, self.canvas_size), dtype=np.uint8)
 
-        fig, ax = plt.subplots(1, 1, figsize=(8, 8))
-
-        # Plot all strokes individually, color by type/modifier
-        color_map = {
-            ("arc", "normal"): "orange",
-            ("arc", "circle"): "magenta",
-            ("arc", "square"): "purple",
-            ("arc", "triangle"): "brown",
-            ("arc", "zigzag"): "gold",
-            ("line", "circle"): "cyan",
-            ("line", "normal"): "blue",
-            ("line", "zigzag"): "green",
-            ("line", "square"): "gray",
-            ("line", "triangle"): "red",
-        }
-
-        # For each stroke, plot its vertices
-        for i, stroke in enumerate(image_program.strokes):
-            # Get stroke vertices
-            if stroke.stroke_type == StrokeType.LINE:
-                start = (self.turtle_x, self.turtle_y)
-                verts = self._generate_line_vertices(start, (self.turtle_x, self.turtle_y), stroke.shape_modifier)
-            else:
-                verts = []  # Already handled in main pipeline
-            # Actually, use the main vertices list and split by stroke boundaries
-            # For now, just color by type/modifier
-            color = color_map.get((stroke.stroke_type.value, stroke.shape_modifier.value), "black")
-            # Find stroke segment in vertices
-            # This is approximate: each stroke starts at previous end
-            # For better accuracy, need to track per-stroke vertices
-            # Here, just plot all as one path, but overlay arcs/circles
-
-        # Plot all vertices as connected path
-        vertices = image_program.vertices
-        xs = [v[0] for v in vertices]
-        ys = [v[1] for v in vertices]
-        ax.plot(xs, ys, 'b-', linewidth=2, alpha=0.7, label='Parsed Path')
-        ax.scatter(xs, ys, c='red', s=20, alpha=0.8, label='Vertices')
-
-        # Overlay: highlight arc/circle strokes
-        arc_indices = [i for i, s in enumerate(image_program.strokes) if s.stroke_type == StrokeType.ARC]
-        circle_indices = [i for i, s in enumerate(image_program.strokes) if s.shape_modifier == ShapeModifier.CIRCLE]
-        # For diagnostic, mark arc/circle vertices
-        if arc_indices:
-            ax.scatter([vertices[0][0]], [vertices[0][1]], c='orange', s=120, marker='*', label='Arc Start')
-        if circle_indices:
-            ax.scatter([vertices[0][0]], [vertices[0][1]], c='magenta', s=120, marker='*', label='Circle Start')
-
-        # Mark start and end points
-        if len(vertices) >= 2:
-            ax.scatter(xs[0], ys[0], c='green', s=100, marker='o', label='Start')
-            ax.scatter(xs[-1], ys[-1], c='red', s=100, marker='s', label='End')
-
-        # Set equal aspect ratio and grid
-        ax.set_aspect('equal')
-        ax.grid(True, alpha=0.3)
-        ax.legend()
-
-        # Add title with stroke information
-        stroke_info = f"{len(image_program.strokes)} strokes, {len(vertices)} vertices"
-        ax.set_title(f"Parsed Image: {image_program.image_id}\n{stroke_info}")
+        # CRITICAL FIX: High-quality anti-aliased rendering
+        return self._render_vertices_to_image(image_program.vertices)
+    
+    def _render_vertices_to_image(self, vertices: List[Tuple[float, float]], 
+                                  size: Tuple[int, int] = None) -> np.ndarray:
+        """
+        High-quality rendering with anti-aliasing for professional dataset matching.
+        Creates 4x resolution then downsamples for smooth edges.
+        """
+        import cv2
+        
+        if size is None:
+            size = (self.canvas_size, self.canvas_size)
+        
+        # Create 4x resolution canvas for anti-aliasing
+        scale = 4
+        high_res_size = (size[0] * scale, size[1] * scale)
+        canvas = np.zeros(high_res_size, dtype=np.uint8)
+        
+        if not vertices:
+            return cv2.resize(canvas, size, interpolation=cv2.INTER_AREA)
+        
+        # CRITICAL FIX: Convert world coordinates to canvas coordinates
+        # Turtle coordinates are centered at (0,0), canvas coordinates start at top-left
+        canvas_vertices = []
+        for x, y in vertices:
+            # Transform from world coordinates to canvas coordinates
+            canvas_x = (x + self.canvas_center) * scale  # Center and scale
+            canvas_y = (y + self.canvas_center) * scale  # Center and scale
+            canvas_vertices.append((int(canvas_x), int(canvas_y)))
+        
+        # Draw high-resolution path with proper thickness
+        if len(canvas_vertices) > 1:
+            cv2.polylines(canvas, [np.array(canvas_vertices, dtype=np.int32)], 
+                         False, 255, thickness=2*scale, lineType=cv2.LINE_AA)
+        
+        # Draw vertices as small circles for better connectivity
+        for x, y in canvas_vertices:
+            cv2.circle(canvas, (x, y), scale, 255, -1)
+        
+        # Downsample with anti-aliasing to target resolution
+        result = cv2.resize(canvas, size, interpolation=cv2.INTER_AREA)
+        
+        # Apply threshold to create clean binary image
+        _, result = cv2.threshold(result, 127, 255, cv2.THRESH_BINARY)
+        
+        # Save if path provided
+        if hasattr(self, '_save_path') and self._save_path:
+            cv2.imwrite(self._save_path, result)
+            print(f"Saved high-quality rendered image: {self._save_path}")
+        
+        return result
 
         # Show stroke details in text
         stroke_details = []
