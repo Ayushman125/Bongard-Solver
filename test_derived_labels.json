@@ -1,1 +1,0 @@
-[{"image_id": "test_001", "action_commands": ["move 0.0 0.0", "line 0.5 0.5", "line 0.5 -0.5", "line -0.5 -0.5", "line -0.5 0.5", "line 0.0 0.0"], "geometry": {}, "features": {}}, {"image_id": "test_002", "action_commands": ["move 0.0 0.0", "circle 0.0 0.0 0.3"], "geometry": {}, "features": {}}]

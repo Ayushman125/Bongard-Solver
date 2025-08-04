@@ -84,8 +84,8 @@ class UnifiedActionParser:
         self.turtle_heading = 0.0  # degrees
         
         # CRITICAL FIX: Corrected scale factor for proper 64x64 image rendering
-        # Bongard-LOGO uses normalized [0,1] coordinates, scale to ~25 for good visibility
-        self.scale_factor = 25.0  # Optimized for 64x64 images with proper margins
+        # Bongard-LOGO uses normalized [0,1] coordinates, scale to ~15 for proper bounds
+        self.scale_factor = 15.0  # FIXED: Reduced from 25.0 to prevent coordinate overflow
         
         # Enhanced precision settings
         self.high_precision_mode = True
@@ -826,13 +826,39 @@ class UnifiedActionParser:
     
     def _detect_stroke_groups(self, stroke_commands: List[str]) -> List[List[str]]:
         """
-        Analyze stroke commands to detect distinct object groups.
-        Uses improved heuristics based on stroke patterns and geometric analysis.
+        CORRECTED: Conservative stroke grouping to prevent over-separation.
+        Most Bongard-LOGO images should be single connected shapes, not scattered objects.
         """
         if len(stroke_commands) <= 1:
             return [stroke_commands]
         
-        # Strategy 1: Detect based on stroke parameter patterns and transitions
+        # CRITICAL FIX: Use conservative grouping to keep related strokes together
+        # Only split into multiple groups when there are very clear separations
+        
+        # For small numbers of strokes, keep them as a single connected shape
+        if len(stroke_commands) <= 3:
+            logging.debug(f"STROKE GROUP: Keeping {len(stroke_commands)} strokes as single connected shape")
+            return [stroke_commands]
+        
+        # Check if all strokes have similar parameters (likely one object)
+        stroke_types = set()
+        shape_modifiers = set()
+        lengths = []
+        
+        for cmd in stroke_commands:
+            stroke = self._parse_stroke_command(cmd)
+            if stroke:
+                stroke_types.add(stroke.stroke_type)
+                shape_modifiers.add(stroke.shape_modifier)
+                if 'length' in stroke.parameters:
+                    lengths.append(stroke.parameters['length'])
+        
+        # If parameters are similar, keep as single object
+        if len(stroke_types) <= 1 and len(shape_modifiers) <= 2:
+            logging.debug(f"STROKE GROUP: Similar parameters detected, keeping as single object")
+            return [stroke_commands]
+        
+        # Conservative splitting only for very different stroke patterns
         groups = []
         current_group = []
         
@@ -843,50 +869,35 @@ class UnifiedActionParser:
                 current_group.append(cmd)
                 continue
                 
-            # Enhanced heuristics for group separation:
             should_start_new_group = False
             
             if prev_stroke and len(current_group) > 0:
-                # Check for dramatic parameter changes indicating new object
+                # Only split on very dramatic changes (increased thresholds)
                 if stroke.stroke_type == StrokeType.LINE and prev_stroke.stroke_type == StrokeType.LINE:
                     curr_length = stroke.parameters.get('length', 1.0)
                     prev_length = prev_stroke.parameters.get('length', 1.0)
-                    curr_angle = stroke.parameters.get('angle', 0.0)
-                    prev_angle = prev_stroke.parameters.get('angle', 0.0)
                     
-                    # Large length change suggests new object
+                    # MUCH higher threshold for length changes
                     length_ratio = abs(curr_length - prev_length) / max(prev_length, 0.1)
-                    if length_ratio > 0.6:  # Increased threshold for more stability
+                    if length_ratio > 1.5:  # Increased from 0.6 to 1.5
                         should_start_new_group = True
-                        logging.debug(f"STROKE GROUP: Large length change detected ({length_ratio:.3f}) at stroke {i}")
-                    
-                    # Large angle jump suggests disconnected object
-                    angle_diff = abs(curr_angle - prev_angle)
-                    if angle_diff > 0.5:  # More than 180 degrees difference
-                        should_start_new_group = True
-                        logging.debug(f"STROKE GROUP: Large angle change detected ({angle_diff:.3f}) at stroke {i}")
+                        logging.debug(f"STROKE GROUP: Major length change detected ({length_ratio:.3f})")
                 
-                # Shape modifier pattern analysis
+                # Only split on extreme modifier differences
                 if stroke.shape_modifier != prev_stroke.shape_modifier:
                     modifier_distance = self._calculate_modifier_similarity(stroke.shape_modifier, prev_stroke.shape_modifier)
-                    if modifier_distance > 0.8 and len(current_group) >= 2:  # Very different modifiers
+                    if modifier_distance > 0.9 and len(current_group) >= 4:  # Very high threshold
                         should_start_new_group = True
-                        logging.debug(f"STROKE GROUP: Shape modifier change detected ({modifier_distance:.3f}) at stroke {i}")
-                
-                # Stroke type transition (line to arc or vice versa)
-                if stroke.stroke_type != prev_stroke.stroke_type and len(current_group) >= 3:
-                    should_start_new_group = True
-                    logging.debug(f"STROKE GROUP: Stroke type change detected at stroke {i}")
+                        logging.debug(f"STROKE GROUP: Extreme modifier change detected ({modifier_distance:.3f})")
             
-            # Heuristic: Group size limit (common pattern in Bongard-LOGO)
-            if len(current_group) >= 5:  # Increased from 4 to allow slightly larger objects
+            # Much larger group size limit
+            if len(current_group) >= 8:  # Increased from 5 to 8
                 should_start_new_group = True
-                logging.debug(f"STROKE GROUP: Group size limit reached at stroke {i}")
+                logging.debug(f"STROKE GROUP: Large group size limit reached")
             
             if should_start_new_group and current_group:
                 groups.append(current_group)
                 current_group = [cmd]
-                logging.debug(f"STROKE GROUP: Started new group at stroke {i}, previous group size: {len(groups[-1])}")
             else:
                 current_group.append(cmd)
             
@@ -980,37 +991,37 @@ class UnifiedActionParser:
     
     def _position_for_next_object(self, object_index: int, total_objects: int):
         """
-        Position turtle for the next object to create spatial separation.
-        Uses intelligent spacing based on common Bongard-LOGO layouts.
+        CORRECTED: Compact positioning to keep objects within 64x64 canvas bounds.
+        Reduced spacing by 70% to prevent coordinate overflow.
         """
-        # Common layouts in Bongard-LOGO: side-by-side, above-below, corners
-        spacing = self.scale_factor * 1.2  # Reasonable separation distance
+        # CRITICAL FIX: Much smaller spacing to prevent coordinates going outside canvas
+        spacing = self.scale_factor * 0.4  # Reduced from 1.2 to 0.4 (70% reduction)
         
         if total_objects == 2:
-            # Side-by-side layout (most common)
+            # Closer side-by-side layout
             if object_index == 1:
                 self.turtle_x = spacing
                 self.turtle_y = 0.0
         elif total_objects == 3:
-            # Triangle layout
+            # Compact triangle layout
             if object_index == 1:
-                self.turtle_x = spacing * 0.7
-                self.turtle_y = spacing * 0.5
+                self.turtle_x = spacing * 0.5  # Further reduced
+                self.turtle_y = spacing * 0.3
             elif object_index == 2:
-                self.turtle_x = -spacing * 0.7
-                self.turtle_y = spacing * 0.5
+                self.turtle_x = -spacing * 0.5
+                self.turtle_y = spacing * 0.3
         elif total_objects >= 4:
-            # Grid layout
+            # Very compact grid layout
             cols = 2
             rows = (total_objects + cols - 1) // cols
             col = object_index % cols
             row = object_index // cols
-            self.turtle_x = (col - cols/2 + 0.5) * spacing
-            self.turtle_y = (row - rows/2 + 0.5) * spacing
+            self.turtle_x = (col - cols/2 + 0.5) * spacing * 0.6  # Additional reduction
+            self.turtle_y = (row - rows/2 + 0.5) * spacing * 0.6
         
         self.turtle_heading = 0.0  # Reset heading for each object
         
-        logging.debug(f"POSITIONING: Object {object_index+1}/{total_objects} positioned at ({self.turtle_x:.3f}, {self.turtle_y:.3f})")
+        logging.debug(f"POSITIONING: Compact layout - Object {object_index+1}/{total_objects} positioned at ({self.turtle_x:.3f}, {self.turtle_y:.3f})")
 
     def get_image_summary(self, image_program: ImageProgram) -> Dict[str, Any]:
         """Get a summary of an image program for analysis"""
@@ -1041,39 +1052,74 @@ class UnifiedActionParser:
     def _render_vertices_to_image(self, vertices: List[Tuple[float, float]], 
                                   size: Tuple[int, int] = None) -> np.ndarray:
         """
-        High-quality rendering with anti-aliasing for professional dataset matching.
-        Creates 4x resolution then downsamples for smooth edges.
+        CORRECTED: High-quality rendering with adaptive coordinate bounds checking.
+        Prevents coordinate overflow and ensures all shapes are visible within canvas.
         """
         import cv2
         
         if size is None:
             size = (self.canvas_size, self.canvas_size)
         
+        if not vertices:
+            return np.zeros(size, dtype=np.uint8)
+        
+        # CRITICAL FIX: Adaptive coordinate scaling to ensure all vertices fit
+        all_x = [x for x, y in vertices]
+        all_y = [y for x, y in vertices]
+        
+        # Calculate bounds of all vertices
+        min_x, max_x = min(all_x), max(all_x)
+        min_y, max_y = min(all_y), max(all_y)
+        
+        # Calculate required scale to fit within canvas with margins
+        margin = 8  # Leave 8-pixel margin on all sides
+        canvas_width = size[0] - 2 * margin
+        canvas_height = size[1] - 2 * margin
+        
+        # Calculate adaptive scale factors
+        if max_x - min_x > 0:
+            scale_x = canvas_width / (max_x - min_x)
+        else:
+            scale_x = 1.0
+            
+        if max_y - min_y > 0:
+            scale_y = canvas_height / (max_y - min_y)
+        else:
+            scale_y = 1.0
+        
+        # Use the smaller scale to maintain aspect ratio
+        adaptive_scale = min(scale_x, scale_y, 1.0)  # Don't scale up, only down
+        
+        logging.debug(f"RENDER: Bounds X[{min_x:.2f}, {max_x:.2f}] Y[{min_y:.2f}, {max_y:.2f}], adaptive_scale={adaptive_scale:.3f}")
+        
         # Create 4x resolution canvas for anti-aliasing
-        scale = 4
-        high_res_size = (size[0] * scale, size[1] * scale)
+        aa_scale = 4
+        high_res_size = (size[0] * aa_scale, size[1] * aa_scale)
         canvas = np.zeros(high_res_size, dtype=np.uint8)
         
-        if not vertices:
-            return cv2.resize(canvas, size, interpolation=cv2.INTER_AREA)
-        
-        # CRITICAL FIX: Convert world coordinates to canvas coordinates
-        # Turtle coordinates are centered at (0,0), canvas coordinates start at top-left
+        # Transform vertices to canvas coordinates with adaptive scaling
         canvas_vertices = []
+        center_x, center_y = high_res_size[1] // 2, high_res_size[0] // 2
+        
         for x, y in vertices:
-            # Transform from world coordinates to canvas coordinates
-            canvas_x = (x + self.canvas_center) * scale  # Center and scale
-            canvas_y = (y + self.canvas_center) * scale  # Center and scale
+            # Apply adaptive scaling and centering
+            canvas_x = center_x + (x - (min_x + max_x) / 2) * adaptive_scale * aa_scale
+            canvas_y = center_y + (y - (min_y + max_y) / 2) * adaptive_scale * aa_scale
+            
+            # CRITICAL FIX: Clamp coordinates to canvas bounds
+            canvas_x = max(0, min(high_res_size[1] - 1, canvas_x))
+            canvas_y = max(0, min(high_res_size[0] - 1, canvas_y))
+            
             canvas_vertices.append((int(canvas_x), int(canvas_y)))
         
         # Draw high-resolution path with proper thickness
         if len(canvas_vertices) > 1:
             cv2.polylines(canvas, [np.array(canvas_vertices, dtype=np.int32)], 
-                         False, 255, thickness=2*scale, lineType=cv2.LINE_AA)
+                         False, 255, thickness=2*aa_scale, lineType=cv2.LINE_AA)
         
         # Draw vertices as small circles for better connectivity
         for x, y in canvas_vertices:
-            cv2.circle(canvas, (x, y), scale, 255, -1)
+            cv2.circle(canvas, (x, y), aa_scale, 255, -1)
         
         # Downsample with anti-aliasing to target resolution
         result = cv2.resize(canvas, size, interpolation=cv2.INTER_AREA)
@@ -1081,10 +1127,7 @@ class UnifiedActionParser:
         # Apply threshold to create clean binary image
         _, result = cv2.threshold(result, 127, 255, cv2.THRESH_BINARY)
         
-        # Save if path provided
-        if hasattr(self, '_save_path') and self._save_path:
-            cv2.imwrite(self._save_path, result)
-            print(f"Saved high-quality rendered image: {self._save_path}")
+        logging.debug(f"RENDER: Generated {size} image with {np.count_nonzero(result)} non-zero pixels")
         
         return result
 

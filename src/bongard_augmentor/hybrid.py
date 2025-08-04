@@ -72,61 +72,57 @@ class DataLoaderWrapper:
         return result
 
 class ActionMaskGenerator:
-    """Generates synthetic masks from action programs with corrected coordinate handling."""
+    """CORRECTED: Generates high-quality masks using the fixed coordinate system."""
     
     def __init__(self, image_size=(64, 64)):
         self.image_size = image_size
         # CRITICAL FIX: Use the corrected UnifiedActionParser with proper coordinate system
         self.action_parser = UnifiedActionParser()
-        logging.debug(f"ActionMaskGenerator: Initialized with image_size={image_size}")
-        logging.debug(f"ActionMaskGenerator: Parser scale_factor={self.action_parser.scale_factor}")
+        
+        # Verify the corrected settings are loaded
+        logging.debug(f"ActionMaskGenerator: Using corrected parser with scale_factor={self.action_parser.scale_factor}")
+        logging.debug(f"ActionMaskGenerator: Canvas center={self.action_parser.canvas_center}")
+        
+        if self.action_parser.scale_factor != 15.0:
+            logging.warning(f"ActionMaskGenerator: Expected scale_factor=15.0, got {self.action_parser.scale_factor}")
     
     def generate_mask_from_actions(self, action_commands: List[str]) -> np.ndarray:
-        """Generate a binary mask from action commands with corrected coordinate handling."""
+        """Generate high-quality mask from action commands using corrected coordinate system."""
         try:
-            logging.debug(f"ActionMaskGenerator: Processing {len(action_commands)} action commands")
-            logging.debug(f"ActionMaskGenerator: Commands preview: {action_commands[:3] if action_commands else 'Empty'}")
+            logging.debug(f"ActionMaskGenerator: Processing {len(action_commands)} commands")
             
-            # Parse the action commands using the corrected UnifiedActionParser
+            # Parse using the corrected parser
             parsed_program = self.action_parser._parse_single_image(
                 action_commands, 
-                image_id="temp", 
+                image_id="mask_gen", 
                 is_positive=True, 
-                problem_id="temp"
+                problem_id="augmentation"
             )
             
-            # Create a blank mask
-            mask = np.zeros(self.image_size, dtype=np.uint8)
-            
             if parsed_program and parsed_program.vertices:
-                logging.debug(f"ActionMaskGenerator: Got {len(parsed_program.vertices)} vertices from parser")
+                logging.debug(f"ActionMaskGenerator: Got {len(parsed_program.vertices)} vertices")
                 
-                # Analyze vertex distribution
-                vertices = parsed_program.vertices
-                if vertices:
-                    x_coords = [v[0] for v in vertices if len(v) >= 2]
-                    y_coords = [v[1] for v in vertices if len(v) >= 2]
-                    if x_coords and y_coords:
-                        logging.debug(f"ActionMaskGenerator: Vertex ranges - X: [{min(x_coords):.1f}, {max(x_coords):.1f}], "
-                                     f"Y: [{min(y_coords):.1f}, {max(y_coords):.1f}]")
+                # CRITICAL FIX: Use the corrected high-quality rendering method
+                mask = self.action_parser._render_vertices_to_image(parsed_program.vertices, self.image_size)
                 
-                # CRITICAL FIX: Use the high-quality rendering from the corrected parser
-                mask = self._render_vertices_to_mask(parsed_program.vertices)
+                # Verify the mask quality
+                non_zero_pixels = np.count_nonzero(mask)
+                fill_percentage = 100 * non_zero_pixels / mask.size
+                
+                logging.debug(f"ActionMaskGenerator: Generated mask: {non_zero_pixels} pixels ({fill_percentage:.1f}%)")
+                
+                if non_zero_pixels < 5:
+                    logging.warning("ActionMaskGenerator: Very few pixels generated, may indicate coordinate issues")
+                
+                return mask
             else:
-                logging.warning("ActionMaskGenerator: No vertices in parsed program, using fallback")
-                if parsed_program:
-                    logging.debug(f"ActionMaskGenerator: Parsed program attributes: {dir(parsed_program)}")
-                # Fallback: try to parse individual commands manually
-                mask = self._render_simple_commands_to_mask(action_commands)
-            
-            logging.debug(f"ActionMaskGenerator: Generated mask with {np.sum(mask > 0)} non-zero pixels")
-            return mask
-            
+                logging.warning("ActionMaskGenerator: No vertices generated, using fallback")
+                return self._generate_fallback_mask()
+                
         except Exception as e:
-            logging.warning(f"Failed to generate mask from actions: {e}")
+            logging.error(f"ActionMaskGenerator failed: {e}")
             import traceback
             logging.debug(f"Full traceback: {traceback.format_exc()}")
-            # Return a simple fallback mask
             return self._generate_fallback_mask()
     
     def _render_vertices_to_mask(self, vertices: List[Tuple[float, float]]) -> np.ndarray:
