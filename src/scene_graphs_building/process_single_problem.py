@@ -1272,12 +1272,45 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                 
                 # Extract enhanced features for each node
                 for node_id, node_data in G.nodes(data=True):
+                    # ACTION PROGRAMS: Construct image path from problem structure
+                    # Since action programs don't include image paths, construct them from the node data
                     image_path = None
-                    parent_shape_id = node_data.get('parent_shape_id', '')
-                    for rec in problem_records:
-                        if rec.get('image_path') and parent_shape_id in rec.get('image_path', ''):
-                            image_path = rec['image_path']
-                            break
+                    
+                    # Get the label from node data to determine if it's positive (category_1) or negative (category_0)
+                    label = node_data.get('label', 'positive')
+                    category_folder = 'category_1' if label in ['positive', 'category_1'] else 'category_0'
+                    
+                    # Extract base problem name from problem_id
+                    # problem_id format: bd_asymmetric_unbala_x_0000
+                    # Extract category (bd, ff, hd) from problem_id
+                    category = problem_id.split('_')[0] if '_' in problem_id else 'bd'
+                    
+                    # Get original record index to determine which image (0.png, 1.png, etc.)
+                    original_record_idx = node_data.get('original_record_idx', 0)
+                    
+                    # CRITICAL FIX: Cap the record index to avoid accessing non-existent images
+                    # Bongard problems typically have 7 images per category (0-6), but may have more records
+                    max_image_index = 6  # Images are numbered 0-6 (7 total images)
+                    capped_record_idx = min(original_record_idx, max_image_index)
+                    
+                    if original_record_idx > max_image_index:
+                        logging.debug(f"Capping record index {original_record_idx} to {capped_record_idx} for node {node_id}")
+                    
+                    # Construct the image path
+                    image_path = f"data/raw/ShapeBongard_V2/{category}/images/{problem_id}\\{category_folder}\\{capped_record_idx}.png"
+                    
+                    # Verify the constructed path exists (after remapping)
+                    from src.scene_graphs_building.data_loading import remap_path
+                    try:
+                        remapped_path = remap_path(image_path)
+                        if os.path.exists(remapped_path):
+                            logging.debug(f"Constructed valid image path for node {node_id}: {image_path} -> {remapped_path}")
+                        else:
+                            logging.warning(f"Constructed image path does not exist for node {node_id}: {remapped_path}")
+                            image_path = None
+                    except Exception as e:
+                        logging.warning(f"Failed to validate image path for node {node_id}: {e}")
+                        image_path = None
                     
                     if image_path:
                         try:
@@ -1406,21 +1439,28 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                             G.nodes[node_id]['data_completeness_score'] = 0.0
                             G.nodes[node_id]['missing_field_count'] = len(['area', 'perimeter', 'centroid', 'vertices', 'object_type'])
                 
-                # Add VL-based edges with enhanced similarity
+                # Add VL-based edges with enhanced similarity (limited to most meaningful)
                 vl_edges = clip_embedder.contrastive_edges(
                     [G.nodes[n] for n in G.nodes()], 
-                    threshold=0.15, 
+                    threshold=0.25,  # Increased threshold for more selective edges
                     use_roi=getattr(args, 'use_roi', False),
                     logo_mode=True
                 )
                 
+                # Limit VL edges to prevent explosion - only add top similarity pairs
+                if len(vl_edges) > 10:  # Limit to max 10 VL edges per problem
+                    vl_edges = sorted(vl_edges, key=lambda x: x.get('similarity', 0.0), reverse=True)[:10]
+                
                 for edge_data in vl_edges:
                     if 'source' in edge_data and 'target' in edge_data:
-                        G.add_edge(edge_data['source'], edge_data['target'], 
-                                 predicate='visual_similarity', source='vision_language',
-                                 similarity_score=edge_data.get('similarity', 0.0))
+                        # Only add if similarity is above threshold and no duplicate edge exists
+                        if (edge_data.get('similarity', 0.0) > 0.25 and 
+                            not G.has_edge(edge_data['source'], edge_data['target'])):
+                            G.add_edge(edge_data['source'], edge_data['target'], 
+                                     predicate='visual_similarity', source='vision_language',
+                                     similarity_score=edge_data.get('similarity', 0.0))
                 
-                logging.info(f"Added {len(vl_edges)} VL-based edges to graph for {parent_shape_id}")
+                logging.info(f"Added {len([e for e in vl_edges if e.get('similarity', 0.0) > 0.25])} VL-based edges to graph for {parent_shape_id}")
                 
             except Exception as e:
                 logging.warning(f"Failed to apply VL features: {e}")
@@ -1513,23 +1553,47 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                 apex_patterns = motif_miner.find_apex_patterns(G)
                 symmetry_patterns = motif_miner.find_symmetry_patterns(G)
                 
-                # Add pattern-based edges with enhanced metadata
+                # Add pattern-based edges with enhanced metadata (limited to high-confidence patterns)
                 pattern_count = 0
-                for pattern in bridge_patterns + apex_patterns + symmetry_patterns:
+                max_pattern_edges = 15  # Limit total pattern edges per problem
+                all_patterns = bridge_patterns + apex_patterns + symmetry_patterns
+                
+                # Sort patterns by confidence and only use top ones
+                sorted_patterns = sorted(all_patterns, key=lambda x: x.get('confidence', 0.0), reverse=True)[:5]
+                
+                for pattern in sorted_patterns:
+                    if pattern_count >= max_pattern_edges:
+                        break
+                        
                     pattern_type = pattern.get('type', 'unknown')
                     pattern_confidence = pattern.get('confidence', 0.0)
                     
-                    for i, node_a in enumerate(pattern.get('nodes', [])):
-                        for node_b in pattern.get('nodes', [])[i+1:]:
-                            if G.has_node(node_a) and G.has_node(node_b):
+                    # Only add patterns with high confidence
+                    if pattern_confidence < 0.7:
+                        continue
+                    
+                    pattern_nodes = pattern.get('nodes', [])
+                    # Limit edges per pattern to prevent explosion
+                    edges_added_this_pattern = 0
+                    max_edges_per_pattern = min(3, len(pattern_nodes))
+                    
+                    for i, node_a in enumerate(pattern_nodes):
+                        if edges_added_this_pattern >= max_edges_per_pattern:
+                            break
+                        for node_b in pattern_nodes[i+1:]:
+                            if (edges_added_this_pattern >= max_edges_per_pattern or
+                                pattern_count >= max_pattern_edges):
+                                break
+                            if G.has_node(node_a) and G.has_node(node_b) and not G.has_edge(node_a, node_b):
                                 G.add_edge(node_a, node_b, 
                                          predicate=f'forms_{pattern_type}_pattern', 
                                          source='motif_discovery',
                                          pattern_confidence=pattern_confidence,
                                          pattern_id=f'pattern_{pattern_count}')
                                 pattern_count += 1
+                                edges_added_this_pattern += 1
                 
-                logging.info(f"Enhanced motif mining added {len(motif_nodes)} super-nodes with comprehensive features and {len(bridge_patterns + apex_patterns + symmetry_patterns)} pattern relationships")
+                logging.info(f"Enhanced motif mining added {len(motif_nodes)} super-nodes with comprehensive features and {pattern_count} high-confidence pattern relationships")
                 
             except Exception as e:
                 logging.warning(f"Failed to apply motif mining: {e}")
@@ -1705,7 +1769,7 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
                         node_data['kb_concept'] = None
                 
                 logging.info(f"Adding ConceptNet commonsense edges to graph with {G.number_of_nodes()} nodes")
-                add_commonsense_edges(G, top_k=3, kb=kb)
+                add_commonsense_edges(G, top_k=2, kb=kb)  # Reduced from 3 to 2 for fewer edges
                 
                 # Count ConceptNet edges added
 
@@ -1783,25 +1847,75 @@ async def _process_single_problem(problem_id: str, problem_records: List[Dict[st
 
     # --- Save Outputs ---
     # For simplicity, we save a combined graph for visualization, but return the structured dict
+    logging.info(f"[LOGO Visualization] Starting visualization process for {problem_id}. Final graphs count: {len(final_graphs)}")
     if final_graphs:
         # Combine all graphs from the problem into one for a single visualization file
         combined_graph = nx.compose_all(list(final_graphs.values()))
+        logging.info(f"[LOGO Visualization] Combined graph created with {combined_graph.number_of_nodes()} nodes and {combined_graph.number_of_edges()} edges")
         try:
             from scripts.scene_graph_visualization import save_scene_graph_visualization, save_scene_graph_csv
             feedback_vis_dir = os.path.join('feedback', 'visualizations_logo')
             os.makedirs(feedback_vis_dir, exist_ok=True)
+            logging.info(f"[LOGO Visualization] Created visualization directory: {feedback_vis_dir}")
             
             # Clean up and ensure complete node data before export
             _ensure_complete_node_data(combined_graph)
             
             # Save CSVs and visualizations
+            logging.info(f"[LOGO Visualization] Calling save_scene_graph_csv for {problem_id}")
             save_scene_graph_csv(combined_graph, feedback_vis_dir, problem_id)
+            logging.info(f"[LOGO Visualization] CSV export completed for {problem_id}")
+            
+            # ACTION PROGRAMS: Find or construct a valid image path for visualization
             image_path_vis = next((rec.get('image_path') for rec in problem_records if rec.get('image_path')), None)
+            logging.info(f"[LOGO Visualization] Found image path from records: {image_path_vis}")
+            
+            # If no image path in records (action-program mode), construct one from the first available image
+            if not image_path_vis:
+                # Try to construct a representative image path for visualization
+                # Use the first positive example image (category_1/0.png)
+                category = problem_id.split('_')[0] if '_' in problem_id else 'bd'
+                constructed_path = f"data/raw/ShapeBongard_V2/{category}/images/{problem_id}\\category_1\\0.png"
+                logging.info(f"[LOGO Visualization] Constructed path: {constructed_path}")
+                
+                try:
+                    from src.scene_graphs_building.data_loading import remap_path
+                    remapped_constructed_path = remap_path(constructed_path)
+                    logging.info(f"[LOGO Visualization] Remapped constructed path: {remapped_constructed_path}")
+                    if os.path.exists(remapped_constructed_path):
+                        image_path_vis = constructed_path
+                        logging.info(f"Using constructed image path for visualization: {image_path_vis}")
+                    else:
+                        logging.warning(f"Constructed image path does not exist: {remapped_constructed_path}")
+                except Exception as e:
+                    logging.warning(f"Failed to construct image path for visualization: {e}")
+            
+            # Generate visualization if we have a valid image path
+            logging.info(f"[LOGO Visualization] Image path for visualization: {image_path_vis}")
             if image_path_vis:
-                # Pass abstract_view=True to generate the high-level graph visualization
-                save_scene_graph_visualization(combined_graph, remap_path(image_path_vis), feedback_vis_dir, problem_id, abstract_view=True)
+                try:
+                    # Pass abstract_view=True to generate the high-level graph visualization
+                    logging.info(f"[LOGO Visualization] Calling save_scene_graph_visualization with image path")
+                    save_scene_graph_visualization(combined_graph, remap_path(image_path_vis), feedback_vis_dir, problem_id, abstract_view=True)
+                    logging.info(f"Successfully saved visualization for {problem_id}")
+                except Exception as viz_error:
+                    logging.warning(f"Visualization generation failed for {problem_id}: {viz_error}")
+                    import traceback
+                    logging.warning(f"Visualization error traceback: {traceback.format_exc()}")
+            else:
+                # Generate graph-only visualization without image overlay
+                try:
+                    logging.info(f"[LOGO Visualization] Calling save_scene_graph_visualization without image path")
+                    save_scene_graph_visualization(combined_graph, None, feedback_vis_dir, problem_id, abstract_view=True)
+                    logging.info(f"Successfully saved graph-only visualization for {problem_id}")
+                except Exception as viz_error:
+                    logging.warning(f"Graph-only visualization generation failed for {problem_id}: {viz_error}")
+                    import traceback
+                    logging.warning(f"Graph-only visualization error traceback: {traceback.format_exc()}")
         except Exception as e:
             logging.warning(f"[LOGO Visualization] Failed to save outputs for {problem_id}: {e}\n{traceback.format_exc()}")
+    else:
+        logging.warning(f"[LOGO Visualization] No final graphs found for {problem_id} - skipping visualization")
 
     return {'scene_graphs': final_graphs, 'objects': all_objects_for_return, 'mode': 'logo', 'rules': None}
 

@@ -1545,6 +1545,12 @@ def create_missing_data_analysis(csv_dir, out_dir, puzzle_pattern="*"):
 
 def save_scene_graph_visualization(G, image_path, out_dir, problem_id, abstract_view=True):
     """Save a visualization of the scene graph G overlaid on the real image."""
+    logging.info(f"[save_scene_graph_visualization] Called for {problem_id}, image_path={image_path}, out_dir={out_dir}, abstract_view={abstract_view}")
+    logging.info(f"[save_scene_graph_visualization] Graph has {G.number_of_nodes()} nodes and {G.number_of_edges()} edges")
+    logging.info(f"[save_scene_graph_visualization] Current working directory: {os.getcwd()}")
+    logging.info(f"[save_scene_graph_visualization] Output directory absolute path: {os.path.abspath(out_dir)}")
+    logging.info(f"[save_scene_graph_visualization] Output directory exists: {os.path.exists(out_dir)}")
+    
     os.makedirs(out_dir, exist_ok=True)
     # Node positions: use centroid, else first vertex, else (0,0)
     pos = {}
@@ -1613,7 +1619,9 @@ def save_scene_graph_visualization(G, image_path, out_dir, problem_id, abstract_
         logging.warning(f"Skipped {len(edge_labels) - len(drawable_edge_labels)} edge labels for self-loops or co-located nodes in {problem_id}.")
 
     # 1. Save graph overlayed on real image (if image exists)
+    logging.info(f"[save_scene_graph_visualization] Checking image path: {image_path}")
     if image_path and os.path.exists(image_path):
+        logging.info(f"[save_scene_graph_visualization] Image exists, creating overlay visualization")
         try:
             with Image.open(image_path) as img:
                 plt.figure(figsize=(12, 12))
@@ -1627,10 +1635,14 @@ def save_scene_graph_visualization(G, image_path, out_dir, problem_id, abstract_
                 out_path_full = os.path.join(out_dir, f"{problem_id}_scene_graph.png")
                 plt.savefig(out_path_full, bbox_inches='tight', dpi=150)
                 plt.close()
+                logging.info(f"[save_scene_graph_visualization] Saved overlay visualization to {out_path_full}")
         except Exception as e:
             logging.error(f"Failed to create full visualization for {problem_id}: {e}")
+    else:
+        logging.info(f"[save_scene_graph_visualization] Image not available, skipping overlay visualization")
 
     # 2. Save pure matplotlib graph visualization (no image)
+    logging.info(f"[save_scene_graph_visualization] Creating graph-only visualization")
     plt.figure(figsize=(8, 8))
     nx.draw_networkx_nodes(plotG, pos, node_color=node_colors, node_size=800, edgecolors=node_border_colors, linewidths=1.5)
     nx.draw_networkx_edges(plotG, pos, edge_color=edge_colors, arrows=True, arrowstyle='-|>', width=1.5, alpha=0.8)
@@ -1639,12 +1651,29 @@ def save_scene_graph_visualization(G, image_path, out_dir, problem_id, abstract_
     plt.title(f"Graph Only - {problem_id}")
     plt.axis('off')
     out_path_graph = os.path.join(out_dir, f"{problem_id}_graph_only.png")
-    plt.savefig(out_path_graph, bbox_inches='tight')
-    plt.close()
+    logging.info(f"[save_scene_graph_visualization] Attempting to save graph to: {out_path_graph}")
+    try:
+        plt.savefig(out_path_graph, bbox_inches='tight')
+        plt.close()
+        
+        # Verify the file was created and get its size
+        if os.path.exists(out_path_graph):
+            file_size = os.path.getsize(out_path_graph)
+            logging.info(f"[save_scene_graph_visualization] Saved graph-only visualization to {out_path_graph} (size: {file_size} bytes)")
+        else:
+            logging.error(f"[save_scene_graph_visualization] File was not created at {out_path_graph}")
+    except Exception as save_error:
+        plt.close()  # Ensure we close the figure even if save fails
+        logging.error(f"[save_scene_graph_visualization] Failed to save graph: {save_error}")
+        import traceback
+        logging.error(f"[save_scene_graph_visualization] Save error traceback: {traceback.format_exc()}")
+        raise
 
     # 3. Save abstract graph view (if enabled and applicable)
+    logging.info(f"[save_scene_graph_visualization] Abstract view enabled: {abstract_view}")
     if abstract_view:
         abstract_nodes = [n for n, data in G.nodes(data=True) if data.get('source') == 'geometric_grouping']
+        logging.info(f"[save_scene_graph_visualization] Found {len(abstract_nodes)} abstract nodes")
         if abstract_nodes:
             abstract_G = G.subgraph(abstract_nodes).copy()
             
@@ -1677,6 +1706,11 @@ def save_scene_graph_visualization(G, image_path, out_dir, problem_id, abstract_
             out_path_abstract = os.path.join(out_dir, f"{problem_id}_graph_abstract.png")
             plt.savefig(out_path_abstract, bbox_inches='tight')
             plt.close()
+            logging.info(f"[save_scene_graph_visualization] Saved abstract visualization to {out_path_abstract}")
+        else:
+            logging.info(f"[save_scene_graph_visualization] No abstract nodes found, skipping abstract view")
+    
+    logging.info(f"[save_scene_graph_visualization] Completed visualization for {problem_id}")
 
 def save_scene_graph_csv(G, out_dir, problem_id):
     """Save node and edge data of the scene graph as CSV files."""

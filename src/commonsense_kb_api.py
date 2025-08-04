@@ -114,6 +114,15 @@ class ConceptNetAPI:
         ConceptNetAPI._initialized = True
         logging.info(f"ConceptNetAPI initialized with REST interface (singleton instance). base_url={self.base_url}, cache_size={self.cache_size}, rate_limit={self.rate_limit}")
     
+    def _manage_cache_size(self):
+        """Keep cache size within limits."""
+        if len(self.cache) > self.cache_size:
+            # Remove oldest entries (simple FIFO)
+            keys_to_remove = list(self.cache.keys())[:-self.cache_size//2]
+            for key in keys_to_remove:
+                del self.cache[key]
+            logging.debug(f"ConceptNetAPI: Trimmed cache to {len(self.cache)} entries")
+    
     def _normalize_concept(self, concept: str) -> str:
         """Normalize geometric concepts to ConceptNet-friendly terms, NO FALLBACKS."""
         if not concept:
@@ -258,7 +267,7 @@ class ConceptNetAPI:
         return paths[:20]
     
     def get_related_concepts(self, concept: str, limit: int = 20) -> List[Dict]:
-        """Get concepts related to the input concept."""
+        """Get concepts related to the input concept with caching."""
         # Normalize concept before querying 
         concept_norm = self._normalize_concept(concept)
         
@@ -267,10 +276,16 @@ class ConceptNetAPI:
             logging.info(f"ConceptNetAPI: Skipping get_related_concepts for unmapped concept: {concept} -> {concept_norm}")
             return []
         
+        # Check cache first
+        cache_key = f"related_{concept_norm}_{limit}"
+        if cache_key in self.cache:
+            logging.info(f"ConceptNetAPI: Using cached related concepts for {concept_norm}")
+            return self.cache[cache_key]
+        
         concept_encoded = quote(concept_norm, safe='')
         endpoint = f"/related/c/en/{concept_encoded}"
-        params = {'limit': limit}
-        logging.info(f"ConceptNetAPI: get_related_concepts for concept={concept} (norm: {concept_norm}), limit={limit}")
+        params = {'limit': min(limit, 10)}  # Limit API response to max 10 relations
+        logging.info(f"ConceptNetAPI: get_related_concepts for concept={concept} (norm: {concept_norm}), limit={params['limit']}")
         data = self._make_request(endpoint, params)
         related = []
         if data is None:
@@ -288,6 +303,10 @@ class ConceptNetAPI:
                             'weight': item.get('weight', 1.0),
                             'source': 'conceptnet_api'
                         })
+        
+        # Cache the result
+        self.cache[cache_key] = related
+        self._manage_cache_size()
         return related
 
     def related(self, concept: str) -> List[Tuple[str, str]]:
@@ -303,6 +322,14 @@ class ConceptNetAPI:
         if concept_norm is None:
             logging.info(f"ConceptNetAPI.related: Skipping unmapped concept '{concept}' - no fallback")
             return []
+        
+        # Check cache first for related results
+        cache_key = f"related_tuples_{concept_norm}"
+        if cache_key in self.cache:
+            logging.info(f"ConceptNetAPI.related: Using cached results for concept '{concept_norm}'")
+            cached_result = self.cache[cache_key]
+            logging.info(f"ConceptNet query for concept '{concept}': found {len(cached_result)} relations")
+            return cached_result
         
         # Get all outgoing relations for the concept
         relations = self.query_relations_for_concept(concept)
@@ -328,9 +355,17 @@ class ConceptNetAPI:
                 result.append(('RelatedTo', other_concept))
                 logging.debug(f"ConceptNetAPI.related: Adding related concept (RelatedTo, {other_concept})")
         
-        # NO ENHANCED GEOMETRIC RELATIONS FALLBACK - removed completely
+        # Log first few relations for debugging
+        if len(result) > 0:
+            sample_relations = result[:5]  # Show first 5 relations
+            logging.info(f"ConceptNetAPI.related: Sample relations for '{concept}': {sample_relations}")
+        
+        # Cache the final result
+        self.cache[cache_key] = result
+        self._manage_cache_size()
         
         logging.info(f"ConceptNetAPI.related: Found {len(result)} total relations for concept '{concept}'")
+        logging.info(f"ConceptNet query for concept '{concept}': found {len(result)} relations")
         return result
     
     # Enhanced geometric relations method REMOVED - no fallbacks allowed

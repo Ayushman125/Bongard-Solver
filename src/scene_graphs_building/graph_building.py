@@ -98,54 +98,117 @@ def add_commonsense_edges(G, top_k, kb=None):
     if kb is None:
         logging.info("[add_commonsense_edges] KB not available, skipping.")
         return
+    
     nodes_with_data = list(G.nodes(data=True))
+    if len(nodes_with_data) == 0:
+        logging.info("[add_commonsense_edges] No nodes in graph, skipping.")
+        return
+    
     # Normalize all shape_label values (motifs and shapes)
     for _, d in nodes_with_data:
         if d.get('shape_label') is not None:
             from src.scene_graphs_building.config import SHAPE_MAP
             lbl = str(d['shape_label']).lower().replace('_',' ').replace('-',' ').strip()
             d['shape_label'] = SHAPE_MAP.get(lbl, lbl)
+    
     all_shape_labels = [d.get('kb_concept') for _, d in nodes_with_data]
     logging.info(f"[add_commonsense_edges] All node kb_concepts: {all_shape_labels}")
-    # CRITICAL FIX: Don't override kb_concept - it's already set correctly in the graph building step
-    # The kb_concept should use the Bongard-LOGO shape types (normal, circle, square, triangle, zigzag)
+    
+    # Get unique concepts to avoid redundant queries
+    unique_concepts = set(d.get('kb_concept') for _, d in nodes_with_data if d.get('kb_concept'))
+    logging.info(f"[add_commonsense_edges] Unique concepts to query: {unique_concepts}")
+    
+    # Meaningful geometric relations for Bongard problems
+    meaningful_relations = {
+        'RelatedTo', 'SimilarTo', 'PartOf', 'HasProperty', 'IsA', 
+        'DerivedFrom', 'AtLocation', 'HasA', 'DefinedAs'
+    }
+    
     edge_count = 0
-    for u, data_u in nodes_with_data:
-        # Use kb_concept directly instead of processing shape_label
-        concept = data_u.get('kb_concept')
+    concept_cache = {}  # Cache relations per concept
+    
+    # Process each unique concept only once
+    for concept in unique_concepts:
         if not concept:
-            logging.debug(f"Node {u}: no valid kb_concept found")
             continue
-        logging.debug(f"Node {u}: processing kb_concept '{concept}'")
-        try:
-            related = kb.related(concept) if hasattr(kb, 'related') else []
-            logging.info(f"ConceptNet query for concept '{concept}': found {len(related)} relations")
-            if related:
-                logging.debug(f"Relations for '{concept}': {related[:5]}")  # Log first 5 for debugging
-        except Exception as e:
-            logging.warning(f"Commonsense KB query failed for concept '{concept}': {e}")
-            continue
-        # Prune to allowed relations and top_k
-        added = 0
-        for rel, other in related:
-            if rel not in CONCEPTNET_KEEP_RELS:
+            
+        # Get all nodes with this concept
+        nodes_with_concept = [u for u, data_u in nodes_with_data if data_u.get('kb_concept') == concept]
+        
+        if concept in concept_cache:
+            related = concept_cache[concept]
+            logging.info(f"Using cached relations for concept '{concept}': {len(related)} relations")
+        else:
+            try:
+                related = kb.related(concept) if hasattr(kb, 'related') else []
+                # Filter for meaningful relations only and limit to top_k
+                related = [(rel, other) for rel, other in related 
+                          if rel in meaningful_relations][:top_k]
+                concept_cache[concept] = related
+                logging.info(f"ConceptNet query for concept '{concept}': found {len(related)} meaningful relations")
+            except Exception as e:
+                logging.warning(f"Commonsense KB query failed for concept '{concept}': {e}")
+                concept_cache[concept] = []
                 continue
-            if added >= top_k:
-                break
-            # Find matching node v by checking kb_concept
-            # FIXED: Handle ConceptNet concept mapping - look for nodes whose mapped concept equals 'other'
-            for v, data_v in nodes_with_data:
-                v_concept = data_v.get('kb_concept')
-                if u != v and v_concept:
-                    # Get the mapped concept for comparison
-                    v_mapped_concept = kb.concept_map.get(v_concept, v_concept) if hasattr(kb, 'concept_map') else v_concept
-                    # Match if either the raw concept or mapped concept equals the relation target
-                    if v_concept == other or v_mapped_concept == other:
+        
+        # Add edges only between different concept types (avoid same-type redundant edges)
+        for rel, other in related:
+            logging.debug(f"[add_commonsense_edges] Processing relation: {concept} --{rel}--> {other}")
+            
+            # Create semantic mapping for flexible concept matching
+            semantic_map = {
+                # Direct ConceptNet mappings based on actual returns
+                'straight': ['line'],  # line -> RelatedTo straight
+                'line': ['line'],      # line -> RelatedTo line  
+                'a circle': ['arc', 'circle'],  # arc -> PartOf a circle
+                'circle': ['arc', 'circle'],    # arc -> PartOf circle
+                'pattern': ['motif'],           # motif -> RelatedTo pattern
+                'a pattern': ['motif'],         # motif -> IsA a pattern
+                
+                # General semantic mappings
+                'curve': ['arc', 'circle'],
+                'geometry': ['line', 'arc', 'square', 'triangle', 'circle'],
+                'shape': ['line', 'arc', 'square', 'triangle', 'circle', 'motif'],
+                'design': ['motif', 'pattern'],
+                'form': ['line', 'arc', 'square', 'triangle', 'circle'],
+                'structure': ['motif', 'pattern'],
+                'straight line': ['line'],
+                'curved line': ['arc'],
+                'geometric shape': ['square', 'triangle', 'circle']
+            }
+            
+            # Find target nodes with flexible concept matching
+            target_concepts = semantic_map.get(other, [other])  # Use mapping or exact match
+            target_nodes = [v for v, data_v in nodes_with_data 
+                           if data_v.get('kb_concept') != concept and  # Different concept types only
+                           (data_v.get('kb_concept') in target_concepts or 
+                            data_v.get('kb_concept') == other or
+                            (hasattr(kb, 'concept_map') and 
+                             kb.concept_map.get(data_v.get('kb_concept'), data_v.get('kb_concept')) == other))]
+            
+            # Special case: Allow same-concept edges for certain meaningful relations
+            if rel in ['SimilarTo', 'RelatedTo'] and other in target_concepts and concept in target_concepts:
+                same_concept_nodes = [v for v, data_v in nodes_with_data if data_v.get('kb_concept') == concept]
+                target_nodes.extend(same_concept_nodes)
+            
+            logging.debug(f"[add_commonsense_edges] Found {len(target_nodes)} target nodes for concept '{other}' (mapped to {target_concepts})")
+            
+            # Limit edges per relation type to prevent explosion
+            edges_added_for_relation = 0
+            max_edges_per_relation = min(2, len(target_nodes))  # Maximum 2 edges per relation type
+            
+            for u in nodes_with_concept:
+                if edges_added_for_relation >= max_edges_per_relation:
+                    break
+                for v in target_nodes:
+                    if edges_added_for_relation >= max_edges_per_relation:
+                        break
+                    if u != v and not G.has_edge(u, v):  # Avoid duplicate edges
                         G.add_edge(u, v, predicate=rel, source='kb')
                         edge_count += 1
-                        added += 1
-                        logging.debug(f"[add_commonsense_edges] Added KB edge: {u}->{v} predicate={rel} (matched {v_concept}->{v_mapped_concept} to {other})")
-                        break
+                        edges_added_for_relation += 1
+                        logging.debug(f"[add_commonsense_edges] Added KB edge: {u}->{v} predicate={rel}")
+    
     logging.info(f"[add_commonsense_edges] Finished: KB edges added={edge_count}")
 
 def build_graph_unvalidated(record, predicates, top_k, extra_edges=None, kb=None):

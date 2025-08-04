@@ -1,11 +1,6 @@
-try:
-    import segment_anything
-    import sap_toolkit
-    HYBRID_PIPELINE_AVAILABLE = True
-except ImportError:
-    HYBRID_PIPELINE_AVAILABLE = False
+# Action-based augmentation utilities
+# No longer requires SAM or complex CV dependencies
 
-import torch
 import numpy as np
 import cv2
 from enum import Enum, auto
@@ -23,12 +18,16 @@ class MaskType(Enum):
 
 def classify_mask(mask_tensor):
     """Classify mask into EMPTY, THIN, SPARSE, or DENSE based on area and morphology."""
-    area = mask_tensor.sum().item()
+    area = mask_tensor.sum().item() if hasattr(mask_tensor, 'sum') else np.sum(mask_tensor)
     if area == 0:
         return MaskType.EMPTY
     
     # Use morphological properties to distinguish between thin, sparse, and dense
-    np_mask = (mask_tensor.squeeze().cpu().numpy() * 255).astype(np.uint8)
+    if hasattr(mask_tensor, 'cpu'):
+        np_mask = (mask_tensor.squeeze().cpu().numpy() * 255).astype(np.uint8)
+    else:
+        np_mask = (mask_tensor * 255).astype(np.uint8) if mask_tensor.dtype != np.uint8 else mask_tensor
+    
     eroded = cv2.erode(np_mask, np.ones((3,3), np.uint8), iterations=1)
     eroded_area = np.sum(eroded > 0)
     
@@ -41,34 +40,26 @@ def classify_mask(mask_tensor):
     else:
         return MaskType.DENSE
 
-def robust_z_scores(tensor):
-    """Compute z-scores using median absolute deviation (MAD)."""
-    tensor = tensor.float()
-    median = torch.median(tensor)
-    mad = torch.median(torch.abs(tensor - median))
-    return (tensor - median) / (1.4826 * mad + 1e-6)
-
-def sanitize_for_opencv(tensor):
-    """Convert PyTorch tensor to a format OpenCV understands."""
-    arr = tensor.cpu().numpy()
+def sanitize_for_opencv(arr):
+    """Convert array to a format OpenCV understands."""
+    if hasattr(arr, 'cpu'):  # Handle torch tensors if present
+        arr = arr.cpu().numpy()
     if arr.ndim == 3:
         arr = arr.squeeze(0)
     if arr.dtype != np.uint8:
         arr = (arr * 255).astype(np.uint8)
     return arr
 
-def diagnose_tensor_corruption(tensor, name="tensor", path=None):
+def diagnose_array_corruption(arr, name="array", path=None):
     """
-    Print shape, dtype, device and OpenCV compatibility of a tensor or numpy array.
+    Print shape, dtype and OpenCV compatibility of an array.
     """
     print(f"\n🛠️ Diagnosing {name}{': '+path if path else ''}")
-    if isinstance(tensor, torch.Tensor):
-        t = tensor
-        print(f" PyTorch: shape={tuple(t.shape)}, dtype={t.dtype}, device={t.device}, "
-              f"contiguous={t.is_contiguous()}")
-        np_arr = t.detach().cpu().numpy()
+    if hasattr(arr, 'cpu'):  # Handle torch tensors if present
+        np_arr = arr.detach().cpu().numpy()
+        print(f" Tensor: shape={tuple(arr.shape)}, dtype={arr.dtype}, device={getattr(arr, 'device', 'N/A')}")
     else:
-        np_arr = tensor
+        np_arr = arr
         print(f" NumPy: shape={np_arr.shape}, dtype={np_arr.dtype}")
 
     # Squeeze singleton dims and take first channel if >2D
@@ -127,26 +118,28 @@ def safe_device_transfer(tensor, device):
             tensor = tensor.to(device)
     return tensor
 
-def repair_mask(mask_tensor):
+def repair_mask(mask_array):
     """Apply morphological closing to repair thin masks."""
-    arr = sanitize_for_opencv(mask_tensor)
+    arr = sanitize_for_opencv(mask_array)
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     repaired = cv2.morphologyEx(arr, cv2.MORPH_CLOSE, kernel)
-    return torch.from_numpy(repaired).unsqueeze(0).float()
+    return repaired
 
-def pre_warp_mask(mask_tensor):
+def pre_warp_mask(mask_array):
     """Morphological dilation to fatten thin masks before augmentation."""
-    arr = sanitize_for_opencv(mask_tensor)
+    arr = sanitize_for_opencv(mask_array)
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
     dilated = cv2.dilate(arr, kernel, iterations=2)
-    return torch.from_numpy(dilated).unsqueeze(0).float()
+    return dilated
 
-def pre_warp_fatten(tensor, size=7):
+def pre_warp_fatten(array, size=7):
     """Aggressively dilate mask or line-art image before augmentation."""
-    arr = sanitize_for_opencv(tensor) * 255
+    arr = sanitize_for_opencv(array) 
+    if arr.max() <= 1.0:  # If normalized, scale to 0-255
+        arr = (arr * 255).astype(np.uint8)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
     dilated = cv2.dilate(arr, kernel, iterations=2)
-    return torch.from_numpy(dilated).unsqueeze(0).float() / 255.0
+    return dilated.astype(np.float32) / 255.0
 
 def topology_aware_morphological_repair(mask: np.ndarray, mask_type: MaskType) -> np.ndarray:
     """
@@ -257,63 +250,33 @@ def setup_logging(log_level: str = 'INFO', log_file: str = 'logs/augmentor.log')
     log.info(f"Logging initialized. Level: {log_level}, File: {log_file}")
 
 def get_base_config() -> Dict:
-    """Loads a base configuration from a YAML file or returns a default."""
-    # In a real-world scenario, this would load from a file
-    # For this case, we'll define a comprehensive default config here.
+    """Returns default configuration for action-based augmentation pipeline."""
     return {
         'data': {
-            'input_path': 'data/derived_labels.json',
+            'input_path': None,  # Path to derived_labels.json (optional)
+            'action_programs_dir': None,  # Path to action programs directory (optional) 
             'output_path': 'data/augmented.pkl',
-            'problem_folders_path': 'data/ShapeBongard_V2/puzzles',
+            'problems_list': None,  # Optional file containing list of problems to process
+            'n_select': 50,  # Number of problems to select from action programs
         },
         'processing': {
             'batch_size': 32,
-            'device': 'cuda' if torch.cuda.is_available() else 'cpu',
+            'device': 'cpu',  # Action-based processing doesn't require GPU
         },
-        'augmentation': {
-            'type': 'geometric', # 'geometric', 'photometric', 'both'
-            'geometric_params': {
-                'rotation': 15,
-                'scale_min': 0.9,
-                'scale_max': 1.1,
-                'translate_x': 0.1,
-                'translate_y': 0.1,
-                'shear': 5,
-            },
-            'photometric_params': {
-                'brightness': 0.2,
-                'contrast': 0.2,
-                'saturation': 0.2,
-                'hue': 0.1,
-            }
-        },
-        'sam': {
-            'model_type': 'vit_h',
-            'checkpoint_path': 'models/sam_vit_h_4b8939.pth',
-            'hq_checkpoint_path': 'models/sam_hq_vit_h.pth',
-            'use_hq': True,
-        },
-        'prompting': {
-            'strategy': 'hybrid', # 'grid', 'bbox', 'hybrid'
-            'grid_points_per_side': 16,
-            'use_semantic_filtering': True,
-            'concept_source': 'data/conceptnet_lite.json',
-        },
+        'image_size': (64, 64),  # Size for generated masks
+        'enable_post_processing': False,  # Enable morphological post-processing
         'refinement': {
-            'use_iterative_refinement': True,
-            'max_iterations': 3,
-            'use_morphological_cleanup': True,
-            'use_fallback_on_failure': True,
-            'fallback_strategy': 'convex_hull', # 'convex_hull', 'bbox'
+            'contour_approx_factor': 0.02,
+            'min_component_size': 50,
+            'closing_kernel_size': 3,
+            'opening_kernel_size': 3,
         },
-        'qa': {
-            'enabled': True,
-            'failure_rate_threshold': 0.15, # 15% failure rate triggers fallback mode
-            'metrics': ['iou', 'pixel_accuracy', 'topology_consistency'],
-            'log_dir': 'qa_adversarial',
+        'skeleton': {
+            'min_branch_length': 10,
         },
+        'inspection_dir': None,  # Optional directory for saving inspection images
         'logging': {
             'level': 'INFO',
-            'log_file': 'logs/hybrid_augmentor.log'
+            'log_file': 'logs/augmentor.log'
         }
     }

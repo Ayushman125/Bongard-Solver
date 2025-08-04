@@ -1,13 +1,8 @@
-# ConceptNet whitelist of relation types to retain
+# ConceptNet whitelist of relation types to retain - optimized for Bongard problems
 CONCEPTNET_KEEP_RELS = {
-    "PartOf", "HasA", "AtLocation", "MadeOf", "DerivedFrom",
-    "RelatedTo", "IsA", "UsedFor", "CapableOf", "Desires",
-    "HasProperty", "LocatedNear", "SimilarTo", "SymbolOf",
-    "HasSubevent", "CausesDesire", "MotivatedByGoal", "ObstructedBy",
-    "Causes", "HasPrerequisite", "HasFirstSubevent", "HasLastSubevent",
-    "DefinedAs", "MannerOf", "ReceivesAction", "HasContext",
-    "EntailsEvent", "InstanceOf", "ExternalURL", "EtymologicallyRelatedTo",
-    "FormOf", "Antonym", "Synonym", "DistinctFrom", "NotUsedFor"
+    "RelatedTo", "SimilarTo", "PartOf", "HasProperty", "IsA", 
+    "DerivedFrom", "AtLocation", "HasA", "DefinedAs", "MadeOf",
+    "SymbolOf", "DistinctFrom", "FormOf"  # Reduced from 25+ to 13 most meaningful relations
 }
 
 
