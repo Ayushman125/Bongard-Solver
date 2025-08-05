@@ -558,68 +558,70 @@ class MaskRefiner:
         """
         Advanced binary mask conversion with adaptive thresholding, multi-level thresholding,
         edge-preserving smoothing, and confidence-weighted binarization.
+        Fixes assignment errors and ensures robust shape handling.
         """
         # Ensure mask is a numpy array and float32 for processing
+        if mask is None or not isinstance(mask, np.ndarray) or mask.size == 0:
+            logging.warning("Input mask is empty or invalid. Returning blank mask.")
+            return np.zeros((256, 256), dtype=np.uint8)  # Default size if unknown
+        # Enforce mask is 2D (single channel)
+        if mask.ndim > 2:
+            logging.warning(f"Input mask has shape {mask.shape}, flattening to 2D.")
+            mask = mask.squeeze()
+            if mask.ndim > 2:
+                mask = mask[...,0]
+        if mask.ndim != 2:
+            logging.warning(f"Input mask is not 2D after squeeze, got shape {mask.shape}. Returning blank mask.")
+            return np.zeros((256, 256), dtype=np.uint8)
         if mask.dtype != np.float32:
             mask = mask.astype(np.float32) / 255.0 if mask.max() > 1 else mask.astype(np.float32)
 
         # Edge-preserving smoothing
-        # Bilateral filter requires 3 channels for color images, or single channel for grayscale.
-        # Assuming the input mask is grayscale (single channel), check its dimensions.
-        if len(mask.shape) == 2: # Grayscale
-            mask_smooth = cv2.bilateralFilter(mask, d=5, sigmaColor=0.1, sigmaSpace=5)
-        elif len(mask.shape) == 3 and mask.shape[2] == 1: # Grayscale with channel dim
-            mask_smooth = cv2.bilateralFilter(mask, d=5, sigmaColor=0.1, sigmaSpace=5).reshape(mask.shape[:2])
-        else:
-            # If it's a 3-channel color image, convert to grayscale first for bilateral filtering
-            logging.warning("Input mask has multiple channels. Converting to grayscale for smoothing.")
-            mask_gray = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY) if mask.shape[2] == 3 else mask[:,:,0]
-            mask_smooth = cv2.bilateralFilter(mask_gray, d=5, sigmaColor=0.1, sigmaSpace=5)
+        mask_smooth = cv2.bilateralFilter(mask, d=5, sigmaColor=0.1, sigmaSpace=5)
 
         # Otsu + adaptive thresholding
         mask_uint8 = (mask_smooth * 255).astype(np.uint8)
-        
+
         # Ensure there's enough variance for Otsu's method, otherwise fallback to a simple threshold
         if mask_uint8.min() == mask_uint8.max():
             _, otsu_mask = cv2.threshold(mask_uint8, 127, 255, cv2.THRESH_BINARY)
         else:
             _, otsu_mask = cv2.threshold(mask_uint8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        
+
         adaptive_mask = cv2.adaptiveThreshold(mask_uint8, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-        
+
         # Combine Otsu and adaptive
         combined_mask = cv2.bitwise_or(otsu_mask, adaptive_mask)
-        
+
         # Confidence-weighted binarization (if confidence_map provided)
         if confidence_map is not None:
-            # Ensure confidence_map is float32 and normalized to [0, 1]
             if confidence_map.dtype != np.float32:
                 conf_norm = confidence_map.astype(np.float32) / confidence_map.max() if confidence_map.max() > 0 else confidence_map.astype(np.float32)
             else:
                 conf_norm = cv2.normalize(confidence_map, None, 0, 1, cv2.NORM_MINMAX)
-            
-            # Ensure conf_norm has the same dimensions as combined_mask
             if conf_norm.shape != combined_mask.shape:
                 logging.warning(f"Confidence map shape {conf_norm.shape} does not match mask shape {combined_mask.shape}. Resizing confidence map.")
                 conf_norm = cv2.resize(conf_norm, (combined_mask.shape[1], combined_mask.shape[0]), interpolation=cv2.INTER_LINEAR)
-            
             combined_mask = np.where(conf_norm > 0.5, combined_mask, 0)
-        
+
         # Morphological closing to fill small holes
         closed = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, np.ones((self.closing_kernel_size, self.closing_kernel_size), np.uint8))
-        
+
         # Remove small objects
         num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(closed, connectivity=8)
-        processed_mask = np.copy(closed) # Make a copy to modify
+        processed_mask = np.copy(closed)
         for i in range(1, num_labels):
             if stats[i, cv2.CC_STAT_AREA] < self.min_component_size:
                 processed_mask[labels == i] = 0
-        
+
         # Fill holes with size constraints
-        # ndimage.binary_fill_holes expects a boolean array
-        filled_holes = ndimage.binary_fill_holes(processed_mask > 0).astype(np.uint8)
-        
-        return filled_holes * 255 # Return binary mask (0 or 255)
+        filled_holes = ndi.binary_fill_holes(processed_mask > 0).astype(np.uint8)
+
+        # Final shape check: ensure output is 2D and uint8
+        if filled_holes.ndim != 2:
+            logging.warning(f"Output mask is not 2D, got shape {filled_holes.shape}. Flattening.")
+            filled_holes = filled_holes.reshape(-1, filled_holes.shape[-1]) if filled_holes.size > 0 else np.zeros((256, 256), dtype=np.uint8)
+        return filled_holes * 255
 
     def validate_mask_quality_with_confidence(self, mask: np.ndarray, image: np.ndarray, prediction_scores: list, model=None, input_tensor=None, mc_dropout_runs: int = 20, device: str = 'cpu', logits=None, temperature: float = 1.0) -> tuple:
         """

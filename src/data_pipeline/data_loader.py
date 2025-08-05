@@ -30,8 +30,8 @@ def load_json_data(input_path):
 # ACTION PROGRAMS ONLY: Use load_action_programs() instead
 
 def remap_path(path):
-    """Remaps image paths to match expected dataset structure."""
-    return path.replace('category_1', '1').replace('category_0', '0')
+    """Remaps image paths to match expected dataset structure. FIXED: No replacement, use actual folder names."""
+    return path
 
 def robust_image_open(path, *args, **kwargs):
     """
