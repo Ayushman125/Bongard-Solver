@@ -142,8 +142,9 @@ class ComprehensiveBongardProcessor:
                            is_positive: bool, problem_id: str, category: str,
                            image_path: str) -> Optional[Dict[str, Any]]:
         """
-        Process a single image using the canonical Bongard-LOGO parser for all action types.
+        Process a single image using the robust NVLabs parser for all action types.
         """
+        from src.data_pipeline.logo_parser import ComprehensiveNVLabsParser
         self.processing_stats['total_processed'] += 1
         logger.debug(f"Processing image_id={image_id}, problem_id={problem_id}, is_positive={is_positive}")
         logger.debug(f"action_commands type: {type(action_commands)}, value: {action_commands}")
@@ -152,12 +153,13 @@ class ComprehensiveBongardProcessor:
             if isinstance(action_commands, list) and len(action_commands) == 1 and isinstance(action_commands[0], list):
                 action_commands = action_commands[0]
 
-            # Use canonical Bongard-LOGO parser
-            try:
-                bongard_image = BongardImage.import_from_action_string_list(action_commands)
-            except Exception as e:
-                logger.error(f"[process_single_image] Failed to parse action_commands: {action_commands} | Error: {e}")
+            # Use robust NVLabs parser
+            parser = ComprehensiveNVLabsParser()
+            shape = parser.parse_action_commands(action_commands, problem_id)
+            if not shape:
+                logger.error(f"[process_single_image] Failed to parse action_commands: {action_commands}")
                 return None
+            bongard_image = BongardImage(one_stroke_shapes=[shape])
 
             if not bongard_image or not hasattr(bongard_image, 'one_stroke_shapes') or not bongard_image.one_stroke_shapes:
                 logger.error(f"[process_single_image] No valid strokes found for image {image_id}")
