@@ -161,6 +161,7 @@ class PhysicsInference:
 
         # small-polygon repair (fix: use n < 20 for fallback, as in snippet)
         if not poly.is_valid and n < 20:
+            logging.warning(f"Invalid polygon with {n} vertices, using unit square fallback.")
             poly = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
 
         poly = PhysicsInference._ensure_polygon(poly)
@@ -199,14 +200,20 @@ class PhysicsInference:
 
     @staticmethod
     def num_straight(vertices_or_poly):
-        return len(PhysicsInference.safe_extract_vertices(vertices_or_poly))
+        """
+        Alias for count_straight_segments: returns the number of straight segments in the shape.
+        """
+        return PhysicsInference.count_straight_segments(vertices_or_poly)
 
     @staticmethod
     @safe_feature(default=False)
     def has_quadrangle(vertices_or_poly):
+        """
+        Returns True if the shape is a valid convex quadrangle (exactly 4 vertices).
+        """
         verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
         poly = Polygon(verts)
-        return len(verts) >= 4 and poly.is_valid and PhysicsInference.is_convex(poly)
+        return len(verts) == 4 and poly.is_valid and PhysicsInference.is_convex(poly)
 
     @staticmethod
     @safe_feature(default=False)

@@ -51,6 +51,23 @@ FLAGGING_THRESHOLDS = {
 
 
 class ComprehensiveBongardProcessor:
+    def normalize_vertices(self, vertices_raw):
+        """Normalize Bongard-LOGO coordinates from (-360,360) to (0,1) range."""
+        if not vertices_raw:
+            return []
+        return [((x + 360) / 720.0, (y + 360) / 720.0) for x, y in vertices_raw]
+
+    def calculate_geometry(self, vertices):
+        """Calculate geometry properties from normalized vertices."""
+        if not vertices:
+            return {}
+        xs, ys = zip(*vertices)
+        return {
+            'bbox': {'min_x': min(xs), 'max_x': max(xs), 'min_y': min(ys), 'max_y': max(ys)},
+            'centroid': [sum(xs)/len(xs), sum(ys)/len(ys)],
+            'width': max(xs) - min(xs),
+            'height': max(ys) - min(ys)
+        }
     # Load TSVs once for all instances
     _shape_attributes = None
     _shape_defs = None
@@ -157,52 +174,44 @@ class ComprehensiveBongardProcessor:
             if isinstance(action_commands, list) and len(action_commands) == 1 and isinstance(action_commands[0], list):
                 action_commands = action_commands[0]
 
-            # 1. Parse action strings into actions using parser (no feature extraction here)
             parser = ComprehensiveNVLabsParser()
             parsed_actions = parser.parse_action_commands(action_commands, problem_id)
             if not parsed_actions:
                 logger.error(f"[process_single_image] Failed to parse action_commands: {action_commands}")
                 return None
 
-            # 2. Construct OneStrokeShape using Bongard-LOGO repo (not parser's shape object)
             # If parser returns a list of actions, wrap in OneStrokeShape; if already OneStrokeShape, use as is
             if hasattr(parsed_actions, 'basic_actions'):
                 shape = parsed_actions
             else:
                 shape = OneStrokeShape(basic_actions=parsed_actions)
 
-            # 3. BongardShapePainter is only needed for rendering, not for feature extraction. Do not instantiate here.
-            # If rendering is needed, instantiate BongardShapePainter with required arguments at that point only.
+            # --- Normalize vertices and calculate geometry ---
+            vertices_raw = getattr(shape, 'vertices', [])
+            vertices = self.normalize_vertices(vertices_raw)
+            geometry = self.calculate_geometry(vertices)
 
-            # 4. Extract vertices, geometry, and features using Bongard-LOGO repo
-            vertices = getattr(shape, 'vertices', [])
-            geometry = getattr(shape, 'geometry', {})
-            # Use Bongard-LOGO repo's feature extraction methods if available
-            image_features = getattr(shape, 'get_features', lambda: {})()
-            # For physics and composition features, use your own or Bongard-LOGO's if available
+            # --- Calculate image features using normalized vertices ---
+            image_features = self._calculate_image_features(vertices, getattr(shape, 'basic_actions', []), geometry)
             physics_features = self._calculate_physics_features(vertices)
             composition_features = self._calculate_composition_features(getattr(shape, 'basic_actions', []))
-            # Stroke type features (differentiated)
-            differentiated_features = self._calculate_stroke_type_differentiated_features({'line_features': [], 'arc_features': []}, getattr(shape, 'basic_actions', []))
 
-            # 5. Iterate over basic_actions for per-stroke metadata
+            # --- Aggregate line and arc features for stroke_type_features ---
+            line_features = []
+            arc_features = []
             stroke_features = []
             shape_attr_map = self.get_shape_attribute_map()
             shape_def_map = self.get_shape_def_map()
             unique_shape_functions = set()
             shape_function_counts = {}
             unique_modifiers = set()
-            # If action_commands was flattened above, keep a copy for fallback
             original_action_commands = action_commands if isinstance(action_commands, list) else []
             for i, action in enumerate(getattr(shape, 'basic_actions', [])):
-                # Robustly extract stroke_type from class name
                 stroke_type_val = type(action).__name__.replace('Action', '').lower()
-                # Robustly extract shape_modifier and parameters from raw_command string, function_name, or action attributes
                 raw_command = getattr(action, 'raw_command', None)
                 function_name = getattr(action, 'function_name', None)
                 # Fallback: if raw_command is None, try to reconstruct from original_action_commands
                 if not raw_command and original_action_commands and i < len(original_action_commands):
-                    # Only use if it's a string (not a nested list)
                     if isinstance(original_action_commands[i], str):
                         raw_command = original_action_commands[i]
                 shape_modifier_val = None
@@ -221,20 +230,25 @@ class ComprehensiveBongardProcessor:
                                 parameters[f'param{idx+1}'] = float(p)
                             except Exception:
                                 parameters[f'param{idx+1}'] = p
+                    # Extract function_name for TSV lookup
+                    if len(parts) >= 1:
+                        function_name = parts[0] + (f"_{parts[1]}" if len(parts) > 1 else "")
                 # 2. Try function_name if not found
                 if not shape_modifier_val and function_name and isinstance(function_name, str):
                     fn_parts = function_name.split('_')
                     if len(fn_parts) >= 2:
                         shape_modifier_val = fn_parts[1]
-                # 3. Try action.shape_modifier if present (for custom action classes)
+                if not function_name and raw_command and isinstance(raw_command, str):
+                    # fallback: use first two parts as function_name
+                    parts = raw_command.split('_')
+                    if len(parts) >= 2:
+                        function_name = f"{parts[0]}_{parts[1]}"
                 if not shape_modifier_val and hasattr(action, 'shape_modifier'):
-                    # Accept both .value and direct string
                     smod = getattr(action, 'shape_modifier')
                     if hasattr(smod, 'value'):
                         shape_modifier_val = smod.value
                     elif isinstance(smod, str):
                         shape_modifier_val = smod
-                # 4. Fallback to 'normal'
                 if not shape_modifier_val:
                     shape_modifier_val = 'normal'
                 is_valid = getattr(action, 'is_valid', True)
@@ -242,12 +256,17 @@ class ComprehensiveBongardProcessor:
                 canonical_shape_def = shape_def_map.get(function_name) if function_name else None
                 stroke_specific_features = self._calculate_stroke_specific_features(
                     action, i, stroke_type_val, shape_modifier_val, parameters)
+                if stroke_type_val == 'line':
+                    line_features.append(stroke_specific_features)
+                elif stroke_type_val == 'arc':
+                    arc_features.append(stroke_specific_features)
                 stroke_data = {
                     'stroke_id': f"{image_id}_stroke_{i}",
                     'stroke_type': stroke_type_val,
                     'shape_modifier': shape_modifier_val,
                     'parameters': parameters,
                     'raw_command': raw_command,
+                    'function_name': function_name,
                     'is_valid': is_valid,
                     'specific_features': stroke_specific_features,
                 }
@@ -262,7 +281,21 @@ class ComprehensiveBongardProcessor:
                     unique_shape_functions.add(function_name)
                     shape_function_counts[function_name] = shape_function_counts.get(function_name, 0) + 1
 
-            # 6. Canonical shape summary
+            # --- Calculate stroke_type_features with correct aggregation ---
+            differentiated_features = self._calculate_stroke_type_differentiated_features(
+                {'line_features': line_features, 'arc_features': arc_features}, getattr(shape, 'basic_actions', []))
+
+            # --- Robust action_program: always use best available command string ---
+            action_program = []
+            for i, a in enumerate(getattr(shape, 'basic_actions', [])):
+                rc = getattr(a, 'raw_command', None)
+                if not rc and original_action_commands and i < len(original_action_commands):
+                    if isinstance(original_action_commands[i], str):
+                        rc = original_action_commands[i]
+                if not rc:
+                    rc = str(a)
+                action_program.append(rc)
+
             image_canonical_summary = {
                 'unique_shape_functions': sorted(list(unique_shape_functions)),
                 'shape_function_counts': shape_function_counts,
@@ -288,7 +321,7 @@ class ComprehensiveBongardProcessor:
                     'processing_timestamp': time.time(),
                     'feature_count': len(image_features) + len(physics_features) + len(composition_features)
                 },
-                'action_program': [getattr(a, 'raw_command', None) for a in getattr(shape, 'basic_actions', [])],
+                'action_program': action_program,
                 'geometry': geometry
             }
             self.processing_stats['successful'] += 1
