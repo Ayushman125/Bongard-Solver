@@ -225,6 +225,7 @@ class ComprehensiveBongardProcessor:
         self.processing_stats['total_processed'] += 1
         logger.debug(f"Processing image_id={image_id}, problem_id={problem_id}, is_positive={is_positive}")
         logger.debug(f"action_commands type: {type(action_commands)}, value: {action_commands}")
+        import traceback
         try:
             # Flatten action_commands if it is a nested list (e.g., [[...]]), as in hybrid.py
             if isinstance(action_commands, list) and len(action_commands) == 1 and isinstance(action_commands[0], list):
@@ -234,6 +235,15 @@ class ComprehensiveBongardProcessor:
             parsed_actions = parser.parse_action_commands(action_commands, problem_id)
             if not parsed_actions:
                 logger.error(f"[process_single_image] Failed to parse action_commands: {action_commands}")
+                # Save to flagged_issues.txt
+                try:
+                    output_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'output'))
+                    os.makedirs(output_dir, exist_ok=True)
+                    flag_path = os.path.join(output_dir, 'flagged_issues.txt')
+                    with open(flag_path, 'a', encoding='utf-8') as f:
+                        f.write(f"[FAILED PARSE] image_id={image_id}, problem_id={problem_id}, action_commands={action_commands}\n")
+                except Exception as file_exc:
+                    logger.error(f"[process_single_image] Could not write to flagged_issues.txt: {file_exc}")
                 return None
 
             # If parser returns a list of actions, wrap in OneStrokeShape; if already OneStrokeShape, use as is
@@ -251,22 +261,39 @@ class ComprehensiveBongardProcessor:
             # --- Robust polygon recovery on normalized vertices ---
             from shapely.geometry import Polygon
             from shapely.ops import polygonize
-            poly = Polygon(normalized_vertices)
-            if not poly.is_valid or poly.area == 0:
-                try:
-                    poly = list(polygonize([normalized_vertices]))[0]
-                except Exception:
-                    poly = Polygon(normalized_vertices)
-            # Use the possibly recovered polygon for geometry/area/complexity
-            norm_vertices_for_features = list(poly.exterior.coords) if hasattr(poly, 'exterior') else normalized_vertices
+            poly = None
+            norm_vertices_for_features = normalized_vertices
+            try:
+                poly = Polygon(normalized_vertices)
+                if not poly.is_valid or poly.area == 0:
+                    # Try buffer(0) fix
+                    poly = poly.buffer(0)
+                if not poly.is_valid or poly.area == 0:
+                    # Try polygonize
+                    polys = list(polygonize([normalized_vertices]))
+                    if polys:
+                        poly = polys[0]
+                if (not poly.is_valid or poly.area == 0) and len(normalized_vertices) >= 3:
+                    # Fallback: convex hull
+                    poly = Polygon(normalized_vertices).convex_hull
+                if poly.is_valid and poly.area > 0:
+                    norm_vertices_for_features = list(poly.exterior.coords)
+                else:
+                    poly = None
+            except Exception:
+                poly = None
+                norm_vertices_for_features = normalized_vertices
 
             # --- Calculate geometry from normalized (possibly recovered) vertices ---
             geometry = self.calculate_geometry(norm_vertices_for_features)
 
             # --- Calculate image features using robust polygon ---
             image_features = self._calculate_image_features(norm_vertices_for_features, getattr(shape, 'basic_actions', []), geometry)
-            physics_features = self._calculate_physics_features(norm_vertices_for_features)
+            # Use actual centroid for center_of_mass
+            centroid = geometry.get('centroid')
+            # Count actual LineAction and ArcAction objects for stroke counting
             composition_features = self._calculate_composition_features(getattr(shape, 'basic_actions', []))
+            physics_features = self._calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=getattr(shape, 'basic_actions', []))
 
             # --- Aggregate line and arc features for stroke_type_features ---
             line_features = []
@@ -408,7 +435,17 @@ class ComprehensiveBongardProcessor:
             return self.json_safe(complete_record)
         except Exception as e:
             error_msg = f"Error processing image {image_id}: {e}"
-            logger.error(error_msg)
+            stack_trace = traceback.format_exc()
+            logger.error(f"{error_msg}\n{stack_trace}")
+            # Save to flagged_issues.txt
+            try:
+                output_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'output'))
+                os.makedirs(output_dir, exist_ok=True)
+                flag_path = os.path.join(output_dir, 'flagged_issues.txt')
+                with open(flag_path, 'a', encoding='utf-8') as f:
+                    f.write(f"[ERROR] image_id={image_id}, problem_id={problem_id}, error={e}\n{stack_trace}\n")
+            except Exception as file_exc:
+                logger.error(f"[process_single_image] Could not write to flagged_issues.txt: {file_exc}")
             return None
     
     def _flag_case(self, image_id: str, problem_id: str, reason: str, flags: List[str]):
@@ -550,9 +587,17 @@ class ComprehensiveBongardProcessor:
         }
 
     def _calculate_arc_specific_features_from_params(self, params: dict) -> Dict[str, Any]:
-        radius = params.get('param1', 0)
-        span_angle = params.get('param2', 0)
-        end_angle = params.get('param3', 0)
+        # Robustly convert parameters to float, fallback to 0 if conversion fails
+        def to_float(val):
+            try:
+                return float(val)
+            except (ValueError, TypeError):
+                return 0.0
+
+        radius = to_float(params.get('param1', 0))
+        span_angle = to_float(params.get('param2', 0))
+        end_angle = to_float(params.get('param3', 0))
+
         arc_length = abs(span_angle) * radius * self.safe_divide(math.pi, 180) if radius > 0 else 0
         is_major_arc = abs(span_angle) > 180
         is_full_circle = abs(span_angle) >= 350
@@ -722,36 +767,80 @@ class ComprehensiveBongardProcessor:
             logger.warning(f"Error calculating image features: {e}")
             return {}
     
-    def _calculate_physics_features(self, vertices: List[tuple]) -> Dict[str, Any]:
-        """Calculate physics-based features using PhysicsInference."""
+    def _calculate_physics_features(self, vertices: List[tuple], centroid=None, strokes=None) -> Dict[str, Any]:
+        """Calculate physics-based features using PhysicsInference. Accepts centroid override and strokes for correct counting."""
         if not vertices:
             return {}
-            
         try:
-            poly = PhysicsInference.polygon_from_vertices(vertices)
-            
+            poly = None
+            try:
+                poly = PhysicsInference.polygon_from_vertices(vertices)
+            except Exception:
+                pass
+            # Use centroid from geometry if provided, else fallback
+            center_of_mass = centroid if centroid is not None else ([0.0, 0.0] if not poly else PhysicsInference.centroid(poly))
+
+            # Count actual LineAction and ArcAction objects if strokes provided
+            num_straight_segments = 0
+            num_arcs = 0
+            if strokes is not None:
+                from bongard.bongard import LineAction, ArcAction
+                for s in strokes:
+                    if isinstance(s, LineAction):
+                        num_straight_segments += 1
+                    elif isinstance(s, ArcAction):
+                        num_arcs += 1
+            else:
+                # fallback to geometry-based
+                num_straight_segments = PhysicsInference.count_straight_segments(vertices)
+                num_arcs = PhysicsInference.count_arcs(vertices)
+
             features = {
                 # Core physics properties
                 'moment_of_inertia': PhysicsInference.moment_of_inertia(vertices),
-                'center_of_mass': PhysicsInference.centroid(poly),
-                
+                'center_of_mass': center_of_mass,
                 # Shape metrics
-                'num_straight_segments': PhysicsInference.count_straight_segments(vertices),
-                'num_arcs': PhysicsInference.count_arcs(vertices),
+                'num_straight_segments': num_straight_segments,
+                'num_arcs': num_arcs,
                 'has_quadrangle': PhysicsInference.has_quadrangle(vertices),
                 'has_obtuse_angle': PhysicsInference.has_obtuse(vertices),
-                
                 # Advanced metrics
                 'curvature_score': self._calculate_curvature_score(vertices),
                 'angular_variance': self._calculate_angular_variance(vertices),
                 'edge_length_variance': self._calculate_edge_length_variance(vertices)
             }
-            
             return features
-            
         except Exception as e:
             logger.warning(f"Error calculating physics features: {e}")
             return {}
+    def validate_features(self, features: dict) -> dict:
+        """Validate key features and flag issues. Returns dict of issues found."""
+        import numpy as np
+        issues = {}
+        # Area
+        area = features.get('image_features', {}).get('area', None)
+        if area is not None and (area <= 0 or not np.isfinite(area)):
+            issues['area'] = area
+        # Center of mass
+        com = features.get('physics_features', {}).get('center_of_mass', None)
+        if com is not None and (not isinstance(com, (list, tuple)) or len(com) != 2 or not all(np.isfinite(c) for c in com)):
+            issues['center_of_mass'] = com
+        # Stroke counts
+        nline = features.get('physics_features', {}).get('num_straight_segments', None)
+        narc = features.get('physics_features', {}).get('num_arcs', None)
+        if nline is not None and nline < 0:
+            issues['num_straight_segments'] = nline
+        if narc is not None and narc < 0:
+            issues['num_arcs'] = narc
+        # Angular variance
+        angvar = features.get('physics_features', {}).get('angular_variance', None)
+        if angvar is not None and (angvar < 0 or angvar > 180):
+            issues['angular_variance'] = angvar
+        # Pattern regularity
+        preg = features.get('composition_features', {}).get('pattern_regularity', None)
+        if preg is not None and (preg < 0 or preg > 1):
+            issues['pattern_regularity'] = preg
+        return issues
     
     def _calculate_composition_features(self, strokes: List) -> Dict[str, Any]:
         """Calculate features about stroke composition and relationships. FIXED: Use actual modifiers from strokes."""
@@ -987,31 +1076,33 @@ class ComprehensiveBongardProcessor:
         return self.safe_divide(PhysicsInference.count_arcs(vertices), max(len(vertices), 1))
     
     def _calculate_angular_variance(self, vertices: List[tuple]) -> float:
-        """Calculate variance in angles between edges."""
-        # Fix: Ensure vertices is a list of tuples, not a Polygon object
+        """Calculate variance in angles between edges, with proper scaling and stability."""
         vertices = self.ensure_vertex_list(vertices)
         if len(vertices) < 3:
             return 0.0
-        
         try:
             import numpy as np
             angles = []
             n = len(vertices)
-            
             for i in range(n):
                 p1 = np.array(vertices[i])
                 p2 = np.array(vertices[(i + 1) % n])
                 p3 = np.array(vertices[(i + 2) % n])
-                
                 v1 = p2 - p1
                 v2 = p3 - p2
-                
-                if np.linalg.norm(v1) > 1e-6 and np.linalg.norm(v2) > 1e-6:
-                    angle = np.arccos(np.clip(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2)), -1, 1))
-                    angles.append(np.degrees(angle))
-            
-            return self.json_safe(np.var(angles) if angles else 0.0)
-        except:
+                norm1 = np.linalg.norm(v1)
+                norm2 = np.linalg.norm(v2)
+                if norm1 > 1e-6 and norm2 > 1e-6:
+                    dot = np.clip(np.dot(v1, v2) / (norm1 * norm2), -1.0, 1.0)
+                    angle = np.arccos(dot)
+                    angle_deg = np.degrees(angle)
+                    angles.append(angle_deg)
+            if not angles:
+                return 0.0
+            var = np.var(angles)
+            var = min(var, 180.0)
+            return self.json_safe(var)
+        except Exception:
             return 0.0
     
     def _calculate_edge_length_variance(self, vertices: List[tuple]) -> float:
