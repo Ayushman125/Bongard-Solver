@@ -6,7 +6,7 @@ from .exceptions import NoPredicateFound
 def _get_feature_types(samples):
     # Returns dict: feature -> type ('bool', 'numeric', 'other')
     types = {}
-    for f in samples:
+    for i, f in enumerate(samples):
         for k, v in f.items():
             if isinstance(v, bool):
                 types[k] = 'bool'
@@ -14,13 +14,19 @@ def _get_feature_types(samples):
                 types[k] = 'numeric'
             else:
                 types.setdefault(k, 'other')
+        # Debug: print first 2 feature dicts
+        if i < 2:
+            print(f"DEBUG auto_inducer.py: Feature dict {i}: {f}")
     return types
 
 def induce(problem_id, positives, negatives):
     # 1. Try all boolean features
     pos_feats = positives
     neg_feats = negatives
+    print(f"DEBUG auto_inducer.py: induce() called for {problem_id}")
+    print(f"  Positives count: {len(positives)} Negatives count: {len(negatives)}")
     types = _get_feature_types(pos_feats + neg_feats)
+    print(f"  Feature types: {types}")
     for feat, typ in types.items():
         if typ == 'bool':
             if all(f.get(feat, False) for f in pos_feats) and not any(f.get(feat, False) for f in neg_feats):

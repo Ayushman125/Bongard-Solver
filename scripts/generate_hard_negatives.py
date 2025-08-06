@@ -49,13 +49,17 @@ def parse_logo_commands_to_tuples(commands: List[Any]) -> List[Tuple[str, Any]]:
     return parsed
 
 def is_positive_label(label: Any) -> bool:
+    # Only 'positive' and 'negative' are valid labels in the new derived_labels.json
     if label is None:
         return False
     label_str = str(label).strip().lower()
-    return label_str in {"category_1", "positive", "1", "true", "yes"}
+    return label_str == "positive"
 
 def process_sample_with_guaranteed_success(sample: Dict[str, Any], concept_fn, args) -> Tuple[Dict[str, Any], str]:
     pid = sample['problem_id']
+    if 'features' not in sample:
+        logging.warning(f"Sample for problem {pid} is missing 'features' key. Skipping sample.")
+        return [], None
     base_cmds = parse_logo_commands_to_tuples(sample['action_program'])
     original_label = concept_fn(sample['features'])
     scorer = Scorer(concept_fn, sample['features'])
@@ -195,7 +199,11 @@ def main():
 
     sample_args = []
     for pid, entries in problems.items():
-        concept_fn = get_concept_fn_for_problem(pid)
+        try:
+            concept_fn = get_concept_fn_for_problem(pid)
+        except KeyError as e:
+            logging.warning(f"Skipping problem {pid}: {e}")
+            continue
         seen_geoms = []
         for entry in entries:
             if not is_positive_label(entry.get('label')):

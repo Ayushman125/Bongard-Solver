@@ -1,6 +1,6 @@
 import logging
 from src.data_pipeline.logo_parser import BongardLogoParser
-from src.data_pipeline.physics_infer import PhysicsInference
+from src.physics_inference import PhysicsInference
 
 def flips_label(original_features, perturbed_features, concept_fn):
     original_label = concept_fn(original_features)

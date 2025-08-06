@@ -21,7 +21,7 @@ def _load_derived_labels(path=DERIVED_LABELS_PATH):
         data = json.load(f)
     # Map problem_id to list of (features, label)
     pid_to_samples = {}
-    for entry in data:
+    for i, entry in enumerate(data):
         pid = entry['problem_id']
         # Normalize label: category_1 → 1, category_0 → 0, or fallback to int/str
         label = entry.get('label', None)
@@ -31,8 +31,20 @@ def _load_derived_labels(path=DERIVED_LABELS_PATH):
             y = 0
         else:
             y = int(label) if isinstance(label, int) else 0
-        features = entry.get('features', {})
+        # Aggregate all relevant features: per-stroke, image, physics, composition, stroke_type
+        features = {}
+        # Per-stroke features
+        for stroke in entry.get('strokes', []):
+            features.update(stroke.get('specific_features', {}))
+        # Top-level composite features
+        for key in ["image_features", "physics_features", "composition_features", "stroke_type_features"]:
+            comp = entry.get(key, {})
+            if isinstance(comp, dict):
+                features.update(comp)
         pid_to_samples.setdefault(pid, []).append((features, y))
+        # Debug: print the first 3 feature dicts for inspection
+        if i < 3:
+            print(f"DEBUG registry.py: Sample {i} for problem {pid} label={y}\nFeatures: {json.dumps(features, indent=2)}\n")
     return pid_to_samples
 
 def _spec_to_lambda(spec):
@@ -90,6 +102,12 @@ class ConceptRegistry:
     def _scan_and_update(self, derived_labels_path):
         pid_to_samples = _load_derived_labels(derived_labels_path)
         updated = False
+        prioritized_features = [
+            'geometric_complexity', 'homogeneity_score', 'shape_diversity', 'pattern_regularity',
+            'dominant_stroke_type', 'dominant_shape_modifier', 'visual_complexity', 'irregularity_score',
+            'num_straight_segments', 'num_arcs', 'has_obtuse_angle', 'has_quadrangle', 'compactness',
+            'eccentricity', 'aspect_ratio', 'area', 'perimeter', 'is_convex', 'symmetry_score', 'rotational_symmetry'
+        ]
         for pid, samples in pid_to_samples.items():
             if pid in self.funcs:
                 continue
@@ -97,11 +115,39 @@ class ConceptRegistry:
             negatives = [f for f, y in samples if y == 0]
             if not positives or not negatives:
                 continue  # skip degenerate
-            spec = induce(pid, positives, negatives)
-            self.specs[pid] = spec
-            self.funcs[pid] = _spec_to_lambda(spec)
-            print(f"INFO  Auto-derived concept for {pid} → {spec['signature']}")
-            updated = True
+            # Debug: print features for first 2 problems
+            if len(self.funcs) < 2:
+                print(f"DEBUG registry.py: Induction input for {pid}\nPositives: {json.dumps(positives[:2], indent=2)}\nNegatives: {json.dumps(negatives[:2], indent=2)}\n")
+            try:
+                spec = induce(pid, positives, negatives)
+                self.specs[pid] = spec
+                self.funcs[pid] = _spec_to_lambda(spec)
+                print(f"INFO  Auto-derived concept for {pid} → {spec['signature']}")
+                updated = True
+            except NoPredicateFound as e:
+                # Fallback: try prioritized single features
+                fallback_found = False
+                for feat in prioritized_features:
+                    pos_vals = [f.get(feat, None) for f in positives]
+                    neg_vals = [f.get(feat, None) for f in negatives]
+                    if (all(v is not None for v in pos_vals + neg_vals)
+                        and (len(set(pos_vals)) > 1 or len(set(neg_vals)) > 1 or set(pos_vals) != set(neg_vals))):
+                        # Try induction with only this feature
+                        pos_feat = [{feat: f[feat]} for f in positives if feat in f]
+                        neg_feat = [{feat: f[feat]} for f in negatives if feat in f]
+                        try:
+                            spec = induce(pid, pos_feat, neg_feat)
+                            self.specs[pid] = spec
+                            self.funcs[pid] = _spec_to_lambda(spec)
+                            print(f"INFO  Fallback concept for {pid} using '{feat}' → {spec['signature']}")
+                            updated = True
+                            fallback_found = True
+                            break
+                        except NoPredicateFound:
+                            continue
+                if not fallback_found:
+                    print(f"WARNING: {e}. Skipping problem {pid}.")
+                    continue
         if updated:
             self.cache_path.write_text(yaml.safe_dump(self.specs))
 
