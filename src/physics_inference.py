@@ -264,7 +264,7 @@ class PhysicsInference:
     @safe_feature(default=0.0)
     def angular_variance(vertices_or_poly):
         """
-        Returns variance of angles in degrees, normalized to [0, 180]. Ensures finite, JSON-serializable output.
+        Returns variance of angles in degrees, capped at 180.0. Ensures finite, JSON-serializable output.
         """
         verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
         if not verts or len(verts) < 3:
@@ -283,11 +283,9 @@ class PhysicsInference:
         if not angles:
             return 0.0
         var = np.var(angles)
-        # Normalize: variance of uniform [0,180] is 2700, so scale to [0,1]
-        result = float(var) / 2700.0
-        if not np.isfinite(result):
+        if not np.isfinite(var):
             return 0.0
-        return result
+        return min(float(var), 180.0)
 
     @staticmethod
     @safe_feature(default=False)

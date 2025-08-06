@@ -370,7 +370,7 @@ class ComprehensiveNVLabsParser:
             
             # Parse each command using NVLabs parsers
             actions = []
-            for cmd in commands:
+            for idx, cmd in enumerate(commands):
                 try:
                     # Handle nested list case (commands might be wrapped in an extra list)
                     if isinstance(cmd, list):
@@ -379,13 +379,14 @@ class ComprehensiveNVLabsParser:
                             if isinstance(sub_cmd, str):
                                 action = self._parse_single_command(sub_cmd)
                                 if action:
+                                    action.raw_command = sub_cmd  # PATCH: Set raw_command for each action
                                     actions.append(action)
                         continue
                     elif isinstance(cmd, str):
                         action = self._parse_single_command(cmd)
                         if action:
+                            action.raw_command = cmd  # PATCH: Set raw_command for each action
                             actions.append(action)
-                        
                 except Exception as e:
                     logger.error(f"Failed to parse command '{cmd}': {e}")
                     continue

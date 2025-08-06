@@ -56,9 +56,12 @@ class ComprehensiveBongardProcessor:
         import logging
         logger = logging.getLogger(__name__)
         n = len(modifier_sequence)
-        if not modifier_sequence or n < 2:
-            logger.debug("Pattern regularity: sequence too short, returning 1.0")
-            return 1.0
+        logger.debug(f"Input modifier_sequence: {modifier_sequence}")
+        logger.debug(f"Unique modifiers: {set(modifier_sequence)}")
+        logger.debug(f"Diversity penalty calculation: ({len(set(modifier_sequence))} - 1) / ({len(modifier_sequence)} - 1)")
+        if not modifier_sequence or n < 3:
+            logger.debug("Pattern regularity: sequence too short, returning NaN")
+            return float('nan')
         # 1. Repetition score
         repetition_count = sum(1 for i in range(n-1) if modifier_sequence[i] == modifier_sequence[i+1])
         repetition_score = repetition_count / (n-1)
@@ -301,6 +304,20 @@ class ComprehensiveBongardProcessor:
             shape_function_counts = {}
             unique_modifiers = set()
             original_action_commands = action_commands if isinstance(action_commands, list) else []
+
+            # --- NEW: Extract canonical problem name for TSV lookup (robust normalization) ---
+            canonical_name = problem_id
+            if '_' in canonical_name:
+                if canonical_name.startswith('bd_') or canonical_name.startswith('ff_') or canonical_name.startswith('hd_'):
+                    canonical_name = canonical_name.split('_', 1)[1]
+            # Remove numeric suffix (e.g. _0000)
+            import re
+            canonical_base = re.sub(r'(_\d+)?$', '', canonical_name)
+            # Normalize: lowercase, replace hyphens/spaces, remove trailing underscores
+            canonical_key = canonical_base.lower().replace('-', '_').replace(' ', '_').rstrip('_')
+            canonical_shape_attributes = shape_attr_map.get(canonical_key)
+            canonical_shape_def = shape_def_map.get(canonical_key)
+
             for i, action in enumerate(getattr(shape, 'basic_actions', [])):
                 stroke_type_val = type(action).__name__.replace('Action', '').lower()
                 raw_command = getattr(action, 'raw_command', None)
@@ -325,11 +342,6 @@ class ComprehensiveBongardProcessor:
                                 parameters[f'param{idx+1}'] = float(p)
                             except Exception:
                                 parameters[f'param{idx+1}'] = p
-                    # Extract function_name for TSV lookup (base name only)
-                    if len(parts) >= 1:
-                        base_function_name = parts[0]
-                else:
-                    base_function_name = None
                 # 2. Try function_name if not found
                 if not shape_modifier_val and function_name and isinstance(function_name, str):
                     fn_parts = function_name.split('_')
@@ -349,13 +361,8 @@ class ComprehensiveBongardProcessor:
                 if not shape_modifier_val:
                     shape_modifier_val = 'normal'
                 is_valid = getattr(action, 'is_valid', True)
-                # Use base_function_name for TSV lookup
-                lookup_name = base_function_name if base_function_name else (function_name.split('_')[0] if function_name else None)
-                canonical_shape_attributes = shape_attr_map.get(lookup_name) if lookup_name else None
-                canonical_shape_def = shape_def_map.get(lookup_name) if lookup_name else None
-                # Debug logging for missing TSV keys
-                if lookup_name and (canonical_shape_attributes is None or canonical_shape_def is None):
-                    logger.debug(f"[TSV LOOKUP] No TSV entry for function_name '{lookup_name}' (raw_command: {raw_command}, function_name: {function_name})")
+                # --- Use canonical_name for all strokes ---
+                # No per-stroke lookup; all strokes get the same canonical attributes/def
                 stroke_specific_features = self._calculate_stroke_specific_features(
                     action, i, stroke_type_val, shape_modifier_val, parameters)
                 if stroke_type_val == 'line':
@@ -751,25 +758,42 @@ class ComprehensiveBongardProcessor:
                 'height': geometry.get('height', 0.0),
                 'area': PhysicsInference.area(poly) if poly else 0.0,
                 'perimeter': self._calculate_perimeter(vertices),
-                'aspect_ratio': self.safe_divide(geometry.get('width', 1.0), geometry.get('height', 1.0), 1.0)
             }
-            features.update({
-                'is_convex': PhysicsInference.is_convex(poly) if poly else False,
-                'convexity_ratio': self._calculate_convexity_ratio(poly) if poly else 0.0,
-                'compactness': self._calculate_compactness(features['area'], features['perimeter']),
-                'eccentricity': self._calculate_eccentricity(vertices)
-            })
-            features.update({
-                'symmetry_score': PhysicsInference.symmetry_score(vertices),
-                'horizontal_symmetry': self._check_horizontal_symmetry(vertices),
-                'vertical_symmetry': self._check_vertical_symmetry(vertices),
-                'rotational_symmetry': self._check_rotational_symmetry(vertices)
-            })
-            features.update({
-                'geometric_complexity': self._calculate_geometric_complexity(vertices),
-                'visual_complexity': len(strokes) + self.safe_divide(len(vertices), 10.0),
-                'irregularity_score': self._calculate_irregularity(vertices)
-            })
+            # Aspect ratio: clip and flag outliers
+            raw_ar = self.safe_divide(geometry.get('width', 1.0), geometry.get('height', 1.0), 1.0)
+            ar = max(FLAGGING_THRESHOLDS['min_aspect_ratio'], min(raw_ar, FLAGGING_THRESHOLDS['max_aspect_ratio']))
+            features['aspect_ratio'] = ar
+
+            # Convexity ratio: None if poly is None, else compute
+            if poly is None:
+                features['convexity_ratio'] = None
+            else:
+                features['convexity_ratio'] = self.safe_divide(poly.area, poly.convex_hull.area)
+
+            features['is_convex'] = PhysicsInference.is_convex(poly) if poly else False
+            features['compactness'] = self._calculate_compactness(features['area'], features['perimeter'])
+            features['eccentricity'] = self._calculate_eccentricity(vertices)
+
+            # Symmetry and compactness: None if area or perimeter is zero
+            if features['perimeter'] == 0 or features['area'] == 0:
+                features['compactness'] = None
+                features['symmetry_score'] = None
+            else:
+                features['symmetry_score'] = PhysicsInference.symmetry_score(vertices)
+
+            features['horizontal_symmetry'] = self._check_horizontal_symmetry(vertices)
+            features['vertical_symmetry'] = self._check_vertical_symmetry(vertices)
+            features['rotational_symmetry'] = self._check_rotational_symmetry(vertices)
+
+            # has_quadrangle: robust check for 4-vertex polygons
+            if poly and hasattr(poly, 'exterior') and hasattr(poly.exterior, 'coords') and len(poly.exterior.coords)-1 == 4:
+                features['has_quadrangle'] = True
+            else:
+                features['has_quadrangle'] = PhysicsInference.has_quadrangle(vertices)
+
+            features['geometric_complexity'] = self._calculate_geometric_complexity(vertices)
+            features['visual_complexity'] = len(strokes) + self.safe_divide(len(vertices), 30.0)
+            features['irregularity_score'] = self._calculate_irregularity(vertices)
             logger.debug(f"Image features: area={features['area']}, perimeter={features['perimeter']}, is_convex={features['is_convex']}")
             return self.json_safe(features)
         except Exception as e:
@@ -886,7 +910,7 @@ class ComprehensiveBongardProcessor:
                 'dominant_shape_modifier': max(shape_modifiers.items(), key=lambda x: x[1])[0] if shape_modifiers else 'unknown'
             }
             features.update({
-                'composition_complexity': len(strokes) * len(shape_modifiers),
+                'composition_complexity': len(strokes) + len(shape_modifiers),
                 'homogeneity_score': self._calculate_homogeneity(shape_modifiers),
                 'pattern_regularity': self._calculate_pattern_regularity_from_modifiers(modifier_sequence)
             })
@@ -896,25 +920,35 @@ class ComprehensiveBongardProcessor:
             return {}
 
     def _extract_modifier_from_stroke(self, stroke) -> str:
-        """Extract the actual shape modifier from a stroke object, robustly."""
+        """Extract the actual shape modifier from a stroke object, robustly, with debug logging."""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f'Stroke type: {type(stroke)}, attributes: {dir(stroke)}')
+        logger.debug(f'Raw command: {getattr(stroke, "raw_command", None)}')
+        logger.debug(f'Shape modifier: {getattr(stroke, "shape_modifier", None)}')
         # Priority: attribute > raw_command > function_name > fallback
         if hasattr(stroke, 'shape_modifier'):
             smod = getattr(stroke, 'shape_modifier')
             if hasattr(smod, 'value'):
                 if smod.value:
+                    logger.debug(f"Extracted modifier from .shape_modifier.value: {smod.value}")
                     return str(smod.value)
             elif isinstance(smod, str) and smod:
+                logger.debug(f"Extracted modifier from .shape_modifier: {smod}")
                 return smod
         raw_command = getattr(stroke, 'raw_command', None)
         if raw_command and isinstance(raw_command, str):
             parts = raw_command.split('_')
             if len(parts) >= 2 and parts[1]:
+                logger.debug(f"Extracted modifier from raw_command: {parts[1]}")
                 return parts[1]
         function_name = getattr(stroke, 'function_name', None)
         if function_name and isinstance(function_name, str):
             fn_parts = function_name.split('_')
             if len(fn_parts) >= 2 and fn_parts[1]:
+                logger.debug(f"Extracted modifier from function_name: {fn_parts[1]}")
                 return fn_parts[1]
+        logger.debug("Falling back to 'normal' modifier")
         return 'normal'
 
     # Helper methods for feature calculation
@@ -1038,23 +1072,14 @@ class ComprehensiveBongardProcessor:
             return 1  # No rotational symmetry
     
     def _calculate_geometric_complexity(self, vertices: List[tuple]) -> float:
-        """Calculate geometric complexity score."""
-        # Fix: Ensure vertices is a list of tuples, not a Polygon object
+        """Calculate geometric complexity score with softened weights."""
         vertices = self.ensure_vertex_list(vertices)
         if len(vertices) < 3:
             return 1.0
-        
-        # Base complexity from vertex count
-        complexity = self.safe_divide(len(vertices), 10.0)
-        
-        # Add complexity from angular variance
+        n = len(vertices)
         angular_var = self._calculate_angular_variance(vertices)
-        complexity += self.safe_divide(angular_var, 100.0)
-        
-        # Add complexity from edge length variance
         edge_var = self._calculate_edge_length_variance(vertices)
-        complexity += self.safe_divide(edge_var, 100.0)
-        
+        complexity = self.safe_divide(n, 50.0) + self.safe_divide(angular_var, 300.0) + self.safe_divide(edge_var, 300.0)
         return self.json_safe(complexity)
     
     def _calculate_irregularity(self, vertices: List[tuple]) -> float:
@@ -1103,7 +1128,7 @@ class ComprehensiveBongardProcessor:
         return self.safe_divide(PhysicsInference.count_arcs(vertices), max(len(vertices), 1))
     
     def _calculate_angular_variance(self, vertices: List[tuple]) -> float:
-        """Calculate variance in angles between edges, with proper scaling and debug logging."""
+        """Calculate variance in angles between edges, capped at 180.0."""
         import logging
         logger = logging.getLogger(__name__)
         vertices = self.ensure_vertex_list(vertices)
@@ -1131,9 +1156,8 @@ class ComprehensiveBongardProcessor:
                 logger.debug("Angular variance: no valid angles, returning 0.0")
                 return 0.0
             var = np.var(angles)
-            var = min(var, 180.0)
             logger.debug(f"Angular variance: angles={angles}, variance={var}")
-            return self.json_safe(var)
+            return self.json_safe(min(var, 180.0))
         except Exception as e:
             logger.warning(f"Angular variance: error {e}")
             return 0.0
