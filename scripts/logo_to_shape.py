@@ -142,9 +142,13 @@ class ComprehensiveBongardProcessor:
                            is_positive: bool, problem_id: str, category: str,
                            image_path: str) -> Optional[Dict[str, Any]]:
         """
-        Process a single image using the robust NVLabs parser for all action types.
+        Parse action strings, then use Bongard-LOGO repo for all geometry, feature, and canonicalization calculations.
         """
         from src.data_pipeline.logo_parser import ComprehensiveNVLabsParser
+        from bongard.bongard import OneStrokeShape, LineAction, ArcAction
+        import sys, os
+        sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'Bongard-LOGO', 'Bongard-LOGO')))
+
         self.processing_stats['total_processed'] += 1
         logger.debug(f"Processing image_id={image_id}, problem_id={problem_id}, is_positive={is_positive}")
         logger.debug(f"action_commands type: {type(action_commands)}, value: {action_commands}")
@@ -153,57 +157,91 @@ class ComprehensiveBongardProcessor:
             if isinstance(action_commands, list) and len(action_commands) == 1 and isinstance(action_commands[0], list):
                 action_commands = action_commands[0]
 
-            # Use robust NVLabs parser
+            # 1. Parse action strings into actions using parser (no feature extraction here)
             parser = ComprehensiveNVLabsParser()
-            shape = parser.parse_action_commands(action_commands, problem_id)
-            if not shape:
+            parsed_actions = parser.parse_action_commands(action_commands, problem_id)
+            if not parsed_actions:
                 logger.error(f"[process_single_image] Failed to parse action_commands: {action_commands}")
                 return None
-            bongard_image = BongardImage(one_stroke_shapes=[shape])
 
-            if not bongard_image or not hasattr(bongard_image, 'one_stroke_shapes') or not bongard_image.one_stroke_shapes:
-                logger.error(f"[process_single_image] No valid strokes found for image {image_id}")
-                return None
+            # 2. Construct OneStrokeShape using Bongard-LOGO repo (not parser's shape object)
+            # If parser returns a list of actions, wrap in OneStrokeShape; if already OneStrokeShape, use as is
+            if hasattr(parsed_actions, 'basic_actions'):
+                shape = parsed_actions
+            else:
+                shape = OneStrokeShape(basic_actions=parsed_actions)
 
-            # Prepare TSV lookup
+            # 3. BongardShapePainter is only needed for rendering, not for feature extraction. Do not instantiate here.
+            # If rendering is needed, instantiate BongardShapePainter with required arguments at that point only.
+
+            # 4. Extract vertices, geometry, and features using Bongard-LOGO repo
+            vertices = getattr(shape, 'vertices', [])
+            geometry = getattr(shape, 'geometry', {})
+            # Use Bongard-LOGO repo's feature extraction methods if available
+            image_features = getattr(shape, 'get_features', lambda: {})()
+            # For physics and composition features, use your own or Bongard-LOGO's if available
+            physics_features = self._calculate_physics_features(vertices)
+            composition_features = self._calculate_composition_features(getattr(shape, 'basic_actions', []))
+            # Stroke type features (differentiated)
+            differentiated_features = self._calculate_stroke_type_differentiated_features({'line_features': [], 'arc_features': []}, getattr(shape, 'basic_actions', []))
+
+            # 5. Iterate over basic_actions for per-stroke metadata
+            stroke_features = []
             shape_attr_map = self.get_shape_attribute_map()
             shape_def_map = self.get_shape_def_map()
-
-            stroke_features = []
-            all_vertices = []
-            stroke_type_specific_features = {'line_features': [], 'arc_features': []}
-
-            # Aggregation containers for image-level canonical summary
             unique_shape_functions = set()
             shape_function_counts = {}
             unique_modifiers = set()
-
-            for i, shape in enumerate(bongard_image.one_stroke_shapes):
-                # Use Bongard-LOGO API for type and parameters
-                stroke_type = getattr(shape, 'stroke_type', 'unknown')
-                if hasattr(stroke_type, 'value'):
-                    stroke_type_val = stroke_type.value
-                else:
-                    stroke_type_val = str(stroke_type)
-                shape_modifier = getattr(shape, 'shape_modifier', 'normal')
-                if hasattr(shape_modifier, 'value'):
-                    shape_modifier_val = shape_modifier.value
-                else:
-                    shape_modifier_val = str(shape_modifier)
-                # Parameters and geometry
-                parameters = getattr(shape, 'parameters', {})
-                raw_command = getattr(shape, 'raw_command', None)
-                is_valid = getattr(shape, 'is_valid', True)
-                # Vertices
-                vertices = getattr(shape, 'vertices', [])
-                if vertices:
-                    all_vertices.extend(vertices)
-                # Canonical shape attributes from TSVs
-                function_name = getattr(shape, 'function_name', None)
+            # If action_commands was flattened above, keep a copy for fallback
+            original_action_commands = action_commands if isinstance(action_commands, list) else []
+            for i, action in enumerate(getattr(shape, 'basic_actions', [])):
+                # Robustly extract stroke_type from class name
+                stroke_type_val = type(action).__name__.replace('Action', '').lower()
+                # Robustly extract shape_modifier and parameters from raw_command string, function_name, or action attributes
+                raw_command = getattr(action, 'raw_command', None)
+                function_name = getattr(action, 'function_name', None)
+                # Fallback: if raw_command is None, try to reconstruct from original_action_commands
+                if not raw_command and original_action_commands and i < len(original_action_commands):
+                    # Only use if it's a string (not a nested list)
+                    if isinstance(original_action_commands[i], str):
+                        raw_command = original_action_commands[i]
+                shape_modifier_val = None
+                parameters = {}
+                # 1. Try raw_command (preferred)
+                if raw_command and isinstance(raw_command, str):
+                    parts = raw_command.split('_')
+                    if len(parts) >= 2:
+                        shape_modifier_val = parts[1]
+                    # Extract parameters from the rest of the string
+                    param_str = '_'.join(parts[2:]) if len(parts) > 2 else ''
+                    if param_str:
+                        main_params = param_str.split('-')
+                        for idx, p in enumerate(main_params):
+                            try:
+                                parameters[f'param{idx+1}'] = float(p)
+                            except Exception:
+                                parameters[f'param{idx+1}'] = p
+                # 2. Try function_name if not found
+                if not shape_modifier_val and function_name and isinstance(function_name, str):
+                    fn_parts = function_name.split('_')
+                    if len(fn_parts) >= 2:
+                        shape_modifier_val = fn_parts[1]
+                # 3. Try action.shape_modifier if present (for custom action classes)
+                if not shape_modifier_val and hasattr(action, 'shape_modifier'):
+                    # Accept both .value and direct string
+                    smod = getattr(action, 'shape_modifier')
+                    if hasattr(smod, 'value'):
+                        shape_modifier_val = smod.value
+                    elif isinstance(smod, str):
+                        shape_modifier_val = smod
+                # 4. Fallback to 'normal'
+                if not shape_modifier_val:
+                    shape_modifier_val = 'normal'
+                is_valid = getattr(action, 'is_valid', True)
                 canonical_shape_attributes = shape_attr_map.get(function_name) if function_name else None
                 canonical_shape_def = shape_def_map.get(function_name) if function_name else None
-                # Use hybrid.py's feature extraction if needed, else fallback
-                stroke_specific_features = {}
+                stroke_specific_features = self._calculate_stroke_specific_features(
+                    action, i, stroke_type_val, shape_modifier_val, parameters)
                 stroke_data = {
                     'stroke_id': f"{image_id}_stroke_{i}",
                     'stroke_type': stroke_type_val,
@@ -218,27 +256,13 @@ class ComprehensiveBongardProcessor:
                 if canonical_shape_def:
                     stroke_data['canonical_shape_def'] = canonical_shape_def
                 stroke_features.append(stroke_data)
-                if stroke_type_val == 'line':
-                    stroke_type_specific_features['line_features'].append(stroke_data)
-                elif stroke_type_val == 'arc':
-                    stroke_type_specific_features['arc_features'].append(stroke_data)
-                # Aggregate modifiers
                 if shape_modifier_val:
                     unique_modifiers.add(shape_modifier_val)
                 if function_name:
                     unique_shape_functions.add(function_name)
                     shape_function_counts[function_name] = shape_function_counts.get(function_name, 0) + 1
 
-            if not all_vertices:
-                return None
-
-            # Optionally, use Bongard-LOGO for image-level features
-            image_features = {}
-            physics_features = {}
-            composition_features = {}
-            differentiated_features = {}
-
-            # Build image-level canonical summary
+            # 6. Canonical shape summary
             image_canonical_summary = {
                 'unique_shape_functions': sorted(list(unique_shape_functions)),
                 'shape_function_counts': shape_function_counts,
@@ -253,8 +277,8 @@ class ComprehensiveBongardProcessor:
                 'image_path': image_path,
                 'strokes': stroke_features,
                 'num_strokes': len(stroke_features),
-                'vertices': all_vertices,
-                'num_vertices': len(all_vertices),
+                'vertices': vertices,
+                'num_vertices': len(vertices) if vertices else 0,
                 'image_features': image_features,
                 'physics_features': physics_features,
                 'composition_features': composition_features,
@@ -264,8 +288,8 @@ class ComprehensiveBongardProcessor:
                     'processing_timestamp': time.time(),
                     'feature_count': len(image_features) + len(physics_features) + len(composition_features)
                 },
-                'action_program': [getattr(s, 'raw_command', None) for s in bongard_image.one_stroke_shapes],
-                'geometry': getattr(bongard_image, 'geometry', {})
+                'action_program': [getattr(a, 'raw_command', None) for a in getattr(shape, 'basic_actions', [])],
+                'geometry': geometry
             }
             self.processing_stats['successful'] += 1
             return self.json_safe(complete_record)
@@ -386,54 +410,45 @@ class ComprehensiveBongardProcessor:
         
         return flags
     
-    def _calculate_stroke_specific_features(self, stroke, stroke_index: int) -> Dict[str, Any]:
+    def _calculate_stroke_specific_features(self, stroke, stroke_index: int, stroke_type_val=None, shape_modifier_val=None, parameters=None) -> Dict[str, Any]:
         """Calculate features specific to stroke type and shape modifier"""
         features = {'stroke_index': stroke_index}
-        
-        if stroke.stroke_type.value == 'line':
-            features.update(self._calculate_line_specific_features(stroke))
-        elif stroke.stroke_type.value == 'arc':
-            features.update(self._calculate_arc_specific_features(stroke))
-        
-        # Add shape modifier specific features
-        features.update(self._calculate_shape_modifier_features(stroke))
-        
+        stype = stroke_type_val or type(stroke).__name__.replace('Action', '').lower()
+        smod = shape_modifier_val or 'normal'
+        params = parameters or {}
+        if stype == 'line':
+            features.update(self._calculate_line_specific_features_from_params(params))
+        elif stype == 'arc':
+            features.update(self._calculate_arc_specific_features_from_params(params))
+        features.update(self._calculate_shape_modifier_features_from_val(smod))
         return features
-    
-    def _calculate_line_specific_features(self, stroke) -> Dict[str, Any]:
-        """Calculate features specific to line strokes"""
-        params = stroke.parameters
-        length = params.get('length', 0)
-        angle = params.get('angle', 0)
-        
+
+    def _calculate_line_specific_features_from_params(self, params: dict) -> Dict[str, Any]:
+        length = params.get('param1', 0)
+        angle = params.get('param2', 0)
         return {
             'line_length': length,
             'line_angle': angle,
-            'line_length_normalized': self.safe_divide(min(length, 2.0), 2.0),  # Normalize to [0,1]
-            'line_angle_normalized': (angle % 1.0),  # Normalize angle to [0,1)
+            'line_length_normalized': self.safe_divide(min(length, 2.0), 2.0),
+            'line_angle_normalized': (angle % 1.0),
             'line_direction': 'horizontal' if abs(angle - 0.5) < 0.1 else 'vertical' if abs(angle) < 0.1 or abs(angle - 1.0) < 0.1 else 'diagonal',
             'line_is_short': length < 0.3,
             'line_is_long': length > 1.5
         }
-    
-    def _calculate_arc_specific_features(self, stroke) -> Dict[str, Any]:
-        """Calculate features specific to arc strokes"""
-        params = stroke.parameters
-        radius = params.get('radius', 0)
-        span_angle = params.get('span_angle', 0)
-        end_angle = params.get('end_angle', 0)
-        
-        # Calculate arc characteristics
+
+    def _calculate_arc_specific_features_from_params(self, params: dict) -> Dict[str, Any]:
+        radius = params.get('param1', 0)
+        span_angle = params.get('param2', 0)
+        end_angle = params.get('param3', 0)
         arc_length = abs(span_angle) * radius * self.safe_divide(math.pi, 180) if radius > 0 else 0
         is_major_arc = abs(span_angle) > 180
         is_full_circle = abs(span_angle) >= 350
-        
         return {
             'arc_radius': radius,
             'arc_span_angle': span_angle,
             'arc_end_angle': end_angle,
             'arc_length': arc_length,
-            'arc_curvature': self.safe_divide(1.0, max(radius, 1e-6)),  # Inverse of radius
+            'arc_curvature': self.safe_divide(1.0, max(radius, 1e-6)),
             'arc_is_major': is_major_arc,
             'arc_is_full_circle': is_full_circle,
             'arc_direction': 'clockwise' if span_angle < 0 else 'counterclockwise',
@@ -445,17 +460,15 @@ class ComprehensiveBongardProcessor:
             'arc_is_gentle': abs(span_angle) < 90
         }
     
-    def _calculate_shape_modifier_features(self, stroke) -> Dict[str, Any]:
-        """Calculate features based on shape modifier"""
-        modifier = stroke.shape_modifier.value
-        
+
+    def _calculate_shape_modifier_features_from_val(self, modifier: str) -> Dict[str, Any]:
+        """Calculate features based on shape modifier string value (not from action object)"""
         base_features = {
             'shape_modifier': modifier,
             'is_normal': modifier == 'normal',
             'is_geometric': modifier in ['circle', 'square', 'triangle'],
             'is_pattern': modifier == 'zigzag'
         }
-        
         # Shape-specific features
         if modifier == 'triangle':
             base_features['geometric_complexity'] = 3
@@ -469,10 +482,9 @@ class ComprehensiveBongardProcessor:
         elif modifier == 'zigzag':
             base_features['pattern_complexity'] = 'high'
             base_features['has_repetitive_pattern'] = True
-        else:  # normal
+        else:  # normal or unknown
             base_features['geometric_complexity'] = 1
             base_features['is_simple'] = True
-        
         return base_features
     
     def _calculate_stroke_type_differentiated_features(self, stroke_type_features: Dict, strokes: List) -> Dict[str, Any]:
@@ -638,19 +650,26 @@ class ComprehensiveBongardProcessor:
         """Calculate features about stroke composition and relationships."""
         if not strokes:
             return {}
-            
         try:
             # Stroke type distribution
             stroke_types = {}
             shape_modifiers = {}
-            
             for stroke in strokes:
-                stroke_type = stroke.stroke_type.value
-                shape_mod = stroke.shape_modifier.value
-                
+                stroke_type = type(stroke).__name__.replace('Action', '').lower()
+                # Robustly extract shape_modifier from raw_command or function_name if possible
+                raw_command = getattr(stroke, 'raw_command', None)
+                function_name = getattr(stroke, 'function_name', None)
+                shape_mod = 'normal'
+                if raw_command and isinstance(raw_command, str):
+                    parts = raw_command.split('_')
+                    if len(parts) >= 2:
+                        shape_mod = parts[1]
+                elif function_name and isinstance(function_name, str):
+                    fn_parts = function_name.split('_')
+                    if len(fn_parts) >= 2:
+                        shape_mod = fn_parts[1]
                 stroke_types[stroke_type] = stroke_types.get(stroke_type, 0) + 1
                 shape_modifiers[shape_mod] = shape_modifiers.get(shape_mod, 0) + 1
-            
             # Analyze stroke patterns
             features = {
                 'stroke_type_distribution': stroke_types,
@@ -660,19 +679,50 @@ class ComprehensiveBongardProcessor:
                 'dominant_stroke_type': max(stroke_types.items(), key=lambda x: x[1])[0] if stroke_types else 'unknown',
                 'dominant_shape_modifier': max(shape_modifiers.items(), key=lambda x: x[1])[0] if shape_modifiers else 'unknown'
             }
-            
             # Compositional complexity
             features.update({
                 'composition_complexity': len(strokes) * len(set(shape_modifiers.keys())),
                 'homogeneity_score': self._calculate_homogeneity(shape_modifiers),
-                'pattern_regularity': self._calculate_pattern_regularity(strokes)
+                'pattern_regularity': self._calculate_pattern_regularity_from_modifiers([self._extract_shape_modifier_from_stroke(s) for s in strokes])
             })
-            
             return features
-            
         except Exception as e:
             logger.warning(f"Error calculating composition features: {e}")
             return {}
+
+    def _extract_shape_modifier_from_stroke(self, stroke) -> str:
+        """Extract shape modifier from a stroke's raw_command or function_name, never from attribute."""
+        raw_command = getattr(stroke, 'raw_command', None)
+        function_name = getattr(stroke, 'function_name', None)
+        if raw_command and isinstance(raw_command, str):
+            parts = raw_command.split('_')
+            if len(parts) >= 2:
+                return parts[1]
+        if function_name and isinstance(function_name, str):
+            fn_parts = function_name.split('_')
+            if len(fn_parts) >= 2:
+                return fn_parts[1]
+        return 'normal'
+
+    def _calculate_pattern_regularity_from_modifiers(self, modifier_sequence: list) -> float:
+        """Calculate regularity of stroke patterns from a list of modifier strings."""
+        if len(modifier_sequence) < 2:
+            return 1.0
+        regularities = []
+        # Check for alternating patterns
+        if len(modifier_sequence) >= 4:
+            alternating_score = 0
+            for i in range(len(modifier_sequence) - 2):
+                if modifier_sequence[i] == modifier_sequence[i + 2]:
+                    alternating_score += 1
+            regularities.append(alternating_score / (len(modifier_sequence) - 2))
+        # Check for repetition
+        repetition_score = 0
+        for i in range(len(modifier_sequence) - 1):
+            if modifier_sequence[i] == modifier_sequence[i + 1]:
+                repetition_score += 1
+        regularities.append(repetition_score / (len(modifier_sequence) - 1))
+        return max(regularities) if regularities else 0.0
     
     # Helper methods for feature calculation
     def _calculate_perimeter(self, vertices: List[tuple]) -> float:
