@@ -2,8 +2,7 @@ import argparse
 import logging
 from .hybrid import HybridAugmentor
 from .utils import setup_logging, get_base_config
-from src.data_pipeline.logo_parser import UnifiedActionParser
-from src.data_pipeline.logo_parser import ComprehensiveNVLabsParser as NVLabsActionParser
+
 
 def main():
     """Main entry point for the action-based augmentation script."""
@@ -22,7 +21,6 @@ def main():
     parser.add_argument('--image-size', type=int, nargs=2, default=[64, 64], help='Image size for mask generation (height width)')
     parser.add_argument('--enable-post-processing', action='store_true', help='Enable post-processing of generated masks')
     parser.add_argument('--inspection-dir', type=str, help='Directory to save inspection images and action files')
-    parser.add_argument("--use-nvlabs", action="store_true", help="Use NVLabs canonical parser")
     
     # Logging options
     parser.add_argument('--log-level', type=str, default='INFO', help='Logging level (e.g., DEBUG, INFO, WARNING)')
@@ -84,5 +82,4 @@ def main():
 if __name__ == "__main__":
     main()
 
-if __name__ == "__main__":
-    main()
+

@@ -86,7 +86,7 @@ except ImportError:
 
 # Import data loading and parsing components
 from src.data_pipeline.data_loader import load_action_programs
-from src.data_pipeline.logo_parser import ComprehensiveNVLabsParser, NVLABS_AVAILABLE
+
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -186,20 +186,29 @@ class ActionMaskGenerator:
         logging.info(f"Filtered action programs to {len(action_data)} problems for processing.")
 
         result = []
+        seen_image_ids = set()
         for problem_id, problem_data in action_data.items():
             # Handle Bongard-LOGO format: [positive_examples, negative_examples]
             if isinstance(problem_data, list) and len(problem_data) == 2:
                 for i, action_commands in enumerate(problem_data[0]):  # positive examples
+                    image_id = f"{problem_id}_pos_{i}"
+                    if image_id in seen_image_ids:
+                        continue
+                    seen_image_ids.add(image_id)
                     entry = {
                         'problem_id': problem_id,
-                        'image_id': f"{problem_id}_pos_{i}",
+                        'image_id': image_id,
                         'action_commands': action_commands,
                     }
                     result.append(entry)
                 for i, action_commands in enumerate(problem_data[1]):  # negative examples
+                    image_id = f"{problem_id}_neg_{i}"
+                    if image_id in seen_image_ids:
+                        continue
+                    seen_image_ids.add(image_id)
                     entry = {
                         'problem_id': problem_id,
-                        'image_id': f"{problem_id}_neg_{i}",
+                        'image_id': image_id,
                         'action_commands': action_commands,
                     }
                     result.append(entry)
@@ -213,15 +222,23 @@ class ActionMaskGenerator:
                     images = []
                 for img in images:
                     if isinstance(img, dict):
+                        image_id = img.get('image_id')
+                        if image_id in seen_image_ids:
+                            continue
+                        seen_image_ids.add(image_id)
                         entry = {
                             'problem_id': problem_id,
-                            'image_id': img.get('image_id'),
+                            'image_id': image_id,
                             'action_commands': img.get('action_commands'),
                         }
                     elif isinstance(img, list) and len(img) == 2:
+                        image_id = img[0]
+                        if image_id in seen_image_ids:
+                            continue
+                        seen_image_ids.add(image_id)
                         entry = {
                             'problem_id': problem_id,
-                            'image_id': img[0],
+                            'image_id': image_id,
                             'action_commands': img[1],
                         }
                     else:
@@ -233,7 +250,12 @@ class ActionMaskGenerator:
         inspection_dir = os.path.join(os.path.dirname(output_path), "mask_inspection")
         os.makedirs(inspection_dir, exist_ok=True)
         from tqdm import tqdm
+        processed_ids = set()
         for entry in tqdm(result, desc="Generating masks from action programs", mininterval=0.5):
+            image_id = entry['image_id']
+            if image_id in processed_ids:
+                continue
+            processed_ids.add(image_id)
             try:
                 # Directly generate mask using canonical Bongard-LOGO workflow
                 mask = self.generate_mask(entry['action_commands'], entry['problem_id'])

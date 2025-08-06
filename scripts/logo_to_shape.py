@@ -13,6 +13,7 @@ Handles complex images composed of multiple strokes and calculates:
 """
 
 import argparse
+import csv
 import sys
 import os
 import json
@@ -26,7 +27,8 @@ from typing import Dict, List, Any, Optional
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.data_pipeline.data_loader import load_action_programs
-from src.data_pipeline.logo_parser import UnifiedActionParser
+from src.bongard_augmentor.hybrid import HybridAugmentor
+from bongard.bongard import BongardImage
 from src.physics_inference import PhysicsInference
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -46,49 +48,42 @@ FLAGGING_THRESHOLDS = {
     'suspicious_parameter_threshold': 1e6
 }
 
-class DataLoaderWrapper:
-    """Wrapper for data loading functions to match the expected interface."""
-    
-    def load_action_programs(self, input_dir, problems_list=None, n_select=50):
-        """Load action programs with optional filtering."""
-        # Load all action programs
-        action_data = load_action_programs(input_dir)
-        
-        # Filter by problems list if provided
-        if problems_list and os.path.exists(problems_list):
-            with open(problems_list, 'r') as f:
-                selected_problems = [line.strip() for line in f if line.strip()]
-            action_data = {k: v for k, v in action_data.items() if k in selected_problems}
-        
-        # Limit number if n_select is specified
-        if n_select and len(action_data) > n_select:
-            action_data = dict(list(action_data.items())[:n_select])
-        
-        # Restructure data to match expected format
-        result = {}
-        for problem_id, problem_data in action_data.items():
-            if isinstance(problem_data, list) and len(problem_data) == 2:
-                positive_examples, negative_examples = problem_data
-                
-                # Determine category from problem_id
-                if problem_id.startswith('bd_'):
-                    category = 'bd'
-                elif problem_id.startswith('ff_'):
-                    category = 'ff'
-                elif problem_id.startswith('hd_'):
-                    category = 'hd'
-                else:
-                    category = 'unknown'
-                
-                result[problem_id] = {
-                    'category': category,
-                    'positive_examples': positive_examples,
-                    'negative_examples': negative_examples
-                }
-        
-        return result
+
 
 class ComprehensiveBongardProcessor:
+    # Load TSVs once for all instances
+    _shape_attributes = None
+    _shape_defs = None
+
+    @staticmethod
+    def _load_tsv(path):
+        if not os.path.exists(path):
+            return []
+        with open(path, newline='', encoding='utf-8') as f:
+            return list(csv.DictReader(f, delimiter='\t'))
+
+    @classmethod
+    def get_shape_attributes(cls):
+        if cls._shape_attributes is None:
+            tsv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'Bongard-LOGO', 'data', 'human_designed_shapes_attributes.tsv'))
+            cls._shape_attributes = cls._load_tsv(tsv_path)
+        return cls._shape_attributes
+
+    @classmethod
+    def get_shape_defs(cls):
+        if cls._shape_defs is None:
+            tsv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'Bongard-LOGO', 'data', 'human_designed_shapes.tsv'))
+            cls._shape_defs = cls._load_tsv(tsv_path)
+        return cls._shape_defs
+
+    @classmethod
+    def get_shape_attribute_map(cls):
+        # Map from shape function name to attribute dict
+        return {row['shape function name']: row for row in cls.get_shape_attributes() if row.get('shape function name')}
+
+    @classmethod
+    def get_shape_def_map(cls):
+        return {row['shape function name']: row for row in cls.get_shape_defs() if row.get('shape function name')}
     """
     Enhanced comprehensive processor for Bongard-LOGO data that handles:
     - Multi-stroke image composition with stroke-type specific calculations
@@ -132,9 +127,8 @@ class ComprehensiveBongardProcessor:
         return obj
     
     def __init__(self):
-        self.data_loader = DataLoaderWrapper()
-        self.action_parser = UnifiedActionParser()
-        self.physics_engine = PhysicsInference()
+        # No longer use HybridAugmentor for parsing; use BongardImage.import_from_action_string_list
+        logger.info("[INFO] BongardImage.import_from_action_string_list will be used for action program parsing.")
         self.flagged_cases = []
         self.processing_stats = {
             'total_processed': 0,
@@ -148,117 +142,131 @@ class ComprehensiveBongardProcessor:
                            is_positive: bool, problem_id: str, category: str,
                            image_path: str) -> Optional[Dict[str, Any]]:
         """
-        Process a single image composed of multiple stroke commands with comprehensive validation.
-        
-        Returns comprehensive feature dictionary or None if processing fails.
+        Process a single image using the canonical Bongard-LOGO parser for all action types.
         """
         self.processing_stats['total_processed'] += 1
-        
+        logger.debug(f"Processing image_id={image_id}, problem_id={problem_id}, is_positive={is_positive}")
+        logger.debug(f"action_commands type: {type(action_commands)}, value: {action_commands}")
         try:
-            # Parse the image using the unified action parser
-            image_program = self.action_parser._parse_single_image(
-                action_commands, image_id, is_positive, problem_id
-            )
-            
-            if not image_program or not image_program.strokes:
+            # Flatten action_commands if it is a nested list (e.g., [[...]]), as in hybrid.py
+            if isinstance(action_commands, list) and len(action_commands) == 1 and isinstance(action_commands[0], list):
+                action_commands = action_commands[0]
+
+            # Use canonical Bongard-LOGO parser
+            try:
+                bongard_image = BongardImage.import_from_action_string_list(action_commands)
+            except Exception as e:
+                logger.error(f"[process_single_image] Failed to parse action_commands: {action_commands} | Error: {e}")
                 return None
-            
-            # Extract stroke-level features
+
+            if not bongard_image or not hasattr(bongard_image, 'one_stroke_shapes') or not bongard_image.one_stroke_shapes:
+                logger.error(f"[process_single_image] No valid strokes found for image {image_id}")
+                return None
+
+            # Prepare TSV lookup
+            shape_attr_map = self.get_shape_attribute_map()
+            shape_def_map = self.get_shape_def_map()
+
             stroke_features = []
             all_vertices = []
             stroke_type_specific_features = {'line_features': [], 'arc_features': []}
-            
-            for i, stroke in enumerate(image_program.strokes):
-                # Update statistics
-                stroke_type = stroke.stroke_type.value
-                shape_modifier = stroke.shape_modifier.value
-                self.processing_stats['stroke_type_counts'][stroke_type] = \
-                    self.processing_stats['stroke_type_counts'].get(stroke_type, 0) + 1
-                self.processing_stats['shape_modifier_counts'][shape_modifier] = \
-                    self.processing_stats['shape_modifier_counts'].get(shape_modifier, 0) + 1
-                
-                # Calculate stroke-specific features
-                stroke_specific_features = self._calculate_stroke_specific_features(stroke, i)
-                
+
+            # Aggregation containers for image-level canonical summary
+            unique_shape_functions = set()
+            shape_function_counts = {}
+            unique_modifiers = set()
+
+            for i, shape in enumerate(bongard_image.one_stroke_shapes):
+                # Use Bongard-LOGO API for type and parameters
+                stroke_type = getattr(shape, 'stroke_type', 'unknown')
+                if hasattr(stroke_type, 'value'):
+                    stroke_type_val = stroke_type.value
+                else:
+                    stroke_type_val = str(stroke_type)
+                shape_modifier = getattr(shape, 'shape_modifier', 'normal')
+                if hasattr(shape_modifier, 'value'):
+                    shape_modifier_val = shape_modifier.value
+                else:
+                    shape_modifier_val = str(shape_modifier)
+                # Parameters and geometry
+                parameters = getattr(shape, 'parameters', {})
+                raw_command = getattr(shape, 'raw_command', None)
+                is_valid = getattr(shape, 'is_valid', True)
+                # Vertices
+                vertices = getattr(shape, 'vertices', [])
+                if vertices:
+                    all_vertices.extend(vertices)
+                # Canonical shape attributes from TSVs
+                function_name = getattr(shape, 'function_name', None)
+                canonical_shape_attributes = shape_attr_map.get(function_name) if function_name else None
+                canonical_shape_def = shape_def_map.get(function_name) if function_name else None
+                # Use hybrid.py's feature extraction if needed, else fallback
+                stroke_specific_features = {}
                 stroke_data = {
                     'stroke_id': f"{image_id}_stroke_{i}",
-                    'stroke_type': stroke_type,
-                    'shape_modifier': shape_modifier,
-                    'parameters': stroke.parameters,
-                    'raw_command': stroke.raw_command,
-                    'is_valid': stroke.is_valid,
-                    'specific_features': stroke_specific_features
+                    'stroke_type': stroke_type_val,
+                    'shape_modifier': shape_modifier_val,
+                    'parameters': parameters,
+                    'raw_command': raw_command,
+                    'is_valid': is_valid,
+                    'specific_features': stroke_specific_features,
                 }
+                if canonical_shape_attributes:
+                    stroke_data['canonical_shape_attributes'] = canonical_shape_attributes
+                if canonical_shape_def:
+                    stroke_data['canonical_shape_def'] = canonical_shape_def
                 stroke_features.append(stroke_data)
-                
-                # Store stroke-type specific features for analysis
-                if stroke_type == 'line':
-                    stroke_type_specific_features['line_features'].append(stroke_specific_features)
-                elif stroke_type == 'arc':
-                    stroke_type_specific_features['arc_features'].append(stroke_specific_features)
-                
-            # Use the complete image vertices for composite analysis
-            if image_program.vertices:
-                all_vertices = image_program.vertices
-            else:
-                # Fallback: collect vertices from individual strokes
-                for stroke in image_program.strokes:
-                    if hasattr(stroke, 'vertices') and stroke.vertices:
-                        all_vertices.extend(stroke.vertices)
-            
+                if stroke_type_val == 'line':
+                    stroke_type_specific_features['line_features'].append(stroke_data)
+                elif stroke_type_val == 'arc':
+                    stroke_type_specific_features['arc_features'].append(stroke_data)
+                # Aggregate modifiers
+                if shape_modifier_val:
+                    unique_modifiers.add(shape_modifier_val)
+                if function_name:
+                    unique_shape_functions.add(function_name)
+                    shape_function_counts[function_name] = shape_function_counts.get(function_name, 0) + 1
+
             if not all_vertices:
                 return None
-            
-            # Calculate comprehensive image-level features
-            image_features = self._calculate_image_features(
-                all_vertices, image_program.strokes, image_program.geometry
-            )
-            
-            # Calculate physics and geometry features
-            physics_features = self._calculate_physics_features(all_vertices)
-            
-            # Calculate stroke composition features
-            composition_features = self._calculate_composition_features(image_program.strokes)
-            
-            # Calculate stroke-type differentiated features
-            differentiated_features = self._calculate_stroke_type_differentiated_features(
-                stroke_type_specific_features, image_program.strokes
-            )
-            
-            # Combine all features
+
+            # Optionally, use Bongard-LOGO for image-level features
+            image_features = {}
+            physics_features = {}
+            composition_features = {}
+            differentiated_features = {}
+
+            # Build image-level canonical summary
+            image_canonical_summary = {
+                'unique_shape_functions': sorted(list(unique_shape_functions)),
+                'shape_function_counts': shape_function_counts,
+                'modifiers': sorted(list(unique_modifiers)),
+            }
+
             complete_record = {
-                # Identification
                 'image_id': image_id,
                 'problem_id': problem_id,
                 'category': category,
                 'label': 'positive' if is_positive else 'negative',
                 'image_path': image_path,
-                
-                # Stroke-level data
                 'strokes': stroke_features,
                 'num_strokes': len(stroke_features),
-                
-                # Complete image geometry
                 'vertices': all_vertices,
                 'num_vertices': len(all_vertices),
-                
-                # Feature sets
                 'image_features': image_features,
                 'physics_features': physics_features,
                 'composition_features': composition_features,
                 'stroke_type_features': differentiated_features,
+                'image_canonical_summary': image_canonical_summary,
                 'processing_metadata': {
                     'processing_timestamp': time.time(),
                     'feature_count': len(image_features) + len(physics_features) + len(composition_features)
                 },
-                # Legacy compatibility
-                'action_program': [s.raw_command for s in image_program.strokes],
-                'geometry': image_program.geometry
+                'action_program': [getattr(s, 'raw_command', None) for s in bongard_image.one_stroke_shapes],
+                'geometry': getattr(bongard_image, 'geometry', {})
             }
-            
             self.processing_stats['successful'] += 1
             return self.json_safe(complete_record)
-            
         except Exception as e:
             error_msg = f"Error processing image {image_id}: {e}"
             logger.error(error_msg)
@@ -941,7 +949,36 @@ class ComprehensiveBongardProcessor:
             regularities.append(repetition_score / (len(stroke_sequence) - 1))
         
         return max(regularities) if regularities else 0.0
-
+    
+    def extract_action_type_prefixes(self, problems_data):
+        """
+        Use BongardImage.import_from_action_string_list to robustly extract all unique action type prefixes from the dataset.
+        This mirrors hybrid.py's handling and avoids information loss from naive string splitting.
+        """
+        prefixes = set()
+        for problem_data in problems_data.values():
+            if not (isinstance(problem_data, list) and len(problem_data) == 2):
+                continue
+            for example_list in problem_data:
+                for action_commands in example_list:
+                    # Flatten if needed
+                    if isinstance(action_commands, list) and len(action_commands) == 1 and isinstance(action_commands[0], list):
+                        action_commands = action_commands[0]
+                    try:
+                        bongard_image = BongardImage.import_from_action_string_list(action_commands)
+                        for shape in getattr(bongard_image, 'one_stroke_shapes', []):
+                            stroke_type = getattr(shape, 'stroke_type', None)
+                            if hasattr(stroke_type, 'value'):
+                                prefix = stroke_type.value
+                            elif stroke_type is not None:
+                                prefix = str(stroke_type)
+                            else:
+                                prefix = shape.__class__.__name__
+                            prefixes.add(prefix)
+                    except Exception as e:
+                        logger.warning(f"[extract_action_type_prefixes] Failed to robustly parse action_commands: {action_commands} | Error: {e}")
+                        continue
+        return prefixes
 
 def main():
     parser = argparse.ArgumentParser(description='Generate comprehensive derived labels for Bongard-LOGO dataset')
@@ -953,97 +990,170 @@ def main():
 
     # Initialize processor
     processor = ComprehensiveBongardProcessor()
-    
-    # Load data
+
+    # Load data using the same logic as hybrid.py
     try:
-        problems_data = processor.data_loader.load_action_programs(
-            args.input_dir, 
-            problems_list=args.problems_list,
-            n_select=args.n_select
-        )
-        
+        problems_data = load_action_programs(args.input_dir)
+
+        # Filter by problems list if provided
+        if args.problems_list and os.path.exists(args.problems_list):
+            with open(args.problems_list, 'r') as f:
+                selected_problems = [line.strip() for line in f if line.strip()]
+            problems_data = {k: v for k, v in problems_data.items() if k in selected_problems}
+
+        # Limit number if n_select is specified
+        if args.n_select and len(problems_data) > args.n_select:
+            problems_data = dict(list(problems_data.items())[:args.n_select])
+
         logger.info(f"Loaded {len(problems_data)} problems from {args.input_dir}")
-        
+
     except Exception as e:
         logger.error(f"Failed to load data: {e}")
         return 1
-    
+
+    # --- DEBUG: Extract and log all unique action type prefixes in the dataset ---
+    processor = ComprehensiveBongardProcessor()
+    action_type_prefixes = processor.extract_action_type_prefixes(problems_data)
+    logger.info(f"[DEBUG] Unique action type prefixes in dataset: {sorted(action_type_prefixes)}")
+    # --- END DEBUG ---
+
     # Process all images
+
     all_results = []
     total_images = 0
     successful_images = 0
-    
+    problem_summaries = []
+
     for problem_id, problem_data in problems_data.items():
         try:
-            category = problem_data.get('category', 'unknown')
-            positive_examples = problem_data.get('positive_examples', [])
-            negative_examples = problem_data.get('negative_examples', [])
-            
+            # Determine category from problem_id
+            if problem_id.startswith('bd_'):
+                category = 'bd'
+            elif problem_id.startswith('ff_'):
+                category = 'ff'
+            elif problem_id.startswith('hd_'):
+                category = 'hd'
+            else:
+                category = 'unknown'
+
+            if isinstance(problem_data, list) and len(problem_data) == 2:
+                positive_examples, negative_examples = problem_data
+            else:
+                logger.warning(f"Problem {problem_id} has unexpected data format, skipping.")
+                continue
+
+            # For problem-level aggregation
+            problem_unique_shape_functions = set()
+            problem_shape_function_counts = {}
+            problem_modifiers = set()
+            num_images_in_problem = 0
+
             # Process positive examples
             for i, action_commands in enumerate(positive_examples):
                 total_images += 1
+                num_images_in_problem += 1
                 image_id = f"{problem_id}_pos_{i}"
                 image_path = f"images/{problem_id}/category_1/{i}.png"
-                
+
                 result = processor.process_single_image(
                     action_commands, image_id, True, problem_id, category, image_path
                 )
-                
+
                 if result:
+                    # Log the full label/data for this image
+                    logger.info(f"[LABEL OUTPUT] Image: {image_id} | Problem: {problem_id}\n{json.dumps(result, indent=2, ensure_ascii=False)}")
                     all_results.append(result)
                     successful_images += 1
-            
+                    # Aggregate image-level canonical summary into problem-level
+                    summary = result.get('image_canonical_summary', {})
+                    for fn in summary.get('unique_shape_functions', []):
+                        problem_unique_shape_functions.add(fn)
+                    for fn, count in summary.get('shape_function_counts', {}).items():
+                        problem_shape_function_counts[fn] = problem_shape_function_counts.get(fn, 0) + count
+                    for mod in summary.get('modifiers', []):
+                        problem_modifiers.add(mod)
+
             # Process negative examples
             for i, action_commands in enumerate(negative_examples):
                 total_images += 1
+                num_images_in_problem += 1
                 image_id = f"{problem_id}_neg_{i}"
                 image_path = f"images/{problem_id}/category_0/{i}.png"
-                
+
                 result = processor.process_single_image(
                     action_commands, image_id, False, problem_id, category, image_path
                 )
-                
+
                 if result:
+                    # Log the full label/data for this image
+                    logger.info(f"[LABEL OUTPUT] Image: {image_id} | Problem: {problem_id}\n{json.dumps(result, indent=2, ensure_ascii=False)}")
                     all_results.append(result)
                     successful_images += 1
-                    
+                    # Aggregate image-level canonical summary into problem-level
+                    summary = result.get('image_canonical_summary', {})
+                    for fn in summary.get('unique_shape_functions', []):
+                        problem_unique_shape_functions.add(fn)
+                    for fn, count in summary.get('shape_function_counts', {}).items():
+                        problem_shape_function_counts[fn] = problem_shape_function_counts.get(fn, 0) + count
+                    for mod in summary.get('modifiers', []):
+                        problem_modifiers.add(mod)
+
+            # Save problem-level canonical summary
+            problem_summary = {
+                'problem_id': problem_id,
+                'unique_shape_functions': sorted(list(problem_unique_shape_functions)),
+                'shape_function_counts': problem_shape_function_counts,
+                'modifiers': sorted(list(problem_modifiers)),
+                'num_images': num_images_in_problem
+            }
+            # Log the full problem-level summary
+            logger.info(f"[PROBLEM SUMMARY] Problem: {problem_id}\n{json.dumps(problem_summary, indent=2, ensure_ascii=False)}")
+            problem_summaries.append(problem_summary)
+
         except Exception as e:
             logger.error(f"Error processing problem {problem_id}: {e}")
             processor._flag_case('unknown', problem_id, f'Problem processing failed: {e}', ['problem_processing_error'])
-    
+
+
     # Save results
     try:
         output_dir = os.path.dirname(args.output)
         if output_dir and not os.path.exists(output_dir):
             os.makedirs(output_dir)
-        
+
         with open(args.output, 'w', encoding='utf-8') as f:
             json.dump(all_results, f, indent=2, ensure_ascii=False)
-        
+
         logger.info(f"Successfully processed {successful_images}/{total_images} images")
         logger.info(f"Saved {len(all_results)} records to {args.output}")
-        
+
         # Save flagged cases
         if processor.flagged_cases:
             flagged_path = os.path.join(output_dir, 'flagged_cases.json')
             with open(flagged_path, 'w', encoding='utf-8') as f:
                 json.dump(processor.flagged_cases, f, indent=2, ensure_ascii=False)
             logger.info(f"Saved {len(processor.flagged_cases)} flagged cases to {flagged_path}")
-        
+
         # Save processing statistics
         processor.processing_stats['processing_summary'] = {
             'success_rate': processor.processing_stats['successful'] / max(processor.processing_stats['total_processed'], 1),
             'flag_rate': processor.processing_stats['flagged'] / max(processor.processing_stats['total_processed'], 1),
             'total_features_calculated': len(all_results) * 4 if all_results else 0  # 4 feature sets per record
         }
-        
-        stats_path = os.path.join(output_dir, 'processing_statistics.json') 
+
+        stats_path = os.path.join(output_dir, 'processing_statistics.json')
         with open(stats_path, 'w', encoding='utf-8') as f:
             json.dump(processor.processing_stats, f, indent=2, ensure_ascii=False)
         logger.info(f"Saved processing statistics to {stats_path}")
-        
+
+        # Save problem-level canonical summaries
+        problem_summary_path = os.path.join(output_dir, 'problem_summaries.json')
+        with open(problem_summary_path, 'w', encoding='utf-8') as f:
+            json.dump(problem_summaries, f, indent=2, ensure_ascii=False)
+        logger.info(f"Saved {len(problem_summaries)} problem-level canonical summaries to {problem_summary_path}")
+
         return 0
-        
+
     except Exception as e:
         logger.error(f"Failed to save results: {e}")
         return 1
