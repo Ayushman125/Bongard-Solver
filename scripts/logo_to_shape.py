@@ -80,21 +80,48 @@ class ComprehensiveBongardProcessor:
         # Clamp to [0,1]
         return max(0.0, min(1.0, pattern_regularity))
     def normalize_vertices(self, vertices_raw):
-        """Normalize Bongard-LOGO coordinates from (-360,360) to (0,1) range."""
+        """
+        Normalize coordinates to [0,1] in both axes, preserving aspect ratio and centering shape if needed.
+        Returns normalized vertices.
+        """
         if not vertices_raw:
             return []
-        return [((x + 360) / 720.0, (y + 360) / 720.0) for x, y in vertices_raw]
+        xs, ys = zip(*vertices_raw)
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+        width = max_x - min_x
+        height = max_y - min_y
+        # Avoid division by zero
+        if width == 0:
+            width = 1e-8
+        if height == 0:
+            height = 1e-8
+        # Aspect ratio preserving: fit to [0,1] in both axes, centered
+        scale = max(width, height)
+        cx = (min_x + max_x) / 2
+        cy = (min_y + max_y) / 2
+        # Center to (0.5,0.5) after scaling
+        norm_vertices = []
+        for x, y in vertices_raw:
+            nx = (x - cx) / scale + 0.5
+            ny = (y - cy) / scale + 0.5
+            norm_vertices.append((nx, ny))
+        return norm_vertices
 
     def calculate_geometry(self, vertices):
         """Calculate geometry properties from normalized vertices."""
         if not vertices:
             return {}
         xs, ys = zip(*vertices)
+        bbox = {'min_x': min(xs), 'max_x': max(xs), 'min_y': min(ys), 'max_y': max(ys)}
+        centroid = [sum(xs)/len(xs), sum(ys)/len(ys)]
+        width = bbox['max_x'] - bbox['min_x']
+        height = bbox['max_y'] - bbox['min_y']
         return {
-            'bbox': {'min_x': min(xs), 'max_x': max(xs), 'min_y': min(ys), 'max_y': max(ys)},
-            'centroid': [sum(xs)/len(xs), sum(ys)/len(ys)],
-            'width': max(xs) - min(xs),
-            'height': max(ys) - min(ys)
+            'bbox': bbox,
+            'centroid': centroid,
+            'width': width,
+            'height': height
         }
     # Load TSVs once for all instances
     _shape_attributes = None
@@ -188,6 +215,7 @@ class ComprehensiveBongardProcessor:
                            image_path: str) -> Optional[Dict[str, Any]]:
         """
         Parse action strings, then use Bongard-LOGO repo for all geometry, feature, and canonicalization calculations.
+        Implements robust normalization, polygon recovery, and always includes raw_vertices.
         """
         from src.data_pipeline.logo_parser import ComprehensiveNVLabsParser
         from bongard.bongard import OneStrokeShape, LineAction, ArcAction
@@ -214,14 +242,30 @@ class ComprehensiveBongardProcessor:
             else:
                 shape = OneStrokeShape(basic_actions=parsed_actions)
 
-            # --- Normalize vertices and calculate geometry ---
+            # --- Always include raw vertices ---
             vertices_raw = getattr(shape, 'vertices', [])
-            vertices = self.normalize_vertices(vertices_raw)
-            geometry = self.calculate_geometry(vertices)
 
-            # --- Calculate image features using normalized vertices ---
-            image_features = self._calculate_image_features(vertices, getattr(shape, 'basic_actions', []), geometry)
-            physics_features = self._calculate_physics_features(vertices)
+            # --- Normalize vertices (aspect ratio preserved, centered) ---
+            normalized_vertices = self.normalize_vertices(vertices_raw)
+
+            # --- Robust polygon recovery on normalized vertices ---
+            from shapely.geometry import Polygon
+            from shapely.ops import polygonize
+            poly = Polygon(normalized_vertices)
+            if not poly.is_valid or poly.area == 0:
+                try:
+                    poly = list(polygonize([normalized_vertices]))[0]
+                except Exception:
+                    poly = Polygon(normalized_vertices)
+            # Use the possibly recovered polygon for geometry/area/complexity
+            norm_vertices_for_features = list(poly.exterior.coords) if hasattr(poly, 'exterior') else normalized_vertices
+
+            # --- Calculate geometry from normalized (possibly recovered) vertices ---
+            geometry = self.calculate_geometry(norm_vertices_for_features)
+
+            # --- Calculate image features using robust polygon ---
+            image_features = self._calculate_image_features(norm_vertices_for_features, getattr(shape, 'basic_actions', []), geometry)
+            physics_features = self._calculate_physics_features(norm_vertices_for_features)
             composition_features = self._calculate_composition_features(getattr(shape, 'basic_actions', []))
 
             # --- Aggregate line and arc features for stroke_type_features ---
@@ -345,8 +389,9 @@ class ComprehensiveBongardProcessor:
                 'image_path': image_path,
                 'strokes': stroke_features,
                 'num_strokes': len(stroke_features),
-                'vertices': vertices,
-                'num_vertices': len(vertices) if vertices else 0,
+                'raw_vertices': vertices_raw,
+                'vertices': norm_vertices_for_features,
+                'num_vertices': len(norm_vertices_for_features) if norm_vertices_for_features else 0,
                 'image_features': image_features,
                 'physics_features': physics_features,
                 'composition_features': composition_features,
@@ -545,7 +590,7 @@ class ComprehensiveBongardProcessor:
             base_features['geometric_complexity'] = 4
             base_features['has_right_angles'] = True
         elif modifier == 'circle':
-            base_features['geometric_complexity'] = float('inf')  # Conceptually infinite sides
+            base_features['geometric_complexity'] = 10  # Use a large but finite value for circles
             base_features['has_curved_edges'] = True
         elif modifier == 'zigzag':
             base_features['pattern_complexity'] = 'high'
@@ -632,17 +677,20 @@ class ComprehensiveBongardProcessor:
     
     def _calculate_image_features(self, vertices: List[tuple], strokes: List, 
                                 geometry: Dict[str, Any]) -> Dict[str, Any]:
-        """Calculate comprehensive image-level features."""
-        # Fix: Ensure vertices is a list of tuples, not a Polygon object
+        """Calculate comprehensive image-level features with robust polygon recovery."""
         vertices = self.ensure_vertex_list(vertices)
         if not vertices:
             return {}
-            
         try:
-            # Create polygon for analysis
-            poly = PhysicsInference.polygon_from_vertices(vertices)
-            
-            # Basic geometric properties
+            from shapely.geometry import Polygon
+            from shapely.ops import polygonize
+            try:
+                poly = Polygon(vertices)
+                if not poly.is_valid or poly.area == 0:
+                    # Try to recover with polygonize
+                    poly = list(polygonize([vertices]))[0]
+            except Exception:
+                poly = Polygon(vertices)
             features = {
                 'bounding_box': geometry.get('bbox', {}),
                 'centroid': geometry.get('centroid', [0.0, 0.0]),
@@ -652,33 +700,24 @@ class ComprehensiveBongardProcessor:
                 'perimeter': self._calculate_perimeter(vertices),
                 'aspect_ratio': self.safe_divide(geometry.get('width', 1.0), geometry.get('height', 1.0), 1.0)
             }
-            
-            # Shape analysis
             features.update({
                 'is_convex': PhysicsInference.is_convex(poly),
                 'convexity_ratio': self._calculate_convexity_ratio(poly),
                 'compactness': self._calculate_compactness(features['area'], features['perimeter']),
                 'eccentricity': self._calculate_eccentricity(vertices)
             })
-            
-            # Symmetry analysis
             features.update({
                 'symmetry_score': PhysicsInference.symmetry_score(vertices),
                 'horizontal_symmetry': self._check_horizontal_symmetry(vertices),
                 'vertical_symmetry': self._check_vertical_symmetry(vertices),
                 'rotational_symmetry': self._check_rotational_symmetry(vertices)
             })
-            
-            # Complexity measures
             features.update({
                 'geometric_complexity': self._calculate_geometric_complexity(vertices),
                 'visual_complexity': len(strokes) + self.safe_divide(len(vertices), 10.0),
                 'irregularity_score': self._calculate_irregularity(vertices)
             })
-            
-            # Convert all numpy types to native Python types for JSON serialization
             return self.json_safe(features)
-            
         except Exception as e:
             logger.warning(f"Error calculating image features: {e}")
             return {}

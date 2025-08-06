@@ -196,14 +196,18 @@ class PhysicsInference:
         Returns area normalized to unit square if possible.
         """
         poly = PhysicsInference._ensure_polygon(poly_geom)
-        minx, miny, maxx, maxy = poly.bounds
-        width = maxx - minx
-        height = maxy - miny
-        area = poly.area
-        if width > 0 and height > 0:
-            norm_area = area / (width * height)
-            return min(max(norm_area, 0.0), 1.0)
-        return area
+        """Return area of a polygon, robust to invalid polygons. Use polygonize to recover if needed."""
+        try:
+            if poly.is_valid and poly.area > 0:
+                return poly.area
+            # Try to recover with polygonize
+            from shapely.ops import polygonize
+            polys = list(polygonize([poly.exterior.coords]))
+            if polys:
+                return polys[0].area
+            return 0.0
+        except Exception:
+            return 0.0
 
     @staticmethod
     @safe_feature(default=0.0)
