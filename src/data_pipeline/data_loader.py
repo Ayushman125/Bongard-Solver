@@ -115,14 +115,14 @@ def load_action_programs(base_dir, categories=('bd', 'ff', 'hd')):
                     # Validate structure: should be [positive_examples, negative_examples]
                     if isinstance(action_program_data, list) and len(action_program_data) == 2:
                         action_programs[problem_id] = action_program_data
-                        print(f"[INFO] Loaded action program for {problem_id}: {len(action_program_data[0])} positive, {len(action_program_data[1])} negative examples")
+                        # Removed per-problem log for cleaner output
                     else:
                         print(f"[WARN] Unexpected action program structure for {problem_id}: {type(action_program_data)}")
                         
             except Exception as e:
                 print(f"[WARN] Failed to load action program {fname}: {e}")
     
-    print(f"[INFO] Total action programs loaded: {len(action_programs)}")
+    # Removed misleading log; filtered count is now logged in pipeline
     return action_programs
 
 def parse_action_command(command):

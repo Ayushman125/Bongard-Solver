@@ -21,11 +21,19 @@ from enum import Enum
 nvlabs_path = Path(__file__).parent.parent.parent / "Bongard-LOGO"
 sys.path.insert(0, str(nvlabs_path))
 
-# Import the original NVLabs classes
+# Import the original NVLabs classes DIRECTLY - no redefinitions needed!
 try:
-    from bongard.bongard import LineAction as NVLabsLineAction, ArcAction as NVLabsArcAction, OneStrokeShape as NVLabsOneStrokeShape, BasicAction
-    print("✅ Successfully imported NVLabs classes")
+    from bongard import LineAction, ArcAction, OneStrokeShape, BongardImage
+    from bongard.bongard import BasicAction  # Import BasicAction directly from bongard.py
+    from bongard.bongard_painter import BongardImagePainter, BongardProblemPainter, BongardShapePainter
+    print("✅ Successfully imported ALL NVLabs classes directly from Bongard-LOGO repo")
     NVLABS_AVAILABLE = True
+    
+    # We can use these directly without any wrapper classes!
+    NVLabsLineAction = LineAction
+    NVLabsArcAction = ArcAction
+    NVLabsOneStrokeShape = OneStrokeShape
+    
 except ImportError as e:
     print(f"⚠️ NVLabs classes not available, using fallback: {e}")
     NVLABS_AVAILABLE = False
@@ -95,9 +103,7 @@ if NVLABS_AVAILABLE:
             vertices = []
             current_x, current_y = 0.0, 0.0  # Start at center
             current_angle = 0.0  # Start facing right (0 degrees)
-            
             vertices.append((current_x, current_y))
-            
             try:
                 for action in self.basic_actions:
                     # Turn first (like turtle graphics)
@@ -105,44 +111,35 @@ if NVLABS_AVAILABLE:
                         current_angle += action.turn_angle
                     elif action.turn_direction == "R":
                         current_angle -= action.turn_angle
-                    
                     if isinstance(action, LineAction):
                         # Move forward by line_length in current direction
+                        # --- FIX: Ensure line_length is properly scaled ---
                         distance = action.line_length
+                        if hasattr(action, 'line_length_normalization_factor') and action.line_length_normalization_factor:
+                            distance *= action.line_length_normalization_factor
                         angle_rad = math.radians(current_angle)
-                        
                         new_x = current_x + distance * math.cos(angle_rad)
                         new_y = current_y + distance * math.sin(angle_rad)
-                        
                         vertices.append((new_x, new_y))
                         current_x, current_y = new_x, new_y
-                            
                     elif isinstance(action, ArcAction):
                         # Handle arc drawing (approximate with line segments)
                         radius = action.arc_radius
+                        if hasattr(action, 'arc_radius_normalizaton_factor') and action.arc_radius_normalizaton_factor:
+                            radius *= action.arc_radius_normalizaton_factor
                         arc_angle = action.arc_angle
-                        
-                        # Approximate arc with line segments
                         num_segments = max(4, int(abs(arc_angle) / 10))
                         angle_step = arc_angle / num_segments
-                        
                         for i in range(num_segments):
                             segment_angle = current_angle + (i + 1) * angle_step
                             angle_rad = math.radians(segment_angle)
-                            
-                            # For arcs, the turtle follows a curved path
                             step_distance = radius * math.radians(abs(angle_step))
                             new_x = current_x + step_distance * math.cos(angle_rad)
                             new_y = current_y + step_distance * math.sin(angle_rad)
-                            
                             vertices.append((new_x, new_y))
                             current_x, current_y = new_x, new_y
-                        
-                        # Update angle after arc
                         current_angle += arc_angle
-                            
                 return vertices
-                
             except Exception as e:
                 logger.error(f"Failed to calculate vertices: {e}")
                 return []
@@ -158,28 +155,11 @@ else:
             
         @classmethod
         def import_from_action_string(cls, action_string, line_length_normalization_factor=None):
-            """Parse line action string using NVLabs format with 2 or 3 parameters."""
+            """Parse line action string using NVLabs format."""
             try:
                 movement, turn_angle = action_string.split("-")
                 turn_angle = float(turn_angle)
-                
-                # Line format can be:
-                # 2 parts: line_length (e.g., line_1.0) - default "normal" type  
-                # 3 parts: line_type_length (e.g., line_triangle_1.000, line_zigzag_0.600, line_circle_0.5)
-                parts = movement.split("_")
-                if len(parts) == 2:
-                    action_name, line_length = parts
-                    line_type = "normal"  # Default type for 2-part format
-                elif len(parts) == 3:
-                    action_name, line_type, line_length = parts
-                    # Validate line type - common types: normal, triangle, square, circle, zigzag
-                    valid_line_types = {"normal", "triangle", "square", "circle", "zigzag"}
-                    if line_type not in valid_line_types:
-                        logger.warning(f"Unknown line type '{line_type}' in {movement}, treating as custom type")
-                else:
-                    logger.error(f"Invalid line format: {movement}, expected 2 or 3 parts, got {len(parts)}: {parts}")
-                    return None
-                
+                action_name, line_type, line_length = movement.split("_")
                 line_length = float(line_length)
                 
                 if line_length_normalization_factor is not None:
@@ -219,49 +199,20 @@ else:
             
         @classmethod
         def import_from_action_string(cls, action_string, arc_radius_normalizaton_factor=None):
-            """Parse arc action string using NVLabs format with 3 or 4 parameters."""
+            """Parse arc action string using NVLabs format."""
             try:
                 movement, turn_angle = action_string.split("-")
                 turn_angle = float(turn_angle)
-                
-                # Arc format can be:
-                # 3 parts: arc_radius_angle (e.g., arc_0.5_30.0) - default "normal" type
-                # 4 parts: arc_type_radius_angle (e.g., arc_triangle_0.5_30.0, arc_circle_0.5_30.0)
-                parts = movement.split("_")
-                if len(parts) == 3:
-                    action_name, arc_radius, arc_angle = parts
-                    arc_type = "normal"  # Default type for 3-part format
-                elif len(parts) == 4:
-                    # Full format with explicit arc type
-                    action_name, arc_type, arc_radius, arc_angle = parts
-                else:
-                    logger.error(f"Invalid arc format: {movement}, expected 3 or 4 parts, got {len(parts)}: {parts}")
-                    return None
-                
+                action_name, arc_type, arc_radius, arc_angle = movement.split("_")
                 arc_radius = float(arc_radius)
                 arc_angle = float(arc_angle)
-                
-                # Validate arc type - common types: normal, triangle, square, circle, zigzag
-                valid_arc_types = {"normal", "triangle", "square", "circle", "zigzag"}
-                if arc_type not in valid_arc_types:
-                    logger.warning(f"Unknown arc type '{arc_type}' in {movement}, treating as custom type")
                 
                 if arc_radius_normalizaton_factor is not None:
                     denormalized_arc_radius = arc_radius * arc_radius_normalizaton_factor
                 else:
                     denormalized_arc_radius = arc_radius
                     
-                # Arc angle normalization for NVLabs compatibility
-                # Real data has angles in degrees, NVLabs expects [0,1] normalized
-                if arc_angle > 1.0:
-                    # Convert from degrees to normalized [0,1] range
-                    # 360 degrees = 1.0, so divide by 360
-                    normalized_arc_angle = arc_angle / 360.0  # For NVLabs compatibility
-                    denormalized_arc_angle = arc_angle  # Keep original degrees for our calculation
-                else:
-                    # Already normalized
-                    normalized_arc_angle = arc_angle
-                    denormalized_arc_angle = arc_angle * 360  # Convert to degrees for our calculation
+                denormalized_arc_angle = arc_angle * 360  # Assuming normalized
                 
                 # Denormalize turn angle
                 if 0 <= turn_angle <= 1:
@@ -320,13 +271,15 @@ else:
             try:
                 for action in self.basic_actions:
                     if isinstance(action, LineAction):
-                        # Different line types create different geometric patterns
-                        vertices_to_add = self._calculate_line_vertices(action, current_x, current_y, current_angle)
-                        vertices.extend(vertices_to_add)
+                        # Move forward by line_length in current direction
+                        distance = action.line_length
+                        angle_rad = np.radians(current_angle)
                         
-                        # Update position to the last vertex
-                        if vertices_to_add:
-                            current_x, current_y = vertices_to_add[-1]
+                        new_x = current_x + distance * np.cos(angle_rad)
+                        new_y = current_y + distance * np.sin(angle_rad)
+                        
+                        vertices.append((new_x, new_y))
+                        current_x, current_y = new_x, new_y
                         
                         # Turn by the specified angle
                         if action.turn_direction == "L":
@@ -335,16 +288,26 @@ else:
                             current_angle -= action.turn_angle
                             
                     elif isinstance(action, ArcAction):
-                        # Different arc types create different curved patterns
-                        vertices_to_add = self._calculate_arc_vertices(action, current_x, current_y, current_angle)
-                        vertices.extend(vertices_to_add)
+                        # Handle arc drawing (simplified as line segments)
+                        radius = action.arc_radius
+                        arc_angle = action.arc_angle
                         
-                        # Update position to the last vertex
-                        if vertices_to_add:
-                            current_x, current_y = vertices_to_add[-1]
+                        # Approximate arc with line segments
+                        num_segments = max(4, int(abs(arc_angle) / 10))
+                        angle_step = arc_angle / num_segments
+                        
+                        for i in range(num_segments):
+                            segment_angle = current_angle + (i + 1) * angle_step
+                            angle_rad = np.radians(segment_angle)
+                            
+                            new_x = current_x + radius * np.cos(angle_rad)
+                            new_y = current_y + radius * np.sin(angle_rad)
+                            
+                            vertices.append((new_x, new_y))
+                            current_x, current_y = new_x, new_y
                         
                         # Update angle after arc
-                        current_angle += action.arc_angle
+                        current_angle += arc_angle
                         
                         # Turn by the specified angle
                         if action.turn_direction == "L":
@@ -358,165 +321,7 @@ else:
                 logger.error(f"Failed to calculate vertices: {e}")
                 return []
 
-        def _calculate_line_vertices(self, action, start_x, start_y, current_angle):
-            """Calculate vertices for different line types."""
-            vertices = []
-            distance = action.line_length
-            angle_rad = np.radians(current_angle)
-            
-            if action.line_type == "normal":
-                # Simple straight line
-                new_x = start_x + distance * np.cos(angle_rad)
-                new_y = start_y + distance * np.sin(angle_rad)
-                vertices.append((new_x, new_y))
-                
-            elif action.line_type == "triangle":
-                # Create triangular zigzag pattern
-                segments = 3
-                segment_length = distance / segments
-                for i in range(segments):
-                    segment_angle = current_angle + (30 if i % 2 == 0 else -30)  # Alternate angles
-                    seg_angle_rad = np.radians(segment_angle)
-                    new_x = start_x + segment_length * np.cos(seg_angle_rad)
-                    new_y = start_y + segment_length * np.sin(seg_angle_rad)
-                    vertices.append((new_x, new_y))
-                    start_x, start_y = new_x, new_y
-                    
-            elif action.line_type == "square":
-                # Create square wave pattern
-                segments = 4
-                segment_length = distance / segments
-                for i in range(segments):
-                    segment_angle = current_angle + (90 if i % 2 == 0 else -90)  # Right angles
-                    seg_angle_rad = np.radians(segment_angle)
-                    new_x = start_x + segment_length * np.cos(seg_angle_rad)
-                    new_y = start_y + segment_length * np.sin(seg_angle_rad)
-                    vertices.append((new_x, new_y))
-                    start_x, start_y = new_x, new_y
-                    
-            elif action.line_type == "zigzag":
-                # Create zigzag pattern
-                segments = 6
-                segment_length = distance / segments
-                for i in range(segments):
-                    segment_angle = current_angle + (45 if i % 2 == 0 else -45)  # Zigzag angles
-                    seg_angle_rad = np.radians(segment_angle)
-                    new_x = start_x + segment_length * np.cos(seg_angle_rad)
-                    new_y = start_y + segment_length * np.sin(seg_angle_rad)
-                    vertices.append((new_x, new_y))
-                    start_x, start_y = new_x, new_y
-                    
-            elif action.line_type == "circle":
-                # Approximate circular arc as line segments
-                num_segments = 8
-                angle_step = 360 / num_segments  # Full circle
-                radius = distance / (2 * np.pi)  # Convert length to radius
-                for i in range(num_segments):
-                    segment_angle = current_angle + i * angle_step
-                    seg_angle_rad = np.radians(segment_angle)
-                    new_x = start_x + radius * np.cos(seg_angle_rad)
-                    new_y = start_y + radius * np.sin(seg_angle_rad)
-                    vertices.append((new_x, new_y))
-            else:
-                # Default to normal line for unknown types
-                new_x = start_x + distance * np.cos(angle_rad)
-                new_y = start_y + distance * np.sin(angle_rad)
-                vertices.append((new_x, new_y))
-                
-            return vertices
 
-        def _calculate_arc_vertices(self, action, start_x, start_y, current_angle):
-            """Calculate vertices for different arc types."""
-            vertices = []
-            radius = action.arc_radius
-            arc_angle = action.arc_angle
-            
-            if action.arc_type == "normal":
-                # Simple arc
-                num_segments = max(4, int(abs(arc_angle) / 10))
-                angle_step = arc_angle / num_segments
-                
-                for i in range(num_segments):
-                    segment_angle = current_angle + (i + 1) * angle_step
-                    angle_rad = np.radians(segment_angle)
-                    step_distance = radius * np.radians(abs(angle_step))
-                    new_x = start_x + step_distance * np.cos(angle_rad)
-                    new_y = start_y + step_distance * np.sin(angle_rad)
-                    vertices.append((new_x, new_y))
-                    start_x, start_y = new_x, new_y
-                    
-            elif action.arc_type == "triangle":
-                # Triangular arc pattern - more angular
-                num_segments = 3
-                angle_step = arc_angle / num_segments
-                for i in range(num_segments):
-                    segment_angle = current_angle + (i + 1) * angle_step
-                    angle_rad = np.radians(segment_angle)
-                    # Create angular pattern
-                    step_distance = radius * 1.2  # Slightly longer steps for triangular effect
-                    new_x = start_x + step_distance * np.cos(angle_rad)
-                    new_y = start_y + step_distance * np.sin(angle_rad)
-                    vertices.append((new_x, new_y))
-                    start_x, start_y = new_x, new_y
-                    
-            elif action.arc_type == "square":
-                # Square arc pattern - right-angled segments
-                num_segments = 4
-                angle_step = arc_angle / num_segments
-                for i in range(num_segments):
-                    segment_angle = current_angle + (i + 1) * angle_step
-                    # Snap to 90-degree increments for square effect
-                    segment_angle = round(segment_angle / 90) * 90
-                    angle_rad = np.radians(segment_angle)
-                    step_distance = radius * np.radians(abs(angle_step))
-                    new_x = start_x + step_distance * np.cos(angle_rad)
-                    new_y = start_y + step_distance * np.sin(angle_rad)
-                    vertices.append((new_x, new_y))
-                    start_x, start_y = new_x, new_y
-                    
-            elif action.arc_type == "zigzag":
-                # Zigzag arc pattern
-                num_segments = max(6, int(abs(arc_angle) / 15))
-                angle_step = arc_angle / num_segments
-                for i in range(num_segments):
-                    # Add zigzag variation to arc
-                    zigzag_offset = 15 if i % 2 == 0 else -15
-                    segment_angle = current_angle + (i + 1) * angle_step + zigzag_offset
-                    angle_rad = np.radians(segment_angle)
-                    step_distance = radius * np.radians(abs(angle_step))
-                    new_x = start_x + step_distance * np.cos(angle_rad)
-                    new_y = start_y + step_distance * np.sin(angle_rad)
-                    vertices.append((new_x, new_y))
-                    start_x, start_y = new_x, new_y
-                    
-            elif action.arc_type == "circle":
-                # Circular arc - very smooth
-                num_segments = max(8, int(abs(arc_angle) / 5))  # More segments for smoothness
-                angle_step = arc_angle / num_segments
-                center_x = start_x
-                center_y = start_y
-                
-                for i in range(num_segments):
-                    segment_angle = current_angle + (i + 1) * angle_step
-                    angle_rad = np.radians(segment_angle)
-                    new_x = center_x + radius * np.cos(angle_rad)
-                    new_y = center_y + radius * np.sin(angle_rad)
-                    vertices.append((new_x, new_y))
-            else:
-                # Default to normal arc for unknown types
-                num_segments = max(4, int(abs(arc_angle) / 10))
-                angle_step = arc_angle / num_segments
-                
-                for i in range(num_segments):
-                    segment_angle = current_angle + (i + 1) * angle_step
-                    angle_rad = np.radians(segment_angle)
-                    step_distance = radius * np.radians(abs(angle_step))
-                    new_x = start_x + step_distance * np.cos(angle_rad)
-                    new_y = start_y + step_distance * np.sin(angle_rad)
-                    vertices.append((new_x, new_y))
-                    start_x, start_y = new_x, new_y
-                    
-            return vertices
 class ComprehensiveNVLabsParser:
     """
     Comprehensive parser using NVLabs coordinate system and geometry.
@@ -623,88 +428,18 @@ class ComprehensiveNVLabsParser:
     def _parse_single_command(self, cmd: str):
         """Parse a single command using NVLabs or fallback parsers."""
         if cmd.startswith("line_"):
-            # Ensure line commands are in 3-part format for NVLabs compatibility
-            normalized_cmd = self._normalize_line_command_for_nvlabs(cmd)
             return LineAction.import_from_action_string(
-                normalized_cmd, 
+                cmd, 
                 line_length_normalization_factor=self.base_scaling_factor
             )
         elif cmd.startswith("arc_"):
-            # For NVLabs compatibility, we need to normalize the arc angle if it's in degrees
-            normalized_cmd = self._normalize_arc_command_for_nvlabs(cmd)
             return ArcAction.import_from_action_string(
-                normalized_cmd,
+                cmd,
                 arc_radius_normalizaton_factor=self.base_scaling_factor
             )
         else:
             logger.warning(f"Unknown command format: {cmd}")
             return None
-    
-    def _normalize_line_command_for_nvlabs(self, cmd: str) -> str:
-        """Normalize line command to NVLabs format (ensure 3-part format)."""
-        try:
-            if "-" not in cmd:
-                return cmd
-                
-            movement, turn_angle = cmd.split("-")
-            parts = movement.split("_")
-            
-            if len(parts) == 2:
-                # Convert 2-part format to 3-part by adding "normal" type
-                action_name, line_length = parts
-                normalized_movement = f"{action_name}_normal_{line_length}"
-                return f"{normalized_movement}-{turn_angle}"
-            elif len(parts) == 3:
-                # Already in correct format
-                return cmd
-            else:
-                logger.error(f"Invalid line format: {movement}, expected 2 or 3 parts, got {len(parts)}: {parts}")
-                return cmd
-                
-        except Exception as e:
-            logger.error(f"Failed to normalize line command {cmd}: {e}")
-            return cmd
-
-    def _normalize_arc_command_for_nvlabs(self, cmd: str) -> str:
-        """Normalize arc command to NVLabs format (ensure 4-part format with normalized angle)."""
-        try:
-            if "-" not in cmd:
-                return cmd
-                
-            movement, turn_angle = cmd.split("-")
-            parts = movement.split("_")
-            
-            if len(parts) == 3:
-                # arc_radius_angle format - convert to 4-part by adding "normal" type
-                action_name, arc_radius, arc_angle = parts
-                arc_angle_float = float(arc_angle)
-                
-                # Convert degrees to normalized [0,1] if needed
-                if arc_angle_float > 1.0:
-                    normalized_angle = arc_angle_float / 360.0
-                else:
-                    normalized_angle = arc_angle_float
-                    
-                # Convert to 4-part format with "normal" type
-                normalized_cmd = f"{action_name}_normal_{arc_radius}_{normalized_angle}-{turn_angle}"
-                return normalized_cmd
-                    
-            elif len(parts) == 4:
-                # arc_type_radius_angle format  
-                action_name, arc_type, arc_radius, arc_angle = parts
-                arc_angle_float = float(arc_angle)
-                
-                # Convert degrees to normalized [0,1] if needed
-                if arc_angle_float > 1.0:
-                    normalized_angle = arc_angle_float / 360.0
-                    normalized_cmd = f"{action_name}_{arc_type}_{arc_radius}_{normalized_angle}-{turn_angle}"
-                    return normalized_cmd
-                    
-            return cmd  # Return original if no normalization needed
-            
-        except Exception as e:
-            logger.warning(f"Failed to normalize arc command '{cmd}': {e}")
-            return cmd
     
     def render_shape_to_image(self, shape: OneStrokeShape, output_size: Tuple[int, int] = None) -> Optional[np.ndarray]:
         logger.info(f"[LOGOPARSER] Rendering shape to image. Output size: {output_size if output_size else self.canvas_size}")
@@ -742,10 +477,8 @@ class ComprehensiveNVLabsParser:
             img_vertices = []
             for x, y in vertices:
                 # Map from (-360, 360) to (0, canvas_size)
-                # CRITICAL FIX: Correct Y coordinate mapping - use Y coordinate range, not X range for Y
-                coord_range_size = self.coordinate_range[1] - self.coordinate_range[0]
-                img_x = int((x - self.coordinate_range[0]) / coord_range_size * output_size[1])
-                img_y = int((y - self.coordinate_range[0]) / coord_range_size * output_size[0])
+                img_x = int((x - self.coordinate_range[0]) / (self.coordinate_range[1] - self.coordinate_range[0]) * output_size[1])
+                img_y = int((y - self.coordinate_range[0]) / (self.coordinate_range[1] - self.coordinate_range[0]) * output_size[0])
                 # Clamp to image bounds
                 img_x = max(0, min(output_size[1] - 1, img_x))
                 img_y = max(0, min(output_size[0] - 1, img_y))
@@ -790,190 +523,45 @@ class ComprehensiveNVLabsParser:
                     current_angle -= action.turn_angle
                 
                 if isinstance(action, LineAction):
-                    # Use shape-specific line calculation
-                    vertices_to_add = self._calculate_line_vertices_for_parser(action, current_x, current_y, current_angle)
-                    vertices.extend(vertices_to_add)
+                    # Move forward by line_length in current direction
+                    distance = action.line_length
+                    angle_rad = math.radians(current_angle)
                     
-                    # Update position to the last vertex
-                    if vertices_to_add:
-                        current_x, current_y = vertices_to_add[-1]
+                    new_x = current_x + distance * math.cos(angle_rad)
+                    new_y = current_y + distance * math.sin(angle_rad)
+                    
+                    vertices.append((new_x, new_y))
+                    current_x, current_y = new_x, new_y
                         
                 elif isinstance(action, ArcAction):
-                    # Use shape-specific arc calculation
-                    vertices_to_add = self._calculate_arc_vertices_for_parser(action, current_x, current_y, current_angle)
-                    vertices.extend(vertices_to_add)
+                    # Handle arc drawing (approximate with line segments)
+                    radius = action.arc_radius
+                    arc_angle = action.arc_angle
                     
-                    # Update position to the last vertex
-                    if vertices_to_add:
-                        current_x, current_y = vertices_to_add[-1]
+                    # Approximate arc with line segments
+                    num_segments = max(4, int(abs(arc_angle) / 10))
+                    angle_step = arc_angle / num_segments
+                    
+                    for i in range(num_segments):
+                        segment_angle = current_angle + (i + 1) * angle_step
+                        angle_rad = math.radians(segment_angle)
+                        
+                        # For arcs, the turtle follows a curved path
+                        step_distance = radius * math.radians(abs(angle_step))
+                        new_x = current_x + step_distance * math.cos(angle_rad)
+                        new_y = current_y + step_distance * math.sin(angle_rad)
+                        
+                        vertices.append((new_x, new_y))
+                        current_x, current_y = new_x, new_y
                     
                     # Update angle after arc
-                    current_angle += action.arc_angle
+                    current_angle += arc_angle
                         
             return vertices
             
         except Exception as e:
             logger.error(f"Failed to calculate vertices: {e}")
             return []
-
-    def _calculate_line_vertices_for_parser(self, action, start_x, start_y, current_angle):
-        """Calculate vertices for different line types - parser version."""
-        vertices = []
-        distance = action.line_length
-        angle_rad = math.radians(current_angle)
-        
-        if action.line_type == "normal":
-            # Simple straight line
-            new_x = start_x + distance * math.cos(angle_rad)
-            new_y = start_y + distance * math.sin(angle_rad)
-            vertices.append((new_x, new_y))
-            
-        elif action.line_type == "triangle":
-            # Create triangular pattern
-            segments = 3
-            segment_length = distance / segments
-            for i in range(segments):
-                segment_angle = current_angle + (30 if i % 2 == 0 else -30)  # Alternate angles
-                seg_angle_rad = math.radians(segment_angle)
-                new_x = start_x + segment_length * math.cos(seg_angle_rad)
-                new_y = start_y + segment_length * math.sin(seg_angle_rad)
-                vertices.append((new_x, new_y))
-                start_x, start_y = new_x, new_y
-                
-        elif action.line_type == "square":
-            # Create square wave pattern
-            segments = 4
-            segment_length = distance / segments
-            for i in range(segments):
-                segment_angle = current_angle + (90 if i % 2 == 0 else -90)  # Right angles
-                seg_angle_rad = math.radians(segment_angle)
-                new_x = start_x + segment_length * math.cos(seg_angle_rad)
-                new_y = start_y + segment_length * math.sin(seg_angle_rad)
-                vertices.append((new_x, new_y))
-                start_x, start_y = new_x, new_y
-                
-        elif action.line_type == "zigzag":
-            # Create zigzag pattern
-            segments = 6
-            segment_length = distance / segments
-            for i in range(segments):
-                segment_angle = current_angle + (45 if i % 2 == 0 else -45)  # Zigzag angles
-                seg_angle_rad = math.radians(segment_angle)
-                new_x = start_x + segment_length * math.cos(seg_angle_rad)
-                new_y = start_y + segment_length * math.sin(seg_angle_rad)
-                vertices.append((new_x, new_y))
-                start_x, start_y = new_x, new_y
-                
-        elif action.line_type == "circle":
-            # Approximate circular arc as line segments
-            num_segments = 8
-            angle_step = 360 / num_segments  # Full circle
-            radius = distance / (2 * math.pi)  # Convert length to radius
-            for i in range(num_segments):
-                segment_angle = current_angle + i * angle_step
-                seg_angle_rad = math.radians(segment_angle)
-                new_x = start_x + radius * math.cos(seg_angle_rad)
-                new_y = start_y + radius * math.sin(seg_angle_rad)
-                vertices.append((new_x, new_y))
-        else:
-            # Default to normal line for unknown types
-            new_x = start_x + distance * math.cos(angle_rad)
-            new_y = start_y + distance * math.sin(angle_rad)
-            vertices.append((new_x, new_y))
-            
-        return vertices
-
-    def _calculate_arc_vertices_for_parser(self, action, start_x, start_y, current_angle):
-        """Calculate vertices for different arc types - parser version."""
-        vertices = []
-        radius = action.arc_radius
-        arc_angle = action.arc_angle
-        
-        if action.arc_type == "normal":
-            # Simple arc
-            num_segments = max(4, int(abs(arc_angle) / 10))
-            angle_step = arc_angle / num_segments
-            
-            for i in range(num_segments):
-                segment_angle = current_angle + (i + 1) * angle_step
-                angle_rad = math.radians(segment_angle)
-                step_distance = radius * math.radians(abs(angle_step))
-                new_x = start_x + step_distance * math.cos(angle_rad)
-                new_y = start_y + step_distance * math.sin(angle_rad)
-                vertices.append((new_x, new_y))
-                start_x, start_y = new_x, new_y
-                
-        elif action.arc_type == "triangle":
-            # Triangular arc pattern - more angular
-            num_segments = 3
-            angle_step = arc_angle / num_segments
-            for i in range(num_segments):
-                segment_angle = current_angle + (i + 1) * angle_step
-                angle_rad = math.radians(segment_angle)
-                step_distance = radius * 1.2  # Slightly longer for triangular effect
-                new_x = start_x + step_distance * math.cos(angle_rad)
-                new_y = start_y + step_distance * math.sin(angle_rad)
-                vertices.append((new_x, new_y))
-                start_x, start_y = new_x, new_y
-                
-        elif action.arc_type == "square":
-            # Square arc pattern - right-angled segments
-            num_segments = 4
-            angle_step = arc_angle / num_segments
-            for i in range(num_segments):
-                segment_angle = current_angle + (i + 1) * angle_step
-                # Snap to 90-degree increments for square effect
-                segment_angle = round(segment_angle / 90) * 90
-                angle_rad = math.radians(segment_angle)
-                step_distance = radius * math.radians(abs(angle_step))
-                new_x = start_x + step_distance * math.cos(angle_rad)
-                new_y = start_y + step_distance * math.sin(angle_rad)
-                vertices.append((new_x, new_y))
-                start_x, start_y = new_x, new_y
-                
-        elif action.arc_type == "zigzag":
-            # Zigzag arc pattern
-            num_segments = max(6, int(abs(arc_angle) / 15))
-            angle_step = arc_angle / num_segments
-            for i in range(num_segments):
-                # Add zigzag variation to arc
-                zigzag_offset = 15 if i % 2 == 0 else -15
-                segment_angle = current_angle + (i + 1) * angle_step + zigzag_offset
-                angle_rad = math.radians(segment_angle)
-                step_distance = radius * math.radians(abs(angle_step))
-                new_x = start_x + step_distance * math.cos(angle_rad)
-                new_y = start_y + step_distance * math.sin(angle_rad)
-                vertices.append((new_x, new_y))
-                start_x, start_y = new_x, new_y
-                
-        elif action.arc_type == "circle":
-            # Circular arc - very smooth
-            num_segments = max(8, int(abs(arc_angle) / 5))  # More segments for smoothness
-            angle_step = arc_angle / num_segments
-            center_x = start_x
-            center_y = start_y
-            
-            for i in range(num_segments):
-                segment_angle = current_angle + (i + 1) * angle_step
-                angle_rad = math.radians(segment_angle)
-                new_x = center_x + radius * math.cos(angle_rad)
-                new_y = center_y + radius * math.sin(angle_rad)
-                vertices.append((new_x, new_y))
-        else:
-            # Default to normal arc for unknown types
-            num_segments = max(4, int(abs(arc_angle) / 10))
-            angle_step = arc_angle / num_segments
-            
-            for i in range(num_segments):
-                segment_angle = current_angle + (i + 1) * angle_step
-                angle_rad = math.radians(segment_angle)
-                step_distance = radius * math.radians(abs(angle_step))
-                new_x = start_x + step_distance * math.cos(angle_rad)
-                new_y = start_y + step_distance * math.sin(angle_rad)
-                vertices.append((new_x, new_y))
-                start_x, start_y = new_x, new_y
-                
-        return vertices
     
     def process_action_commands_to_image(self, commands: List[str], problem_id: str, 
                                        output_size: Tuple[int, int] = None) -> Optional[np.ndarray]:
