@@ -406,23 +406,15 @@ class ActionMaskGenerator:
             return self._generate_synthetic_mask(action_commands, problem_id)
 
     def generate_mask(self, action_commands: list, problem_id: str, output_size: tuple = None):
-        """
-        Generate a mask using a two-pass strategy for guaranteed placement.
-        1. First pass calculates exact bounding boxes.
-        2. Second pass uses this data for collision-aware placement.
-        """
-        import math
-
-        # Define canvas_center and coord_range_max at the top so they are available everywhere
-        canvas_size = self.canvas_size if hasattr(self, 'canvas_size') else 512
-        canvas_center = canvas_size / 2
-        coord_range_max = self.coordinate_range[1]
-
+        import tempfile
+        import shutil
+        import glob
+        from PIL import Image
+        import numpy as np
         shape_actions_filepath = os.path.join(BONGARD_LOGO_PATH, "data", "human_designed_shapes.tsv")
         shape_attributes_filepath = os.path.join(BONGARD_LOGO_PATH, "data", "human_designed_shapes_attributes.tsv")
         sampler = None
         sampler_type = None
-
         if problem_id.startswith('bd_') and BASIC_SAMPLER_AVAILABLE:
             sampler = BasicSampler(shape_actions_filepath, shape_attributes_filepath)
             sampler_type = 'BasicSampler'
@@ -441,415 +433,19 @@ class ActionMaskGenerator:
 
         problem_painter = BongardProblemPainter()
         scaling_factors_range = getattr(problem_painter, 'scaling_factors_range', (150, 220))
-
-        # --- Two-Pass Placement Strategy ---
-
-        # 1. Pre-sample scaling factors
+        # Pre-sample scaling factors
         if sampler and hasattr(sampler, 'sample_scaling_factors'):
             scaling_factors = sampler.sample_scaling_factors(num_shapes=num_shapes)
         else:
             scaling_factors = [random.uniform(scaling_factors_range[0], scaling_factors_range[1]) for _ in range(num_shapes)]
 
-        # 2. First Pass: Calculate precise bounding box for each shape
-        shape_bounds = []
-        shape_offsets = []
-        shape_canvas_sizes = []
-        anchor_offsets = []
+        # Set all start_coordinates to None to trigger auto-positioning
         for i, shape in enumerate(bongard_image.one_stroke_shapes):
-            bounds = self._get_shape_bounds(shape, scaling_factors[i], problem_painter)
-            if bounds is None:
-                logging.warning(f"Could not calculate bounds for a shape in {problem_id}. Falling back.")
-                return self._generate_synthetic_mask(action_commands, problem_id)
-            width, height, cmin, rmin, large_canvas_size, anchor_offset_x, anchor_offset_y = bounds
-            shape_bounds.append((width, height))
-            shape_offsets.append((cmin, rmin))
-            shape_canvas_sizes.append(large_canvas_size)
-            anchor_offsets.append((anchor_offset_x, anchor_offset_y))
-
-        # 3. Second Pass: Iterative placement with exact bounding boxes
-        max_attempts = 500
-        valid_placement_found = False
-        final_placements = []
-        margin = 15 # pixels
-
-        # --- Improved adaptive placement strategy ---
-        for attempt in range(max_attempts):
-            placed_boxes = []
-            is_valid_config = True
-            box_positions = [None] * num_shapes
-            
-            # Calculate total area and adaptive spacing
-            total_shape_area = sum(w * h for w, h in shape_bounds)
-            canvas_area = canvas_size * canvas_size
-            density_ratio = total_shape_area / canvas_area
-            
-            # Adaptive minimum separation based on object sizes and canvas density
-            max_dimension = max(max(w, h) for w, h in shape_bounds)
-            min_separation = max(20, int(max_dimension * 0.3), int(canvas_size * 0.1))
-            
-            if num_shapes == 1:
-                # Single object: place in center with small random offset
-                width, height = shape_bounds[0]
-                center_x = canvas_size // 2 - width // 2
-                center_y = canvas_size // 2 - height // 2
-                offset_x = random.randint(-50, 50)
-                offset_y = random.randint(-50, 50)
-                x = max(margin, min(canvas_size - width - margin, center_x + offset_x))
-                y = max(margin, min(canvas_size - height - margin, center_y + offset_y))
-                box_positions[0] = {'x1': x, 'y1': y, 'x2': x + width, 'y2': y + height}
-                placed_boxes = [box_positions[0]]
-                
-            elif num_shapes == 2:
-                # Two objects: use adaptive diagonal or side-by-side placement
-                width0, height0 = shape_bounds[0]
-                width1, height1 = shape_bounds[1]
-                
-                # Determine if objects can fit side by side or need diagonal placement
-                total_width = width0 + width1 + min_separation
-                total_height = height0 + height1 + min_separation
-                
-                placement_strategies = []
-                
-                # Strategy 1: Side by side (horizontal)
-                if total_width + 2 * margin <= canvas_size:
-                    x0 = margin
-                    x1 = x0 + width0 + min_separation
-                    # Ensure both objects have valid Y positions within bounds
-                    max_y0 = canvas_size - height0 - margin
-                    max_y1 = canvas_size - height1 - margin
-                    if max_y0 > margin and max_y1 > margin:
-                        y0 = random.randint(margin, max_y0)
-                        y1 = random.randint(margin, max_y1)
-                        placement_strategies.append([(x0, y0), (x1, y1)])
-                
-                # Strategy 2: Vertical stack
-                if total_height + 2 * margin <= canvas_size:
-                    y0 = margin
-                    y1 = y0 + height0 + min_separation
-                    # Ensure both objects have valid X positions within bounds
-                    max_x0 = canvas_size - width0 - margin
-                    max_x1 = canvas_size - width1 - margin
-                    if max_x0 > margin and max_x1 > margin:
-                        x0 = random.randint(margin, max_x0)
-                        x1 = random.randint(margin, max_x1)
-                        placement_strategies.append([(x0, y0), (x1, y1)])
-                
-                # Strategy 3: Diagonal placement (always possible with smaller objects)
-                for _ in range(5):  # Try multiple diagonal configurations
-                    x0 = random.randint(margin, canvas_size - width0 - margin)
-                    y0 = random.randint(margin, canvas_size - height0 - margin)
-                    
-                    # Place second object diagonally opposite with minimum separation
-                    attempts_for_second = 0
-                    while attempts_for_second < 50:
-                        x1 = random.randint(margin, canvas_size - width1 - margin)
-                        y1 = random.randint(margin, canvas_size - height1 - margin)
-                        
-                        # Check minimum separation (center-to-center distance)
-                        center_dist = math.sqrt((x0 + width0/2 - x1 - width1/2)**2 + 
-                                              (y0 + height0/2 - y1 - height1/2)**2)
-                        if center_dist >= min_separation:
-                            placement_strategies.append([(x0, y0), (x1, y1)])
-                            break
-                        attempts_for_second += 1
-                
-                # Try placement strategies
-                found = False
-                random.shuffle(placement_strategies)
-                for strategy in placement_strategies:
-                    (x0, y0), (x1, y1) = strategy
-                    box0 = {'x1': x0, 'y1': y0, 'x2': x0 + width0, 'y2': y0 + height0}
-                    box1 = {'x1': x1, 'y1': y1, 'x2': x1 + width1, 'y2': y1 + height1}
-                    
-                    # Check for overlap
-                    if (box0['x2'] < box1['x1'] or box0['x1'] > box1['x2'] or 
-                        box0['y2'] < box1['y1'] or box0['y1'] > box1['y2']):
-                        box_positions[0] = box0
-                        box_positions[1] = box1
-                        placed_boxes = [box0, box1]
-                        found = True
-                        break
-                
-                if not found:
-                    is_valid_config = False
-            elif num_shapes == 3:
-                # Three objects: use grid-based placement with better spacing
-                widths = [shape_bounds[i][0] for i in range(3)]
-                heights = [shape_bounds[i][1] for i in range(3)]
-                
-                # Calculate available space for each object
-                available_width = canvas_size - 2 * margin
-                available_height = canvas_size - 2 * margin
-                
-                # Try different arrangements: L-shape, triangle, line
-                arrangements = []
-                
-                # Arrangement 1: L-shape (two on top, one on bottom)
-                if sum(widths[:2]) + min_separation + 2 * margin <= canvas_size:
-                    x0 = margin
-                    x1 = margin + widths[0] + min_separation
-                    y0 = y1 = margin
-                    x2 = margin
-                    y2 = margin + max(heights[0], heights[1]) + min_separation
-                    if (x1 + widths[1] <= canvas_size - margin and 
-                        y2 + heights[2] <= canvas_size - margin):
-                        arrangements.append([(x0, y0), (x1, y1), (x2, y2)])
-                
-                # Arrangement 2: Triangle formation
-                center_x = canvas_size // 2
-                center_y = canvas_size // 2
-                radius = min(canvas_size // 4, 100)
-                
-                for angle_offset in [0, 60, 120]:  # Try different triangle orientations
-                    positions = []
-                    valid_triangle = True
-                    for i in range(3):
-                        angle = (i * 120 + angle_offset) * math.pi / 180
-                        x = center_x + radius * math.cos(angle) - widths[i] // 2
-                        y = center_y + radius * math.sin(angle) - heights[i] // 2
-                        
-                        # Check bounds
-                        if (x < margin or x + widths[i] > canvas_size - margin or
-                            y < margin or y + heights[i] > canvas_size - margin):
-                            valid_triangle = False
-                            break
-                        positions.append((int(x), int(y)))
-                    
-                    if valid_triangle:
-                        arrangements.append(positions)
-                
-                # Arrangement 3: Vertical line
-                total_height = sum(heights) + 2 * min_separation
-                if total_height + 2 * margin <= canvas_size:
-                    x_base = canvas_size // 2 - max(widths) // 2
-                    y_current = margin
-                    positions = []
-                    for i in range(3):
-                        x = x_base + (max(widths) - widths[i]) // 2
-                        positions.append((x, y_current))
-                        y_current += heights[i] + min_separation
-                    arrangements.append(positions)
-                
-                # Try arrangements
-                found = False
-                random.shuffle(arrangements)
-                for arrangement in arrangements:
-                    boxes = []
-                    overlap_found = False
-                    
-                    for i, (x, y) in enumerate(arrangement):
-                        box = {'x1': x, 'y1': y, 'x2': x + widths[i], 'y2': y + heights[i]}
-                        
-                        # Check overlap with previously placed boxes
-                        for existing_box in boxes:
-                            if not (box['x2'] < existing_box['x1'] or box['x1'] > existing_box['x2'] or 
-                                   box['y2'] < existing_box['y1'] or box['y1'] > existing_box['y2']):
-                                overlap_found = True
-                                break
-                        
-                        if overlap_found:
-                            break
-                        boxes.append(box)
-                    
-                    if not overlap_found and len(boxes) == 3:
-                        for i, box in enumerate(boxes):
-                            box_positions[i] = box
-                        placed_boxes = boxes
-                        found = True
-                        break
-                
-                if not found:
-                    is_valid_config = False
+            shape.start_coordinates = None
+            if sampler and hasattr(sampler, 'sample_orientations'):
+                shape.start_orientation = sampler.sample_orientations(num_shapes=num_shapes)[i]
             else:
-                # Greedy adaptive for 4+ objects with improved bounds checking
-                shape_indices = list(range(num_shapes))
-                shape_areas = [w * h for (w, h) in shape_bounds]
-                sorted_indices = sorted(shape_indices, key=lambda i: -shape_areas[i])
-                
-                for idx in sorted_indices:
-                    width, height = shape_bounds[idx]
-                    found_spot_for_shape = False
-                    
-                    # Calculate valid placement bounds
-                    max_x = canvas_size - width - margin
-                    max_y = canvas_size - height - margin
-                    
-                    if max_x <= margin or max_y <= margin:
-                        # Object too large for canvas
-                        is_valid_config = False
-                        break
-                    
-                    for _ in range(200):
-                        x = random.randint(margin, max_x)
-                        y = random.randint(margin, max_y)
-                        current_box = {'x1': x, 'y1': y, 'x2': x + width, 'y2': y + height}
-                        
-                        # Check overlap with all previously placed boxes
-                        is_overlapping = False
-                        for other_box in placed_boxes:
-                            if other_box is None:
-                                continue
-                            # Check overlap using bounding box intersection
-                            if not (current_box['x2'] <= other_box['x1'] or 
-                                    current_box['x1'] >= other_box['x2'] or 
-                                    current_box['y2'] <= other_box['y1'] or 
-                                    current_box['y1'] >= other_box['y2']):
-                                is_overlapping = True
-                                break
-                        
-                        # Also check minimum separation distance
-                        if not is_overlapping:
-                            current_center_x = x + width / 2
-                            current_center_y = y + height / 2
-                            
-                            for other_box in placed_boxes:
-                                if other_box is None:
-                                    continue
-                                other_center_x = (other_box['x1'] + other_box['x2']) / 2
-                                other_center_y = (other_box['y1'] + other_box['y2']) / 2
-                                
-                                center_dist = math.sqrt((current_center_x - other_center_x)**2 + 
-                                                      (current_center_y - other_center_y)**2)
-                                if center_dist < min_separation:
-                                    is_overlapping = True
-                                    break
-                        
-                        if not is_overlapping:
-                            box_positions[idx] = current_box
-                            placed_boxes.append(current_box)
-                            found_spot_for_shape = True
-                            break
-                    
-                    if not found_spot_for_shape:
-                        is_valid_config = False
-                        break
-            # Post-render diagnostic check: ensure all shapes are in bounds and do not overlap in the mask
-            if is_valid_config:
-                # Prepare BongardImage for this placement with improved coordinate transformation
-                start_coords = []
-                for i in range(num_shapes):
-                    box = box_positions[i]
-                    width, height = shape_bounds[i]
-                    anchor_offset_x, anchor_offset_y = anchor_offsets[i]
-                    
-                    # Calculate the anchor point in canvas coordinates
-                    anchor_x = box['x1'] + anchor_offset_x
-                    anchor_y = box['y1'] + anchor_offset_y
-                    
-                    # Transform to Bongard-LOGO coordinate system (-360 to 360)
-                    # Add bounds checking to prevent coordinates from going too far out
-                    logo_x = (anchor_x - canvas_center) * (coord_range_max / canvas_center)
-                    logo_y = -(anchor_y - canvas_center) * (coord_range_max / canvas_center)
-                    
-                    # Clamp coordinates to safe bounds to prevent objects from going off-canvas
-                    safe_bound = coord_range_max * 0.9  # Use 90% of max range for safety
-                    logo_x = max(-safe_bound, min(safe_bound, logo_x))
-                    logo_y = max(-safe_bound, min(safe_bound, logo_y))
-                    
-                    start_coords.append((logo_x, logo_y))
-                    
-                if sampler and hasattr(sampler, 'sample_orientations'):
-                    start_orients = sampler.sample_orientations(num_shapes=num_shapes)
-                else:
-                    start_orients = [random.uniform(0, 360) for _ in range(num_shapes)]
-                norm_orients = [(o % 360) for o in start_orients]
-                
-                # Apply coordinates and orientations to shapes
-                for i, shape in enumerate(bongard_image.one_stroke_shapes):
-                    shape.start_coordinates = start_coords[i]
-                    shape.start_orientation = norm_orients[i]
-                    shape.set_consistent_scaling_factors(scaling_factors[i])
-                # Render to temp mask
-                temp_dir = tempfile.mkdtemp()
-                ps_dir = os.path.join(temp_dir, "ps")
-                png_dir = os.path.join(temp_dir, "png")
-                os.makedirs(ps_dir, exist_ok=True)
-                os.makedirs(png_dir, exist_ok=True)
-                problem_painter.save_bongard_images([bongard_image], "1", ps_dir, png_dir, auto_position=False)
-                ps_file = os.path.join(ps_dir, "1", "0.ps")
-                png_file = os.path.join(png_dir, "1", "0.png")
-                mask_valid = False
-                if os.path.exists(ps_file):
-                    import subprocess
-                    gs_cmd = [
-                        "gswin64c" if os.name == "nt" else "gs",
-                        "-dNOPAUSE", "-dBATCH", "-sDEVICE=png16m",
-                        f"-sOutputFile={png_file}", ps_file
-                    ]
-                    try:
-                        subprocess.run(gs_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    except Exception:
-                        import shutil
-                        shutil.rmtree(temp_dir)
-                        continue
-                    if os.path.exists(png_file):
-                        from PIL import Image
-                        img = Image.open(png_file).convert('L')
-                        mask = (np.array(img) < 128).astype(np.uint8)
-                        # Check all nonzero pixels are within bounds
-                        if np.any(np.where(mask)[0] < 0) or np.any(np.where(mask)[0] >= canvas_size) or \
-                           np.any(np.where(mask)[1] < 0) or np.any(np.where(mask)[1] >= canvas_size):
-                            import shutil
-                            shutil.rmtree(temp_dir)
-                            continue
-                        # Check for overlap: label connected components, should be num_shapes
-                        from scipy.ndimage import label
-                        labeled, n = label(mask)
-                        if n != num_shapes:
-                            import shutil
-                            shutil.rmtree(temp_dir)
-                            continue
-                        mask_valid = True
-                import shutil
-                shutil.rmtree(temp_dir)
-                if mask_valid:
-                    final_placements = box_positions
-                    valid_placement_found = True
-                    logging.debug(f"Found valid placement for {problem_id} on attempt {attempt + 1} (diagnostic check passed)")
-                    break
-            # If failed after many attempts, try reducing scaling and retry
-            if (not valid_placement_found) and attempt == max_attempts - 1:
-                # Reduce scaling and retry
-                logging.warning(f"Placement failed for {problem_id} after {max_attempts} attempts, reducing scaling and retrying.")
-                scaling_factors = [max(60, s * 0.8) for s in scaling_factors]
-                # Recompute bounds with new scaling
-                shape_bounds = []
-                anchor_offsets = []
-                for i, shape in enumerate(bongard_image.one_stroke_shapes):
-                    bounds = self._get_shape_bounds(shape, scaling_factors[i], problem_painter)
-                    if bounds is None:
-                        logging.warning(f"Could not calculate bounds for a shape in {problem_id} after scaling reduction. Falling back.")
-                        return self._generate_synthetic_mask(action_commands, problem_id)
-                    width, height, cmin, rmin, large_canvas_size, anchor_offset_x, anchor_offset_y = bounds
-                    shape_bounds.append((width, height))
-                    anchor_offsets.append((anchor_offset_x, anchor_offset_y))
-
-        if not valid_placement_found:
-            logging.warning(f"Could not find a valid placement for {problem_id} after {max_attempts} attempts. Falling back to synthetic mask.")
-            return self._generate_synthetic_mask(action_commands, problem_id)
-
-        # 4. Final Rendering with calculated placements
-        start_coords = []
-        canvas_center = canvas_size / 2
-        coord_range_max = self.coordinate_range[1]
-        for i, box in enumerate(final_placements):
-            width, height = shape_bounds[i]
-            anchor_offset_x, anchor_offset_y = anchor_offsets[i]
-            anchor_x = box['x1'] + anchor_offset_x
-            anchor_y = box['y1'] + anchor_offset_y
-            logo_x = (anchor_x - canvas_center) * (coord_range_max / canvas_center)
-            logo_y = -(anchor_y - canvas_center) * (coord_range_max / canvas_center)
-            start_coords.append((logo_x, logo_y))
-
-        if sampler and hasattr(sampler, 'sample_orientations'):
-            start_orients = sampler.sample_orientations(num_shapes=num_shapes)
-        else:
-            start_orients = [random.uniform(0, 360) for _ in range(num_shapes)]
-
-        norm_orients = [(o % 360) for o in start_orients]
-        for i, shape in enumerate(bongard_image.one_stroke_shapes):
-            shape.start_coordinates = start_coords[i]
-            shape.start_orientation = norm_orients[i]
+                shape.start_orientation = random.uniform(0, 360)
             shape.set_consistent_scaling_factors(scaling_factors[i])
 
         temp_dir = tempfile.mkdtemp()
@@ -857,42 +453,51 @@ class ActionMaskGenerator:
         png_dir = os.path.join(temp_dir, "png")
         os.makedirs(ps_dir, exist_ok=True)
         os.makedirs(png_dir, exist_ok=True)
-        problem_painter.save_bongard_images([bongard_image], "1", ps_dir, png_dir, auto_position=False)
-        ps_file = os.path.join(ps_dir, "1", "0.ps")
-        png_file = os.path.join(png_dir, "1", "0.png")
-        if os.path.exists(ps_file):
-            import subprocess
-            gs_cmd = [
-                "gswin64c" if os.name == "nt" else "gs",
-                "-dNOPAUSE", "-dBATCH", "-sDEVICE=png16m",
-                f"-sOutputFile={png_file}", ps_file
-            ]
-            try:
-                subprocess.run(gs_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            except (subprocess.CalledProcessError, FileNotFoundError) as e:
-                logging.error(f"Ghostscript failed for {problem_id}: {e}. Falling back to synthetic mask.")
-                import shutil
-                shutil.rmtree(temp_dir)
-                return self._generate_synthetic_mask(action_commands, problem_id)
+        # Use auto_position=True for robust placement
+        problem_painter.save_bongard_images([bongard_image], "1", ps_dir, png_dir, auto_position=True)
 
-            if os.path.exists(png_file):
-                from PIL import Image
-                img = Image.open(png_file).convert('L')
-                mask = (np.array(img) < 128).astype(np.uint8)
-                import shutil
-                shutil.rmtree(temp_dir)
-                logging.info(f"Successfully generated {sampler_type} mask for {problem_id}")
-                return mask
-            else:
-                import shutil
-                shutil.rmtree(temp_dir)
-                logging.error(f"Ghostscript did not produce PNG for {problem_id}. Falling back to synthetic mask.")
-                return self._generate_synthetic_mask(action_commands, problem_id)
-        else:
-            import shutil
+        # Try all possible PNG locations
+        possible_pngs = [
+            os.path.join(png_dir, "1", "0.png"),
+            os.path.join(png_dir, "0.png"),
+            os.path.join(png_dir, "1.png"),
+            os.path.join(png_dir, "0", "0.png"),
+            os.path.join(png_dir, "1", "1.png"),
+        ]
+        png_file = None
+        for candidate in possible_pngs:
+            if os.path.exists(candidate):
+                png_file = candidate
+                break
+
+        # Fallback: try to convert PS to PNG if not found
+        if png_file is None:
+            ps_candidates = glob.glob(os.path.join(ps_dir, "*", "0.ps")) + glob.glob(os.path.join(ps_dir, "0.ps"))
+            if ps_candidates:
+                ps_file = ps_candidates[0]
+                fallback_png = os.path.join(png_dir, "fallback.png")
+                gs_cmd = [
+                    "gswin64c" if os.name == "nt" else "gs",
+                    "-dNOPAUSE", "-dBATCH", "-sDEVICE=png16m",
+                    f"-sOutputFile={fallback_png}", ps_file
+                ]
+                try:
+                    subprocess.run(gs_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    if os.path.exists(fallback_png):
+                        png_file = fallback_png
+                except Exception as e:
+                    png_file = None
+
+        if png_file is None or not os.path.exists(png_file):
             shutil.rmtree(temp_dir)
-            logging.error(f"PostScript file not found for {problem_id}. Falling back to synthetic mask.")
+            logging.error(f"PNG file not found for {problem_id}. Falling back to synthetic mask.")
             return self._generate_synthetic_mask(action_commands, problem_id)
+
+        img = Image.open(png_file).convert('L')
+        mask = (np.array(img) < 128).astype(np.uint8)
+        shutil.rmtree(temp_dir)
+        logging.info(f"Successfully generated {sampler_type} mask for {problem_id}")
+        return mask
 
     def _generate_synthetic_mask(self, action_commands: list, problem_id: str) -> np.ndarray:
         """
