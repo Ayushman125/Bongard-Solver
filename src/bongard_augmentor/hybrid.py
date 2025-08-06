@@ -1,5 +1,3 @@
-
-
 # ------------------------------------------------------------------
 # Action-Based Augmentation Pipeline
 # Processes Action Programs instead of Real Images  
@@ -93,269 +91,68 @@ from src.data_pipeline.logo_parser import ComprehensiveNVLabsParser, NVLABS_AVAI
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# --- Fast Spatial Grid for O(1) Collision Detection ---
+from collections import defaultdict
+
+class FastSpatialGrid:
+    def __init__(self, canvas_size=512, cell_size=64):
+        self.canvas_size = canvas_size
+        self.cell_size = cell_size
+        self.grid = defaultdict(list)
+
+    def _cells_covered(self, x, y, width, height):
+        x0 = int(x // self.cell_size)
+        y0 = int(y // self.cell_size)
+        x1 = int((x + width) // self.cell_size)
+        y1 = int((y + height) // self.cell_size)
+        for cx in range(x0, x1 + 1):
+            for cy in range(y0, y1 + 1):
+                yield (cx, cy)
+
+    def check_collision(self, x, y, width, height):
+        for cell in self._cells_covered(x, y, width, height):
+            for bx, by, bw, bh in self.grid[cell]:
+                if not (x + width <= bx or x >= bx + bw or y + height <= by or y >= by + bh):
+                    return True
+        return False
+
+    def add_box(self, x, y, width, height):
+        for cell in self._cells_covered(x, y, width, height):
+            self.grid[cell].append((x, y, width, height))
+
+def canvas_to_logo(canvas_x, canvas_y, canvas_size=512):
+    # Map (0,512) to (-360,360)
+    logo_x = (canvas_x * 720.0 / canvas_size) - 360.0
+    logo_y = -((canvas_y * 720.0 / canvas_size) - 360.0)
+    return logo_x, logo_y
+
+def logo_to_canvas(logo_x, logo_y, canvas_size=512):
+    # Map (-360,360) to (0,512)
+    canvas_x = int((logo_x + 360.0) * canvas_size / 720.0)
+    canvas_y = int((360.0 - logo_y) * canvas_size / 720.0)
+    return canvas_x, canvas_y
 
 
 class ActionMaskGenerator:
-    def _get_shape_bounds(self, shape, scaling_factor, problem_painter):
-        """
-        Render a single shape at the origin to calculate its precise bounding box.
-        Returns (width, height, cmin, rmin, large_canvas_size, anchor_offset_x, anchor_offset_y).
-        The anchor offset is the pixel offset from the anchor point (0,0) to the bounding box top-left.
-        """
-        import tempfile
-        import os
-        import numpy as np
-        import logging
-        action_strings = [str(a) for a in shape.get_actions()]
-        temp_bongard_image = BongardImage.import_from_action_string_list([action_strings])
-        single_shape = temp_bongard_image.one_stroke_shapes[0]
-        single_shape.start_coordinates = (0, 0)
-        single_shape.start_orientation = 0
-        single_shape.set_consistent_scaling_factors(scaling_factor)
-        temp_dir = tempfile.mkdtemp()
-        try:
-            ps_dir = os.path.join(temp_dir, "ps")
-            png_dir = os.path.join(temp_dir, "png")
-            bounds_check_ps_dir = os.path.join(ps_dir, "bounds_check")
-            bounds_check_png_dir = os.path.join(png_dir, "bounds_check")
-            os.makedirs(bounds_check_ps_dir, exist_ok=True)
-            os.makedirs(bounds_check_png_dir, exist_ok=True)
-            large_canvas_size = 1024
-            logging.debug(f"[get_shape_bounds] Saving Bongard image for bounds_check: ps_dir={bounds_check_ps_dir}, png_dir={bounds_check_png_dir}")
-            orig_canvas_size = getattr(problem_painter, 'canvas_size', None)
-            try:
-                if hasattr(problem_painter, 'canvas_size'):
-                    problem_painter.canvas_size = large_canvas_size
-                problem_painter.save_bongard_images([temp_bongard_image], "bounds_check", ps_dir, png_dir, auto_position=False)
-            finally:
-                if orig_canvas_size is not None:
-                    problem_painter.canvas_size = orig_canvas_size
-            ps_file = os.path.join(bounds_check_ps_dir, "0.ps")
-            png_file = os.path.join(bounds_check_png_dir, "0.png")
-            if not os.path.exists(ps_file):
-                logging.error(f"[get_shape_bounds] PostScript file not found: {ps_file}")
-                return None
-            import subprocess
-            gs_cmd = ["gswin64c" if os.name == "nt" else "gs", "-dNOPAUSE", "-dBATCH", "-sDEVICE=png16m", f"-sOutputFile={png_file}", ps_file]
-            logging.debug(f"[get_shape_bounds] Running Ghostscript: {' '.join(gs_cmd)}")
-            try:
-                subprocess.run(gs_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            except Exception as gs_exc:
-                logging.error(f"[get_shape_bounds] Ghostscript failed: {gs_exc}")
-                return None
-            if not os.path.exists(png_file):
-                logging.error(f"[get_shape_bounds] PNG file not found after Ghostscript: {png_file}")
-                return None
-            from PIL import Image
-            try:
-                img_array = (np.array(Image.open(png_file).convert('L')) < 128).astype(np.uint8)
-            except Exception as img_exc:
-                logging.error(f"[get_shape_bounds] Failed to load PNG as image: {img_exc}")
-                return None
-            rows = np.any(img_array, axis=1)
-            cols = np.any(img_array, axis=0)
-            if not np.any(rows) or not np.any(cols):
-                logging.error(f"[get_shape_bounds] Rendered PNG is empty: {png_file}")
-                return None
-            rmin, rmax = np.where(rows)[0][[0, -1]]
-            cmin, cmax = np.where(cols)[0][[0, -1]]
-            width = cmax - cmin
-            height = rmax - rmin
-            # Anchor point (0,0) in large canvas coordinates
-            anchor_x = large_canvas_size // 2
-            anchor_y = large_canvas_size // 2
-            anchor_offset_x = anchor_x - cmin
-            anchor_offset_y = anchor_y - rmin
-            logging.debug(f"[get_shape_bounds] Calculated bounds: width={width}, height={height}, cmin={cmin}, rmin={rmin}, anchor_offset_x={anchor_offset_x}, anchor_offset_y={anchor_offset_y}")
-            return (width, height, cmin, rmin, large_canvas_size, anchor_offset_x, anchor_offset_y)
-        except Exception as exc:
-            logging.error(f"[get_shape_bounds] Exception: {exc}")
-            return None
-        finally:
-            import shutil
-            shutil.rmtree(temp_dir)
-    def _custom_bd_positioning(self, bongard_image, scaling_factors_range=(150, 220), safe_boundary=270, max_radius=198):
-        """
-        Custom robust boundary-safe positioning for BD problems.
-        Returns coordinates, orientations, and scaling factors for each object.
-        """
-        num_shapes = len(bongard_image.one_stroke_shapes)
-        canvas_max_coord = self.coordinate_range[1] if hasattr(self, 'coordinate_range') else 360
-        avg_scaling = sum(scaling_factors_range) / 2
-        object_radius_estimate = avg_scaling * 0.45
-        safe_boundary = canvas_max_coord - object_radius_estimate
-        max_radius = safe_boundary * 0.8
-        logging.debug(f"[BD] Custom positioning: safe_boundary={safe_boundary:.2f}, max_radius={max_radius:.2f}")
-        coordinates = []
-        orientations = []
-        scaling = []
-        local_rng = random.Random(hashlib.md5(str(num_shapes).encode()).hexdigest())
-        if num_shapes == 1:
-            theta = local_rng.uniform(0, 360)
-            radius = local_rng.uniform(0, max_radius * 0.8)
-            x = radius * math.cos(theta * math.pi / 180)
-            y = radius * math.sin(theta * math.pi / 180)
-            x = max(-safe_boundary, min(safe_boundary, x))
-            y = max(-safe_boundary, min(safe_boundary, y))
-            coordinates.append((x, y))
-            orientations.append(theta)
-            scaling.append(local_rng.uniform(scaling_factors_range[0], scaling_factors_range[1]))
-        elif num_shapes == 2:
-            theta_1 = local_rng.uniform(0, 360)
-            radius_1 = local_rng.uniform(0.3 * max_radius, 0.7 * max_radius)
-            x_1 = radius_1 * math.cos(theta_1 * math.pi / 180)
-            y_1 = radius_1 * math.sin(theta_1 * math.pi / 180)
-            x_1 = max(-safe_boundary, min(safe_boundary, x_1))
-            y_1 = max(-safe_boundary, min(safe_boundary, y_1))
-            coordinates.append((x_1, y_1))
-            orientations.append(theta_1)
-            scaling.append(local_rng.uniform(scaling_factors_range[0], scaling_factors_range[1]))
-            max_attempts = 300
-            for attempt in range(max_attempts):
-                theta_2 = local_rng.uniform(theta_1 - 60, theta_1 + 60)
-                radius_2 = local_rng.uniform(0.3 * max_radius, 0.7 * max_radius)
-                x_2 = radius_2 * math.cos(theta_2 * math.pi / 180)
-                y_2 = radius_2 * math.sin(theta_2 * math.pi / 180)
-                x_2 = max(-safe_boundary, min(safe_boundary, x_2))
-                y_2 = max(-safe_boundary, min(safe_boundary, y_2))
-                distance = math.hypot(x_2 - x_1, y_2 - y_1)
-                x_sep = abs(x_2 - x_1)
-                y_sep = abs(y_2 - y_1)
-                min_distance = max_radius * 0.7
-                min_axis_sep = max_radius * 0.1
-                if distance >= min_distance and x_sep >= min_axis_sep and y_sep >= min_axis_sep:
-                    break
-            else:
-                x_2 = -x_1 * 0.6
-                y_2 = -y_1 * 0.6
-                x_2 = max(-safe_boundary, min(safe_boundary, x_2))
-                y_2 = max(-safe_boundary, min(safe_boundary, y_2))
-                theta_2 = (theta_1 + 180) % 360
-            coordinates.append((x_2, y_2))
-            orientations.append(theta_2)
-            scaling.append(local_rng.uniform(scaling_factors_range[0], scaling_factors_range[1]))
-        else:
-            for i in range(num_shapes):
-                angle = (i / num_shapes) * 360
-                radius = local_rng.uniform(0.2 * max_radius, 0.5 * max_radius)
-                x = radius * math.cos(angle * math.pi / 180)
-                y = radius * math.sin(angle * math.pi / 180)
-                x = max(-safe_boundary, min(safe_boundary, x))
-                y = max(-safe_boundary, min(safe_boundary, y))
-                coordinates.append((x, y))
-                orientations.append(local_rng.uniform(0, 360))
-                scaling.append(local_rng.uniform(scaling_factors_range[0], scaling_factors_range[1]))
-        return coordinates, orientations, scaling
-    """
-    Generates masks using the official Bongard-LOGO repo directly.
-    All positioning, geometry, and coordinate logic is handled by Bongard-LOGO classes:
-    - BongardImagePainter for rendering
-    - OneStrokeShape for geometric representation
-    - BasicAction for normalization/denormalization
-    - All coordinate transforms and positioning use Bongard-LOGO canonical logic
-    """
-    def __init__(self, config=None, canvas_size=512, coordinate_range=(-360, 360)):
-        """
-        Accepts either a config dict or direct canvas_size/coordinate_range.
-        If config is provided, extract canvas_size and coordinate_range from it.
-        Stores config for later use in run_pipeline.
-        Uses Bongard-LOGO positioning, geometry, and coordinate logic directly.
-        """
+    def __init__(self, config=None):
         self.config = config
-        if isinstance(config, dict):
-            canvas_size = config.get('canvas_size', canvas_size)
-            coordinate_range = config.get('coordinate_range', coordinate_range)
-        self.canvas_size = canvas_size
-        self.coordinate_range = coordinate_range
-
-    def _determine_multi_object_positioning(self, num_shapes, scaling_factors_range=(150, 220), safe_boundary=270, max_radius=198):
-        """
-        Improved boundary-safe positioning for multi-object Bongard images.
-        Returns coordinates, orientations, and scaling factors for each object.
-        All coordinates are clamped to ±safe_boundary, and separation is enforced.
-        """
-        # More robust boundary calculation
-        canvas_max_coord = self.coordinate_range[1]
-        avg_scaling = sum(scaling_factors_range) / 2
-        # Estimate object radius based on scaling, with a safety margin
-        object_radius_estimate = avg_scaling * 0.45 
-        # New safe_boundary and max_radius based on canvas size and object size
-        safe_boundary = canvas_max_coord - object_radius_estimate
-        max_radius = safe_boundary * 0.8  # Position objects well within the safe zone
-
-        logging.debug(f"Canvas-aware positioning: safe_boundary={safe_boundary:.2f}, max_radius={max_radius:.2f}")
-
-        coordinates = []
-        orientations = []
-        scaling = []
-        local_rng = random.Random(hashlib.md5(str(num_shapes).encode()).hexdigest())
-        if num_shapes == 1:
-            theta = local_rng.uniform(0, 360)
-            radius = local_rng.uniform(0, max_radius * 0.8)
-            x = radius * math.cos(theta * math.pi / 180)
-            y = radius * math.sin(theta * math.pi / 180)
-            x = max(-safe_boundary, min(safe_boundary, x))
-            y = max(-safe_boundary, min(safe_boundary, y))
-            coordinates.append((x, y))
-            orientations.append(theta)
-            scaling.append(local_rng.uniform(scaling_factors_range[0], scaling_factors_range[1]))
-        elif num_shapes == 2:
-            # First object
-            theta_1 = local_rng.uniform(0, 360)
-            radius_1 = local_rng.uniform(0.3 * max_radius, 0.7 * max_radius)
-            x_1 = radius_1 * math.cos(theta_1 * math.pi / 180)
-            y_1 = radius_1 * math.sin(theta_1 * math.pi / 180)
-            x_1 = max(-safe_boundary, min(safe_boundary, x_1))
-            y_1 = max(-safe_boundary, min(safe_boundary, y_1))
-            coordinates.append((x_1, y_1))
-            orientations.append(theta_1)
-            scaling.append(local_rng.uniform(scaling_factors_range[0], scaling_factors_range[1]))
-            # Second object: Monte Carlo with improved constraints
-            max_attempts = 300
-            for attempt in range(max_attempts):
-                theta_2 = local_rng.uniform(theta_1 - 60, theta_1 + 60)
-                radius_2 = local_rng.uniform(0.3 * max_radius, 0.7 * max_radius)
-                x_2 = radius_2 * math.cos(theta_2 * math.pi / 180)
-                y_2 = radius_2 * math.sin(theta_2 * math.pi / 180)
-                x_2 = max(-safe_boundary, min(safe_boundary, x_2))
-                y_2 = max(-safe_boundary, min(safe_boundary, y_2))
-                distance = math.hypot(x_2 - x_1, y_2 - y_1)
-                x_sep = abs(x_2 - x_1)
-                y_sep = abs(y_2 - y_1)
-                min_distance = max_radius * 0.7
-                min_axis_sep = max_radius * 0.1
-                if distance >= min_distance and x_sep >= min_axis_sep and y_sep >= min_axis_sep:
-                    break
-            else:
-                # Fallback: place on opposite side
-                x_2 = -x_1 * 0.6
-                y_2 = -y_1 * 0.6
-                x_2 = max(-safe_boundary, min(safe_boundary, x_2))
-                y_2 = max(-safe_boundary, min(safe_boundary, y_2))
-                theta_2 = (theta_1 + 180) % 360
-            coordinates.append((x_2, y_2))
-            orientations.append(theta_2)
-            scaling.append(local_rng.uniform(scaling_factors_range[0], scaling_factors_range[1]))
-        else:
-            # Multiple objects: distribute evenly in safe zones
-            for i in range(num_shapes):
-                angle = (i / num_shapes) * 360
-                radius = local_rng.uniform(0.2 * max_radius, 0.5 * max_radius)
-                x = radius * math.cos(angle * math.pi / 180)
-                y = radius * math.sin(angle * math.pi / 180)
-                x = max(-safe_boundary, min(safe_boundary, x))
-                y = max(-safe_boundary, min(safe_boundary, y))
-                coordinates.append((x, y))
-                orientations.append(local_rng.uniform(0, 360))
-                scaling.append(local_rng.uniform(scaling_factors_range[0], scaling_factors_range[1]))
-        return coordinates, orientations, scaling
-
+        # Optionally set attributes from config
+        if config and isinstance(config, dict):
+            for k, v in config.items():
+                setattr(self, k, v)
+        # Set defaults if not in config
+        if not hasattr(self, 'canvas_size'):
+            self.canvas_size = 512
+        if not hasattr(self, 'coordinate_range'):
+            self.coordinate_range = (-360, 360)
     def run_pipeline(self, action_programs_dir=None, output_path=None, problems_list=None, n_select=50):
         """
         Main entry point for action-based augmentation pipeline.
         Loads action programs, generates masks using Bongard-LOGO repo, and saves results.
         Uses config values if present, otherwise CLI arguments.
         """
+        import pickle
+        import cv2
         config = getattr(self, 'config', None)
         if config and isinstance(config, dict):
             action_programs_dir = action_programs_dir or config.get('action_programs_dir') or config.get('data', {}).get('action_programs_dir')
@@ -374,6 +171,7 @@ class ActionMaskGenerator:
             raise ValueError("action_programs_dir and output_path must be specified.")
 
         # Load action programs
+        from src.data_pipeline.data_loader import load_action_programs
         action_data = load_action_programs(action_programs_dir)
         # Filter action_data immediately after loading
         if problems_list and os.path.exists(problems_list):
@@ -434,6 +232,7 @@ class ActionMaskGenerator:
         output_records = []
         inspection_dir = os.path.join(os.path.dirname(output_path), "mask_inspection")
         os.makedirs(inspection_dir, exist_ok=True)
+        from tqdm import tqdm
         for entry in tqdm(result, desc="Generating masks from action programs", mininterval=0.5):
             try:
                 # Directly generate mask using canonical Bongard-LOGO workflow
@@ -447,52 +246,16 @@ class ActionMaskGenerator:
 
                 # Save mask as PNG for inspection
                 mask_img_path = os.path.join(inspection_dir, f"{entry['image_id']}_mask.png")
-                import cv2
-                import numpy as np
-                # Ensure mask is a numpy array before saving
                 if isinstance(mask, np.ndarray):
                     cv2.imwrite(mask_img_path, (mask * 255).astype('uint8'))
                 elif isinstance(mask, (list, tuple)):
                     mask_arr = np.array(mask)
                     cv2.imwrite(mask_img_path, (mask_arr * 255).astype('uint8'))
                 elif isinstance(mask, (int, float)):
-                    # If mask is a scalar, create a 1x1 image
                     mask_arr = np.array([[mask]])
                     cv2.imwrite(mask_img_path, (mask_arr * 255).astype('uint8'))
                 else:
                     logging.error(f"Mask for {entry['image_id']} is not a valid image array: type={type(mask)}")
-
-                # Try to save real image if available (Bongard-LOGO convention)
-                # Example path: data/raw/ShapeBongard_V2/{cat}/images/{problem_id}/category_1/{i}.png
-                # Use category from problem_id prefix
-                problem_id = entry['problem_id']
-                image_id = entry['image_id']
-                if problem_id.startswith('bd_'):
-                    cat = 'bd'
-                elif problem_id.startswith('ff_'):
-                    cat = 'ff'
-                elif problem_id.startswith('hd_'):
-                    cat = 'hd'
-                else:
-                    cat = None
-                if cat:
-                    # Determine pos/neg and index
-                    if '_pos_' in image_id:
-                        label = 'category_1'
-                        idx = image_id.split('_pos_')[-1]
-                    elif '_neg_' in image_id:
-                        label = 'category_0'
-                        idx = image_id.split('_neg_')[-1]
-                    else:
-                        label = None
-                        idx = None
-                    if label and idx is not None:
-                        real_img_path = os.path.join(action_programs_dir, cat, "images", problem_id, label, f"{idx}.png")
-                        if os.path.exists(real_img_path):
-                            # Save a copy for inspection
-                            real_img_out = os.path.join(inspection_dir, f"{image_id}_real.png")
-                            import shutil
-                            shutil.copyfile(real_img_path, real_img_out)
             except Exception as e:
                 logging.error(f"Failed to process entry {entry.get('image_id', 'unknown')}: {e}")
                 continue
