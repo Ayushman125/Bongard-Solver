@@ -145,25 +145,31 @@ class PhysicsInference:
 
     @staticmethod
     def polygon_from_vertices(vertices):
+        import logging
         key = f"{len(vertices)}-{hash(tuple(vertices))}"
         if key in _POLY_CACHE:
             return _POLY_CACHE[key]
 
-        # one-time clean + build
         def _clean_vertices(verts): return verts  # placeholder
         cleaned = _clean_vertices(vertices)
         n = len(cleaned)
-
-        # raw polygon
         t0 = time.time()
-        poly = Polygon(cleaned)
-        logging.debug("polygon: raw build %d verts in %.3fs", n, time.time()-t0)
-
-        # small-polygon repair (fix: use n < 20 for fallback, as in snippet)
-        if not poly.is_valid and n < 20:
-            logging.warning(f"Invalid polygon with {n} vertices, using unit square fallback.")
+        poly = None
+        try:
+            poly = Polygon(cleaned)
+            logging.debug(f"polygon: raw build {n} verts in {time.time()-t0:.3f}s")
+            if not poly.is_valid or poly.area == 0:
+                logging.debug("polygon_from_vertices: invalid or zero-area polygon, trying buffer(0)")
+                poly = poly.buffer(0)
+            if (not poly.is_valid or poly.area == 0) and n >= 3:
+                logging.debug("polygon_from_vertices: still invalid, trying convex hull fallback")
+                poly = Polygon(cleaned).convex_hull
+            if not poly.is_valid or poly.area == 0:
+                logging.warning(f"polygon_from_vertices: Could not recover valid polygon, using unit square fallback.")
+                poly = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
+        except Exception as e:
+            logging.warning(f"polygon_from_vertices: Exception {e}, using unit square fallback.")
             poly = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
-
         poly = PhysicsInference._ensure_polygon(poly)
         _POLY_CACHE[key] = poly
         return poly
@@ -193,20 +199,30 @@ class PhysicsInference:
     @safe_feature(default=0.0)
     def area(poly_geom):
         """
-        Returns area normalized to unit square if possible.
+        Returns area normalized to unit square if possible. Robust to invalid polygons, with buffer(0) and convex hull fallback, and debug logging.
         """
+        import logging
         poly = PhysicsInference._ensure_polygon(poly_geom)
-        """Return area of a polygon, robust to invalid polygons. Use polygonize to recover if needed."""
         try:
             if poly.is_valid and poly.area > 0:
-                return poly.area
+                return float(poly.area)
+            logging.debug("area: invalid or zero-area polygon, trying buffer(0)")
+            poly2 = poly.buffer(0)
+            if poly2.is_valid and poly2.area > 0:
+                return float(poly2.area)
+            logging.debug("area: still invalid, trying convex hull fallback")
+            poly3 = Polygon(list(poly.exterior.coords)).convex_hull
+            if poly3.is_valid and poly3.area > 0:
+                return float(poly3.area)
             # Try to recover with polygonize
             from shapely.ops import polygonize
             polys = list(polygonize([poly.exterior.coords]))
-            if polys:
-                return polys[0].area
+            if polys and polys[0].is_valid and polys[0].area > 0:
+                return float(polys[0].area)
+            logging.warning("area: Could not recover valid area, returning 0.0")
             return 0.0
-        except Exception:
+        except Exception as e:
+            logging.warning(f"area: Exception {e}, returning 0.0")
             return 0.0
 
     @staticmethod
@@ -248,7 +264,7 @@ class PhysicsInference:
     @safe_feature(default=0.0)
     def angular_variance(vertices_or_poly):
         """
-        Returns variance of angles in degrees, normalized to [0, 180].
+        Returns variance of angles in degrees, normalized to [0, 180]. Ensures finite, JSON-serializable output.
         """
         verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
         if not verts or len(verts) < 3:
@@ -268,7 +284,10 @@ class PhysicsInference:
             return 0.0
         var = np.var(angles)
         # Normalize: variance of uniform [0,180] is 2700, so scale to [0,1]
-        return float(var) / 2700.0
+        result = float(var) / 2700.0
+        if not np.isfinite(result):
+            return 0.0
+        return result
 
     @staticmethod
     @safe_feature(default=False)

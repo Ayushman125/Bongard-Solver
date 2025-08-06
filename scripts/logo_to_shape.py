@@ -52,33 +52,29 @@ FLAGGING_THRESHOLDS = {
 
 class ComprehensiveBongardProcessor:
     def _calculate_pattern_regularity_from_modifiers(self, modifier_sequence: List[str]) -> float:
-        """Calculate regularity of a sequence of shape modifiers (pattern regularity)."""
-        if not modifier_sequence or len(modifier_sequence) < 2:
-            return 1.0  # Perfect regularity if only one or zero modifiers
-
-        # 1. Repetition score: fraction of consecutive pairs that are the same
-        repetition_count = 0
-        for i in range(len(modifier_sequence) - 1):
-            if modifier_sequence[i] == modifier_sequence[i + 1]:
-                repetition_count += 1
-        repetition_score = repetition_count / (len(modifier_sequence) - 1)
-
-        # 2. Alternation score: fraction of pairs that alternate (A B A B ...)
-        alternation_count = 0
-        for i in range(len(modifier_sequence) - 2):
-            if modifier_sequence[i] == modifier_sequence[i + 2] and modifier_sequence[i] != modifier_sequence[i + 1]:
-                alternation_count += 1
-        alternation_score = alternation_count / (len(modifier_sequence) - 2) if len(modifier_sequence) > 2 else 0.0
-
-        # 3. Diversity penalty: more unique modifiers = less regularity
+        """Calculate regularity of a sequence of shape modifiers (pattern regularity) with correct formula and debug logging."""
+        import logging
+        logger = logging.getLogger(__name__)
+        n = len(modifier_sequence)
+        if not modifier_sequence or n < 2:
+            logger.debug("Pattern regularity: sequence too short, returning 1.0")
+            return 1.0
+        # 1. Repetition score
+        repetition_count = sum(1 for i in range(n-1) if modifier_sequence[i] == modifier_sequence[i+1])
+        repetition_score = repetition_count / (n-1)
+        # 2. Alternation score
+        alternation_count = sum(1 for i in range(n-2) if modifier_sequence[i] == modifier_sequence[i+2] and modifier_sequence[i] != modifier_sequence[i+1])
+        alternation_score = alternation_count / (n-2) if n > 2 else 0.0
+        # 3. Diversity penalty
         unique_mods = set(modifier_sequence)
-        diversity_penalty = (len(unique_mods) - 1) / max(len(modifier_sequence) - 1, 1)
-
-        # 4. Final score: weighted sum (repetition + alternation) * (1 - diversity_penalty)
-        base_score = max(repetition_score, alternation_score)
-        pattern_regularity = base_score * (1.0 - diversity_penalty)
-        # Clamp to [0,1]
-        return max(0.0, min(1.0, pattern_regularity))
+        diversity_penalty = (len(unique_mods) - 1) / max(n-1, 1)
+        # 4. Final score
+        pattern_score = max(repetition_score, alternation_score)
+        diversity_factor = 1.0 - diversity_penalty
+        pattern_regularity = pattern_score * diversity_factor
+        pattern_regularity = max(0.0, min(1.0, pattern_regularity))
+        logger.debug(f"Pattern regularity: repetition_score={repetition_score}, alternation_score={alternation_score}, diversity_penalty={diversity_penalty}, result={pattern_regularity}")
+        return pattern_regularity
     def normalize_vertices(self, vertices_raw):
         """
         Normalize coordinates to [0,1] in both axes, preserving aspect ratio and centering shape if needed.
@@ -723,31 +719,43 @@ class ComprehensiveBongardProcessor:
     def _calculate_image_features(self, vertices: List[tuple], strokes: List, 
                                 geometry: Dict[str, Any]) -> Dict[str, Any]:
         """Calculate comprehensive image-level features with robust polygon recovery."""
+        import logging
+        logger = logging.getLogger(__name__)
         vertices = self.ensure_vertex_list(vertices)
         if not vertices:
+            logger.debug("Image features: no vertices, returning empty dict")
             return {}
         try:
             from shapely.geometry import Polygon
-            from shapely.ops import polygonize
+            poly = None
             try:
                 poly = Polygon(vertices)
                 if not poly.is_valid or poly.area == 0:
-                    # Try to recover with polygonize
-                    poly = list(polygonize([vertices]))[0]
-            except Exception:
-                poly = Polygon(vertices)
+                    logger.debug("Image features: polygon invalid or zero area, applying buffer(0)")
+                    poly = poly.buffer(0)
+            except Exception as e:
+                logger.debug(f"Image features: error in Polygon(vertices): {e}")
+                poly = None
+            if poly is None or not poly.is_valid or poly.is_empty:
+                # fallback: convex hull
+                try:
+                    logger.debug("Image features: falling back to convex hull")
+                    poly = Polygon(vertices).convex_hull
+                except Exception as e:
+                    logger.debug(f"Image features: error in convex hull: {e}")
+                    poly = None
             features = {
                 'bounding_box': geometry.get('bbox', {}),
                 'centroid': geometry.get('centroid', [0.0, 0.0]),
                 'width': geometry.get('width', 0.0),
                 'height': geometry.get('height', 0.0),
-                'area': PhysicsInference.area(poly),
+                'area': PhysicsInference.area(poly) if poly else 0.0,
                 'perimeter': self._calculate_perimeter(vertices),
                 'aspect_ratio': self.safe_divide(geometry.get('width', 1.0), geometry.get('height', 1.0), 1.0)
             }
             features.update({
-                'is_convex': PhysicsInference.is_convex(poly),
-                'convexity_ratio': self._calculate_convexity_ratio(poly),
+                'is_convex': PhysicsInference.is_convex(poly) if poly else False,
+                'convexity_ratio': self._calculate_convexity_ratio(poly) if poly else 0.0,
                 'compactness': self._calculate_compactness(features['area'], features['perimeter']),
                 'eccentricity': self._calculate_eccentricity(vertices)
             })
@@ -762,39 +770,51 @@ class ComprehensiveBongardProcessor:
                 'visual_complexity': len(strokes) + self.safe_divide(len(vertices), 10.0),
                 'irregularity_score': self._calculate_irregularity(vertices)
             })
+            logger.debug(f"Image features: area={features['area']}, perimeter={features['perimeter']}, is_convex={features['is_convex']}")
             return self.json_safe(features)
         except Exception as e:
             logger.warning(f"Error calculating image features: {e}")
             return {}
     
     def _calculate_physics_features(self, vertices: List[tuple], centroid=None, strokes=None) -> Dict[str, Any]:
-        """Calculate physics-based features using PhysicsInference. Accepts centroid override and strokes for correct counting."""
+        """Calculate physics-based features using PhysicsInference. Accepts centroid override and strokes for correct counting. Uses correct center_of_mass and stroke counts."""
+        import logging
+        logger = logging.getLogger(__name__)
         if not vertices:
+            logger.debug("Physics features: no vertices, returning empty dict")
             return {}
         try:
             poly = None
             try:
                 poly = PhysicsInference.polygon_from_vertices(vertices)
-            except Exception:
-                pass
-            # Use centroid from geometry if provided, else fallback
-            center_of_mass = centroid if centroid is not None else ([0.0, 0.0] if not poly else PhysicsInference.centroid(poly))
-
+            except Exception as e:
+                logger.debug(f"Physics features: error in polygon_from_vertices: {e}")
+            # Use centroid from geometry if provided, else fallback to centroid of vertices
+            if centroid is not None:
+                center_of_mass = centroid
+            elif poly is not None:
+                center_of_mass = PhysicsInference.centroid(poly)
+            else:
+                xs = [v[0] for v in vertices]
+                ys = [v[1] for v in vertices]
+                center_of_mass = [sum(xs)/len(xs), sum(ys)/len(ys)] if xs and ys else [0.0, 0.0]
             # Count actual LineAction and ArcAction objects if strokes provided
             num_straight_segments = 0
             num_arcs = 0
             if strokes is not None:
-                from bongard.bongard import LineAction, ArcAction
-                for s in strokes:
-                    if isinstance(s, LineAction):
-                        num_straight_segments += 1
-                    elif isinstance(s, ArcAction):
-                        num_arcs += 1
+                try:
+                    from bongard.bongard import LineAction, ArcAction
+                    for s in strokes:
+                        if isinstance(s, LineAction):
+                            num_straight_segments += 1
+                        elif isinstance(s, ArcAction):
+                            num_arcs += 1
+                except Exception as e:
+                    logger.debug(f"Physics features: error in stroke counting: {e}")
             else:
                 # fallback to geometry-based
                 num_straight_segments = PhysicsInference.count_straight_segments(vertices)
                 num_arcs = PhysicsInference.count_arcs(vertices)
-
             features = {
                 # Core physics properties
                 'moment_of_inertia': PhysicsInference.moment_of_inertia(vertices),
@@ -809,6 +829,7 @@ class ComprehensiveBongardProcessor:
                 'angular_variance': self._calculate_angular_variance(vertices),
                 'edge_length_variance': self._calculate_edge_length_variance(vertices)
             }
+            logger.debug(f"Physics features: center_of_mass={center_of_mass}, num_straight_segments={num_straight_segments}, num_arcs={num_arcs}")
             return features
         except Exception as e:
             logger.warning(f"Error calculating physics features: {e}")
@@ -922,10 +943,16 @@ class ComprehensiveBongardProcessor:
             return 0.0
     
     def _calculate_compactness(self, area: float, perimeter: float) -> float:
-        """Calculate compactness (isoperimetric ratio)."""
+        """Calculate compactness (isoperimetric ratio) with correct formula and debug logging."""
+        import logging
+        logger = logging.getLogger(__name__)
+        import numpy as np
         if perimeter == 0:
+            logger.debug("Compactness: perimeter is zero, returning 0.0")
             return 0.0
-        return self.json_safe(self.safe_divide(4 * 3.14159 * area, perimeter * perimeter))
+        compactness = self.safe_divide(4 * np.pi * area, perimeter * perimeter)
+        logger.debug(f"Compactness: area={area}, perimeter={perimeter}, compactness={compactness}")
+        return self.json_safe(compactness)
     
     def _calculate_eccentricity(self, vertices: List[tuple]) -> float:
         """Calculate eccentricity based on principal component analysis."""
@@ -1076,9 +1103,12 @@ class ComprehensiveBongardProcessor:
         return self.safe_divide(PhysicsInference.count_arcs(vertices), max(len(vertices), 1))
     
     def _calculate_angular_variance(self, vertices: List[tuple]) -> float:
-        """Calculate variance in angles between edges, with proper scaling and stability."""
+        """Calculate variance in angles between edges, with proper scaling and debug logging."""
+        import logging
+        logger = logging.getLogger(__name__)
         vertices = self.ensure_vertex_list(vertices)
         if len(vertices) < 3:
+            logger.debug("Angular variance: not enough vertices, returning 0.0")
             return 0.0
         try:
             import numpy as np
@@ -1098,11 +1128,14 @@ class ComprehensiveBongardProcessor:
                     angle_deg = np.degrees(angle)
                     angles.append(angle_deg)
             if not angles:
+                logger.debug("Angular variance: no valid angles, returning 0.0")
                 return 0.0
             var = np.var(angles)
             var = min(var, 180.0)
+            logger.debug(f"Angular variance: angles={angles}, variance={var}")
             return self.json_safe(var)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Angular variance: error {e}")
             return 0.0
     
     def _calculate_edge_length_variance(self, vertices: List[tuple]) -> float:

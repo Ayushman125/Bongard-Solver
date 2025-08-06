@@ -17,7 +17,7 @@ data/
 logs/
 feedback_samples/
 human_review_batches/
-
+Bongard-LOGO/
 
 # Bongard-LOGO large dataset folders and files
 data/raw/ShapeBongard_V2/
