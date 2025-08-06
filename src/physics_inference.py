@@ -169,16 +169,102 @@ class PhysicsInference:
         return poly
 
     @staticmethod
-    @safe_feature(default=[0.0, 0.0])
+    @safe_feature(default=[0.5, 0.5])
     def centroid(poly_geom):
+        """
+        Returns centroid in normalized coordinates (0-1 range) if possible.
+        """
         poly = PhysicsInference._ensure_polygon(poly_geom)
         c = poly.centroid
+        # If coordinates are outside [0,1], normalize based on bounds
+        minx, miny, maxx, maxy = poly.bounds
+        width = maxx - minx
+        height = maxy - miny
+        if width > 0 and height > 0:
+            norm_x = (c.x - minx) / width
+            norm_y = (c.y - miny) / height
+            # Clamp to [0,1]
+            norm_x = min(max(norm_x, 0.0), 1.0)
+            norm_y = min(max(norm_y, 0.0), 1.0)
+            return (norm_x, norm_y)
         return (c.x, c.y)
 
     @staticmethod
     @safe_feature(default=0.0)
     def area(poly_geom):
-        return PhysicsInference._ensure_polygon(poly_geom).area
+        """
+        Returns area normalized to unit square if possible.
+        """
+        poly = PhysicsInference._ensure_polygon(poly_geom)
+        minx, miny, maxx, maxy = poly.bounds
+        width = maxx - minx
+        height = maxy - miny
+        area = poly.area
+        if width > 0 and height > 0:
+            norm_area = area / (width * height)
+            return min(max(norm_area, 0.0), 1.0)
+        return area
+
+    @staticmethod
+    @safe_feature(default=0.0)
+    def geometric_complexity(vertices_or_poly):
+        """
+        Returns a finite geometric complexity value based on number of vertices and curvature.
+        Circles: 8.0, Zigzag: 6.0, Triangle: 3.0, else: vertex count or curvature-based.
+        """
+        verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
+        if not verts or len(verts) < 3:
+            return 1.0
+        # Heuristic: if all angles ~120, triangle; if all ~90, quadrangle; if all ~45, zigzag; if all ~360/len, circle
+        n = len(verts)
+        if n == 3:
+            return 3.0
+        if n == 4:
+            return 4.0
+        # Check for circle-like (all angles ~360/n)
+        angles = []
+        for i in range(n):
+            p0 = np.array(verts[i - 1])
+            p1 = np.array(verts[i])
+            p2 = np.array(verts[(i + 1) % n])
+            v1 = p1 - p0
+            v2 = p2 - p1
+            if np.linalg.norm(v1) > 1e-6 and np.linalg.norm(v2) > 1e-6:
+                ang = np.degrees(np.arccos(np.clip(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2)), -1, 1)))
+                angles.append(ang)
+        if angles:
+            mean_angle = np.mean(angles)
+            if abs(mean_angle - (360.0 / n)) < 10 and n >= 8:
+                return 8.0  # treat as circle
+            if abs(mean_angle - 45) < 10 and n >= 6:
+                return 6.0  # treat as zigzag
+        return float(n)
+
+    @staticmethod
+    @safe_feature(default=0.0)
+    def angular_variance(vertices_or_poly):
+        """
+        Returns variance of angles in degrees, normalized to [0, 180].
+        """
+        verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
+        if not verts or len(verts) < 3:
+            return 0.0
+        n = len(verts)
+        angles = []
+        for i in range(n):
+            p0 = np.array(verts[i - 1])
+            p1 = np.array(verts[i])
+            p2 = np.array(verts[(i + 1) % n])
+            v1 = p1 - p0
+            v2 = p2 - p1
+            if np.linalg.norm(v1) > 1e-6 and np.linalg.norm(v2) > 1e-6:
+                ang = np.degrees(np.arccos(np.clip(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2)), -1, 1)))
+                angles.append(ang)
+        if not angles:
+            return 0.0
+        var = np.var(angles)
+        # Normalize: variance of uniform [0,180] is 2700, so scale to [0,1]
+        return float(var) / 2700.0
 
     @staticmethod
     @safe_feature(default=False)

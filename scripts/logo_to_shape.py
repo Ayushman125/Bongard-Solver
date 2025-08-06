@@ -51,6 +51,34 @@ FLAGGING_THRESHOLDS = {
 
 
 class ComprehensiveBongardProcessor:
+    def _calculate_pattern_regularity_from_modifiers(self, modifier_sequence: List[str]) -> float:
+        """Calculate regularity of a sequence of shape modifiers (pattern regularity)."""
+        if not modifier_sequence or len(modifier_sequence) < 2:
+            return 1.0  # Perfect regularity if only one or zero modifiers
+
+        # 1. Repetition score: fraction of consecutive pairs that are the same
+        repetition_count = 0
+        for i in range(len(modifier_sequence) - 1):
+            if modifier_sequence[i] == modifier_sequence[i + 1]:
+                repetition_count += 1
+        repetition_score = repetition_count / (len(modifier_sequence) - 1)
+
+        # 2. Alternation score: fraction of pairs that alternate (A B A B ...)
+        alternation_count = 0
+        for i in range(len(modifier_sequence) - 2):
+            if modifier_sequence[i] == modifier_sequence[i + 2] and modifier_sequence[i] != modifier_sequence[i + 1]:
+                alternation_count += 1
+        alternation_score = alternation_count / (len(modifier_sequence) - 2) if len(modifier_sequence) > 2 else 0.0
+
+        # 3. Diversity penalty: more unique modifiers = less regularity
+        unique_mods = set(modifier_sequence)
+        diversity_penalty = (len(unique_mods) - 1) / max(len(modifier_sequence) - 1, 1)
+
+        # 4. Final score: weighted sum (repetition + alternation) * (1 - diversity_penalty)
+        base_score = max(repetition_score, alternation_score)
+        pattern_regularity = base_score * (1.0 - diversity_penalty)
+        # Clamp to [0,1]
+        return max(0.0, min(1.0, pattern_regularity))
     def normalize_vertices(self, vertices_raw):
         """Normalize Bongard-LOGO coordinates from (-360,360) to (0,1) range."""
         if not vertices_raw:
@@ -230,9 +258,11 @@ class ComprehensiveBongardProcessor:
                                 parameters[f'param{idx+1}'] = float(p)
                             except Exception:
                                 parameters[f'param{idx+1}'] = p
-                    # Extract function_name for TSV lookup
+                    # Extract function_name for TSV lookup (base name only)
                     if len(parts) >= 1:
-                        function_name = parts[0] + (f"_{parts[1]}" if len(parts) > 1 else "")
+                        base_function_name = parts[0]
+                else:
+                    base_function_name = None
                 # 2. Try function_name if not found
                 if not shape_modifier_val and function_name and isinstance(function_name, str):
                     fn_parts = function_name.split('_')
@@ -252,8 +282,13 @@ class ComprehensiveBongardProcessor:
                 if not shape_modifier_val:
                     shape_modifier_val = 'normal'
                 is_valid = getattr(action, 'is_valid', True)
-                canonical_shape_attributes = shape_attr_map.get(function_name) if function_name else None
-                canonical_shape_def = shape_def_map.get(function_name) if function_name else None
+                # Use base_function_name for TSV lookup
+                lookup_name = base_function_name if base_function_name else (function_name.split('_')[0] if function_name else None)
+                canonical_shape_attributes = shape_attr_map.get(lookup_name) if lookup_name else None
+                canonical_shape_def = shape_def_map.get(lookup_name) if lookup_name else None
+                # Debug logging for missing TSV keys
+                if lookup_name and (canonical_shape_attributes is None or canonical_shape_def is None):
+                    logger.debug(f"[TSV LOOKUP] No TSV entry for function_name '{lookup_name}' (raw_command: {raw_command}, function_name: {function_name})")
                 stroke_specific_features = self._calculate_stroke_specific_features(
                     action, i, stroke_type_val, shape_modifier_val, parameters)
                 if stroke_type_val == 'line':
@@ -680,83 +715,59 @@ class ComprehensiveBongardProcessor:
             return {}
     
     def _calculate_composition_features(self, strokes: List) -> Dict[str, Any]:
-        """Calculate features about stroke composition and relationships."""
+        """Calculate features about stroke composition and relationships. FIXED: Use actual modifiers from strokes."""
         if not strokes:
             return {}
         try:
-            # Stroke type distribution
             stroke_types = {}
             shape_modifiers = {}
+            modifier_sequence = []
             for stroke in strokes:
                 stroke_type = type(stroke).__name__.replace('Action', '').lower()
-                # Robustly extract shape_modifier from raw_command or function_name if possible
-                raw_command = getattr(stroke, 'raw_command', None)
-                function_name = getattr(stroke, 'function_name', None)
-                shape_mod = 'normal'
-                if raw_command and isinstance(raw_command, str):
-                    parts = raw_command.split('_')
-                    if len(parts) >= 2:
-                        shape_mod = parts[1]
-                elif function_name and isinstance(function_name, str):
-                    fn_parts = function_name.split('_')
-                    if len(fn_parts) >= 2:
-                        shape_mod = fn_parts[1]
+                modifier = self._extract_modifier_from_stroke(stroke)
                 stroke_types[stroke_type] = stroke_types.get(stroke_type, 0) + 1
-                shape_modifiers[shape_mod] = shape_modifiers.get(shape_mod, 0) + 1
-            # Analyze stroke patterns
+                shape_modifiers[modifier] = shape_modifiers.get(modifier, 0) + 1
+                modifier_sequence.append(modifier)
             features = {
                 'stroke_type_distribution': stroke_types,
                 'shape_modifier_distribution': shape_modifiers,
-                'stroke_diversity': len(set(stroke_types.keys())),
-                'shape_diversity': len(set(shape_modifiers.keys())),
+                'stroke_diversity': len(stroke_types),
+                'shape_diversity': len(shape_modifiers),
                 'dominant_stroke_type': max(stroke_types.items(), key=lambda x: x[1])[0] if stroke_types else 'unknown',
                 'dominant_shape_modifier': max(shape_modifiers.items(), key=lambda x: x[1])[0] if shape_modifiers else 'unknown'
             }
-            # Compositional complexity
             features.update({
-                'composition_complexity': len(strokes) * len(set(shape_modifiers.keys())),
+                'composition_complexity': len(strokes) * len(shape_modifiers),
                 'homogeneity_score': self._calculate_homogeneity(shape_modifiers),
-                'pattern_regularity': self._calculate_pattern_regularity_from_modifiers([self._extract_shape_modifier_from_stroke(s) for s in strokes])
+                'pattern_regularity': self._calculate_pattern_regularity_from_modifiers(modifier_sequence)
             })
             return features
         except Exception as e:
             logger.warning(f"Error calculating composition features: {e}")
             return {}
 
-    def _extract_shape_modifier_from_stroke(self, stroke) -> str:
-        """Extract shape modifier from a stroke's raw_command or function_name, never from attribute."""
+    def _extract_modifier_from_stroke(self, stroke) -> str:
+        """Extract the actual shape modifier from a stroke object, robustly."""
+        # Priority: attribute > raw_command > function_name > fallback
+        if hasattr(stroke, 'shape_modifier'):
+            smod = getattr(stroke, 'shape_modifier')
+            if hasattr(smod, 'value'):
+                if smod.value:
+                    return str(smod.value)
+            elif isinstance(smod, str) and smod:
+                return smod
         raw_command = getattr(stroke, 'raw_command', None)
-        function_name = getattr(stroke, 'function_name', None)
         if raw_command and isinstance(raw_command, str):
             parts = raw_command.split('_')
-            if len(parts) >= 2:
+            if len(parts) >= 2 and parts[1]:
                 return parts[1]
+        function_name = getattr(stroke, 'function_name', None)
         if function_name and isinstance(function_name, str):
             fn_parts = function_name.split('_')
-            if len(fn_parts) >= 2:
+            if len(fn_parts) >= 2 and fn_parts[1]:
                 return fn_parts[1]
         return 'normal'
 
-    def _calculate_pattern_regularity_from_modifiers(self, modifier_sequence: list) -> float:
-        """Calculate regularity of stroke patterns from a list of modifier strings."""
-        if len(modifier_sequence) < 2:
-            return 1.0
-        regularities = []
-        # Check for alternating patterns
-        if len(modifier_sequence) >= 4:
-            alternating_score = 0
-            for i in range(len(modifier_sequence) - 2):
-                if modifier_sequence[i] == modifier_sequence[i + 2]:
-                    alternating_score += 1
-            regularities.append(alternating_score / (len(modifier_sequence) - 2))
-        # Check for repetition
-        repetition_score = 0
-        for i in range(len(modifier_sequence) - 1):
-            if modifier_sequence[i] == modifier_sequence[i + 1]:
-                repetition_score += 1
-        regularities.append(repetition_score / (len(modifier_sequence) - 1))
-        return max(regularities) if regularities else 0.0
-    
     # Helper methods for feature calculation
     def _calculate_perimeter(self, vertices: List[tuple]) -> float:
         """Calculate perimeter of the shape."""
