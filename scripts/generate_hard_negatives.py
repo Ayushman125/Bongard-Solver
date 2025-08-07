@@ -57,12 +57,22 @@ def is_positive_label(label: Any) -> bool:
 
 def process_sample_with_guaranteed_success(sample: Dict[str, Any], concept_fn, args) -> Tuple[Dict[str, Any], str]:
     pid = sample['problem_id']
-    if 'features' not in sample:
-        logging.warning(f"Sample for problem {pid} is missing 'features' key. Skipping sample.")
+    # Aggregate features from the new derived_labels.json structure
+    features = {}
+    for stroke in sample.get('strokes', []):
+        if 'specific_features' in stroke:
+            features.update(stroke.get('specific_features', {}))
+    for key in ["image_features", "physics_features", "composition_features", "stroke_type_features",
+                "relational_features", "sequential_features", "topological_features"]:
+        comp = sample.get(key, {})
+        if isinstance(comp, dict) and comp:
+            features.update(comp)
+    if not features:
+        logging.warning(f"Sample for problem {pid} is missing all expected feature keys. Skipping sample.")
         return [], None
     base_cmds = parse_logo_commands_to_tuples(sample['action_program'])
-    original_label = concept_fn(sample['features'])
-    scorer = Scorer(concept_fn, sample['features'])
+    original_label = concept_fn(features)
+    scorer = Scorer(concept_fn, features)
     parser = BongardLogoParser()
     found: List[Dict[str, Any]] = []
     seen_geoms: List[List[Tuple[float, float]]] = []

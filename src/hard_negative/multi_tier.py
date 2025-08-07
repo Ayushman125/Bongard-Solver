@@ -57,7 +57,19 @@ def generate_hard_negative_for_sample(
     """
     pid = sample["problem_id"]
     base_cmds = parse_logo_commands_to_tuples(sample["action_program"])
-    original_features = sample["features"]
+    # Aggregate features from the new derived_labels.json structure
+    original_features = {}
+    for stroke in sample.get('strokes', []):
+        if 'specific_features' in stroke:
+            original_features.update(stroke.get('specific_features', {}))
+    for key in ["image_features", "physics_features", "composition_features", "stroke_type_features",
+                "relational_features", "sequential_features", "topological_features"]:
+        comp = sample.get(key, {})
+        if isinstance(comp, dict) and comp:
+            original_features.update(comp)
+    if not original_features:
+        logging.warning(f"Sample for problem {sample.get('problem_id', '?')} is missing all expected feature keys. Skipping sample.")
+        return
     scorer = Scorer(concept_fn, original_features)
     original_label = concept_fn(original_features)
     found: List[Dict[str, Any]] = []

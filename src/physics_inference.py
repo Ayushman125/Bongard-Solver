@@ -44,6 +44,94 @@ def safe_acos(x):
 class PhysicsInference:
 
     @staticmethod
+    def find_stroke_intersections(strokes):
+        """
+        Count the number of intersections between all pairs of strokes.
+        Each stroke is assumed to have a .vertices attribute (list of (x, y)).
+        """
+        from shapely.geometry import LineString
+        count = 0
+        n = len(strokes)
+        for i in range(n):
+            v1 = getattr(strokes[i], 'vertices', None)
+            if not v1 or len(v1) < 2:
+                continue
+            l1 = LineString(v1)
+            for j in range(i+1, n):
+                v2 = getattr(strokes[j], 'vertices', None)
+                if not v2 or len(v2) < 2:
+                    continue
+                l2 = LineString(v2)
+                if l1.crosses(l2) or l1.intersects(l2):
+                    count += 1
+        return count
+
+    @staticmethod
+    def strokes_touching(strokes):
+        """
+        Count the number of pairs of strokes that touch (share at least one endpoint).
+        """
+        count = 0
+        n = len(strokes)
+        for i in range(n):
+            v1 = getattr(strokes[i], 'vertices', None)
+            if not v1 or len(v1) < 2:
+                continue
+            for j in range(i+1, n):
+                v2 = getattr(strokes[j], 'vertices', None)
+                if not v2 or len(v2) < 2:
+                    continue
+                if v1[0] in v2 or v1[-1] in v2 or v2[0] in v1 or v2[-1] in v1:
+                    count += 1
+        return count
+
+    @staticmethod
+    def stroke_contains_stroke(strokes):
+        """
+        Count the number of strokes whose vertices are all inside another stroke's polygon.
+        """
+        from shapely.geometry import Polygon
+        count = 0
+        n = len(strokes)
+        for i in range(n):
+            v1 = getattr(strokes[i], 'vertices', None)
+            if not v1 or len(v1) < 3:
+                continue
+            poly1 = Polygon(v1)
+            for j in range(n):
+                if i == j:
+                    continue
+                v2 = getattr(strokes[j], 'vertices', None)
+                if not v2 or len(v2) < 3:
+                    continue
+                poly2 = Polygon(v2)
+                if poly1.contains(poly2):
+                    count += 1
+        return count
+
+    @staticmethod
+    def stroke_overlap_area(strokes):
+        """
+        Compute the total area of overlap between all pairs of stroke polygons.
+        """
+        from shapely.geometry import Polygon
+        total_overlap = 0.0
+        n = len(strokes)
+        for i in range(n):
+            v1 = getattr(strokes[i], 'vertices', None)
+            if not v1 or len(v1) < 3:
+                continue
+            poly1 = Polygon(v1)
+            for j in range(i+1, n):
+                v2 = getattr(strokes[j], 'vertices', None)
+                if not v2 or len(v2) < 3:
+                    continue
+                poly2 = Polygon(v2)
+                if poly1.intersects(poly2):
+                    total_overlap += poly1.intersection(poly2).area
+        return total_overlap
+
+    @staticmethod
     def count_arcs(vertices_or_poly, angle_thresh=30):
         """
         Estimate the number of arcs in a polyline or polygon.

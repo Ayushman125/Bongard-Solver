@@ -294,6 +294,23 @@ class ComprehensiveBongardProcessor:
             composition_features = self._calculate_composition_features(getattr(shape, 'basic_actions', []))
             physics_features = self._calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=getattr(shape, 'basic_actions', []))
 
+            # --- Relational/Topological/Sequential Features ---
+            from src.physics_inference import PhysicsInference
+            # Intersections, adjacency, containment, overlap (relational)
+            intersections = PhysicsInference.find_stroke_intersections(getattr(shape, 'basic_actions', []))
+            adjacency = PhysicsInference.strokes_touching(getattr(shape, 'basic_actions', []))
+            containment = PhysicsInference.stroke_contains_stroke(getattr(shape, 'basic_actions', []))
+            overlap = PhysicsInference.stroke_overlap_area(getattr(shape, 'basic_actions', []))
+
+            # Sequential pattern features (n-gram, alternation, regularity)
+            modifier_sequence = [self._extract_modifier_from_stroke(s) for s in getattr(shape, 'basic_actions', [])]
+            ngram_features = self._extract_ngram_features(modifier_sequence)
+            alternation = self._detect_alternation(modifier_sequence)
+            regularity = self._calculate_pattern_regularity_from_modifiers(modifier_sequence)
+
+            # Topological features (chain/star/cycle detection, connectivity)
+            graph_features = self._extract_graph_features(getattr(shape, 'basic_actions', []))
+
             # --- Aggregate line and arc features for stroke_type_features ---
             line_features = []
             arc_features = []
@@ -432,7 +449,20 @@ class ComprehensiveBongardProcessor:
                     'feature_count': len(image_features) + len(physics_features) + len(composition_features)
                 },
                 'action_program': action_program,
-                'geometry': geometry
+                'geometry': geometry,
+                # --- New relational/topological/sequential features ---
+                'relational_features': {
+                    'intersections': intersections,
+                    'adjacency': adjacency,
+                    'containment': containment,
+                    'overlap': overlap
+                },
+                'sequential_features': {
+                    'ngram': ngram_features,
+                    'alternation': alternation,
+                    'regularity': regularity
+                },
+                'topological_features': graph_features
             }
             self.processing_stats['successful'] += 1
             return self.json_safe(complete_record)
@@ -450,6 +480,33 @@ class ComprehensiveBongardProcessor:
             except Exception as file_exc:
                 logger.error(f"[process_single_image] Could not write to flagged_issues.txt: {file_exc}")
             return None
+
+    def _extract_ngram_features(self, sequence, n=2):
+        """Extract n-gram counts from a sequence, with string keys for JSON compatibility."""
+        from collections import Counter
+        ngrams = zip(*[sequence[i:] for i in range(n)])
+        # Convert tuple n-grams to string keys (e.g., 'A|B')
+        ngram_list = ['|'.join(map(str, ng)) for ng in ngrams]
+        return dict(Counter(ngram_list))
+
+    def _detect_alternation(self, sequence):
+        """Detect if sequence alternates between two values."""
+        if len(sequence) < 2:
+            return False
+        a, b = sequence[0], sequence[1]
+        for i, val in enumerate(sequence):
+            if val != (a if i % 2 == 0 else b):
+                return False
+        return True
+
+    def _extract_graph_features(self, strokes):
+        """Detect chain/star/cycle topology and connectivity from stroke relationships."""
+        # Placeholder: count strokes, check for cycles (if all touch), star (one central), chain (ends=2)
+        n = len(strokes)
+        if n == 0:
+            return {'type': 'none', 'connectivity': 0}
+        # For now, just return counts; real implementation would use adjacency/intersection
+        return {'num_strokes': n}
     
     def _flag_case(self, image_id: str, problem_id: str, reason: str, flags: List[str]):
         """Add a case to the flagged cases list"""
