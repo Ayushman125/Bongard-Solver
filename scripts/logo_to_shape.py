@@ -93,43 +93,18 @@ class ComprehensiveBongardProcessor:
             return float('nan')
 
     def _calculate_angular_variance(self, vertices: list) -> float:
-        """Variance of interior angles (degrees), see PhysicsInference.angular_variance."""
-        return PhysicsInference.angular_variance(vertices)
+        # Use robust angular variance, fallback to 0 for <3 points
+        return PhysicsInference.robust_angular_variance(vertices)
 
     def _calculate_irregularity(self, vertices: list) -> float:
-        """
-        Normalized MAD of interior angles (radians) from regular n-gon. 0=regular, 1=max irregular.
-        Returns NaN for degenerate polygons (fewer than 3 valid angles).
-        """
-        import numpy as np
-        import math
-        try:
-            verts = self.ensure_vertex_list(vertices)
-            n = len(verts)
-            if n < 3:
-                return float('nan')
-            angles = []
-            for i in range(n):
-                p0 = np.array(verts[i - 1])
-                p1 = np.array(verts[i])
-                p2 = np.array(verts[(i + 1) % n])
-                v1 = p0 - p1
-                v2 = p2 - p1
-                norm1 = np.linalg.norm(v1)
-                norm2 = np.linalg.norm(v2)
-                if norm1 > 1e-6 and norm2 > 1e-6:
-                    angle = np.arccos(np.clip(np.dot(v1, v2) / (norm1 * norm2), -1, 1))
-                    if math.degrees(angle) >= 1.0:
-                        angles.append(angle)
-            if len(angles) < 3:
-                return float('nan')
-            expected = (n - 2) * math.pi / n
-            mad = np.mean([abs(a - expected) for a in angles])
-            return min(1.0, mad / math.pi)
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"Irregularity error: {e}")
-            return float('nan')
+        # Use variance of edge lengths and angles as irregularity
+        verts = self.ensure_vertex_list(vertices)
+        if not verts or len(verts) < 3:
+            return 0.0
+        edge_lengths = [np.linalg.norm(np.array(verts[(i+1)%len(verts)]) - np.array(verts[i])) for i in range(len(verts))]
+        length_var = np.var(edge_lengths) if len(edge_lengths) > 1 else 0.0
+        angle_var = self._calculate_angular_variance(verts)
+        return float(length_var + angle_var)
 
     def _calculate_pattern_regularity_from_modifiers(self, modifier_sequence: list) -> float:
         """Pattern regularity using PhysicsInference.pattern_regularity. Returns NaN if sequence too short."""
@@ -791,19 +766,12 @@ class ComprehensiveBongardProcessor:
         return result
 
     def _detect_alternation(self, sequence):
-        """Detect if sequence alternates between two values."""
+        """Compute maximal alternation score using PhysicsInference.alternation_score."""
         logger = logging.getLogger(__name__)
         logger.debug(f"[_detect_alternation] INPUTS: sequence={sequence}")
-        if len(sequence) < 2:
-            logger.debug("[_detect_alternation] OUTPUT: False (sequence too short)")
-            return False
-        a, b = sequence[0], sequence[1]
-        for i, val in enumerate(sequence):
-            if val != (a if i % 2 == 0 else b):
-                logger.debug(f"[_detect_alternation] OUTPUT: False (failed at index {i})")
-                return False
-        logger.debug("[_detect_alternation] OUTPUT: True")
-        return True
+        score = PhysicsInference.alternation_score(sequence)
+        logger.debug(f"[_detect_alternation] OUTPUT: {score}")
+        return score
 
     def _extract_graph_features(self, strokes):
         """Detect chain/star/cycle topology and connectivity from stroke relationships."""
@@ -931,9 +899,7 @@ class ComprehensiveBongardProcessor:
         return flags
     
     def _calculate_stroke_specific_features(self, stroke, stroke_index: int, stroke_type_val=None, shape_modifier_val=None, parameters=None) -> Dict[str, Any]:
-
         """Calculate features specific to stroke type and shape modifier, using robust geometric/physics formulas."""
-
         logger = logging.getLogger(__name__)
         logger.debug(f"[_calculate_stroke_specific_features] INPUTS: stroke_index={stroke_index}, stroke_type_val={stroke_type_val}, shape_modifier_val={shape_modifier_val}, parameters={parameters}")
         features = {'stroke_index': stroke_index}
@@ -942,52 +908,17 @@ class ComprehensiveBongardProcessor:
         params = parameters or {}
         verts = self._extract_stroke_vertices(stroke, stroke_index, None)
         logger.debug(f"[_calculate_stroke_specific_features] verts: {verts}")
-        # Angular variance: only defined for strokes with >=3 points
-        if verts and len(verts) >= 3:
-            features['angular_variance'] = PhysicsInference.angular_variance(verts)
-        else:
-            features['angular_variance'] = float('nan')
-        # Curvature, center of mass, moment of inertia
+        # Angular variance
+        features['angular_variance'] = PhysicsInference.robust_angular_variance(verts)
+        # Curvature
+        features['curvature_score'] = PhysicsInference.robust_curvature(verts)
+        # Moment of inertia
+        features['moment_of_inertia'] = PhysicsInference.robust_moment_of_inertia(verts, stype, params)
+        # For line strokes, add line_length, line_angle, etc.
         if stype == 'line':
             features.update(self._calculate_line_specific_features_from_params(params))
-            if verts and len(verts) == 2:
-                features['curvature_score'] = PhysicsInference.line_curvature_score(verts)
-                p0, p1 = np.array(verts[0]), np.array(verts[1])
-                length = np.linalg.norm(p1 - p0)
-                features['moment_of_inertia'] = PhysicsInference.line_moment_of_inertia(length)
-                features['center_of_mass'] = PhysicsInference.polyline_weighted_center_of_mass(verts)
-            else:
-                features['curvature_score'] = float('nan')
-                features['moment_of_inertia'] = float('nan')
-                features['center_of_mass'] = (float('nan'), float('nan'))
         elif stype == 'arc':
             features.update(self._calculate_arc_specific_features_from_params(params))
-            radius = params.get('param1', 0)
-            span_angle = params.get('param2', 0)
-            try:
-                radius = float(radius)
-            except Exception:
-                radius = 0.0
-            try:
-                span_angle = float(span_angle)
-            except Exception:
-                span_angle = 0.0
-            features['curvature_score'] = PhysicsInference.arc_curvature_score(radius, span_angle)
-            features['moment_of_inertia'] = PhysicsInference.arc_moment_of_inertia(radius, span_angle)
-            if verts and len(verts) >= 2:
-                features['center_of_mass'] = PhysicsInference.polyline_weighted_center_of_mass(verts)
-            else:
-                features['center_of_mass'] = (float('nan'), float('nan'))
-        else:
-            # fallback for unknown stroke types (e.g., polygons, curves)
-            if verts and len(verts) >= 3:
-                features['curvature_score'] = PhysicsInference.curvature_score(verts)
-                features['moment_of_inertia'] = PhysicsInference.moment_of_inertia(verts)
-                features['center_of_mass'] = PhysicsInference.centroid(verts)
-            else:
-                features['curvature_score'] = float('nan')
-                features['moment_of_inertia'] = float('nan')
-                features['center_of_mass'] = (float('nan'), float('nan'))
         features.update(self._calculate_shape_modifier_features_from_val(smod))
         logger.debug(f"[_calculate_stroke_specific_features] OUTPUT: {features}")
         return features
@@ -1295,48 +1226,39 @@ class ComprehensiveBongardProcessor:
                 except Exception as e:
                     logger.debug(f"[_calculate_image_features] Error in convex hull: {e}")
                     poly = None
+            # Visual complexity using new formula
+            num_strokes = len(strokes)
+            max_strokes = 50
+            perimeter = self._calculate_perimeter(vertices)
+            hull_perimeter = perimeter
+            if poly is not None and hasattr(poly, 'convex_hull'):
+                try:
+                    hull_perimeter = poly.convex_hull.length
+                except Exception:
+                    pass
+            curvature_score = PhysicsInference.robust_curvature(vertices)
+            visual_complexity = PhysicsInference.visual_complexity(num_strokes, max_strokes, perimeter, hull_perimeter, curvature_score)
             features = {
                 'bounding_box': geometry.get('bbox', {}),
                 'centroid': geometry.get('centroid', [0.0, 0.0]),
                 'width': geometry.get('width', 0.0),
                 'height': geometry.get('height', 0.0),
                 'area': PhysicsInference.area(poly) if poly else 0.0,
-                'perimeter': self._calculate_perimeter(vertices),
+                'perimeter': perimeter,
+                'aspect_ratio': max(FLAGGING_THRESHOLDS['min_aspect_ratio'], min(self.safe_divide(geometry.get('width', 1.0), geometry.get('height', 1.0), 1.0), FLAGGING_THRESHOLDS['max_aspect_ratio'])),
+                'convexity_ratio': (max(0.0, min(1.0, self.safe_divide(poly.area, poly.convex_hull.area))) if poly and poly.area != 0 and poly.convex_hull.area != 0 else 0.0),
+                'is_convex': PhysicsInference.is_convex(poly) if poly else False,
+                'compactness': self._calculate_compactness(PhysicsInference.area(poly) if poly else 0.0, perimeter),
+                'eccentricity': self._calculate_eccentricity(vertices),
+                'symmetry_score': (PhysicsInference.symmetry_score(vertices) if perimeter > 0 and (PhysicsInference.area(poly) if poly else 0.0) > 0 else None),
+                'horizontal_symmetry': self._check_horizontal_symmetry(vertices, poly),
+                'vertical_symmetry': self._check_vertical_symmetry(vertices, poly),
+                'rotational_symmetry': self._check_rotational_symmetry(vertices),
+                'has_quadrangle': (True if poly and hasattr(poly, 'exterior') and hasattr(poly.exterior, 'coords') and len(poly.exterior.coords)-1 == 4 else PhysicsInference.has_quadrangle(vertices)),
+                'geometric_complexity': PhysicsInference.geometric_complexity(vertices),
+                'visual_complexity': PhysicsInference.safe_finite(visual_complexity, 0.0, 0.0, 1.0),
+                'irregularity_score': self._calculate_irregularity(vertices),
             }
-            # Aspect ratio: clip and flag outliers
-            raw_ar = self.safe_divide(geometry.get('width', 1.0), geometry.get('height', 1.0), 1.0)
-            ar = max(FLAGGING_THRESHOLDS['min_aspect_ratio'], min(raw_ar, FLAGGING_THRESHOLDS['max_aspect_ratio']))
-            features['aspect_ratio'] = ar
-            # Convexity ratio: robust, clamp to [0,1], handle degenerate
-            if poly is None or poly.area == 0 or poly.convex_hull.area == 0:
-                features['convexity_ratio'] = 0.0
-            else:
-                ratio = self.safe_divide(poly.area, poly.convex_hull.area)
-                features['convexity_ratio'] = max(0.0, min(1.0, ratio))
-            features['is_convex'] = PhysicsInference.is_convex(poly) if poly else False
-            features['compactness'] = self._calculate_compactness(features['area'], features['perimeter'])
-            features['eccentricity'] = self._calculate_eccentricity(vertices)
-            # Symmetry and compactness: None if area or perimeter is zero
-            if features['perimeter'] == 0 or features['area'] == 0:
-                features['compactness'] = None
-                features['symmetry_score'] = None
-            else:
-                features['symmetry_score'] = PhysicsInference.symmetry_score(vertices)
-            features['horizontal_symmetry'] = self._check_horizontal_symmetry(vertices, poly)
-            features['vertical_symmetry'] = self._check_vertical_symmetry(vertices, poly)
-            features['rotational_symmetry'] = self._check_rotational_symmetry(vertices)
-            # has_quadrangle: robust check for 4-vertex polygons
-            if poly and hasattr(poly, 'exterior') and hasattr(poly.exterior, 'coords') and len(poly.exterior.coords)-1 == 4:
-                features['has_quadrangle'] = True
-            else:
-                features['has_quadrangle'] = PhysicsInference.has_quadrangle(vertices)
-            features['geometric_complexity'] = PhysicsInference.geometric_complexity(vertices)
-            # Improved visual complexity: alpha*(V-3)/(Vmax-3) + (1-alpha)*(S-1)/(Smax-1)
-            alpha, V_max, S_max = 0.5, 30, 10
-            V, S = len(vertices), len(strokes)
-            vcomp = alpha * self.safe_divide(V-3, V_max-3) + (1-alpha) * self.safe_divide(S-1, S_max-1)
-            features['visual_complexity'] = max(0.0, vcomp)
-            features['irregularity_score'] = self._calculate_irregularity(vertices)
             logger.debug(f"[_calculate_image_features] OUTPUT: {features}")
             return self.json_safe(features)
         except Exception as e:

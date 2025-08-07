@@ -70,6 +70,111 @@ class PhysicsInference:
         return float(np.var(angles))
 
     @staticmethod
+    def robust_curvature(vertices):
+        """
+        For polylines: sum of absolute turn angles divided by number of segments.
+        For arcs: use normalized arc angle if available.
+        """
+        verts = PhysicsInference.safe_extract_vertices(vertices)
+        if not verts or len(verts) < 3:
+            return 0.0
+        n = len(verts)
+        total_angle = 0.0
+        for i in range(1, n-1):
+            v1 = np.array(verts[i]) - np.array(verts[i-1])
+            v2 = np.array(verts[i+1]) - np.array(verts[i])
+            norm1 = np.linalg.norm(v1)
+            norm2 = np.linalg.norm(v2)
+            if norm1 > 1e-6 and norm2 > 1e-6:
+                cos_theta = np.dot(v1, v2) / (norm1 * norm2)
+                angle = np.arccos(np.clip(cos_theta, -1.0, 1.0))
+                total_angle += abs(angle)
+        return float(total_angle / max(n-2, 1))
+
+    @staticmethod
+    def robust_angular_variance(vertices):
+        """
+        Variance of successive segment angles. For <3 points, return 0.
+        """
+        verts = PhysicsInference.safe_extract_vertices(vertices)
+        if not verts or len(verts) < 3:
+            return 0.0
+        n = len(verts)
+        angles = []
+        for i in range(1, n-1):
+            v1 = np.array(verts[i]) - np.array(verts[i-1])
+            v2 = np.array(verts[i+1]) - np.array(verts[i])
+            norm1 = np.linalg.norm(v1)
+            norm2 = np.linalg.norm(v2)
+            if norm1 > 1e-6 and norm2 > 1e-6:
+                cos_theta = np.dot(v1, v2) / (norm1 * norm2)
+                angle = np.arccos(np.clip(cos_theta, -1.0, 1.0))
+                angles.append(angle)
+        if len(angles) < 2:
+            return 0.0
+        return float(np.var(angles))
+
+    @staticmethod
+    def robust_moment_of_inertia(vertices, stroke_type=None, params=None):
+        """
+        For lines: I = L^3/12. For arcs: use arc formula. For polygons: use standard formula.
+        """
+        verts = PhysicsInference.safe_extract_vertices(vertices)
+        if stroke_type == 'line' and params is not None:
+            length = params.get('length', None)
+            if length is not None:
+                return (length ** 3) / 12.0
+        elif stroke_type == 'arc' and params is not None:
+            radius = params.get('radius', None)
+            delta_theta = params.get('span_angle', None)
+            if radius is not None and delta_theta is not None:
+                arc_length = abs(radius * delta_theta)
+                return arc_length * (radius ** 2)
+        # Fallback: polygonal moment
+        return PhysicsInference.moment_of_inertia(verts)
+
+    @staticmethod
+    def alternation_score(seq):
+        """
+        Compute maximal alternating subsequence fraction.
+        """
+        if not seq or len(seq) < 2:
+            return 0.0
+        max_alt = 1
+        curr = 1
+        for i in range(1, len(seq)):
+            if seq[i] != seq[i-1]:
+                curr += 1
+            else:
+                max_alt = max(max_alt, curr)
+                curr = 1
+        max_alt = max(max_alt, curr)
+        return max_alt / len(seq)
+
+    @staticmethod
+    def visual_complexity(num_strokes, max_strokes, perimeter, hull_perimeter, curvature_score, alpha=0.4, beta=0.3, gamma=0.3):
+        """
+        Weighted sum of normalized stroke count, perimeter/hull, and curvature.
+        All values normalized to [0,1].
+        """
+        stroke_term = min(num_strokes / max(max_strokes, 1), 1.0)
+        perim_term = min(perimeter / max(hull_perimeter, 1e-8), 1.0)
+        curv_term = min(curvature_score / np.pi, 1.0)
+        return alpha * stroke_term + beta * perim_term + gamma * curv_term
+
+    @staticmethod
+    def safe_finite(val, default=0.0, minval=None, maxval=None):
+        """
+        Ensure val is finite and optionally clamp to [minval, maxval].
+        """
+        if not np.isfinite(val):
+            return default
+        if minval is not None:
+            val = max(val, minval)
+        if maxval is not None:
+            val = min(val, maxval)
+        return val
+    @staticmethod
     def polyline_weighted_center_of_mass(vertices):
         """Segment-length-weighted average of midpoints for open polylines."""
         if not vertices or len(vertices) < 2:
