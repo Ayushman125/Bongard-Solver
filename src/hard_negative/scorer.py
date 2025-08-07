@@ -33,14 +33,16 @@ class Scorer:
     def extract_features(self, prog):
         try:
             if isinstance(prog, list) and all(isinstance(x, tuple) and len(x) == 2 for x in prog):
-                action_cmds = [f"{cmd} {param}" if param is not None else str(cmd) for cmd, param in prog]
+                action_cmds = [f"{cmd}_{param}" if param is not None else str(cmd) for cmd, param in prog]
             elif isinstance(prog, list) and all(isinstance(x, str) for x in prog):
                 action_cmds = prog
             else:
                 action_cmds = [str(x) for x in prog]
 
             parser = BongardLogoParser()
-            vertices = parser.parse_action_program(action_cmds)
+            # Use new parser logic: get shape, then vertices
+            shape = parser.comprehensive_parser.parse_action_commands(action_cmds, "unknown_pid")
+            vertices = shape.vertices if shape is not None and hasattr(shape, 'vertices') else []
             if not isinstance(vertices, list) or len(vertices) < 4:
                 logging.warning(f"extract_features: Skipping feature extraction, only {len(vertices) if isinstance(vertices, list) else 'N/A'} vertices (need >=4) for valid polygon.")
                 return self.orig_features if self.orig_features else {}

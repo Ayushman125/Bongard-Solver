@@ -81,8 +81,11 @@ def process_sample_with_guaranteed_success(sample: Dict[str, Any], concept_fn, a
         return any(l2_shape_distance(verts, g) < 1e-3 for g in seen_geoms)
 
     def record_negative(cmds, feats, tier: str):
-        action_cmds = [f"{c} {p}" if p is not None else c for c, p in cmds]
-        verts = parser.parse_action_program(action_cmds)
+        # Convert cmds (list of (cmd, param)) to list of command strings as expected by parser
+        action_cmds = [f"{c}_{p}" if p is not None else c for c, p in cmds]
+        # Use the new parser logic
+        shape = parser.comprehensive_parser.parse_action_commands(action_cmds, pid)
+        verts = shape.vertices if shape is not None and hasattr(shape, 'vertices') else []
         if not is_duplicate(verts):
             found.append({
                 **sample,
@@ -139,23 +142,36 @@ def process_sample_with_guaranteed_success(sample: Dict[str, Any], concept_fn, a
             record_negative(cand, feats, 'gagan')
 
     # HHNM: Hyperbolic mixup (increase combinations)
-    eucl_emb = euclidean_embed(sample['features'])
-    hyp_emb = hyperbolic_embed(sample['features'])
-    eneg = mine_hard(eucl_emb, topk=args.max_per_sample * 2)
-    hneg = mine_hard(hyp_emb, topk=args.max_per_sample * 2)
-    import numpy as np
-    valid_eneg = [e for e in eneg if isinstance(e, (list, np.ndarray))]
-    valid_hneg = [h for h in hneg if isinstance(h, (list, np.ndarray))]
-    for u, v in itertools.product(valid_eneg, valid_hneg):
-        if len(found) >= args.max_per_sample:
-            break
-        mixed, _ = poincare_mixup(u, v)
-        # TODO: decode mixed back to commands
-        perturbed_cmds = mutate(base_cmds)
-        cand = perturbed_cmds
-        feats = scorer.extract_features(cand)
-        if concept_fn(feats) != original_label:
-            record_negative(cand, feats, 'mixup')
+    # Aggregate features as above for embedding
+    embedding_features = {}
+    for stroke in sample.get('strokes', []):
+        if 'specific_features' in stroke:
+            embedding_features.update(stroke.get('specific_features', {}))
+    for key in ["image_features", "physics_features", "composition_features", "stroke_type_features",
+                "relational_features", "sequential_features", "topological_features"]:
+        comp = sample.get(key, {})
+        if isinstance(comp, dict) and comp:
+            embedding_features.update(comp)
+    if not embedding_features:
+        logging.warning(f"Sample for problem {pid} is missing all expected feature keys for embedding. Skipping mixup.")
+    else:
+        eucl_emb = euclidean_embed(embedding_features)
+        hyp_emb = hyperbolic_embed(embedding_features)
+        eneg = mine_hard(eucl_emb, topk=args.max_per_sample * 2)
+        hneg = mine_hard(hyp_emb, topk=args.max_per_sample * 2)
+        import numpy as np
+        valid_eneg = [e for e in eneg if isinstance(e, (list, np.ndarray))]
+        valid_hneg = [h for h in hneg if isinstance(h, (list, np.ndarray))]
+        for u, v in itertools.product(valid_eneg, valid_hneg):
+            if len(found) >= args.max_per_sample:
+                break
+            mixed, _ = poincare_mixup(u, v)
+            # TODO: decode mixed back to commands
+            perturbed_cmds = mutate(base_cmds)
+            cand = perturbed_cmds
+            feats = scorer.extract_features(cand)
+            if concept_fn(feats) != original_label:
+                record_negative(cand, feats, 'mixup')
 
     # Fallback to ensure at least one negative
     if not found:

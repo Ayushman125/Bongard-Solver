@@ -53,6 +53,19 @@ def get_comprehensive_node_style(data):
     comprehensive_features = data.get('comprehensive_features')
     geometric_analysis = data.get('geometric_analysis', {})
     commonsense_analysis = data.get('commonsense_analysis', {})
+
+    # Aggregate features from new structure if needed for legacy compatibility
+    features = {}
+    for stroke in data.get('strokes', []):
+        if 'specific_features' in stroke:
+            features.update(stroke.get('specific_features', {}))
+    for key in ["image_features", "physics_features", "composition_features", "stroke_type_features",
+                "relational_features", "sequential_features", "topological_features"]:
+        comp = data.get(key, {})
+        if isinstance(comp, dict) and comp:
+            features.update(comp)
+    # Optionally, add 'features' key for downstream compatibility
+    data['features'] = features
     
     # Determine shape type with fallback logic - prioritize discovered Bongard-LOGO types
     shape_type = 'unknown'

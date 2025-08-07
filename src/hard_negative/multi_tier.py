@@ -36,12 +36,10 @@ def parse_logo_commands_to_tuples(commands: List[Any]) -> List[Tuple[str, Any]]:
 
 def is_valid_geometry(program: List[Tuple[str, Any]]) -> bool:
     try:
-        action_cmds = [
-            f"{cmd} {param}" if param is not None else cmd
-            for cmd, param in program
-        ]
+        action_cmds = [f"{cmd}_{param}" if param is not None else str(cmd) for cmd, param in program]
         parser = BongardLogoParser()
-        verts = parser.parse_action_program(action_cmds)
+        shape = parser.comprehensive_parser.parse_action_commands(action_cmds, "unknown_pid")
+        verts = shape.vertices if shape is not None and hasattr(shape, 'vertices') else []
         return isinstance(verts, list) and len(verts) >= 4
     except Exception:
         return False
