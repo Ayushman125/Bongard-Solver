@@ -48,6 +48,38 @@ def safe_acos(x):
 
 class PhysicsInference:
     @staticmethod
+    @safe_feature(default=0.0)
+    def curvature_score(vertices_or_poly):
+        """
+        Average absolute change in tangent angle per unit length along the polyline.
+        Returns NaN for degenerate cases.
+        """
+        verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
+        if not verts or len(verts) < 3:
+            return float('nan')
+        n = len(verts)
+        total_curvature = 0.0
+        total_length = 0.0
+        for i in range(n):
+            p0 = np.array(verts[i - 1])
+            p1 = np.array(verts[i])
+            p2 = np.array(verts[(i + 1) % n])
+            v1 = p1 - p0
+            v2 = p2 - p1
+            len1 = np.linalg.norm(v1)
+            len2 = np.linalg.norm(v2)
+            if len1 > 1e-6 and len2 > 1e-6:
+                theta1 = np.arctan2(v1[1], v1[0])
+                theta2 = np.arctan2(v2[1], v2[0])
+                dtheta = abs(theta2 - theta1)
+                dtheta = min(dtheta, 2 * np.pi - dtheta)
+                seg_length = (len1 + len2) / 2
+                total_curvature += dtheta * seg_length
+                total_length += seg_length
+        if total_length < 1e-8:
+            return float('nan')
+        return total_curvature / total_length
+    @staticmethod
     def is_short_line(length: float, diag: float, thresh: float = 0.15) -> bool:
         """Inclusive comparison for short line flag."""
         return length <= thresh * diag
@@ -128,14 +160,12 @@ class PhysicsInference:
     @safe_feature(default=0.0)
     def angular_variance(vertices_or_poly):
         """
-        Computes the variance of angles (in degrees) between consecutive segments of a polygon or polyline.
-        Excludes near-zero angles (colinear/duplicate points) to avoid inflating variance.
-        Returns 0.0 if not enough valid angles.
-        Output is in degrees squared (deg²).
+        Computes the variance of interior angles (in degrees) for a polygon/polyline.
+        Filters out degenerate (near-colinear) angles. Returns NaN if <2 valid angles.
         """
         verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
         if not verts or len(verts) < 3:
-            return 0.0
+            return float('nan')
         n = len(verts)
         angles = []
         for i in range(n):
@@ -149,13 +179,11 @@ class PhysicsInference:
             if norm1 > 1e-6 and norm2 > 1e-6:
                 dot = np.clip(np.dot(v1, v2) / (norm1 * norm2), -1.0, 1.0)
                 angle_deg = np.degrees(np.arccos(dot))
-                if angle_deg > 1.0:  # exclude near-zero angles
+                if angle_deg > 1.0:
                     angles.append(angle_deg)
         if len(angles) < 2:
-            return 0.0
-        var = np.var(angles)
-        # Output is in degrees squared (deg²)
-        return var
+            return float('nan')
+        return float(np.var(angles))
 
     @staticmethod
     def find_stroke_intersections(geoms):
@@ -483,17 +511,12 @@ class PhysicsInference:
         return float(n)
     @staticmethod
     @safe_feature(default=1)
-    def rotational_symmetry(vertices_or_poly, max_order=None, rmse_threshold=0.02):
+    def rotational_symmetry(vertices_or_poly, max_order=None, rmse_threshold=0.01):
         """
         Detects the highest order of rotational symmetry for a polygon/polyline.
         Compares the shape to its rotated versions for k=2,3,...,max_order (default n//2).
         Returns the highest k (>=2) with mean RMSE below threshold, else 1 (no symmetry).
-        Args:
-            vertices_or_poly: list of (x, y) tuples or Polygon
-            max_order: maximum symmetry order to check (default: n//2)
-            rmse_threshold: RMSE threshold for symmetry (default: 0.02 for normalized shapes)
-        Returns:
-            int: highest symmetry order detected (>=2), or 1 if none
+        Lowered RMSE threshold for stricter detection.
         """
         import numpy as np
         verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
@@ -501,20 +524,17 @@ class PhysicsInference:
             return 1
         arr = np.array(verts)
         n = len(arr)
-        # Remove duplicate last point if closed
         if n > 3 and np.allclose(arr[0], arr[-1]):
             arr = arr[:-1]
             n = len(arr)
         centroid = np.mean(arr, axis=0)
         arr_centered = arr - centroid
-        # Normalize scale for RMSE to be meaningful
         scale = np.linalg.norm(arr_centered, axis=1).max()
         if scale < 1e-8:
             scale = 1.0
         arr_norm = arr_centered / scale
         best_order = 1
         best_rmse = float('inf')
-        # By default, check up to n//2 (cannot have more symmetry than half the points)
         max_k = max_order if max_order is not None else max(2, n // 2)
         for k in range(2, max_k + 1):
             theta = 2 * np.pi / k
@@ -523,7 +543,6 @@ class PhysicsInference:
                 [np.sin(theta),  np.cos(theta)]
             ])
             arr_rot = (arr_norm @ rot_matrix.T)
-            # Find best cyclic alignment (allow for cyclic permutation)
             min_rmse = float('inf')
             for shift in range(n):
                 arr_shift = np.roll(arr_norm, shift, axis=0)
@@ -532,7 +551,6 @@ class PhysicsInference:
                 rmse = np.sqrt(np.mean((arr_shift - arr_rot) ** 2))
                 if rmse < min_rmse:
                     min_rmse = rmse
-            # If RMSE is below threshold, consider this symmetry order
             if min_rmse < rmse_threshold and min_rmse < best_rmse:
                 best_order = k
                 best_rmse = min_rmse
@@ -566,15 +584,29 @@ class PhysicsInference:
     @safe_feature(default=False)
     def has_quadrangle(vertices_or_poly):
         """
-        Returns True if the shape is a valid convex quadrangle (exactly 4 vertices).
-        Strips duplicate closing vertex if present.
+        Returns True if the shape is a valid convex quadrangle (exactly 4 unique vertices, convex).
+        Handles closed polygons (duplicate end vertex).
         """
         verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
-        # Remove duplicate closing vertex if present
         if len(verts) > 1 and np.allclose(verts[0], verts[-1]):
             verts = verts[:-1]
         poly = Polygon(verts)
         return len(verts) == 4 and poly.is_valid and PhysicsInference.is_convex(poly)
+    @staticmethod
+    @safe_feature(default=0.0)
+    def edge_length_variance(vertices_or_poly):
+        """
+        Population variance of edge lengths for a polygon/polyline. No normalization.
+        Returns NaN if <2 edges.
+        """
+        verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
+        if not verts or len(verts) < 2:
+            return float('nan')
+        n = len(verts)
+        lengths = [np.linalg.norm(np.array(verts[(i+1)%n]) - np.array(verts[i])) for i in range(n)]
+        if len(lengths) < 2:
+            return float('nan')
+        return float(np.var(lengths))
 
     @staticmethod
     @safe_feature(default=False)

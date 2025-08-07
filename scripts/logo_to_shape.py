@@ -69,36 +69,8 @@ class ComprehensiveBongardProcessor:
             return float('nan')
 
     def _calculate_angular_variance(self, vertices: list) -> float:
-        """
-        Variance of interior angles (radians), ignoring angles <1° (colinear). Returns NaN if <2 valid angles.
-        """
-        import numpy as np
-        import math
-        try:
-            verts = self.ensure_vertex_list(vertices)
-            n = len(verts)
-            if n < 3:
-                return float('nan')
-            angles = []
-            for i in range(n):
-                p0 = np.array(verts[i - 1])
-                p1 = np.array(verts[i])
-                p2 = np.array(verts[(i + 1) % n])
-                v1 = p0 - p1
-                v2 = p2 - p1
-                norm1 = np.linalg.norm(v1)
-                norm2 = np.linalg.norm(v2)
-                if norm1 > 1e-6 and norm2 > 1e-6:
-                    angle = np.arccos(np.clip(np.dot(v1, v2) / (norm1 * norm2), -1, 1))
-                    if math.degrees(angle) >= 1.0:  # Filter out near-colinear
-                        angles.append(angle)
-            if len(angles) < 2:
-                return float('nan')
-            return float(np.var(angles))
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"Angular variance error: {e}")
-            return float('nan')
+        """Variance of interior angles (degrees), see PhysicsInference.angular_variance."""
+        return PhysicsInference.angular_variance(vertices)
 
     def _calculate_irregularity(self, vertices: list) -> float:
         """
@@ -136,34 +108,23 @@ class ComprehensiveBongardProcessor:
             return float('nan')
 
     def _calculate_pattern_regularity_from_modifiers(self, modifier_sequence: list) -> float:
-        """
-        Pattern regularity: only if n>=3, else NaN. Robust to exceptions. Returns NaN if sequence length <3.
-        """
-        import logging
-        logger = logging.getLogger(__name__)
+        """Pattern regularity: only if n>=3, else NaN. See audit recommendations."""
         n = len(modifier_sequence)
         if not modifier_sequence or n < 3:
-            logger.debug("Pattern regularity: sequence too short, returning NaN")
             return float('nan')
-        try:
-            repetition_score = sum(1 for i in range(n-1) if modifier_sequence[i] == modifier_sequence[i+1]) / (n-1)
-            alternation_score = 0.0
-            if n >= 4:
-                alt = [modifier_sequence[i] for i in range(2)]
-                is_alt = all(modifier_sequence[i] == alt[i%2] for i in range(n)) and alt[0] != alt[1]
-                if is_alt:
-                    alternation_score = 1.0
-            unique_mods = set(modifier_sequence)
-            diversity_penalty = (len(unique_mods) - 1) / max(n-1, 1)
-            pattern_score = max(repetition_score, alternation_score)
-            diversity_factor = 1.0 - diversity_penalty
-            pattern_regularity = pattern_score * diversity_factor
-            pattern_regularity = max(0.0, min(1.0, pattern_regularity))
-            logger.debug(f"Pattern regularity: repetition_score={repetition_score}, alternation_score={alternation_score}, diversity_penalty={diversity_penalty}, result={pattern_regularity}")
-            return pattern_regularity
-        except Exception as e:
-            logger.warning(f"Pattern regularity error: {e}")
-            return float('nan')
+        repetition_score = sum(1 for i in range(n-1) if modifier_sequence[i] == modifier_sequence[i+1]) / (n-1)
+        alternation_score = 0.0
+        if n >= 4:
+            alt = [modifier_sequence[i] for i in range(2)]
+            is_alt = all(modifier_sequence[i] == alt[i%2] for i in range(n)) and alt[0] != alt[1]
+            if is_alt:
+                alternation_score = 1.0
+        unique_mods = set(modifier_sequence)
+        diversity_penalty = (len(unique_mods) - 1) / max(n-1, 1)
+        pattern_score = max(repetition_score, alternation_score)
+        diversity_factor = 1.0 - diversity_penalty
+        pattern_regularity = pattern_score * diversity_factor
+        return max(0.0, min(1.0, pattern_regularity))
     def _check_horizontal_symmetry(self, vertices, poly=None):
         """Check horizontal symmetry using PhysicsInference or geometric comparison."""
         try:
@@ -209,19 +170,8 @@ class ComprehensiveBongardProcessor:
             return 0.0
 
     def _calculate_edge_length_variance(self, vertices):
-        """Calculate variance of edge lengths for a polygon."""
-        try:
-            if not vertices or len(vertices) < 2:
-                return float('nan')
-            import numpy as np
-            n = len(vertices)
-            lengths = [np.linalg.norm(np.array(vertices[(i+1)%n]) - np.array(vertices[i])) for i in range(n)]
-            if len(lengths) < 2:
-                return float('nan')
-            return float(np.var(lengths))
-        except Exception as e:
-            logging.getLogger(__name__).warning(f"Edge length variance error: {e}")
-            return float('nan')
+        """Population variance of edge lengths, see PhysicsInference.edge_length_variance."""
+        return PhysicsInference.edge_length_variance(vertices)
 
 
     def extract_action_type_prefixes(self, problems_data):
@@ -1209,12 +1159,7 @@ class ComprehensiveBongardProcessor:
         logger.debug("Falling back to 'normal' modifier")
         return 'normal'
 
-    # Helper methods for feature calculation
-    
 
-    def _check_rotational_symmetry(self, vertices: List[tuple]) -> int:
-        """Check rotational symmetry order using k-fold RMSE (k=2,3,4)."""
-        return PhysicsInference.rotational_symmetry(vertices)
 
     def _calculate_irregularity(self, vertices: List[tuple]) -> float:
         """Calculate normalized mean absolute deviation from regular n-gon angle (0=regular, 1=irregular)."""
@@ -1245,8 +1190,8 @@ class ComprehensiveBongardProcessor:
             logging.getLogger(__name__).warning(f"Irregularity error: {e}")
             return 0.0
     def _calculate_curvature_score(self, vertices: list) -> float:
-        """Curvature score using angular variance from PhysicsInference."""
-        return PhysicsInference.angular_variance(vertices)
+        """Curvature score: average absolute change in tangent angle per unit length (see PhysicsInference.curvature_score)."""
+        return PhysicsInference.curvature_score(vertices)
 
     def _calculate_homogeneity(self, modifier_distribution: dict) -> float:
         """Calculate a simple homogeneity score: 1.0 if all modifiers are the same, lower otherwise (Gini impurity)."""
@@ -1256,287 +1201,8 @@ class ComprehensiveBongardProcessor:
         probs = [v / total for v in modifier_distribution.values()]
         gini = 1.0 - sum(p ** 2 for p in probs)
         return 1.0 - gini  # 1.0 = homogeneous, 0 = maximally diverse
-    
-    def _flag_case(self, image_id: str, problem_id: str, reason: str, flags: List[str]):
-        """Add a case to the flagged cases list"""
-        self.flagged_cases.append({
-            'image_id': image_id,
-            'problem_id': problem_id,
-            'reason': reason,
-            'flags': flags,
-            'timestamp': time.time()
-        })
-        logger.warning(f"Flagged case: {image_id} - {reason}")
-    
-    def _validate_stroke_parameters(self, stroke) -> List[str]:
-        """Validate stroke parameters for suspicious values"""
-        flags = []
-        
-        for param_name, value in stroke.parameters.items():
-            if not isinstance(value, (int, float)):
-                flags.append(f"invalid_parameter_type_{param_name}")
-                continue
-                
-            if math.isnan(value) or math.isinf(value):
-                flags.append(f"invalid_parameter_value_{param_name}")
-                continue
-                
-            if abs(value) > FLAGGING_THRESHOLDS['suspicious_parameter_threshold']:
-                flags.append(f"suspicious_parameter_{param_name}")
-        
-        # Stroke-type specific validation
-        if stroke.stroke_type.value == 'line':
-            length = stroke.parameters.get('length', 0)
-            if length <= 0 or length > 10:
-                flags.append("suspicious_line_length")
-        elif stroke.stroke_type.value == 'arc':
-            radius = stroke.parameters.get('radius', 0)
-            if radius <= 0 or radius > 10:
-                flags.append("suspicious_arc_radius")
-            span_angle = stroke.parameters.get('span_angle', 0)
-            if abs(span_angle) > 720:  # More than 2 full rotations
-                flags.append("suspicious_arc_span")
-        
-        return flags
-    
-    def _validate_vertices(self, vertices: List[tuple]) -> List[str]:
-        """Validate vertex data"""
-        flags = []
-        
-        if len(vertices) < FLAGGING_THRESHOLDS['min_vertices']:
-            flags.append("insufficient_vertices")
-        
-        if len(vertices) > FLAGGING_THRESHOLDS['max_vertices']:
-            flags.append("excessive_vertices")
-        
-        # Check for NaN or infinite coordinates
-        for i, (x, y) in enumerate(vertices):
-            if not (isinstance(x, (int, float)) and isinstance(y, (int, float))):
-                flags.append("invalid_vertex_type")
-                break
-            if math.isnan(x) or math.isnan(y) or math.isinf(x) or math.isinf(y):
-                flags.append("invalid_vertex_coordinates")
-                break
-        
-        # Check for duplicate consecutive vertices
-        duplicate_count = 0
-        for i in range(len(vertices) - 1):
-            if vertices[i] == vertices[i + 1]:
-                duplicate_count += 1
-        
-        if duplicate_count > len(vertices) * 0.5:
-            flags.append("excessive_duplicate_vertices")
-        
-        return flags
-    
-    def _validate_image_features(self, features: Dict[str, Any]) -> List[str]:
-        """Validate computed image features"""
-        flags = []
-        
-        area = features.get('area', 0)
-        if area < FLAGGING_THRESHOLDS['min_area']:
-            flags.append("suspicious_area_too_small")
-        elif area > FLAGGING_THRESHOLDS['max_area']:
-            flags.append("suspicious_area_too_large")
-        
-        aspect_ratio = features.get('aspect_ratio', 1)
-        if aspect_ratio < FLAGGING_THRESHOLDS['min_aspect_ratio']:
-            flags.append("suspicious_aspect_ratio_too_small")
-        elif aspect_ratio > FLAGGING_THRESHOLDS['max_aspect_ratio']:
-            flags.append("suspicious_aspect_ratio_too_large")
-        
-        # Check for NaN values in critical features
-        critical_features = ['area', 'perimeter', 'aspect_ratio', 'compactness']
-        for feature_name in critical_features:
-            value = features.get(feature_name)
-            if value is not None and (math.isnan(value) or math.isinf(value)):
-                flags.append(f"invalid_feature_{feature_name}")
-        
-        return flags
-    
-    def _validate_physics_features(self, features: Dict[str, Any]) -> List[str]:
-        """Validate physics computation results"""
-        flags = []
-        
-        symmetry_score = features.get('symmetry_score', 0)
-        if symmetry_score > FLAGGING_THRESHOLDS['symmetry_score_max']:
-            flags.append("suspicious_symmetry_score")
-        
-        # Check moment of inertia
-        moi = features.get('moment_of_inertia', 0)
-        if moi < 0:
-            flags.append("negative_moment_of_inertia")
-        
-        return flags
-    
-    def _calculate_stroke_specific_features(self, stroke, stroke_index: int, stroke_type_val=None, shape_modifier_val=None, parameters=None) -> Dict[str, Any]:
-        """Calculate features specific to stroke type and shape modifier"""
-        features = {'stroke_index': stroke_index}
-        stype = stroke_type_val or type(stroke).__name__.replace('Action', '').lower()
-        smod = shape_modifier_val or 'normal'
-        params = parameters or {}
-        if stype == 'line':
-            features.update(self._calculate_line_specific_features_from_params(params))
-        elif stype == 'arc':
-            features.update(self._calculate_arc_specific_features_from_params(params))
-        features.update(self._calculate_shape_modifier_features_from_val(smod))
-        return features
 
-    def _calculate_line_specific_features_from_params(self, params: dict) -> Dict[str, Any]:
-        length = params.get('param1', 0)
-        angle = params.get('param2', 0)
-        return {
-            'line_length': length,
-            'line_angle': angle,
-            'line_length_normalized': self.safe_divide(min(length, 2.0), 2.0),
-            'line_angle_normalized': (angle % 1.0),
-            'line_direction': 'horizontal' if abs(angle - 0.5) < 0.1 else 'vertical' if abs(angle) < 0.1 or abs(angle - 1.0) < 0.1 else 'diagonal',
-            'line_is_short': length < 0.3,
-            'line_is_long': length > 1.5
-        }
 
-    def _calculate_arc_specific_features_from_params(self, params: dict) -> Dict[str, Any]:
-        # Robustly convert parameters to float, fallback to 0 if conversion fails
-        def to_float(val):
-            try:
-                return float(val)
-            except (ValueError, TypeError):
-                return 0.0
-
-        radius = to_float(params.get('param1', 0))
-        span_angle = to_float(params.get('param2', 0))
-        end_angle = to_float(params.get('param3', 0))
-
-        arc_length = abs(span_angle) * radius * self.safe_divide(math.pi, 180) if radius > 0 else 0
-        is_major_arc = abs(span_angle) > 180
-        is_full_circle = abs(span_angle) >= 350
-        return {
-            'arc_radius': radius,
-            'arc_span_angle': span_angle,
-            'arc_end_angle': end_angle,
-            'arc_length': arc_length,
-            'arc_curvature': self.safe_divide(1.0, max(radius, 1e-6)),
-            'arc_is_major': is_major_arc,
-            'arc_is_full_circle': is_full_circle,
-            'arc_direction': 'clockwise' if span_angle < 0 else 'counterclockwise',
-            'arc_radius_normalized': self.safe_divide(min(radius, 2.0), 2.0),
-            'arc_span_normalized': self.safe_divide(abs(span_angle), 360.0),
-            'arc_is_small': radius < 0.3,
-            'arc_is_large': radius > 1.5,
-            'arc_is_tight': abs(span_angle) > 270,
-            'arc_is_gentle': abs(span_angle) < 90
-        }
-    
-
-    def _calculate_shape_modifier_features_from_val(self, modifier: str) -> Dict[str, Any]:
-        """Calculate features based on shape modifier string value (not from action object)"""
-        base_features = {
-            'shape_modifier': modifier,
-            'is_normal': modifier == 'normal',
-            'is_geometric': modifier in ['circle', 'square', 'triangle'],
-            'is_pattern': modifier == 'zigzag'
-        }
-        # Shape-specific features
-        if modifier == 'triangle':
-            base_features['geometric_complexity'] = 3
-            base_features['has_sharp_angles'] = True
-        elif modifier == 'square':
-            base_features['geometric_complexity'] = 4
-            base_features['has_right_angles'] = True
-        elif modifier == 'circle':
-            base_features['geometric_complexity'] = 10  # Use a large but finite value for circles
-            base_features['has_curved_edges'] = True
-        elif modifier == 'zigzag':
-            base_features['pattern_complexity'] = 'high'
-            base_features['has_repetitive_pattern'] = True
-        else:  # normal or unknown
-            base_features['geometric_complexity'] = 1
-            base_features['is_simple'] = True
-        return base_features
-    
-    def _calculate_stroke_type_differentiated_features(self, stroke_type_features: Dict, strokes: List) -> Dict[str, Any]:
-        """Calculate features that differentiate between stroke types"""
-        line_features = stroke_type_features['line_features']
-        arc_features = stroke_type_features['arc_features']
-        
-        # Basic counts
-        num_lines = len(line_features)
-        num_arcs = len(arc_features)
-        total_strokes = num_lines + num_arcs
-        
-        features = {
-            'stroke_composition': {
-                'num_lines': num_lines,
-                'num_arcs': num_arcs,
-                'line_ratio': self.safe_divide(num_lines, max(total_strokes, 1)),
-                'arc_ratio': self.safe_divide(num_arcs, max(total_strokes, 1)),
-                'stroke_diversity': 1 if num_lines > 0 and num_arcs > 0 else 0
-            }
-        }
-        
-        # Line-specific aggregate features
-        if line_features:
-            line_lengths = [f['line_length'] for f in line_features]
-            line_angles = [f['line_angle'] for f in line_features]
-            
-            features['line_aggregate'] = {
-                'total_line_length': sum(line_lengths),
-                'avg_line_length': self.safe_divide(sum(line_lengths), len(line_lengths)),
-                'line_length_variance': self._calculate_variance(line_lengths),
-                'line_angle_variance': self._calculate_variance(line_angles),
-                'has_short_lines': any(f['line_is_short'] for f in line_features),
-                'has_long_lines': any(f['line_is_long'] for f in line_features),
-                'dominant_direction': self._calculate_dominant_direction(line_features)
-            }
-        
-        # Arc-specific aggregate features  
-        if arc_features:
-            arc_radii = [f['arc_radius'] for f in arc_features]
-            arc_spans = [f['arc_span_angle'] for f in arc_features]
-            arc_lengths = [f['arc_length'] for f in arc_features]
-            
-            features['arc_aggregate'] = {
-                'total_arc_length': sum(arc_lengths),
-                'avg_arc_radius': self.safe_divide(sum(arc_radii), len(arc_radii)),
-                'avg_arc_span': self.safe_divide(sum(arc_spans), len(arc_spans)),
-                'arc_radius_variance': self._calculate_variance(arc_radii),
-                'arc_span_variance': self._calculate_variance(arc_spans),
-                'total_curvature': sum(f['arc_curvature'] for f in arc_features),
-                'has_full_circles': any(f['arc_is_full_circle'] for f in arc_features),
-                'has_major_arcs': any(f['arc_is_major'] for f in arc_features),
-                'curvature_complexity': len([f for f in arc_features if f['arc_curvature'] > 1.0])
-            }
-        
-        return features
-    
-    def _calculate_variance(self, values: List[float]) -> float:
-        """Calculate variance of a list of values. For length 2, return squared diff. For length 1, return NaN and log."""
-        import numpy as np
-        logger = logging.getLogger(__name__)
-        n = len(values)
-        if n < 1:
-            logger.warning("Variance: empty list, returning NaN")
-            return float('nan')
-        if n == 1:
-            logger.warning("Variance: only one value, returning NaN")
-            return float('nan')
-        if n == 2:
-            diff = values[1] - values[0]
-            return diff * diff / 2.0
-        mean = self.safe_divide(sum(values), n)
-        return self.safe_divide(sum((x - mean) ** 2 for x in values), n)
-    
-    def _calculate_dominant_direction(self, line_features: List[Dict]) -> str:
-        """Calculate the dominant direction of line strokes"""
-        if not line_features:
-            return 'none'
-        
-        directions = [f['line_direction'] for f in line_features]
-        direction_counts = {}
-        for direction in directions:
-            direction_counts[direction] = direction_counts.get(direction, 0) + 1
-        
-        return max(direction_counts.items(), key=lambda x: x[1])[0] if direction_counts else 'none'
     
     def _calculate_image_features(self, vertices: List[tuple], strokes: List, geometry: Dict[str, Any]) -> Dict[str, Any]:
         """Calculate comprehensive image-level features with robust polygon recovery and improved metrics."""
@@ -1677,34 +1343,7 @@ class ComprehensiveBongardProcessor:
         except Exception as e:
             logger.warning(f"Error calculating physics features: {e}")
             return {}
-    def validate_features(self, features: dict) -> dict:
-        """Validate key features and flag issues. Returns dict of issues found."""
-        import numpy as np
-        issues = {}
-        # Area
-        area = features.get('image_features', {}).get('area', None)
-        if area is not None and (area <= 0 or not np.isfinite(area)):
-            issues['area'] = area
-        # Center of mass
-        com = features.get('physics_features', {}).get('center_of_mass', None)
-        if com is not None and (not isinstance(com, (list, tuple)) or len(com) != 2 or not all(np.isfinite(c) for c in com)):
-            issues['center_of_mass'] = com
-        # Stroke counts
-        nline = features.get('physics_features', {}).get('num_straight_segments', None)
-        narc = features.get('physics_features', {}).get('num_arcs', None)
-        if nline is not None and nline < 0:
-            issues['num_straight_segments'] = nline
-        if narc is not None and narc < 0:
-            issues['num_arcs'] = narc
-        # Angular variance
-        angvar = features.get('physics_features', {}).get('angular_variance', None)
-        if angvar is not None and (angvar < 0 or angvar > 180):
-            issues['angular_variance'] = angvar
-        # Pattern regularity
-        preg = features.get('composition_features', {}).get('pattern_regularity', None)
-        if preg is not None and (preg < 0 or preg > 1):
-            issues['pattern_regularity'] = preg
-        return issues
+
     
     def _calculate_composition_features(self, strokes: List) -> Dict[str, Any]:
         """Calculate features about stroke composition and relationships. FIXED: Use actual modifiers from strokes."""
