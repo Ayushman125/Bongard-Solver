@@ -48,13 +48,34 @@ def safe_acos(x):
 
 class PhysicsInference:
     @staticmethod
+    def dedup_vertices(verts, epsilon=1e-8):
+        """
+        Remove duplicate closing vertex if present (within epsilon).
+        """
+        if len(verts) > 2 and np.linalg.norm(np.array(verts[0]) - np.array(verts[-1])) < epsilon:
+            return verts[:-1]
+        return verts
+
+    @staticmethod
+    def rounded_bbox(verts, epsilon=1e-10):
+        """
+        Compute bounding box and round near-zero values to zero.
+        """
+        arr = np.array(verts)
+        minx, miny = arr.min(axis=0)
+        maxx, maxy = arr.max(axis=0)
+        def round_eps(x):
+            return 0.0 if abs(x) < epsilon else x
+        return tuple(map(round_eps, (minx, miny, maxx, maxy)))
+    @staticmethod
     @safe_feature(default=0.0)
     def curvature_score(vertices_or_poly):
         """
         Average absolute change in tangent angle per unit length along the polyline.
-        Returns NaN for degenerate cases.
+        Integrates curvature over arcs. Returns NaN for degenerate cases.
         """
         verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
+        verts = PhysicsInference.dedup_vertices(verts)
         if not verts or len(verts) < 3:
             return float('nan')
         n = len(verts)
@@ -69,16 +90,14 @@ class PhysicsInference:
             len1 = np.linalg.norm(v1)
             len2 = np.linalg.norm(v2)
             if len1 > 1e-6 and len2 > 1e-6:
-                theta1 = np.arctan2(v1[1], v1[0])
-                theta2 = np.arctan2(v2[1], v2[0])
-                dtheta = abs(theta2 - theta1)
-                dtheta = min(dtheta, 2 * np.pi - dtheta)
+                dot = np.clip(np.dot(v1, v2) / (len1 * len2), -1.0, 1.0)
+                dtheta = np.arccos(dot)
                 seg_length = (len1 + len2) / 2
-                total_curvature += dtheta * seg_length
+                total_curvature += abs(dtheta) * seg_length
                 total_length += seg_length
         if total_length < 1e-8:
             return float('nan')
-        return total_curvature / total_length
+        return float(total_curvature / total_length)
     @staticmethod
     def is_short_line(length: float, diag: float, thresh: float = 0.15) -> bool:
         """Inclusive comparison for short line flag."""
@@ -160,10 +179,12 @@ class PhysicsInference:
     @safe_feature(default=0.0)
     def angular_variance(vertices_or_poly):
         """
-        Computes the variance of interior angles (in degrees) for a polygon/polyline.
+        Computes the variance of interior angles (in radians^2) for a polygon/polyline.
         Filters out degenerate (near-colinear) angles. Returns NaN if <2 valid angles.
+        Normalized by number of vertices.
         """
         verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
+        verts = PhysicsInference.dedup_vertices(verts)
         if not verts or len(verts) < 3:
             return float('nan')
         n = len(verts)
@@ -178,12 +199,12 @@ class PhysicsInference:
             norm2 = np.linalg.norm(v2)
             if norm1 > 1e-6 and norm2 > 1e-6:
                 dot = np.clip(np.dot(v1, v2) / (norm1 * norm2), -1.0, 1.0)
-                angle_deg = np.degrees(np.arccos(dot))
-                if angle_deg > 1.0:
-                    angles.append(angle_deg)
+                angle_rad = np.arccos(dot)
+                if angle_rad > 1e-3:
+                    angles.append(angle_rad)
         if len(angles) < 2:
             return float('nan')
-        return float(np.var(angles))
+        return float(np.var(angles) / n)
 
     @staticmethod
     def find_stroke_intersections(geoms):
@@ -631,18 +652,67 @@ class PhysicsInference:
     @safe_feature(default=0.0)
     def moment_of_inertia(vertices_or_poly):
         """
-        Returns the moment of inertia (about centroid) for a polygon or polyline.
-        Implements I = sum(m_i * r_i^2) for unit mass per vertex.
+        Returns the moment of inertia (about centroid) for a polygon using the standard formula:
+        I_z = (1/12) * sum_{i=1}^n (x_i y_{i+1} - x_{i+1} y_i) * (x_i^2 + x_i x_{i+1} + x_{i+1}^2 + y_i^2 + y_i y_{i+1} + y_{i+1}^2) / (2A)
+        Returns 0.0 for degenerate cases.
         """
         verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
+        verts = PhysicsInference.dedup_vertices(verts)
         if not verts or len(verts) < 3:
             return 0.0
-        centroid = np.mean(verts, axis=0)
-        moment = 0.0
-        for vertex in verts:
-            r_squared = np.sum((np.array(vertex) - centroid) ** 2)
-            moment += r_squared
-        return moment / len(verts)
+        arr = np.array(verts)
+        n = len(arr)
+        area = 0.0
+        inertia = 0.0
+        for i in range(n):
+            x0, y0 = arr[i]
+            x1, y1 = arr[(i + 1) % n]
+            cross = x0 * y1 - x1 * y0
+            area += cross
+            inertia += cross * (x0**2 + x0*x1 + x1**2 + y0**2 + y0*y1 + y1**2)
+        area *= 0.5
+        if abs(area) < 1e-8:
+            return 0.0
+        inertia = (1.0/12.0) * inertia / (2.0 * area)
+        return float(abs(inertia))
+
+    @staticmethod
+    def pattern_regularity(modifier_sequence):
+        """
+        Pattern regularity: 1 - (stddev of modifier frequencies / max stddev).
+        Returns NaN if sequence too short.
+        """
+        import numpy as np
+        from collections import Counter
+        n = len(modifier_sequence)
+        if n < 3:
+            return float('nan')
+        counts = np.array(list(Counter(modifier_sequence).values()))
+        std = np.std(counts)
+        max_std = np.std([n, 0, 0]) if len(counts) > 1 else 1.0
+        if max_std == 0:
+            return 1.0
+        reg = 1.0 - (std / max_std)
+        return max(0.0, min(1.0, reg))
+
+    @staticmethod
+    def diversity_penalty(modifier_sequence):
+        """
+        Shannon entropy normalized by log(k), where k is number of unique modifiers.
+        Returns 0 for single-modifier sequences.
+        """
+        import numpy as np
+        from collections import Counter
+        n = len(modifier_sequence)
+        if n == 0:
+            return 0.0
+        counts = np.array(list(Counter(modifier_sequence).values()))
+        probs = counts / n
+        entropy = -np.sum(probs * np.log2(probs + 1e-12))
+        k = len(counts)
+        if k <= 1:
+            return 0.0
+        return float(entropy / np.log2(k))
 
     @staticmethod
     def buffer_geometries(geoms, buffer_amt=0.001):

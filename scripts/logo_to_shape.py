@@ -317,25 +317,11 @@ class ComprehensiveBongardProcessor:
             logging.getLogger(__name__).debug(f"Failed to parse command {command}: {e}")
         return []
     
-    def _calculate_pattern_regularity_from_modifiers(self, modifier_sequence: List[str]) -> float:
-        """Calculate regularity of a sequence of shape modifiers (pattern regularity) with improved formula."""
-        import logging
-        logger = logging.getLogger(__name__)
-        n = len(modifier_sequence)
-        if not modifier_sequence or n < 3:
-            logger.debug("Pattern regularity: sequence too short, returning NaN")
-            return float('nan')
-        # Repetition: fraction of consecutive repeats
-        repetition_score = sum(1 for i in range(n-1) if modifier_sequence[i] == modifier_sequence[i+1]) / (n-1)
-        # Alternation: fraction of strict alternations (A,B,A,B,...)
-        alternation_score = 0.0
-        if n >= 4:
-            alt = [modifier_sequence[i] for i in range(2)]
-            is_alt = all(modifier_sequence[i] == alt[i%2] for i in range(n)) and alt[0] != alt[1]
-            if is_alt:
-                alternation_score = 1.0
-        # Diversity penalty: more unique = less regular
-        unique_mods = set(modifier_sequence)
+    def _calculate_pattern_regularity_from_modifiers(self, modifier_sequence: list) -> float:
+        """
+        Pattern regularity using PhysicsInference.pattern_regularity. Returns NaN if sequence too short.
+        """
+        return PhysicsInference.pattern_regularity(modifier_sequence)
         diversity_penalty = (len(unique_mods) - 1) / max(n-1, 1)
         pattern_score = max(repetition_score, alternation_score)
         diversity_factor = 1.0 - diversity_penalty
@@ -346,27 +332,21 @@ class ComprehensiveBongardProcessor:
     def normalize_vertices(self, vertices_raw):
         """
         Normalize coordinates to [0,1] in both axes, preserving aspect ratio and centering shape if needed.
-        Removes duplicate closing vertex. Returns normalized vertices.
-        Also ensures correct quadrangle/triangle detection by stripping duplicate end vertex.
+        Uses PhysicsInference.dedup_vertices and PhysicsInference.rounded_bbox.
         """
-        if not vertices_raw:
-            return []
-        verts = list(vertices_raw)
-        # Remove duplicate closing vertex for correct polygon type detection
-        if len(verts) > 2 and verts[0] == verts[-1]:
-            verts = verts[:-1]
-        xs, ys = zip(*verts)
-        min_x, max_x = min(xs), max(xs)
-        min_y, max_y = min(ys), max(ys)
-        width = max_x - min_x
-        height = max_y - min_y
-        if width == 0 or height == 0:
-            return [(0.5, 0.5) for _ in verts]
-        scale = max(width, height)
-        cx = (min_x + max_x) / 2
-        cy = (min_y + max_y) / 2
-        norm_vertices = [((x - cx) / scale + 0.5, (y - cy) / scale + 0.5) for x, y in verts]
-        return norm_vertices
+        import numpy as np
+        verts = self.ensure_vertex_list(vertices_raw)
+        verts = PhysicsInference.dedup_vertices(verts)
+        if len(verts) < 2:
+            return verts
+        minx, miny, maxx, maxy = PhysicsInference.rounded_bbox(verts)
+        width = maxx - minx
+        height = maxy - miny
+        if width < 1e-8 or height < 1e-8:
+            return verts
+        arr = np.array(verts)
+        arr = (arr - [minx, miny]) / [width, height]
+        return [tuple(pt) for pt in arr]
 
     def calculate_geometry(self, vertices):
         """Calculate geometry properties from normalized vertices, robustly constructing polygon."""
@@ -944,14 +924,25 @@ class ComprehensiveBongardProcessor:
     def _calculate_line_specific_features_from_params(self, params: dict) -> Dict[str, Any]:
         length = params.get('param1', 0)
         angle = params.get('param2', 0)
+        # Normalize by canvas diagonal (sqrt(2) for unit square)
+        diag = math.sqrt(2)
+        length_norm = self.safe_divide(length, diag)
+        # Direction classification: ±5° for horizontal/vertical, else diagonal
+        angle_deg = (angle % 1.0) * 360.0
+        if abs(angle_deg) <= 5 or abs(angle_deg - 360) <= 5:
+            direction = 'horizontal'
+        elif abs(angle_deg - 90) <= 5 or abs(angle_deg - 270) <= 5:
+            direction = 'vertical'
+        else:
+            direction = 'diagonal'
         return {
             'line_length': length,
             'line_angle': angle,
-            'line_length_normalized': self.safe_divide(min(length, 2.0), 2.0),
+            'line_length_normalized': length_norm,
             'line_angle_normalized': (angle % 1.0),
-            'line_direction': 'horizontal' if abs(angle - 0.5) < 0.1 else 'vertical' if abs(angle) < 0.1 or abs(angle - 1.0) < 0.1 else 'diagonal',
-            'line_is_short': length < 0.3,
-            'line_is_long': length > 1.5
+            'line_direction': direction,
+            'line_is_short': PhysicsInference.is_short_line(length, diag),
+            'line_is_long': PhysicsInference.is_long_line(length, diag)
         }
 
     def _calculate_arc_specific_features_from_params(self, params: dict) -> Dict[str, Any]:
