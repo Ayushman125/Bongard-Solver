@@ -53,6 +53,40 @@ FLAGGING_THRESHOLDS = {
 from src.data_pipeline.logo_parser import ComprehensiveNVLabsParser, OneStrokeShape
 
 class ComprehensiveBongardProcessor:
+    def _actions_to_geometries(self, shape, arc_points=24):
+        """
+        Convert all basic_actions in a shape to shapely geometries (LineString), using the true world-space vertices from shape.vertices.
+        Each stroke is a segment between consecutive vertices. Fallback to synthetic only if vertices are missing.
+        """
+        from shapely.geometry import LineString
+        import logging
+        verts = getattr(shape, 'vertices', None)
+        geoms = []
+        if verts and isinstance(verts, (list, tuple)) and len(verts) >= 2:
+            for i in range(len(verts) - 1):
+                try:
+                    seg = LineString([verts[i], verts[i+1]])
+                    if seg.is_valid and not seg.is_empty:
+                        geoms.append(seg)
+                    else:
+                        logging.debug(f"Stroke {i}: invalid or empty LineString from vertices {verts[i]}, {verts[i+1]}")
+                except Exception as e:
+                    logging.debug(f"Stroke {i}: failed to create LineString: {e}")
+        else:
+            # Fallback: try to synthesize as before (should rarely happen)
+            actions = getattr(shape, 'basic_actions', [])
+            for i, action in enumerate(actions):
+                v = getattr(action, 'vertices', None)
+                if v and isinstance(v, (list, tuple)) and len(v) >= 2:
+                    try:
+                        seg = LineString(v)
+                        if seg.is_valid and not seg.is_empty:
+                            geoms.append(seg)
+                    except Exception as e:
+                        logging.debug(f"Fallback: failed to create LineString for stroke {i}: {e}")
+        logging.debug(f"Number of stroke geometries: {len(geoms)}")
+        return geoms
+    
     def extract_position_and_rotation(self, vertices):
         """Given a list of (x, y) normalized vertices, return centroid and orientation angle (degrees)."""
         import numpy as np
@@ -75,43 +109,6 @@ class ComprehensiveBongardProcessor:
             logger = logging.getLogger(__name__)
             logger.warning(f"extract_position_and_rotation failed: {e}")
             return {'centroid': [0.5, 0.5], 'orientation_degrees': 0.0}
-    def _actions_to_geometries(self, actions):
-        import numpy as np
-        """Convert action objects to shapely LineString geometries using actual coordinates."""
-        from shapely.geometry import LineString
-        import logging
-        logger = logging.getLogger(__name__)
-        geoms = []
-        # Try to get all shape vertices if available (for fallback)
-        all_vertices = None
-        if hasattr(self, 'shape') and hasattr(self.shape, 'vertices'):
-            all_vertices = getattr(self.shape, 'vertices', None)
-        for i, action in enumerate(actions):
-            try:
-                # Method 1: Try to get vertices from action
-                if hasattr(action, 'vertices') and action.vertices:
-                    if len(action.vertices) >= 2:
-                        geoms.append(LineString(action.vertices))
-                        continue
-                # Method 2: Calculate vertices from action parameters
-                if hasattr(action, 'raw_command') and action.raw_command:
-                    vertices = self._calculate_vertices_from_action(action, i)
-                    if vertices and len(vertices) >= 2:
-                        geoms.append(LineString(vertices))
-                        continue
-                # Method 3: Use shape's overall vertices if available
-                if all_vertices and len(all_vertices) > i + 1:
-                    start_idx = min(i, len(all_vertices) - 2)
-                    end_idx = start_idx + 1
-                    segment = LineString([all_vertices[start_idx], all_vertices[end_idx]])
-                    geoms.append(segment)
-                    continue
-                logger.warning(f"Could not create geometry for action {i}: {type(action)}")
-            except Exception as e:
-                logger.debug(f"Failed to convert action {i} to geometry: {e}")
-                continue
-        logger.info(f"Successfully converted {len(geoms)}/{len(actions)} actions to geometries")
-        return geoms
 
     def _calculate_vertices_from_action(self, action, stroke_index):
         import numpy as np
@@ -406,7 +403,11 @@ class ComprehensiveBongardProcessor:
             # --- Relational/Topological/Sequential Features ---
             from src.physics_inference import PhysicsInference
             # Convert actions to shapely geometries for relational features
-            stroke_geometries = self._actions_to_geometries(getattr(shape, 'basic_actions', []))
+            #stroke_geometries = self._actions_to_geometries(getattr(shape, 'basic_actions', []))
+            stroke_geometries = self._actions_to_geometries(shape)
+            logger.debug(f"Number of stroke geometries: {len(stroke_geometries)}")
+            for idx, g in enumerate(stroke_geometries):
+                logger.debug(f"Geometry {idx}: type={g.geom_type}, is_valid={g.is_valid}")
             # Intersections, adjacency, containment, overlap (relational)
             intersections = PhysicsInference.find_stroke_intersections(stroke_geometries)
             adjacency = PhysicsInference.strokes_touching(stroke_geometries)

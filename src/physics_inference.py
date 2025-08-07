@@ -3,6 +3,7 @@
 """
 All imports and logic preserved. Fixed indentation and removed duplicate code.
 """
+
 import time
 from shapely.geometry import Polygon, MultiPolygon
 import functools
@@ -41,30 +42,95 @@ def safe_acos(x):
     """
     return np.arccos(np.clip(x, -1.0, 1.0))
 
+# ───────────── Polygon cache for geometry deduplication ─────────────
+_POLY_CACHE: dict[str, Polygon] = {}
+# ─────────────────────────────────────────────────────────────────────
+
+@staticmethod
+@safe_feature(default=1)
+def rotational_symmetry(vertices_or_poly):
+    """
+    Returns the best rotational symmetry order (2, 3, 4) by comparing RMSE after rotation.
+    Lower RMSE means higher symmetry. Returns best order or 1 if none found.
+    """
+    verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
+    if not verts or len(verts) < 3:
+        return 1
+    import numpy as np
+    def rmse(a, b):
+        a = np.array(a)
+        b = np.array(b)
+        if a.shape != b.shape:
+            return float('inf')
+        return np.sqrt(np.mean((a - b) ** 2))
+    best_order = 1
+    best_score = float('inf')
+    n = len(verts)
+    arr = np.array(verts)
+    centroid = np.mean(arr, axis=0)
+    for k in [2, 3, 4]:
+        theta = 2 * np.pi / k
+        rot_matrix = np.array([
+            [np.cos(theta), -np.sin(theta)],
+            [np.sin(theta),  np.cos(theta)]
+        ])
+        arr_centered = arr - centroid
+        arr_rot = (arr_centered @ rot_matrix.T) + centroid
+        score = rmse(arr, arr_rot)
+        if score < best_score:
+            best_score = score
+            best_order = k
+    return best_order
+
+def safe_feature(default=0.0):
+    """
+    Decorator: if the wrapped method throws any Exception,
+    log it once and return `default` instead.
+    """
+    def decorator(fn):
+        @functools.wraps(fn)
+        def wrapped(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except Exception as e:
+                logging.warning(
+                    f"Feature {fn.__name__} failed ({e!r}), returning default={default}"
+                )
+                return default
+        return wrapped
+    return decorator
+
+def safe_acos(x):
+    """
+    Clamp input to [-1, 1], then return arccos (in radians) for floats or numpy arrays.
+    Prevents math domain errors.
+    """
+    return np.arccos(np.clip(x, -1.0, 1.0))
+
 class PhysicsInference:
 
     @staticmethod
-    def find_stroke_intersections(strokes):
+    def find_stroke_intersections(geoms):
         """
-        Count the number of intersections between all pairs of strokes.
-        Accepts a list of shapely geometries (LineString/Polygon) or action objects with .vertices.
-        Robust to degenerate/empty geometries.
+        Count the number of intersections between all unique pairs of geometries.
+        Accepts a list of shapely geometries (LineString/Polygon).
+        Skips degenerate or invalid geometries.
         """
         import logging
         count = 0
-        n = len(strokes)
+        n = len(geoms)
         for i in range(n):
-            l1 = strokes[i]
-            if l1 is None or not hasattr(l1, 'is_empty') or l1.is_empty:
-                logging.debug(f"find_stroke_intersections: skipping degenerate geometry at index {i}")
+            g1 = geoms[i]
+            if g1 is None or not hasattr(g1, 'is_valid') or not g1.is_valid:
+                logging.debug(f"find_stroke_intersections: skipping invalid geometry at index {i}")
                 continue
             for j in range(i+1, n):
-                l2 = strokes[j]
-                if l2 is None or not hasattr(l2, 'is_empty') or l2.is_empty:
-                    logging.debug(f"find_stroke_intersections: skipping degenerate geometry at index {j}")
+                g2 = geoms[j]
+                if g2 is None or not hasattr(g2, 'is_valid') or not g2.is_valid:
+                    logging.debug(f"find_stroke_intersections: skipping invalid geometry at index {j}")
                     continue
                 try:
-                    if l1.crosses(l2) or l1.intersects(l2):
+                    if g1.intersects(g2):
                         count += 1
                 except Exception as e:
                     logging.debug(f"find_stroke_intersections: error comparing geometries at {i},{j}: {e}")
@@ -472,3 +538,10 @@ class PhysicsInference:
             r_squared = np.sum((np.array(vertex) - centroid) ** 2)
             moment += r_squared
         return moment / len(verts)
+if __name__ == "__main__":
+    from shapely.geometry import LineString
+    g1 = LineString([(0, 0), (1, 1)])
+    g2 = LineString([(0, 1), (1, 0)])
+    print("g1 intersects g2:", g1.intersects(g2))  # Should be True
+    geoms = [g1, g2]
+    print("find_stroke_intersections:", PhysicsInference.find_stroke_intersections(geoms))  # Should be 1
