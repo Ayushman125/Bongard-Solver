@@ -536,6 +536,35 @@ class PhysicsInference:
             r_squared = np.sum((np.array(vertex) - centroid) ** 2)
             moment += r_squared
         return moment / len(verts)
+
+    @staticmethod
+    def buffer_geometries(geoms, buffer_amt=0.001):
+        """
+        Return a list of buffered geometries (Polygon) from input geoms (LineString/Polygon).
+        Skips invalid or empty geometries. Buffering turns lines into thin polygons for robust relational features.
+        """
+        buffered = []
+        for g in geoms:
+            if g is not None and hasattr(g, 'is_valid') and g.is_valid and not g.is_empty:
+                try:
+                    buffered.append(g.buffer(buffer_amt))
+                except Exception as e:
+                    logging.debug(f"buffer_geometries: failed to buffer geometry: {e}")
+        return buffered
+
+    @staticmethod
+    def relational_features_with_buffer(geoms, buffer_amt=0.001):
+        """
+        Compute all relational features (intersections, adjacency, containment, overlap) using buffered geometries.
+        Returns a dict with all four features.
+        """
+        buffered_geoms = PhysicsInference.buffer_geometries(geoms, buffer_amt)
+        return {
+            'intersections': PhysicsInference.find_stroke_intersections(buffered_geoms),
+            'adjacency': PhysicsInference.strokes_touching(buffered_geoms),
+            'containment': PhysicsInference.stroke_contains_stroke(buffered_geoms),
+            'overlap': PhysicsInference.stroke_overlap_area(buffered_geoms)
+        }
 if __name__ == "__main__":
     from shapely.geometry import LineString
     g1 = LineString([(0, 0), (1, 1)])
