@@ -1226,7 +1226,8 @@ class ComprehensiveBongardProcessor:
                 except Exception as e:
                     logger.debug(f"[_calculate_image_features] Error in convex hull: {e}")
                     poly = None
-            # Visual complexity using new formula
+
+            # --- Robust, normalized feature extraction ---
             num_strokes = len(strokes)
             max_strokes = 50
             perimeter = self._calculate_perimeter(vertices)
@@ -1236,7 +1237,10 @@ class ComprehensiveBongardProcessor:
                     hull_perimeter = poly.convex_hull.length
                 except Exception:
                     pass
+            # Use robust, analytic, normalized formulas for all features:
             curvature_score = PhysicsInference.robust_curvature(vertices)
+            angular_variance = PhysicsInference.robust_angular_variance(vertices)
+            moment_of_inertia = PhysicsInference.moment_of_inertia(vertices)
             visual_complexity = PhysicsInference.visual_complexity(num_strokes, max_strokes, perimeter, hull_perimeter, curvature_score)
             # Normalize perimeter: max for [0,1] box is 4 (square), use 4 for safety
             perimeter_norm = min(max(perimeter / 4.0, 0.0), 1.0) if perimeter is not None else 0.0
@@ -1248,7 +1252,7 @@ class ComprehensiveBongardProcessor:
                 'width': geometry.get('width', 0.0),
                 'height': geometry.get('height', 0.0),
                 'area': PhysicsInference.area(poly) if poly else 0.0,
-                'perimeter': perimeter_norm,
+                'perimeter': perimeter_norm,  # normalized [0,1]
                 'aspect_ratio': max(FLAGGING_THRESHOLDS['min_aspect_ratio'], min(self.safe_divide(geometry.get('width', 1.0), geometry.get('height', 1.0), 1.0), FLAGGING_THRESHOLDS['max_aspect_ratio'])),
                 'convexity_ratio': (max(0.0, min(1.0, self.safe_divide(poly.area, poly.convex_hull.area))) if poly and poly.area != 0 and poly.convex_hull.area != 0 else 0.0),
                 'is_convex': PhysicsInference.is_convex(poly) if poly else False,
@@ -1260,7 +1264,10 @@ class ComprehensiveBongardProcessor:
                 'rotational_symmetry': self._check_rotational_symmetry(vertices),
                 'has_quadrangle': (True if poly and hasattr(poly, 'exterior') and hasattr(poly.exterior, 'coords') and len(poly.exterior.coords)-1 == 4 else PhysicsInference.has_quadrangle(vertices)),
                 'geometric_complexity': PhysicsInference.geometric_complexity(vertices),
-                'visual_complexity': visual_complexity_norm,
+                'visual_complexity': visual_complexity_norm,  # normalized [0,1]
+                'curvature_score': curvature_score,  # analytic, normalized
+                'angular_variance': angular_variance,  # analytic, normalized
+                'moment_of_inertia': moment_of_inertia,  # analytic, normalized
                 'irregularity_score': self._calculate_irregularity(vertices),
             }
             logger.debug(f"[_calculate_image_features] OUTPUT: {features}")

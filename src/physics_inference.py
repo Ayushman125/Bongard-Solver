@@ -86,8 +86,8 @@ class PhysicsInference:
             norm1 = np.linalg.norm(v1)
             norm2 = np.linalg.norm(v2)
             if norm1 > 1e-6 and norm2 > 1e-6:
-                cos_theta = np.dot(v1, v2) / (norm1 * norm2)
-                angle = np.arccos(np.clip(cos_theta, -1.0, 1.0))
+                dot = np.clip(np.dot(v1, v2) / (norm1 * norm2), -1.0, 1.0)
+                angle = np.arccos(dot)
                 total_angle += abs(angle)
         return float(total_angle / max(n-2, 1))
 
@@ -107,8 +107,8 @@ class PhysicsInference:
             norm1 = np.linalg.norm(v1)
             norm2 = np.linalg.norm(v2)
             if norm1 > 1e-6 and norm2 > 1e-6:
-                cos_theta = np.dot(v1, v2) / (norm1 * norm2)
-                angle = np.arccos(np.clip(cos_theta, -1.0, 1.0))
+                dot = np.clip(np.dot(v1, v2) / (norm1 * norm2), -1.0, 1.0)
+                angle = np.arccos(dot)
                 angles.append(angle)
         if len(angles) < 2:
             return 0.0
@@ -131,7 +131,9 @@ class PhysicsInference:
                 arc_length = abs(radius * delta_theta)
                 return arc_length * (radius ** 2)
         # Fallback: polygonal moment
-        return PhysicsInference.moment_of_inertia(verts)
+        if verts and len(verts) >= 3:
+            return PhysicsInference.moment_of_inertia(verts)
+        return 0.0
 
     @staticmethod
     def alternation_score(seq):
@@ -915,19 +917,18 @@ class PhysicsInference:
         """
         Pattern regularity: 1/(1+CV) where CV = stddev/mean of modifier frequencies. Returns NaN if sequence too short.
         """
-        import numpy as np
-        from collections import Counter
-        n = len(modifier_sequence)
-        if n < 3:
-            return float('nan')
-        counts = np.array(list(Counter(modifier_sequence).values()))
-        mean = np.mean(counts)
-        std = np.std(counts)
-        if mean == 0:
-            return float('nan')
-        cv = std / mean
-        reg = 1.0 / (1.0 + cv)
-        return reg
+        if not modifier_sequence or len(modifier_sequence) < 2:
+            return 0.0
+        max_alt = 1
+        curr = 1
+        for i in range(1, len(modifier_sequence)):
+            if modifier_sequence[i] != modifier_sequence[i-1]:
+                curr += 1
+            else:
+                max_alt = max(max_alt, curr)
+                curr = 1
+        max_alt = max(max_alt, curr)
+        return max_alt / len(modifier_sequence)
 
     @staticmethod
     def homogeneity_score(modifier_sequence):
@@ -935,12 +936,17 @@ class PhysicsInference:
         Simpson's index: sum(p_m^2) for modifier frequencies. 1.0 if all same, lower if diverse.
         """
         from collections import Counter
+        import numpy as np
         n = len(modifier_sequence)
         if n == 0:
             return float('nan')
         counts = Counter(modifier_sequence)
-        probs = [v / n for v in counts.values()]
-        return sum(p ** 2 for p in probs)
+        probs = np.array([v / n for v in counts.values()])
+        entropy = -np.sum(probs * np.log2(probs + 1e-12))
+        k = len(counts)
+        if k <= 1:
+            return 1.0
+        return 1.0 - (entropy / np.log2(k))
 
     @staticmethod
     def diversity_penalty(modifier_sequence):
