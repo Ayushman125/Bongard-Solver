@@ -53,6 +53,64 @@ FLAGGING_THRESHOLDS = {
 from src.data_pipeline.logo_parser import ComprehensiveNVLabsParser, OneStrokeShape
 
 class ComprehensiveBongardProcessor:
+    def _check_horizontal_symmetry(self, vertices, poly=None):
+        """Check horizontal symmetry using PhysicsInference or geometric comparison."""
+        try:
+            
+            # Prefer PhysicsInference if available
+            if hasattr(PhysicsInference, 'horizontal_symmetry'):
+                return PhysicsInference.horizontal_symmetry(vertices)
+            # Fallback: compare top and bottom halves
+            if poly is not None and hasattr(poly, 'centroid'):
+                centroid_y = poly.centroid.y
+            else:
+                centroid_y = sum(v[1] for v in vertices) / len(vertices)
+            reflected = [(x, 2*centroid_y - y) for x, y in vertices]
+            # Compare original and reflected (simple mean distance)
+            import numpy as np
+            orig = np.array(vertices)
+            refl = np.array(reflected)
+            if orig.shape == refl.shape:
+                return float(np.mean(np.linalg.norm(orig - refl, axis=1)))
+            return 0.0
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"Horizontal symmetry error: {e}")
+            return 0.0
+
+    def _check_vertical_symmetry(self, vertices, poly=None):
+        """Check vertical symmetry using PhysicsInference or geometric comparison."""
+        try:
+            if hasattr(PhysicsInference, 'vertical_symmetry'):
+                return PhysicsInference.vertical_symmetry(vertices)
+            if poly is not None and hasattr(poly, 'centroid'):
+                centroid_x = poly.centroid.x
+            else:
+                centroid_x = sum(v[0] for v in vertices) / len(vertices)
+            reflected = [(2*centroid_x - x, y) for x, y in vertices]
+            import numpy as np
+            orig = np.array(vertices)
+            refl = np.array(reflected)
+            if orig.shape == refl.shape:
+                return float(np.mean(np.linalg.norm(orig - refl, axis=1)))
+            return 0.0
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"Vertical symmetry error: {e}")
+            return 0.0
+
+    def _calculate_edge_length_variance(self, vertices):
+        """Calculate variance of edge lengths for a polygon."""
+        try:
+            if not vertices or len(vertices) < 2:
+                return float('nan')
+            import numpy as np
+            n = len(vertices)
+            lengths = [np.linalg.norm(np.array(vertices[(i+1)%n]) - np.array(vertices[i])) for i in range(n)]
+            if len(lengths) < 2:
+                return float('nan')
+            return float(np.var(lengths))
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"Edge length variance error: {e}")
+            return float('nan')
 
 
     def extract_action_type_prefixes(self, problems_data):
@@ -433,7 +491,6 @@ class ComprehensiveBongardProcessor:
             physics_features = self._calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=getattr(shape, 'basic_actions', []))
 
             # --- Relational/Topological/Sequential Features ---
-            from src.physics_inference import PhysicsInference
             # Convert actions to shapely geometries for relational features
             stroke_geometries = self._actions_to_geometries(shape)
             logger.debug(f"Number of stroke geometries: {len(stroke_geometries)}")
@@ -943,7 +1000,7 @@ class ComprehensiveBongardProcessor:
         vertices = self.ensure_vertex_list(vertices)
         if not vertices:
             logger.debug("Image features: no vertices, returning empty dict")
-           
+
             return {}
         try:
             from shapely.geometry import Polygon
@@ -1005,7 +1062,8 @@ class ComprehensiveBongardProcessor:
             else:
                 features['has_quadrangle'] = PhysicsInference.has_quadrangle(vertices)
 
-            features['geometric_complexity'] = self._calculate_geometric_complexity(vertices)
+            
+            features['geometric_complexity'] = PhysicsInference.geometric_complexity(vertices)
             # Improved visual complexity: alpha*(V-3)/(Vmax-3) + (1-alpha)*(S-1)/(Smax-1)
             alpha, V_max, S_max = 0.5, 30, 10
             V, S = len(vertices), len(strokes)
@@ -1068,7 +1126,7 @@ class ComprehensiveBongardProcessor:
                 'has_obtuse_angle': PhysicsInference.has_obtuse(vertices),
                 # Advanced metrics
                 'curvature_score': self._calculate_curvature_score(vertices),
-                'angular_variance': self._calculate_angular_variance(vertices),
+                'angular_variance': PhysicsInference.angular_variance(vertices),
                 'edge_length_variance': self._calculate_edge_length_variance(vertices)
             }
             logger.debug(f"Physics features: center_of_mass={center_of_mass}, num_straight_segments={num_straight_segments}, num_arcs={num_arcs}")
@@ -1261,7 +1319,6 @@ class ComprehensiveBongardProcessor:
     
     def _check_rotational_symmetry(self, vertices: List[tuple]) -> int:
         """Check rotational symmetry order using k-fold RMSE (k=2,3,4)."""
-        from src.physics_inference import PhysicsInference
         return PhysicsInference.rotational_symmetry(vertices)
 
     def _calculate_irregularity(self, vertices: List[tuple]) -> float:
@@ -1292,6 +1349,18 @@ class ComprehensiveBongardProcessor:
         except Exception as e:
             logging.getLogger(__name__).warning(f"Irregularity error: {e}")
             return 0.0
+    def _calculate_curvature_score(self, vertices: list) -> float:
+        """Curvature score using angular variance from PhysicsInference."""
+        return PhysicsInference.angular_variance(vertices)
+
+    def _calculate_homogeneity(self, modifier_distribution: dict) -> float:
+        """Calculate a simple homogeneity score: 1.0 if all modifiers are the same, lower otherwise (Gini impurity)."""
+        total = sum(modifier_distribution.values())
+        if total == 0:
+            return 1.0
+        probs = [v / total for v in modifier_distribution.values()]
+        gini = 1.0 - sum(p ** 2 for p in probs)
+        return 1.0 - gini  # 1.0 = homogeneous, 0 = maximally diverse
     
     def _flag_case(self, image_id: str, problem_id: str, reason: str, flags: List[str]):
         """Add a case to the flagged cases list"""
@@ -1642,8 +1711,7 @@ class ComprehensiveBongardProcessor:
                 features['has_quadrangle'] = True
             else:
                 features['has_quadrangle'] = PhysicsInference.has_quadrangle(vertices)
-
-            features['geometric_complexity'] = self._calculate_geometric_complexity(vertices)
+            features['geometric_complexity'] = PhysicsInference.geometric_complexity(vertices)
             # Improved visual complexity: alpha*(V-3)/(Vmax-3) + (1-alpha)*(S-1)/(Smax-1)
             alpha, V_max, S_max = 0.5, 30, 10
             V, S = len(vertices), len(strokes)
@@ -1899,7 +1967,6 @@ class ComprehensiveBongardProcessor:
     
     def _check_rotational_symmetry(self, vertices: List[tuple]) -> int:
         """Check rotational symmetry order using k-fold RMSE (k=2,3,4)."""
-        from src.physics_inference import PhysicsInference
         return PhysicsInference.rotational_symmetry(vertices)
 
     def _calculate_irregularity(self, vertices: List[tuple]) -> float:

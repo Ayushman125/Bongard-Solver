@@ -108,6 +108,33 @@ def safe_acos(x):
     return np.arccos(np.clip(x, -1.0, 1.0))
 
 class PhysicsInference:
+    @staticmethod
+    @safe_feature(default=0.0)
+    def angular_variance(vertices_or_poly):
+        """
+        Computes the variance of angles (in degrees) between consecutive segments of a polygon or polyline.
+        Returns 0.0 if not enough vertices.
+        """
+        verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
+        if not verts or len(verts) < 3:
+            return 0.0
+        n = len(verts)
+        angles = []
+        for i in range(n):
+            p0 = np.array(verts[i - 1])
+            p1 = np.array(verts[i])
+            p2 = np.array(verts[(i + 1) % n])
+            v1 = p0 - p1
+            v2 = p2 - p1
+            norm1 = np.linalg.norm(v1)
+            norm2 = np.linalg.norm(v2)
+            if norm1 > 1e-6 and norm2 > 1e-6:
+                dot = np.clip(np.dot(v1, v2) / (norm1 * norm2), -1.0, 1.0)
+                angle = np.degrees(np.arccos(dot))
+                angles.append(angle)
+        if len(angles) < 2:
+            return 0.0
+        return float(np.var(angles))
 
     @staticmethod
     def find_stroke_intersections(geoms):
@@ -431,41 +458,62 @@ class PhysicsInference:
             if np.linalg.norm(v1) > 1e-6 and np.linalg.norm(v2) > 1e-6:
                 ang = np.degrees(np.arccos(np.clip(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2)), -1, 1)))
                 angles.append(ang)
-        if angles:
-            mean_angle = np.mean(angles)
-            if abs(mean_angle - (360.0 / n)) < 10 and n >= 8:
-                return 8.0  # treat as circle
-            if abs(mean_angle - 45) < 10 and n >= 6:
-                return 6.0  # treat as zigzag
-        return float(n)
-
     @staticmethod
-    @safe_feature(default=0.0)
-    def angular_variance(vertices_or_poly):
+    @safe_feature(default=1)
+    def rotational_symmetry(vertices_or_poly, max_order=None, rmse_threshold=0.02):
         """
-        Returns variance of angles in degrees. Ensures finite, JSON-serializable output. No artificial cap.
+        Detects the highest order of rotational symmetry for a polygon/polyline.
+        Compares the shape to its rotated versions for k=2,3,...,max_order (default n//2).
+        Returns the highest k (>=2) with mean RMSE below threshold, else 1 (no symmetry).
+        Args:
+            vertices_or_poly: list of (x, y) tuples or Polygon
+            max_order: maximum symmetry order to check (default: n//2)
+            rmse_threshold: RMSE threshold for symmetry (default: 0.02 for normalized shapes)
+        Returns:
+            int: highest symmetry order detected (>=2), or 1 if none
         """
+        import numpy as np
         verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
         if not verts or len(verts) < 3:
-            return 0.0
-        n = len(verts)
-        angles = []
-        for i in range(n):
-            p0 = np.array(verts[i - 1])
-            p1 = np.array(verts[i])
-            p2 = np.array(verts[(i + 1) % n])
-            v1 = p1 - p0
-            v2 = p2 - p1
-            if np.linalg.norm(v1) > 1e-6 and np.linalg.norm(v2) > 1e-6:
-                ang = np.degrees(np.arccos(np.clip(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2)), -1, 1)))
-                angles.append(ang)
-        if not angles:
-            return 0.0
-        var = np.var(angles)
-        if not np.isfinite(var):
-            return 0.0
-        return float(var)
-
+            return 1
+        arr = np.array(verts)
+        n = len(arr)
+        # Remove duplicate last point if closed
+        if n > 3 and np.allclose(arr[0], arr[-1]):
+            arr = arr[:-1]
+            n = len(arr)
+        centroid = np.mean(arr, axis=0)
+        arr_centered = arr - centroid
+        # Normalize scale for RMSE to be meaningful
+        scale = np.linalg.norm(arr_centered, axis=1).max()
+        if scale < 1e-8:
+            scale = 1.0
+        arr_norm = arr_centered / scale
+        best_order = 1
+        best_rmse = float('inf')
+        # By default, check up to n//2 (cannot have more symmetry than half the points)
+        max_k = max_order if max_order is not None else max(2, n // 2)
+        for k in range(2, max_k + 1):
+            theta = 2 * np.pi / k
+            rot_matrix = np.array([
+                [np.cos(theta), -np.sin(theta)],
+                [np.sin(theta),  np.cos(theta)]
+            ])
+            arr_rot = (arr_norm @ rot_matrix.T)
+            # Find best cyclic alignment (allow for cyclic permutation)
+            min_rmse = float('inf')
+            for shift in range(n):
+                arr_shift = np.roll(arr_norm, shift, axis=0)
+                if arr_shift.shape != arr_rot.shape:
+                    continue
+                rmse = np.sqrt(np.mean((arr_shift - arr_rot) ** 2))
+                if rmse < min_rmse:
+                    min_rmse = rmse
+            # If RMSE is below threshold, consider this symmetry order
+            if min_rmse < rmse_threshold and min_rmse < best_rmse:
+                best_order = k
+                best_rmse = min_rmse
+        return best_order
     @staticmethod
     @safe_feature(default=False)
     def is_convex(poly_geom):
