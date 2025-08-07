@@ -1238,13 +1238,17 @@ class ComprehensiveBongardProcessor:
                     pass
             curvature_score = PhysicsInference.robust_curvature(vertices)
             visual_complexity = PhysicsInference.visual_complexity(num_strokes, max_strokes, perimeter, hull_perimeter, curvature_score)
+            # Normalize perimeter: max for [0,1] box is 4 (square), use 4 for safety
+            perimeter_norm = min(max(perimeter / 4.0, 0.0), 1.0) if perimeter is not None else 0.0
+            # Normalize visual_complexity: robust fallback, already [0,1] if implemented as such
+            visual_complexity_norm = min(max(visual_complexity, 0.0), 1.0) if visual_complexity is not None else 0.0
             features = {
                 'bounding_box': geometry.get('bbox', {}),
                 'centroid': geometry.get('centroid', [0.0, 0.0]),
                 'width': geometry.get('width', 0.0),
                 'height': geometry.get('height', 0.0),
                 'area': PhysicsInference.area(poly) if poly else 0.0,
-                'perimeter': perimeter,
+                'perimeter': perimeter_norm,
                 'aspect_ratio': max(FLAGGING_THRESHOLDS['min_aspect_ratio'], min(self.safe_divide(geometry.get('width', 1.0), geometry.get('height', 1.0), 1.0), FLAGGING_THRESHOLDS['max_aspect_ratio'])),
                 'convexity_ratio': (max(0.0, min(1.0, self.safe_divide(poly.area, poly.convex_hull.area))) if poly and poly.area != 0 and poly.convex_hull.area != 0 else 0.0),
                 'is_convex': PhysicsInference.is_convex(poly) if poly else False,
@@ -1256,7 +1260,7 @@ class ComprehensiveBongardProcessor:
                 'rotational_symmetry': self._check_rotational_symmetry(vertices),
                 'has_quadrangle': (True if poly and hasattr(poly, 'exterior') and hasattr(poly.exterior, 'coords') and len(poly.exterior.coords)-1 == 4 else PhysicsInference.has_quadrangle(vertices)),
                 'geometric_complexity': PhysicsInference.geometric_complexity(vertices),
-                'visual_complexity': PhysicsInference.safe_finite(visual_complexity, 0.0, 0.0, 1.0),
+                'visual_complexity': visual_complexity_norm,
                 'irregularity_score': self._calculate_irregularity(vertices),
             }
             logger.debug(f"[_calculate_image_features] OUTPUT: {features}")
