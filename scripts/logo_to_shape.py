@@ -53,6 +53,106 @@ FLAGGING_THRESHOLDS = {
 from src.data_pipeline.logo_parser import ComprehensiveNVLabsParser, OneStrokeShape
 
 class ComprehensiveBongardProcessor:
+    def _calculate_compactness(self, area: float, perimeter: float) -> float:
+        """Isoperimetric ratio: (4πA)/P². Returns 1 for a perfect circle, <1 otherwise. No clamping."""
+        import math
+        try:
+            if area is None or perimeter is None or perimeter == 0 or area <= 0:
+                return float('nan')
+            return (4 * math.pi * area) / (perimeter ** 2)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Compactness error: {e}")
+            return float('nan')
+
+    def _calculate_angular_variance(self, vertices: list) -> float:
+        """Variance of interior angles (radians), ignoring angles <1°. Returns NaN if <3 vertices."""
+        import numpy as np
+        import math
+        try:
+            verts = self.ensure_vertex_list(vertices)
+            n = len(verts)
+            if n < 3:
+                return float('nan')
+            angles = []
+            for i in range(n):
+                p0 = np.array(verts[i - 1])
+                p1 = np.array(verts[i])
+                p2 = np.array(verts[(i + 1) % n])
+                v1 = p0 - p1
+                v2 = p2 - p1
+                norm1 = np.linalg.norm(v1)
+                norm2 = np.linalg.norm(v2)
+                if norm1 > 1e-6 and norm2 > 1e-6:
+                    angle = np.arccos(np.clip(np.dot(v1, v2) / (norm1 * norm2), -1, 1))
+                    if math.degrees(angle) >= 1.0:
+                        angles.append(angle)
+            if len(angles) < 2:
+                return float('nan')
+            return float(np.var(angles))
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Angular variance error: {e}")
+            return float('nan')
+
+    def _calculate_irregularity(self, vertices: list) -> float:
+        """Normalized MAD of interior angles (radians) from regular n-gon. 0=regular, 1=max irregular."""
+        import numpy as np
+        import math
+        try:
+            verts = self.ensure_vertex_list(vertices)
+            n = len(verts)
+            if n < 3:
+                return float('nan')
+            angles = []
+            for i in range(n):
+                p0 = np.array(verts[i - 1])
+                p1 = np.array(verts[i])
+                p2 = np.array(verts[(i + 1) % n])
+                v1 = p0 - p1
+                v2 = p2 - p1
+                norm1 = np.linalg.norm(v1)
+                norm2 = np.linalg.norm(v2)
+                if norm1 > 1e-6 and norm2 > 1e-6:
+                    angle = np.arccos(np.clip(np.dot(v1, v2) / (norm1 * norm2), -1, 1))
+                    angles.append(angle)
+            if not angles:
+                return float('nan')
+            expected = (n - 2) * math.pi / n
+            mad = np.mean([abs(a - expected) for a in angles])
+            return min(1.0, mad / math.pi)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Irregularity error: {e}")
+            return float('nan')
+
+    def _calculate_pattern_regularity_from_modifiers(self, modifier_sequence: list) -> float:
+        """Pattern regularity: only if n>=3, else NaN. Robust to exceptions."""
+        import logging
+        logger = logging.getLogger(__name__)
+        n = len(modifier_sequence)
+        if not modifier_sequence or n < 3:
+            logger.debug("Pattern regularity: sequence too short, returning NaN")
+            return float('nan')
+        try:
+            repetition_score = sum(1 for i in range(n-1) if modifier_sequence[i] == modifier_sequence[i+1]) / (n-1)
+            alternation_score = 0.0
+            if n >= 4:
+                alt = [modifier_sequence[i] for i in range(2)]
+                is_alt = all(modifier_sequence[i] == alt[i%2] for i in range(n)) and alt[0] != alt[1]
+                if is_alt:
+                    alternation_score = 1.0
+            unique_mods = set(modifier_sequence)
+            diversity_penalty = (len(unique_mods) - 1) / max(n-1, 1)
+            pattern_score = max(repetition_score, alternation_score)
+            diversity_factor = 1.0 - diversity_penalty
+            pattern_regularity = pattern_score * diversity_factor
+            pattern_regularity = max(0.0, min(1.0, pattern_regularity))
+            logger.debug(f"Pattern regularity: repetition_score={repetition_score}, alternation_score={alternation_score}, diversity_penalty={diversity_penalty}, result={pattern_regularity}")
+            return pattern_regularity
+        except Exception as e:
+            logger.warning(f"Pattern regularity error: {e}")
+            return float('nan')
     def _check_horizontal_symmetry(self, vertices, poly=None):
         """Check horizontal symmetry using PhysicsInference or geometric comparison."""
         try:
@@ -255,6 +355,7 @@ class ComprehensiveBongardProcessor:
             import logging
             logging.getLogger(__name__).debug(f"Failed to parse command {command}: {e}")
         return []
+    
     def _calculate_pattern_regularity_from_modifiers(self, modifier_sequence: List[str]) -> float:
         """Calculate regularity of a sequence of shape modifiers (pattern regularity) with improved formula."""
         import logging
@@ -284,46 +385,59 @@ class ComprehensiveBongardProcessor:
     def normalize_vertices(self, vertices_raw):
         """
         Normalize coordinates to [0,1] in both axes, preserving aspect ratio and centering shape if needed.
-        Returns normalized vertices.
+        Removes duplicate closing vertex. Returns normalized vertices.
         """
         if not vertices_raw:
             return []
-        xs, ys = zip(*vertices_raw)
+        verts = list(vertices_raw)
+        # Remove duplicate closing vertex
+        if len(verts) > 2 and verts[0] == verts[-1]:
+            verts = verts[:-1]
+        xs, ys = zip(*verts)
         min_x, max_x = min(xs), max(xs)
         min_y, max_y = min(ys), max(ys)
         width = max_x - min_x
         height = max_y - min_y
-        # Avoid division by zero
-        if width == 0:
-            width = 1e-8
-        if height == 0:
-            height = 1e-8
-        # Aspect ratio preserving: fit to [0,1] in both axes, centered
+        if width == 0 or height == 0:
+            return [(0.5, 0.5) for _ in verts]
         scale = max(width, height)
         cx = (min_x + max_x) / 2
         cy = (min_y + max_y) / 2
-        # Center to (0.5,0.5) after scaling
-        norm_vertices = []
-        for x, y in vertices_raw:
-            nx = (x - cx) / scale + 0.5
-            ny = (y - cy) / scale + 0.5
-            norm_vertices.append((nx, ny))
+        norm_vertices = [((x - cx) / scale + 0.5, (y - cy) / scale + 0.5) for x, y in verts]
         return norm_vertices
 
     def calculate_geometry(self, vertices):
-        """Calculate geometry properties from normalized vertices."""
+        """Calculate geometry properties from normalized vertices, robustly constructing polygon."""
         if not vertices:
             return {}
-        xs, ys = zip(*vertices)
+        verts = list(vertices)
+        # Remove duplicate closing vertex
+        if len(verts) > 2 and verts[0] == verts[-1]:
+            verts = verts[:-1]
+        xs, ys = zip(*verts)
         bbox = {'min_x': min(xs), 'max_x': max(xs), 'min_y': min(ys), 'max_y': max(ys)}
         centroid = [sum(xs)/len(xs), sum(ys)/len(ys)]
         width = bbox['max_x'] - bbox['min_x']
         height = bbox['max_y'] - bbox['min_y']
+        try:
+            from shapely.geometry import Polygon
+            poly = Polygon(verts)
+            if not poly.is_valid:
+                poly = poly.buffer(0)
+            if not poly.is_valid:
+                poly = Polygon(poly.convex_hull)
+            area = poly.area
+            perimeter = poly.length
+        except Exception:
+            area = float('nan')
+            perimeter = float('nan')
         return {
             'bbox': bbox,
             'centroid': centroid,
             'width': width,
-            'height': height
+            'height': height,
+            'area': area,
+            'perimeter': perimeter
         }
     # Load TSVs once for all instances
     _shape_attributes = None
@@ -497,12 +611,32 @@ class ComprehensiveBongardProcessor:
             for idx, g in enumerate(stroke_geometries):
                 logger.debug(f"Geometry {idx}: type={g.geom_type}, is_valid={g.is_valid}")
             # Intersections, adjacency, containment, overlap (relational) -- use buffered polygons for overlap/containment
-            buffer_amt = 0.01  # Small buffer for robust relational features
-            buffered_geoms = [g.buffer(buffer_amt) if hasattr(g, 'buffer') else g for g in stroke_geometries]
-            intersections = PhysicsInference.find_stroke_intersections(stroke_geometries)
-            adjacency = PhysicsInference.strokes_touching(stroke_geometries)
-            containment = PhysicsInference.stroke_contains_stroke(buffered_geoms)
-            overlap = PhysicsInference.stroke_overlap_area(buffered_geoms)
+            buffer_amt = 0.001  # Smaller buffer for robust relational features
+            try:
+                buffered_geoms = [g.buffer(buffer_amt) if hasattr(g, 'buffer') else g for g in stroke_geometries]
+            except Exception as e:
+                logger.warning(f"Buffering error in relational features: {e}")
+                buffered_geoms = stroke_geometries
+            try:
+                intersections = PhysicsInference.find_stroke_intersections(stroke_geometries)
+            except Exception as e:
+                logger.warning(f"Intersections error: {e}")
+                intersections = None
+            try:
+                adjacency = PhysicsInference.strokes_touching(stroke_geometries)
+            except Exception as e:
+                logger.warning(f"Adjacency error: {e}")
+                adjacency = None
+            try:
+                containment = PhysicsInference.stroke_contains_stroke(buffered_geoms)
+            except Exception as e:
+                logger.warning(f"Containment error: {e}")
+                containment = None
+            try:
+                overlap = PhysicsInference.stroke_overlap_area(buffered_geoms)
+            except Exception as e:
+                logger.warning(f"Overlap error: {e}")
+                overlap = None
 
             # Sequential pattern features (n-gram, alternation, regularity)
             modifier_sequence = [self._extract_modifier_from_stroke(s) for s in getattr(shape, 'basic_actions', [])]
@@ -993,114 +1127,7 @@ class ComprehensiveBongardProcessor:
         
         return max(direction_counts.items(), key=lambda x: x[1])[0] if direction_counts else 'none'
     
-    def _calculate_image_features(self, vertices: List[tuple], strokes: List, geometry: Dict[str, Any]) -> Dict[str, Any]:
-        """Calculate comprehensive image-level features with robust polygon recovery and improved metrics."""
-        import numpy as np
-        logger = logging.getLogger(__name__)
-        vertices = self.ensure_vertex_list(vertices)
-        if not vertices:
-            logger.debug("Image features: no vertices, returning empty dict")
-            return {}
-        try:
-            from shapely.geometry import Polygon
-            poly = None
-            try:
-                poly = Polygon(vertices)
-                if not poly.is_valid or poly.area == 0:
-                    logger.debug("Image features: polygon invalid or zero area, applying buffer(0)")
-                    poly = poly.buffer(0)
-            except Exception as e:
-                logger.debug(f"Image features: error in Polygon(vertices): {e}")
-                poly = None
-            if poly is None or not poly.is_valid or poly.is_empty:
-                # fallback: convex hull
-                try:
-                    logger.debug("Image features: falling back to convex hull")
-                    poly = Polygon(vertices).convex_hull
-                except Exception as e:
-                    logger.debug(f"Image features: error in convex hull: {e}")
-                    poly = None
-            # Robust bounding box: fallback to min/max if geometry['bbox'] missing or invalid
-            bbox = geometry.get('bbox', None)
-            if not bbox or not isinstance(bbox, dict) or any(k not in bbox for k in ['xmin','ymin','xmax','ymax']):
-                xs = [v[0] for v in vertices]
-                ys = [v[1] for v in vertices]
-                bbox = {'xmin': float(np.min(xs)), 'ymin': float(np.min(ys)), 'xmax': float(np.max(xs)), 'ymax': float(np.max(ys))}
-            width = bbox['xmax'] - bbox['xmin']
-            height = bbox['ymax'] - bbox['ymin']
-            width = max(width, 1e-6)
-            height = max(height, 1e-6)
-            features = {
-                'bounding_box': bbox,
-                'centroid': geometry.get('centroid', [0.0, 0.0]),
-                'width': width,
-                'height': height,
-                'area': PhysicsInference.area(poly) if poly else 0.0,
-                'perimeter': self._calculate_perimeter(vertices),
-            }
-            # Aspect ratio: always positive, robust to zero division, flag outliers
-            raw_ar = self.safe_divide(width, height, 1.0)
-            ar = max(FLAGGING_THRESHOLDS['min_aspect_ratio'], min(raw_ar, FLAGGING_THRESHOLDS['max_aspect_ratio']))
-            features['aspect_ratio'] = ar
-
-            # Convexity ratio: robust, clamp to [0,1], handle degenerate
-            if poly is None or poly.area == 0 or poly.convex_hull.area == 0:
-                features['convexity_ratio'] = 0.0
-            else:
-                ratio = self.safe_divide(poly.area, poly.convex_hull.area)
-                features['convexity_ratio'] = max(0.0, min(1.0, ratio))
-
-            features['is_convex'] = PhysicsInference.is_convex(poly) if poly else False
-            # Compactness: robust to zero area/perimeter
-            if features['perimeter'] == 0 or features['area'] == 0:
-                features['compactness'] = 0.0
-            else:
-                features['compactness'] = self._calculate_compactness(features['area'], features['perimeter'])
-            # Eccentricity: robust helper
-            try:
-                features['eccentricity'] = float(self._calculate_eccentricity(vertices))
-            except Exception as e:
-                logger.debug(f"Eccentricity calculation failed: {e}")
-                features['eccentricity'] = 0.0
-
-            # Symmetry and compactness: None if area or perimeter is zero
-            if features['perimeter'] == 0 or features['area'] == 0:
-                features['symmetry_score'] = None
-            else:
-                features['symmetry_score'] = PhysicsInference.symmetry_score(vertices)
-
-            features['horizontal_symmetry'] = self._check_horizontal_symmetry(vertices, poly)
-            features['vertical_symmetry'] = self._check_vertical_symmetry(vertices, poly)
-            features['rotational_symmetry'] = self._check_rotational_symmetry(vertices)
-
-            # has_quadrangle: robust check for 4-vertex polygons
-            if poly and hasattr(poly, 'exterior') and hasattr(poly.exterior, 'coords') and len(poly.exterior.coords)-1 == 4:
-                features['has_quadrangle'] = True
-            else:
-                # fallback: check convex hull
-                try:
-                    hull = poly.convex_hull if poly else None
-                    if hull and hasattr(hull, 'exterior') and hasattr(hull.exterior, 'coords'):
-                        features['has_quadrangle'] = (len(hull.exterior.coords)-1 == 4)
-                    else:
-                        features['has_quadrangle'] = False
-                except Exception:
-                    features['has_quadrangle'] = False
-
-            features['geometric_complexity'] = PhysicsInference.geometric_complexity(vertices)
-            # Improved visual complexity: alpha*(V-3)/(Vmax-3) + (1-alpha)*(S-1)/(Smax-1)
-            alpha, V_max, S_max = 0.5, 30, 10
-            V, S = len(vertices), len(strokes)
-            vcomp = alpha * self.safe_divide(V-3, V_max-3) + (1-alpha) * self.safe_divide(S-1, S_max-1)
-            features['visual_complexity'] = max(0.0, vcomp)
-            features['irregularity_score'] = self._calculate_irregularity(vertices)
-            logger.debug(f"Image features: area={features['area']}, perimeter={features['perimeter']}, is_convex={features['is_convex']}")
-            return self.json_safe(features)
-        except Exception as e:
-            logger.warning(f"Error calculating image features: {e}")
-            return {}
     
-    # Duplicate definitions removed for clarity and to avoid context mismatch.
     def validate_features(self, features: dict) -> dict:
         """Validate key features and flag issues. Returns dict of issues found."""
         import numpy as np
@@ -1129,40 +1156,6 @@ class ComprehensiveBongardProcessor:
         if preg is not None and (preg < 0 or preg > 1):
             issues['pattern_regularity'] = preg
         return issues
-    
-    def _calculate_composition_features(self, strokes: List) -> Dict[str, Any]:
-        """Calculate features about stroke composition and relationships. FIXED: Use actual modifiers from strokes."""
-        if not strokes:
-            return {}
-        try:
-            stroke_types = {}
-            shape_modifiers = {}
-            modifier_sequence = []
-            # Sort strokes by index for deterministic pattern regularity
-            strokes_sorted = sorted(strokes, key=lambda s: getattr(s, 'stroke_index', 0))
-            for stroke in strokes_sorted:
-                stroke_type = type(stroke).__name__.replace('Action', '').lower()
-                modifier = self._extract_modifier_from_stroke(stroke)
-                stroke_types[stroke_type] = stroke_types.get(stroke_type, 0) + 1
-                shape_modifiers[modifier] = shape_modifiers.get(modifier, 0) + 1
-                modifier_sequence.append(modifier)
-            features = {
-                'stroke_type_distribution': stroke_types,
-                'shape_modifier_distribution': shape_modifiers,
-                'stroke_diversity': len(stroke_types),
-                'shape_diversity': len(shape_modifiers),
-                'dominant_stroke_type': max(stroke_types.items(), key=lambda x: x[1])[0] if stroke_types else 'unknown',
-                'dominant_shape_modifier': max(shape_modifiers.items(), key=lambda x: x[1])[0] if shape_modifiers else 'unknown'
-            }
-            features.update({
-                'composition_complexity': len(strokes) + len(shape_modifiers),
-                'homogeneity_score': self._calculate_homogeneity(shape_modifiers),
-                'pattern_regularity': self._calculate_pattern_regularity_from_modifiers(modifier_sequence)
-            })
-            return features
-        except Exception as e:
-            logger.warning(f"Error calculating composition features: {e}")
-            return {}
 
     def _extract_modifier_from_stroke(self, stroke) -> str:
         """Extract the actual shape modifier from a stroke object, robustly, with debug logging."""
@@ -1197,95 +1190,8 @@ class ComprehensiveBongardProcessor:
         return 'normal'
 
     # Helper methods for feature calculation
-    def _calculate_perimeter(self, vertices: List[tuple]) -> float:
-        """Calculate perimeter of the shape."""
-        # Fix: Ensure vertices is a list of tuples, not a Polygon object
-        vertices = self.ensure_vertex_list(vertices)
-        if len(vertices) < 2:
-            return 0.0
-        
-        perimeter = 0.0
-        for i in range(len(vertices)):
-            p1 = vertices[i]
-            p2 = vertices[(i + 1) % len(vertices)]
-            perimeter += ((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2)**0.5
-        
-        return self.json_safe(perimeter)
     
-    def _calculate_convexity_ratio(self, poly) -> float:
-        """Calculate ratio of polygon area to convex hull area."""
-        try:
-            if poly.area == 0:
-                return 0.0
-            return self.safe_divide(poly.area, poly.convex_hull.area)
-        except:
-            return 0.0
-    
-    def _calculate_compactness(self, area: float, perimeter: float) -> float:
-        """Calculate compactness (isoperimetric ratio) with correct formula and debug logging."""
-        import logging
-        logger = logging.getLogger(__name__)
-        import numpy as np
-        if perimeter == 0:
-            logger.debug("Compactness: perimeter is zero, returning 0.0")
-            return 0.0
-        compactness = self.safe_divide(4 * np.pi * area, perimeter * perimeter)
-        logger.debug(f"Compactness: area={area}, perimeter={perimeter}, compactness={compactness}")
-        return self.json_safe(compactness)
-    
-    def _calculate_eccentricity(self, vertices: List[tuple]) -> float:
-        """Calculate eccentricity as 1 - (min_eigenvalue / max_eigenvalue) from PCA."""
-        import numpy as np
-        vertices = self.ensure_vertex_list(vertices)
-        if len(vertices) < 3:
-            return 0.0
-        try:
-            points = np.array(vertices)
-            centered = points - np.mean(points, axis=0)
-            cov_matrix = np.cov(centered.T)
-            eigenvals = np.linalg.eigvals(cov_matrix)
-            eigenvals = np.sort(np.abs(eigenvals))[::-1]
-            if eigenvals[0] == 0:
-                return 0.0
-            return self.json_safe(1.0 - self.safe_divide(eigenvals[-1], eigenvals[0]))
-        except Exception as e:
-            logging.getLogger(__name__).warning(f"Eccentricity error: {e}")
-            return 0.0
 
-    def _calculate_angular_variance(self, vertices: List[tuple]) -> float:
-        """Calculate raw variance of interior angles (degrees) for polygon. Return NaN if <2 angles."""
-        import numpy as np
-        logger = logging.getLogger(__name__)
-        vertices = self.ensure_vertex_list(vertices)
-        n = len(vertices)
-        if n < 3:
-            logger.debug("Angular variance: not enough vertices, returning NaN")
-            return float('nan')
-        try:
-            angles = []
-            for i in range(n):
-                p0 = np.array(vertices[i - 1])
-                p1 = np.array(vertices[i])
-                p2 = np.array(vertices[(i + 1) % n])
-                v1 = p0 - p1
-                v2 = p2 - p1
-                norm1 = np.linalg.norm(v1)
-                norm2 = np.linalg.norm(v2)
-                if norm1 > 1e-6 and norm2 > 1e-6:
-                    dot = np.clip(np.dot(v1, v2) / (norm1 * norm2), -1.0, 1.0)
-                    angle = np.arccos(dot)
-                    angle_deg = np.degrees(angle)
-                    angles.append(angle_deg)
-            if len(angles) < 2:
-                logger.warning("Angular variance: insufficient angles, returning NaN")
-                return float('nan')
-            var = np.var(angles)
-            logger.debug(f"Angular variance: angles={angles}, variance={var}")
-            return self.json_safe(var)
-        except Exception as e:
-            logger.warning(f"Angular variance: error {e}")
-            return float('nan')
-    
     def _check_rotational_symmetry(self, vertices: List[tuple]) -> int:
         """Check rotational symmetry order using k-fold RMSE (k=2,3,4)."""
         return PhysicsInference.rotational_symmetry(vertices)
@@ -1869,17 +1775,7 @@ class ComprehensiveBongardProcessor:
         except:
             return 0.0
     
-    def _calculate_compactness(self, area: float, perimeter: float) -> float:
-        """Calculate compactness (isoperimetric ratio) with correct formula and debug logging."""
-        import logging
-        logger = logging.getLogger(__name__)
-        import numpy as np
-        if perimeter == 0:
-            logger.debug("Compactness: perimeter is zero, returning 0.0")
-            return 0.0
-        compactness = self.safe_divide(4 * np.pi * area, perimeter * perimeter)
-        logger.debug(f"Compactness: area={area}, perimeter={perimeter}, compactness={compactness}")
-        return self.json_safe(compactness)
+    # (Removed duplicate _calculate_compactness)
     
     def _calculate_eccentricity(self, vertices: List[tuple]) -> float:
         """Calculate eccentricity as 1 - (min_eigenvalue / max_eigenvalue) from PCA."""
@@ -1900,72 +1796,13 @@ class ComprehensiveBongardProcessor:
             logging.getLogger(__name__).warning(f"Eccentricity error: {e}")
             return 0.0
 
-    def _calculate_angular_variance(self, vertices: List[tuple]) -> float:
-        """Calculate raw variance of interior angles (degrees) for polygon. Return NaN if <2 angles."""
-        import numpy as np
-        logger = logging.getLogger(__name__)
-        vertices = self.ensure_vertex_list(vertices)
-        n = len(vertices)
-        if n < 3:
-            logger.debug("Angular variance: not enough vertices, returning NaN")
-            return float('nan')
-        try:
-            angles = []
-            for i in range(n):
-                p0 = np.array(vertices[i - 1])
-                p1 = np.array(vertices[i])
-                p2 = np.array(vertices[(i + 1) % n])
-                v1 = p0 - p1
-                v2 = p2 - p1
-                norm1 = np.linalg.norm(v1)
-                norm2 = np.linalg.norm(v2)
-                if norm1 > 1e-6 and norm2 > 1e-6:
-                    dot = np.clip(np.dot(v1, v2) / (norm1 * norm2), -1.0, 1.0)
-                    angle = np.arccos(dot)
-                    angle_deg = np.degrees(angle)
-                    angles.append(angle_deg)
-            if len(angles) < 2:
-                logger.warning("Angular variance: insufficient angles, returning NaN")
-                return float('nan')
-            var = np.var(angles)
-            logger.debug(f"Angular variance: angles={angles}, variance={var}")
-            return self.json_safe(var)
-        except Exception as e:
-            logger.warning(f"Angular variance: error {e}")
-            return float('nan')
+    # (Removed duplicate _calculate_angular_variance)
     
     def _check_rotational_symmetry(self, vertices: List[tuple]) -> int:
         """Check rotational symmetry order using k-fold RMSE (k=2,3,4)."""
         return PhysicsInference.rotational_symmetry(vertices)
 
-    def _calculate_irregularity(self, vertices: List[tuple]) -> float:
-        """Calculate normalized mean absolute deviation from regular n-gon angle (0=regular, 1=irregular)."""
-        import numpy as np
-        vertices = self.ensure_vertex_list(vertices)
-        n = len(vertices)
-        if n < 3:
-            return 0.0
-        try:
-            angles = []
-            for i in range(n):
-                p1 = np.array(vertices[i])
-                p2 = np.array(vertices[(i + 1) % n])
-                p3 = np.array(vertices[(i + 2) % n])
-                v1 = p2 - p1
-                v2 = p3 - p2
-                if np.linalg.norm(v1) > 1e-6 and np.linalg.norm(v2) > 1e-6:
-                    angle = np.arccos(np.clip(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2)), -1, 1))
-                    angles.append(angle)
-            if not angles:
-                return 0.0
-            expected_angle = self.safe_divide((n - 2) * np.pi, n)
-            mad = np.mean([abs(angle - expected_angle) for angle in angles])
-            # Normalize: 0 = regular, 1 = max deviation (pi)
-            norm_mad = min(1.0, mad / np.pi)
-            return self.json_safe(norm_mad)
-        except Exception as e:
-            logging.getLogger(__name__).warning(f"Irregularity error: {e}")
-            return 0.0
+    # (Removed duplicate _calculate_irregularity)
 
 def main():
     parser = argparse.ArgumentParser(description='Generate comprehensive derived labels for Bongard-LOGO dataset')
