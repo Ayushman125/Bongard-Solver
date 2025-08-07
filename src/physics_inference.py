@@ -455,17 +455,20 @@ class PhysicsInference:
     def centroid(poly_geom):
         """
         Returns centroid in normalized coordinates (0-1 range) if possible.
+        Accepts list of vertices or Polygon/MultiPolygon.
         """
-        poly = PhysicsInference._ensure_polygon(poly_geom)
+        # Always convert to Polygon if input is a list
+        if isinstance(poly_geom, list):
+            poly = PhysicsInference.polygon_from_vertices(poly_geom)
+        else:
+            poly = PhysicsInference._ensure_polygon(poly_geom)
         c = poly.centroid
-        # If coordinates are outside [0,1], normalize based on bounds
         minx, miny, maxx, maxy = poly.bounds
         width = maxx - minx
         height = maxy - miny
         if width > 0 and height > 0:
             norm_x = (c.x - minx) / width
             norm_y = (c.y - miny) / height
-            # Clamp to [0,1]
             norm_x = min(max(norm_x, 0.0), 1.0)
             norm_y = min(max(norm_y, 0.0), 1.0)
             return (norm_x, norm_y)

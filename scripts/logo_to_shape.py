@@ -346,41 +346,47 @@ class ComprehensiveBongardProcessor:
             return verts
         arr = np.array(verts)
         arr = (arr - [minx, miny]) / [width, height]
+        arr[np.abs(arr) < 1e-10] = 0.0
         return [tuple(pt) for pt in arr]
 
     def calculate_geometry(self, vertices):
         """Calculate geometry properties from normalized vertices, robustly constructing polygon."""
         if not vertices:
             return {}
-        verts = list(vertices)
-        # Remove duplicate closing vertex
-        if len(verts) > 2 and verts[0] == verts[-1]:
-            verts = verts[:-1]
+        verts = PhysicsInference.dedup_vertices(list(vertices))
         xs, ys = zip(*verts)
         bbox = {'min_x': min(xs), 'max_x': max(xs), 'min_y': min(ys), 'max_y': max(ys)}
-        centroid = [sum(xs)/len(xs), sum(ys)/len(ys)]
         width = bbox['max_x'] - bbox['min_x']
         height = bbox['max_y'] - bbox['min_y']
+        area = PhysicsInference.area(verts)
         try:
             from shapely.geometry import Polygon
             poly = Polygon(verts)
-            if not poly.is_valid:
-                poly = poly.buffer(0)
-            if not poly.is_valid:
-                poly = Polygon(poly.convex_hull)
-            area = poly.area
-            perimeter = poly.length
+            perimeter = poly.length if poly.is_valid else float('nan')
         except Exception:
-            area = float('nan')
             perimeter = float('nan')
+        centroid = PhysicsInference.centroid(verts)
+        inertia = PhysicsInference.moment_of_inertia(verts)
         return {
             'bbox': bbox,
             'centroid': centroid,
             'width': width,
             'height': height,
             'area': area,
-            'perimeter': perimeter
+            'perimeter': perimeter,
+            'moment_of_inertia': inertia
         }
+    def _calculate_homogeneity_score(self, modifier_sequence: list) -> float:
+        """
+        Simpson's index: sum(p_m^2) for modifier frequencies. 1.0 if all same, lower if diverse.
+        """
+        from collections import Counter
+        n = len(modifier_sequence)
+        if n == 0:
+            return float('nan')
+        counts = Counter(modifier_sequence)
+        probs = [v / n for v in counts.values()]
+        return sum(p ** 2 for p in probs)
     # Load TSVs once for all instances
     _shape_attributes = None
     _shape_defs = None
@@ -918,6 +924,11 @@ class ComprehensiveBongardProcessor:
             features.update(self._calculate_line_specific_features_from_params(params))
         elif stype == 'arc':
             features.update(self._calculate_arc_specific_features_from_params(params))
+        verts = self._extract_stroke_vertices(stroke, stroke_index, None)
+        features['curvature_score'] = PhysicsInference.curvature_score(verts)
+        features['angular_variance'] = PhysicsInference.angular_variance(verts)
+        features['moment_of_inertia'] = PhysicsInference.moment_of_inertia(verts)
+        features['center_of_mass'] = PhysicsInference.centroid(verts)
         features.update(self._calculate_shape_modifier_features_from_val(smod))
         return features
 
