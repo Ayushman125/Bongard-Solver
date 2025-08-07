@@ -167,9 +167,8 @@ class PhysicsInference:
     @staticmethod
     def stroke_contains_stroke(strokes):
         """
-        Count the number of strokes whose geometry is fully inside another stroke's polygon.
-        Accepts a list of shapely geometries or action objects with .vertices.
-        Robust to degenerate/empty geometries.
+        Count the number of buffered polygons fully containing another buffered polygon.
+        Accepts a list of shapely geometries (buffered recommended).
         """
         import logging
         count = 0
@@ -196,9 +195,8 @@ class PhysicsInference:
     @staticmethod
     def stroke_overlap_area(strokes):
         """
-        Compute the total area of overlap between all pairs of stroke polygons.
-        Accepts a list of shapely geometries or action objects with .vertices.
-        Robust to degenerate/empty geometries.
+        Compute the total area of overlap between all pairs of buffered stroke polygons.
+        Accepts a list of shapely geometries (buffered recommended).
         """
         import logging
         total_overlap = 0.0
