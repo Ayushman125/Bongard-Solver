@@ -54,7 +54,10 @@ from src.data_pipeline.logo_parser import ComprehensiveNVLabsParser, OneStrokeSh
 
 class ComprehensiveBongardProcessor:
     def _calculate_compactness(self, area: float, perimeter: float) -> float:
-        """Isoperimetric ratio: (4πA)/P². Returns 1 for a perfect circle, <1 otherwise. No clamping."""
+        """
+        Isoperimetric ratio: (4πA)/P². Returns 1 for a perfect circle, <1 otherwise.
+        No clamping or bounding is applied. Returns NaN for degenerate cases.
+        """
         import math
         try:
             if area is None or perimeter is None or perimeter == 0 or area <= 0:
@@ -66,7 +69,42 @@ class ComprehensiveBongardProcessor:
             return float('nan')
 
     def _calculate_angular_variance(self, vertices: list) -> float:
-        """Variance of interior angles (radians), ignoring angles <1°. Returns NaN if <3 vertices."""
+        """
+        Variance of interior angles (radians), ignoring angles <1° (colinear). Returns NaN if <2 valid angles.
+        """
+        import numpy as np
+        import math
+        try:
+            verts = self.ensure_vertex_list(vertices)
+            n = len(verts)
+            if n < 3:
+                return float('nan')
+            angles = []
+            for i in range(n):
+                p0 = np.array(verts[i - 1])
+                p1 = np.array(verts[i])
+                p2 = np.array(verts[(i + 1) % n])
+                v1 = p0 - p1
+                v2 = p2 - p1
+                norm1 = np.linalg.norm(v1)
+                norm2 = np.linalg.norm(v2)
+                if norm1 > 1e-6 and norm2 > 1e-6:
+                    angle = np.arccos(np.clip(np.dot(v1, v2) / (norm1 * norm2), -1, 1))
+                    if math.degrees(angle) >= 1.0:  # Filter out near-colinear
+                        angles.append(angle)
+            if len(angles) < 2:
+                return float('nan')
+            return float(np.var(angles))
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Angular variance error: {e}")
+            return float('nan')
+
+    def _calculate_irregularity(self, vertices: list) -> float:
+        """
+        Normalized MAD of interior angles (radians) from regular n-gon. 0=regular, 1=max irregular.
+        Returns NaN for degenerate polygons (fewer than 3 valid angles).
+        """
         import numpy as np
         import math
         try:
@@ -87,36 +125,7 @@ class ComprehensiveBongardProcessor:
                     angle = np.arccos(np.clip(np.dot(v1, v2) / (norm1 * norm2), -1, 1))
                     if math.degrees(angle) >= 1.0:
                         angles.append(angle)
-            if len(angles) < 2:
-                return float('nan')
-            return float(np.var(angles))
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"Angular variance error: {e}")
-            return float('nan')
-
-    def _calculate_irregularity(self, vertices: list) -> float:
-        """Normalized MAD of interior angles (radians) from regular n-gon. 0=regular, 1=max irregular."""
-        import numpy as np
-        import math
-        try:
-            verts = self.ensure_vertex_list(vertices)
-            n = len(verts)
-            if n < 3:
-                return float('nan')
-            angles = []
-            for i in range(n):
-                p0 = np.array(verts[i - 1])
-                p1 = np.array(verts[i])
-                p2 = np.array(verts[(i + 1) % n])
-                v1 = p0 - p1
-                v2 = p2 - p1
-                norm1 = np.linalg.norm(v1)
-                norm2 = np.linalg.norm(v2)
-                if norm1 > 1e-6 and norm2 > 1e-6:
-                    angle = np.arccos(np.clip(np.dot(v1, v2) / (norm1 * norm2), -1, 1))
-                    angles.append(angle)
-            if not angles:
+            if len(angles) < 3:
                 return float('nan')
             expected = (n - 2) * math.pi / n
             mad = np.mean([abs(a - expected) for a in angles])
@@ -127,7 +136,9 @@ class ComprehensiveBongardProcessor:
             return float('nan')
 
     def _calculate_pattern_regularity_from_modifiers(self, modifier_sequence: list) -> float:
-        """Pattern regularity: only if n>=3, else NaN. Robust to exceptions."""
+        """
+        Pattern regularity: only if n>=3, else NaN. Robust to exceptions. Returns NaN if sequence length <3.
+        """
         import logging
         logger = logging.getLogger(__name__)
         n = len(modifier_sequence)
@@ -386,11 +397,12 @@ class ComprehensiveBongardProcessor:
         """
         Normalize coordinates to [0,1] in both axes, preserving aspect ratio and centering shape if needed.
         Removes duplicate closing vertex. Returns normalized vertices.
+        Also ensures correct quadrangle/triangle detection by stripping duplicate end vertex.
         """
         if not vertices_raw:
             return []
         verts = list(vertices_raw)
-        # Remove duplicate closing vertex
+        # Remove duplicate closing vertex for correct polygon type detection
         if len(verts) > 2 and verts[0] == verts[-1]:
             verts = verts[:-1]
         xs, ys = zip(*verts)
@@ -611,9 +623,17 @@ class ComprehensiveBongardProcessor:
             for idx, g in enumerate(stroke_geometries):
                 logger.debug(f"Geometry {idx}: type={g.geom_type}, is_valid={g.is_valid}")
             # Intersections, adjacency, containment, overlap (relational) -- use buffered polygons for overlap/containment
-            buffer_amt = 0.001  # Smaller buffer for robust relational features
+            buffer_amt = 0.001  # Smaller buffer for robust relational features (documented: use exact intersections for lines)
             try:
-                buffered_geoms = [g.buffer(buffer_amt) if hasattr(g, 'buffer') else g for g in stroke_geometries]
+                # For lines, use exact intersections; for polygons/arcs, use small buffer
+                buffered_geoms = []
+                for g in stroke_geometries:
+                    if hasattr(g, 'geom_type') and g.geom_type == 'LineString':
+                        buffered_geoms.append(g)  # No buffer for lines
+                    elif hasattr(g, 'buffer'):
+                        buffered_geoms.append(g.buffer(buffer_amt))
+                    else:
+                        buffered_geoms.append(g)
             except Exception as e:
                 logger.warning(f"Buffering error in relational features: {e}")
                 buffered_geoms = stroke_geometries

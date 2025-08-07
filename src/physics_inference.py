@@ -131,6 +131,7 @@ class PhysicsInference:
         Computes the variance of angles (in degrees) between consecutive segments of a polygon or polyline.
         Excludes near-zero angles (colinear/duplicate points) to avoid inflating variance.
         Returns 0.0 if not enough valid angles.
+        Output is in degrees squared (deg²).
         """
         verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
         if not verts or len(verts) < 3:
@@ -153,8 +154,8 @@ class PhysicsInference:
         if len(angles) < 2:
             return 0.0
         var = np.var(angles)
-        # Output in degrees if needed
-        return var * 180 / np.pi
+        # Output is in degrees squared (deg²)
+        return var
 
     @staticmethod
     def find_stroke_intersections(geoms):
@@ -566,8 +567,12 @@ class PhysicsInference:
     def has_quadrangle(vertices_or_poly):
         """
         Returns True if the shape is a valid convex quadrangle (exactly 4 vertices).
+        Strips duplicate closing vertex if present.
         """
         verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
+        # Remove duplicate closing vertex if present
+        if len(verts) > 1 and np.allclose(verts[0], verts[-1]):
+            verts = verts[:-1]
         poly = Polygon(verts)
         return len(verts) == 4 and poly.is_valid and PhysicsInference.is_convex(poly)
 
