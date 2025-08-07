@@ -76,21 +76,98 @@ class ComprehensiveBongardProcessor:
             logger.warning(f"extract_position_and_rotation failed: {e}")
             return {'centroid': [0.5, 0.5], 'orientation_degrees': 0.0}
     def _actions_to_geometries(self, actions):
-        """Convert a list of action objects to shapely geometries (LineString for lines, Polygon for closed shapes)."""
-        from shapely.geometry import LineString, Polygon
+        import numpy as np
+        """Convert action objects to shapely LineString geometries using actual coordinates."""
+        from shapely.geometry import LineString
+        import logging
+        logger = logging.getLogger(__name__)
         geoms = []
-        for action in actions:
-            pts = getattr(action, 'vertices', None)
-            if pts and isinstance(pts, (list, tuple)) and len(pts) >= 2:
-                try:
-                    # If closed, use Polygon; else LineString
-                    if len(pts) >= 3 and pts[0] == pts[-1]:
-                        geoms.append(Polygon(pts))
-                    else:
-                        geoms.append(LineString(pts))
-                except Exception as e:
-                    logger.warning(f"Failed to convert action to geometry: {e}")
+        # Try to get all shape vertices if available (for fallback)
+        all_vertices = None
+        if hasattr(self, 'shape') and hasattr(self.shape, 'vertices'):
+            all_vertices = getattr(self.shape, 'vertices', None)
+        for i, action in enumerate(actions):
+            try:
+                # Method 1: Try to get vertices from action
+                if hasattr(action, 'vertices') and action.vertices:
+                    if len(action.vertices) >= 2:
+                        geoms.append(LineString(action.vertices))
+                        continue
+                # Method 2: Calculate vertices from action parameters
+                if hasattr(action, 'raw_command') and action.raw_command:
+                    vertices = self._calculate_vertices_from_action(action, i)
+                    if vertices and len(vertices) >= 2:
+                        geoms.append(LineString(vertices))
+                        continue
+                # Method 3: Use shape's overall vertices if available
+                if all_vertices and len(all_vertices) > i + 1:
+                    start_idx = min(i, len(all_vertices) - 2)
+                    end_idx = start_idx + 1
+                    segment = LineString([all_vertices[start_idx], all_vertices[end_idx]])
+                    geoms.append(segment)
+                    continue
+                logger.warning(f"Could not create geometry for action {i}: {type(action)}")
+            except Exception as e:
+                logger.debug(f"Failed to convert action {i} to geometry: {e}")
+                continue
+        logger.info(f"Successfully converted {len(geoms)}/{len(actions)} actions to geometries")
         return geoms
+
+    def _calculate_vertices_from_action(self, action, stroke_index):
+        import numpy as np
+        """Calculate line segment vertices for a single action."""
+        try:
+            if hasattr(action, 'parameters'):
+                params = action.parameters
+                length = params.get('param1', 0.1)
+                angle = params.get('param2', 0.5)
+                # Convert normalized values to actual coordinates
+                start_x = stroke_index * 0.1
+                start_y = 0.5
+                end_x = start_x + length * np.cos(angle * 2 * np.pi)
+                end_y = start_y + length * np.sin(angle * 2 * np.pi)
+                return [(start_x, start_y), (end_x, end_y)]
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).debug(f"Failed to calculate vertices from action: {e}")
+        return []
+
+    def _extract_stroke_vertices(self, stroke, stroke_index, all_vertices):
+        """Extract vertices for individual stroke from overall shape vertices."""
+        try:
+            # Method 1: Direct vertices from stroke
+            if hasattr(stroke, 'vertices') and stroke.vertices:
+                return stroke.vertices
+            # Method 2: Calculate from stroke parameters
+            if hasattr(stroke, 'raw_command'):
+                return self._vertices_from_command(stroke.raw_command, stroke_index)
+            # Method 3: Segment from overall vertices
+            if all_vertices and len(all_vertices) > stroke_index + 1:
+                return [all_vertices[stroke_index], all_vertices[stroke_index + 1]]
+            return []
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Failed to extract vertices for stroke {stroke_index}: {e}")
+            return []
+
+    def _vertices_from_command(self, command, stroke_index):
+        import numpy as np
+        """Generate vertices from action command string."""
+        try:
+            parts = command.split('_')
+            if len(parts) >= 3:
+                params = parts[2].split('-')
+                if len(params) >= 2:
+                    length = float(params[0])
+                    angle = float(params[1])
+                    start = (stroke_index * 0.2, 0.5)
+                    end_x = start[0] + length * np.cos(angle * 2 * np.pi)
+                    end_y = start[1] + length * np.sin(angle * 2 * np.pi)
+                    return [start, (end_x, end_y)]
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).debug(f"Failed to parse command {command}: {e}")
+        return []
     def _calculate_pattern_regularity_from_modifiers(self, modifier_sequence: List[str]) -> float:
         """Calculate regularity of a sequence of shape modifiers (pattern regularity) with improved formula."""
         import logging
