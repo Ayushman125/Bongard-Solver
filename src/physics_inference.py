@@ -48,6 +48,27 @@ def safe_acos(x):
 
 class PhysicsInference:
     @staticmethod
+    def is_short_line(length: float, diag: float, thresh: float = 0.15) -> bool:
+        """Inclusive comparison for short line flag."""
+        return length <= thresh * diag
+
+    @staticmethod
+    def is_long_line(length: float, diag: float, thresh: float = 0.85) -> bool:
+        """Inclusive comparison for long line flag."""
+        return length >= thresh * diag
+    @staticmethod
+    def rotational_symmetry_mask(mask: np.ndarray, k: int = 2) -> float:
+        """Compute k-fold rotational symmetry as normalized mask correlation."""
+        from scipy import ndimage
+        if mask is None or mask.sum() == 0:
+            return 0.0
+        rot = ndimage.rotate(mask, 360 / k, reshape=False, order=0)
+        intersection = np.logical_and(mask, rot).sum()
+        union = np.logical_or(mask, rot).sum()
+        if union == 0:
+            return 0.0
+        return intersection / union
+    @staticmethod
     @safe_feature(default=1)
     def rotational_symmetry(vertices_or_poly, max_order=None, rmse_threshold=0.02):
         """
@@ -131,7 +152,9 @@ class PhysicsInference:
                     angles.append(angle_deg)
         if len(angles) < 2:
             return 0.0
-        return float(np.var(angles))
+        var = np.var(angles)
+        # Output in degrees if needed
+        return var * 180 / np.pi
 
     @staticmethod
     def find_stroke_intersections(geoms):

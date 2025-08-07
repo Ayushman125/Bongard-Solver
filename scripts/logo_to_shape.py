@@ -1077,7 +1077,15 @@ class ComprehensiveBongardProcessor:
             if poly and hasattr(poly, 'exterior') and hasattr(poly.exterior, 'coords') and len(poly.exterior.coords)-1 == 4:
                 features['has_quadrangle'] = True
             else:
-                features['has_quadrangle'] = PhysicsInference.has_quadrangle(vertices)
+                # fallback: check convex hull
+                try:
+                    hull = poly.convex_hull if poly else None
+                    if hull and hasattr(hull, 'exterior') and hasattr(hull.exterior, 'coords'):
+                        features['has_quadrangle'] = (len(hull.exterior.coords)-1 == 4)
+                    else:
+                        features['has_quadrangle'] = False
+                except Exception:
+                    features['has_quadrangle'] = False
 
             features['geometric_complexity'] = PhysicsInference.geometric_complexity(vertices)
             # Improved visual complexity: alpha*(V-3)/(Vmax-3) + (1-alpha)*(S-1)/(Smax-1)
@@ -1130,7 +1138,9 @@ class ComprehensiveBongardProcessor:
             stroke_types = {}
             shape_modifiers = {}
             modifier_sequence = []
-            for stroke in strokes:
+            # Sort strokes by index for deterministic pattern regularity
+            strokes_sorted = sorted(strokes, key=lambda s: getattr(s, 'stroke_index', 0))
+            for stroke in strokes_sorted:
                 stroke_type = type(stroke).__name__.replace('Action', '').lower()
                 modifier = self._extract_modifier_from_stroke(stroke)
                 stroke_types[stroke_type] = stroke_types.get(stroke_type, 0) + 1
