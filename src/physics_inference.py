@@ -379,7 +379,7 @@ class PhysicsInference:
     @safe_feature(default=0.0)
     def angular_variance(vertices_or_poly):
         """
-        Returns variance of angles in degrees, capped at 180.0. Ensures finite, JSON-serializable output.
+        Returns variance of angles in degrees. Ensures finite, JSON-serializable output. No artificial cap.
         """
         verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
         if not verts or len(verts) < 3:
@@ -400,7 +400,7 @@ class PhysicsInference:
         var = np.var(angles)
         if not np.isfinite(var):
             return 0.0
-        return min(float(var), 180.0)
+        return float(var)
 
     @staticmethod
     @safe_feature(default=False)
@@ -459,16 +459,16 @@ class PhysicsInference:
     @staticmethod
     @safe_feature(default=0.0)
     def moment_of_inertia(vertices_or_poly):
+        """
+        Returns the moment of inertia (about centroid) for a polygon or polyline.
+        Implements I = sum(m_i * r_i^2) for unit mass per vertex.
+        """
         verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
-        if len(verts) < 3:
+        if not verts or len(verts) < 3:
             return 0.0
-        try:
-            coords = [(float(x), float(y)) for x, y in verts]
-            return pymunk.moment_for_poly(1.0, coords)
-        except Exception:
-            poly = PhysicsInference.polygon_from_vertices(verts)
-            if not poly.is_empty:
-                minx, miny, maxx, maxy = poly.bounds
-                dx, dy = maxx - minx, maxy - miny
-                return (dx * dx + dy * dy) / 12.0
-            return 0.0
+        centroid = np.mean(verts, axis=0)
+        moment = 0.0
+        for vertex in verts:
+            r_squared = np.sum((np.array(vertex) - centroid) ** 2)
+            moment += r_squared
+        return moment / len(verts)

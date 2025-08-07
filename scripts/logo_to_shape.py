@@ -76,54 +76,41 @@ class ComprehensiveBongardProcessor:
             logger.warning(f"extract_position_and_rotation failed: {e}")
             return {'centroid': [0.5, 0.5], 'orientation_degrees': 0.0}
     def _actions_to_geometries(self, actions):
-        """Convert a list of action objects to shapely geometries (LineString for lines, polyline for arcs)."""
-        from shapely.geometry import LineString
+        """Convert a list of action objects to shapely geometries (LineString for lines, Polygon for closed shapes)."""
+        from shapely.geometry import LineString, Polygon
         geoms = []
         for action in actions:
-            # Try to use .vertices if available
             pts = getattr(action, 'vertices', None)
             if pts and isinstance(pts, (list, tuple)) and len(pts) >= 2:
                 try:
-                    geoms.append(LineString(pts))
-                    continue
-                except Exception:
-                    pass
-            # Fallback: try to infer from parameters (for lines)
-            if hasattr(action, 'parameters') and isinstance(action.parameters, dict):
-                # Try to get endpoints for a line
-                if getattr(action, 'stroke_type', None) and getattr(action.stroke_type, 'value', None) == 'line':
-                    start = action.parameters.get('start')
-                    end = action.parameters.get('end')
-                    if start and end:
-                        try:
-                            geoms.append(LineString([start, end]))
-                            continue
-                        except Exception:
-                            pass
-            # Fallback: skip if cannot convert
-            continue
+                    # If closed, use Polygon; else LineString
+                    if len(pts) >= 3 and pts[0] == pts[-1]:
+                        geoms.append(Polygon(pts))
+                    else:
+                        geoms.append(LineString(pts))
+                except Exception as e:
+                    logger.warning(f"Failed to convert action to geometry: {e}")
         return geoms
     def _calculate_pattern_regularity_from_modifiers(self, modifier_sequence: List[str]) -> float:
-        """Calculate regularity of a sequence of shape modifiers (pattern regularity) with correct formula and debug logging."""
+        """Calculate regularity of a sequence of shape modifiers (pattern regularity) with improved formula."""
         import logging
         logger = logging.getLogger(__name__)
         n = len(modifier_sequence)
-        logger.debug(f"Input modifier_sequence: {modifier_sequence}")
-        logger.debug(f"Unique modifiers: {set(modifier_sequence)}")
-        logger.debug(f"Diversity penalty calculation: ({len(set(modifier_sequence))} - 1) / ({len(modifier_sequence)} - 1)")
         if not modifier_sequence or n < 3:
             logger.debug("Pattern regularity: sequence too short, returning NaN")
             return float('nan')
-        # 1. Repetition score
-        repetition_count = sum(1 for i in range(n-1) if modifier_sequence[i] == modifier_sequence[i+1])
-        repetition_score = repetition_count / (n-1)
-        # 2. Alternation score
-        alternation_count = sum(1 for i in range(n-2) if modifier_sequence[i] == modifier_sequence[i+2] and modifier_sequence[i] != modifier_sequence[i+1])
-        alternation_score = alternation_count / (n-2) if n > 2 else 0.0
-        # 3. Diversity penalty
+        # Repetition: fraction of consecutive repeats
+        repetition_score = sum(1 for i in range(n-1) if modifier_sequence[i] == modifier_sequence[i+1]) / (n-1)
+        # Alternation: fraction of strict alternations (A,B,A,B,...)
+        alternation_score = 0.0
+        if n >= 4:
+            alt = [modifier_sequence[i] for i in range(2)]
+            is_alt = all(modifier_sequence[i] == alt[i%2] for i in range(n)) and alt[0] != alt[1]
+            if is_alt:
+                alternation_score = 1.0
+        # Diversity penalty: more unique = less regular
         unique_mods = set(modifier_sequence)
         diversity_penalty = (len(unique_mods) - 1) / max(n-1, 1)
-        # 4. Final score
         pattern_score = max(repetition_score, alternation_score)
         diversity_factor = 1.0 - diversity_penalty
         pattern_regularity = pattern_score * diversity_factor
