@@ -48,6 +48,20 @@ def safe_acos(x):
 
 class PhysicsInference:
     @staticmethod
+    def shoelace_area(vertices):
+        """
+        Compute the area of a polygon using the shoelace formula.
+        Accepts a list of (x, y) tuples. Returns absolute area.
+        """
+        if not vertices or len(vertices) < 3:
+            return 0.0
+        arr = np.array(vertices)
+        if np.allclose(arr[0], arr[-1]):
+            arr = arr[:-1]
+        x = arr[:, 0]
+        y = arr[:, 1]
+        return 0.5 * abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
+    @staticmethod
     def line_curvature_score(vertices):
         # For a straight line, curvature is zero
         return 0.0
@@ -521,6 +535,13 @@ class PhysicsInference:
         Returns area normalized to unit square if possible. Robust to invalid polygons, with buffer(0) and convex hull fallback, and debug logging.
         """
         import logging
+        # If input is a list of vertices, use shoelace formula
+        if isinstance(poly_geom, list):
+            verts = PhysicsInference.safe_extract_vertices(poly_geom)
+            verts = PhysicsInference.dedup_vertices(verts)
+            if len(verts) >= 3:
+                return PhysicsInference.shoelace_area(verts)
+            return 0.0
         poly = PhysicsInference._ensure_polygon(poly_geom)
         try:
             if poly.is_valid and poly.area > 0:
@@ -653,11 +674,18 @@ class PhysicsInference:
         """
         verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
         verts = PhysicsInference.dedup_vertices(verts)
-        unique = [tuple(v) for v in verts]
+        # Remove duplicate closing vertex if present
+        unique = []
+        for v in verts:
+            if not unique or np.linalg.norm(np.array(v) - np.array(unique[-1])) > 1e-8:
+                unique.append(v)
         if len(unique) != 4:
             return False
-        poly = Polygon(verts)
-        return poly.is_valid and PhysicsInference.is_convex(poly)
+        try:
+            poly = Polygon(unique)
+            return poly.is_valid and poly.equals(poly.convex_hull)
+        except Exception:
+            return False
     @staticmethod
     @safe_feature(default=0.0)
     def edge_length_variance(vertices_or_poly):

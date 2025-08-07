@@ -53,6 +53,28 @@ FLAGGING_THRESHOLDS = {
 from src.data_pipeline.logo_parser import ComprehensiveNVLabsParser, OneStrokeShape
 
 class ComprehensiveBongardProcessor:
+    def _discrete_curvature(self, vertices):
+        """Compute discrete curvature for a sequence of vertices (for zigzag, triangle, etc)."""
+        import numpy as np
+        if not vertices or len(vertices) < 3:
+            return 0.0
+        total_curvature = 0.0
+        total_length = 0.0
+        n = len(vertices)
+        for i in range(1, n-1):
+            p0 = np.array(vertices[i-1])
+            p1 = np.array(vertices[i])
+            p2 = np.array(vertices[i+1])
+            v1 = p1 - p0
+            v2 = p2 - p1
+            len1 = np.linalg.norm(v1)
+            len2 = np.linalg.norm(v2)
+            if len1 > 1e-8 and len2 > 1e-8:
+                cos_theta = np.clip(np.dot(v1, v2) / (len1 * len2), -1.0, 1.0)
+                kappa = abs(np.arccos(cos_theta)) / ((len1 + len2) / 2)
+                total_curvature += kappa * (len1 + len2) / 2
+                total_length += (len1 + len2) / 2
+        return total_curvature / total_length if total_length > 0 else 0.0
     def _calculate_compactness(self, area: float, perimeter: float) -> float:
         """
         Isoperimetric ratio: (4πA)/P². Returns 1 for a perfect circle, <1 otherwise.
@@ -343,7 +365,8 @@ class ComprehensiveBongardProcessor:
         bbox = {'min_x': min(xs), 'max_x': max(xs), 'min_y': min(ys), 'max_y': max(ys)}
         width = bbox['max_x'] - bbox['min_x']
         height = bbox['max_y'] - bbox['min_y']
-        area = PhysicsInference.area(verts)
+        # Use shoelace area for raw vertex lists
+        area = PhysicsInference.shoelace_area(verts) if isinstance(vertices, list) else PhysicsInference.area(verts)
         try:
             from shapely.geometry import Polygon
             poly = Polygon(verts)
@@ -899,14 +922,22 @@ class ComprehensiveBongardProcessor:
         smod = shape_modifier_val or 'normal'
         params = parameters or {}
         verts = self._extract_stroke_vertices(stroke, stroke_index, None)
-        # Use robust per-stroke helpers from PhysicsInference
+        # Angular variance: only defined for polygons (>=3 points), else nan
+        if verts and len(verts) >= 3:
+            features['angular_variance'] = PhysicsInference.angular_variance(verts)
+        else:
+            features['angular_variance'] = float('nan')
+        # Curvature and center of mass logic
         if stype == 'line':
             features.update(self._calculate_line_specific_features_from_params(params))
-            # Compute length from verts if possible
             if verts and len(verts) == 2:
                 p0, p1 = np.array(verts[0]), np.array(verts[1])
                 length = np.linalg.norm(p1 - p0)
-                features['curvature_score'] = PhysicsInference.line_curvature_score(length)
+                # Curvature: 0 for normal, else use discrete for special modifiers
+                if smod in ['circle', 'triangle', 'zigzag']:
+                    features['curvature_score'] = self._discrete_curvature(verts)
+                else:
+                    features['curvature_score'] = 0.0
                 features['moment_of_inertia'] = PhysicsInference.line_moment_of_inertia(length)
                 features['center_of_mass'] = tuple((p0 + p1) / 2)
             else:
@@ -915,10 +946,8 @@ class ComprehensiveBongardProcessor:
                 features['center_of_mass'] = (float('nan'), float('nan'))
         elif stype == 'arc':
             features.update(self._calculate_arc_specific_features_from_params(params))
-            # Use params for arc helpers
             radius = params.get('param1', 0)
             span_angle = params.get('param2', 0)
-            # Defensive: ensure float
             try:
                 radius = float(radius)
             except Exception:
@@ -927,15 +956,16 @@ class ComprehensiveBongardProcessor:
                 span_angle = float(span_angle)
             except Exception:
                 span_angle = 0.0
-            features['curvature_score'] = PhysicsInference.arc_curvature_score(radius, span_angle)
+            # Curvature: abs(span_angle) / abs(radius) (radians)
+            features['curvature_score'] = abs(span_angle) / abs(radius) if abs(radius) > 1e-8 else float('inf')
             features['moment_of_inertia'] = PhysicsInference.arc_moment_of_inertia(radius, span_angle)
-            features['center_of_mass'] = PhysicsInference.arc_center_of_mass(radius, span_angle)
+            # Center of mass for arc: ensure consistent coordinate system if possible
+            features['center_of_mass'] = (float('nan'), float('nan'))  # Placeholder, update if arc_center_of_mass signature matches
         else:
             # fallback for unknown stroke types
-            features['curvature_score'] = PhysicsInference.curvature_score(verts)
+            features['curvature_score'] = self._discrete_curvature(verts) if verts and len(verts) >= 3 else float('nan')
             features['moment_of_inertia'] = PhysicsInference.moment_of_inertia(verts)
             features['center_of_mass'] = PhysicsInference.centroid(verts)
-        features['angular_variance'] = PhysicsInference.angular_variance(verts)
         features.update(self._calculate_shape_modifier_features_from_val(smod))
         return features
 
@@ -945,11 +975,11 @@ class ComprehensiveBongardProcessor:
         # Normalize by canvas diagonal (sqrt(2) for unit square)
         diag = math.sqrt(2)
         length_norm = self.safe_divide(length, diag)
-        # Direction classification: ±5° for horizontal/vertical, else diagonal
+        # Direction classification: ±10° for horizontal/vertical, else diagonal
         angle_deg = (angle % 1.0) * 360.0
-        if abs(angle_deg) <= 5 or abs(angle_deg - 360) <= 5:
+        if abs(angle_deg) <= 10 or abs(angle_deg - 360) <= 10:
             direction = 'horizontal'
-        elif abs(angle_deg - 90) <= 5 or abs(angle_deg - 270) <= 5:
+        elif abs(angle_deg - 90) <= 10 or abs(angle_deg - 270) <= 10:
             direction = 'vertical'
         else:
             direction = 'diagonal'
