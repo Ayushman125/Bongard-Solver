@@ -108,23 +108,8 @@ class ComprehensiveBongardProcessor:
             return float('nan')
 
     def _calculate_pattern_regularity_from_modifiers(self, modifier_sequence: list) -> float:
-        """Pattern regularity: only if n>=3, else NaN. See audit recommendations."""
-        n = len(modifier_sequence)
-        if not modifier_sequence or n < 3:
-            return float('nan')
-        repetition_score = sum(1 for i in range(n-1) if modifier_sequence[i] == modifier_sequence[i+1]) / (n-1)
-        alternation_score = 0.0
-        if n >= 4:
-            alt = [modifier_sequence[i] for i in range(2)]
-            is_alt = all(modifier_sequence[i] == alt[i%2] for i in range(n)) and alt[0] != alt[1]
-            if is_alt:
-                alternation_score = 1.0
-        unique_mods = set(modifier_sequence)
-        diversity_penalty = (len(unique_mods) - 1) / max(n-1, 1)
-        pattern_score = max(repetition_score, alternation_score)
-        diversity_factor = 1.0 - diversity_penalty
-        pattern_regularity = pattern_score * diversity_factor
-        return max(0.0, min(1.0, pattern_regularity))
+        """Pattern regularity using PhysicsInference.pattern_regularity. Returns NaN if sequence too short."""
+        return PhysicsInference.pattern_regularity(modifier_sequence)
     def _check_horizontal_symmetry(self, vertices, poly=None):
         """Check horizontal symmetry using PhysicsInference or geometric comparison."""
         try:
@@ -377,16 +362,8 @@ class ComprehensiveBongardProcessor:
             'moment_of_inertia': inertia
         }
     def _calculate_homogeneity_score(self, modifier_sequence: list) -> float:
-        """
-        Simpson's index: sum(p_m^2) for modifier frequencies. 1.0 if all same, lower if diverse.
-        """
-        from collections import Counter
-        n = len(modifier_sequence)
-        if n == 0:
-            return float('nan')
-        counts = Counter(modifier_sequence)
-        probs = [v / n for v in counts.values()]
-        return sum(p ** 2 for p in probs)
+        """Homogeneity score using PhysicsInference.homogeneity_score (Simpson's index)."""
+        return PhysicsInference.homogeneity_score(modifier_sequence)
     # Load TSVs once for all instances
     _shape_attributes = None
     _shape_defs = None
@@ -916,19 +893,49 @@ class ComprehensiveBongardProcessor:
     
     def _calculate_stroke_specific_features(self, stroke, stroke_index: int, stroke_type_val=None, shape_modifier_val=None, parameters=None) -> Dict[str, Any]:
         """Calculate features specific to stroke type and shape modifier"""
+        import numpy as np
         features = {'stroke_index': stroke_index}
         stype = stroke_type_val or type(stroke).__name__.replace('Action', '').lower()
         smod = shape_modifier_val or 'normal'
         params = parameters or {}
+        verts = self._extract_stroke_vertices(stroke, stroke_index, None)
+        # Use robust per-stroke helpers from PhysicsInference
         if stype == 'line':
             features.update(self._calculate_line_specific_features_from_params(params))
+            # Compute length from verts if possible
+            if verts and len(verts) == 2:
+                p0, p1 = np.array(verts[0]), np.array(verts[1])
+                length = np.linalg.norm(p1 - p0)
+                features['curvature_score'] = PhysicsInference.line_curvature_score(length)
+                features['moment_of_inertia'] = PhysicsInference.line_moment_of_inertia(length)
+                features['center_of_mass'] = tuple((p0 + p1) / 2)
+            else:
+                features['curvature_score'] = float('nan')
+                features['moment_of_inertia'] = float('nan')
+                features['center_of_mass'] = (float('nan'), float('nan'))
         elif stype == 'arc':
             features.update(self._calculate_arc_specific_features_from_params(params))
-        verts = self._extract_stroke_vertices(stroke, stroke_index, None)
-        features['curvature_score'] = PhysicsInference.curvature_score(verts)
+            # Use params for arc helpers
+            radius = params.get('param1', 0)
+            span_angle = params.get('param2', 0)
+            # Defensive: ensure float
+            try:
+                radius = float(radius)
+            except Exception:
+                radius = 0.0
+            try:
+                span_angle = float(span_angle)
+            except Exception:
+                span_angle = 0.0
+            features['curvature_score'] = PhysicsInference.arc_curvature_score(radius, span_angle)
+            features['moment_of_inertia'] = PhysicsInference.arc_moment_of_inertia(radius, span_angle)
+            features['center_of_mass'] = PhysicsInference.arc_center_of_mass(radius, span_angle)
+        else:
+            # fallback for unknown stroke types
+            features['curvature_score'] = PhysicsInference.curvature_score(verts)
+            features['moment_of_inertia'] = PhysicsInference.moment_of_inertia(verts)
+            features['center_of_mass'] = PhysicsInference.centroid(verts)
         features['angular_variance'] = PhysicsInference.angular_variance(verts)
-        features['moment_of_inertia'] = PhysicsInference.moment_of_inertia(verts)
-        features['center_of_mass'] = PhysicsInference.centroid(verts)
         features.update(self._calculate_shape_modifier_features_from_val(smod))
         return features
 

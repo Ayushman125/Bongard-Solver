@@ -48,6 +48,46 @@ def safe_acos(x):
 
 class PhysicsInference:
     @staticmethod
+    def line_curvature_score(vertices):
+        # For a straight line, curvature is zero
+        return 0.0
+
+    @staticmethod
+    def arc_curvature_score(radius, delta_theta):
+        # For a circular arc, curvature is |delta_theta| / radius
+        if radius == 0:
+            return float('nan')
+        return abs(delta_theta) / abs(radius)
+
+    @staticmethod
+    def line_moment_of_inertia(length):
+        # Thin rod about midpoint, unit density: I = L^3 / 12
+        return (length ** 3) / 12.0
+
+    @staticmethod
+    def arc_moment_of_inertia(radius, delta_theta):
+        # Approximate as thin arc, unit density, about centroid
+        # For small arcs, use I = m*R^2, m = arc length
+        arc_length = abs(radius * delta_theta)
+        return arc_length * (radius ** 2)
+
+    @staticmethod
+    def line_center_of_mass(x1, y1, x2, y2):
+        return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+
+    @staticmethod
+    def arc_center_of_mass(x1, y1, x2, y2, radius, delta_theta, cx, cy):
+        # Center of mass of a circular arc segment (approximate)
+        # See: https://mathworld.wolfram.com/Arc.html
+        if delta_theta == 0:
+            return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+        theta1 = math.atan2(y1 - cy, x1 - cx)
+        theta2 = math.atan2(y2 - cy, x2 - cx)
+        theta_avg = (theta1 + theta2) / 2.0
+        r = abs(radius)
+        d = r * math.sin(abs(delta_theta) / 2.0) / (abs(delta_theta) / 2.0) if abs(delta_theta) > 1e-8 else r
+        return (cx + d * math.cos(theta_avg), cy + d * math.sin(theta_avg))
+    @staticmethod
     def dedup_vertices(verts, epsilon=1e-8):
         """
         Remove duplicate closing vertex if present (within epsilon).
@@ -608,14 +648,16 @@ class PhysicsInference:
     @safe_feature(default=False)
     def has_quadrangle(vertices_or_poly):
         """
-        Returns True if the shape is a valid convex quadrangle (exactly 4 unique vertices, convex).
+        Returns True if the shape is a valid convex quadrangle (exactly 4 unique vertices, convex, non-self-intersecting).
         Handles closed polygons (duplicate end vertex).
         """
         verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
-        if len(verts) > 1 and np.allclose(verts[0], verts[-1]):
-            verts = verts[:-1]
+        verts = PhysicsInference.dedup_vertices(verts)
+        unique = [tuple(v) for v in verts]
+        if len(unique) != 4:
+            return False
         poly = Polygon(verts)
-        return len(verts) == 4 and poly.is_valid and PhysicsInference.is_convex(poly)
+        return poly.is_valid and PhysicsInference.is_convex(poly)
     @staticmethod
     @safe_feature(default=0.0)
     def edge_length_variance(vertices_or_poly):
@@ -697,6 +739,19 @@ class PhysicsInference:
             return 1.0
         reg = 1.0 - (std / max_std)
         return max(0.0, min(1.0, reg))
+
+    @staticmethod
+    def homogeneity_score(modifier_sequence):
+        """
+        Simpson's index: sum(p_m^2) for modifier frequencies. 1.0 if all same, lower if diverse.
+        """
+        from collections import Counter
+        n = len(modifier_sequence)
+        if n == 0:
+            return float('nan')
+        counts = Counter(modifier_sequence)
+        probs = [v / n for v in counts.values()]
+        return sum(p ** 2 for p in probs)
 
     @staticmethod
     def diversity_penalty(modifier_sequence):
