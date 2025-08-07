@@ -47,6 +47,62 @@ def safe_acos(x):
     return np.arccos(np.clip(x, -1.0, 1.0))
 
 class PhysicsInference:
+
+    @staticmethod
+    def polyline_angular_variance(vertices):
+        """Variance of turn angles for open polylines (≥3 points). Returns NaN if <2 angles."""
+        if not vertices or len(vertices) < 3:
+            return float('nan')
+        arr = np.array(vertices)
+        n = len(arr)
+        angles = []
+        for i in range(1, n-1):
+            v1 = arr[i] - arr[i-1]
+            v2 = arr[i+1] - arr[i]
+            norm1 = np.linalg.norm(v1)
+            norm2 = np.linalg.norm(v2)
+            if norm1 > 1e-6 and norm2 > 1e-6:
+                dot = np.clip(np.dot(v1, v2) / (norm1 * norm2), -1.0, 1.0)
+                angle = np.arccos(dot)
+                angles.append(angle)
+        if len(angles) < 2:
+            return float('nan')
+        return float(np.var(angles))
+
+    @staticmethod
+    def polyline_weighted_center_of_mass(vertices):
+        """Segment-length-weighted average of midpoints for open polylines."""
+        if not vertices or len(vertices) < 2:
+            return (float('nan'), float('nan'))
+        arr = np.array(vertices)
+        n = len(arr)
+        total = np.zeros(2)
+        total_len = 0.0
+        for i in range(n-1):
+            p0 = arr[i]
+            p1 = arr[i+1]
+            seg_len = np.linalg.norm(p1 - p0)
+            mid = (p0 + p1) / 2
+            total += seg_len * mid
+            total_len += seg_len
+        if total_len < 1e-8:
+            return (float('nan'), float('nan'))
+        return tuple(total / total_len)
+
+    @staticmethod
+    def convexity_ratio(vertices):
+        """Area / area of convex hull. Returns 1.0 for convex shapes, <1 for concave."""
+        verts = PhysicsInference.safe_extract_vertices(vertices)
+        verts = PhysicsInference.dedup_vertices(verts)
+        if len(verts) < 3:
+            return float('nan')
+        poly = Polygon(verts)
+        if not poly.is_valid or poly.area == 0:
+            return float('nan')
+        hull = poly.convex_hull
+        if hull.area == 0:
+            return float('nan')
+        return float(poly.area / hull.area)
     @staticmethod
     def shoelace_area(vertices):
         """
@@ -154,13 +210,13 @@ class PhysicsInference:
         return float(total_curvature / total_length)
     @staticmethod
     def is_short_line(length: float, diag: float, thresh: float = 0.15) -> bool:
-        """Inclusive comparison for short line flag."""
-        return length <= thresh * diag
+        """Inclusive comparison for short line flag. Use thresh=0.2 as per spec."""
+        return length <= 0.2 * diag
 
     @staticmethod
     def is_long_line(length: float, diag: float, thresh: float = 0.85) -> bool:
-        """Inclusive comparison for long line flag."""
-        return length >= thresh * diag
+        """Inclusive comparison for long line flag. Use thresh=0.8 as per spec."""
+        return length >= 0.8 * diag
     @staticmethod
     def rotational_symmetry_mask(mask: np.ndarray, k: int = 2) -> float:
         """Compute k-fold rotational symmetry as normalized mask correlation."""
@@ -752,8 +808,7 @@ class PhysicsInference:
     @staticmethod
     def pattern_regularity(modifier_sequence):
         """
-        Pattern regularity: 1 - (stddev of modifier frequencies / max stddev).
-        Returns NaN if sequence too short.
+        Pattern regularity: 1/(1+CV) where CV = stddev/mean of modifier frequencies. Returns NaN if sequence too short.
         """
         import numpy as np
         from collections import Counter
@@ -761,12 +816,13 @@ class PhysicsInference:
         if n < 3:
             return float('nan')
         counts = np.array(list(Counter(modifier_sequence).values()))
+        mean = np.mean(counts)
         std = np.std(counts)
-        max_std = np.std([n, 0, 0]) if len(counts) > 1 else 1.0
-        if max_std == 0:
-            return 1.0
-        reg = 1.0 - (std / max_std)
-        return max(0.0, min(1.0, reg))
+        if mean == 0:
+            return float('nan')
+        cv = std / mean
+        reg = 1.0 / (1.0 + cv)
+        return reg
 
     @staticmethod
     def homogeneity_score(modifier_sequence):

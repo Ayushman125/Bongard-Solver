@@ -375,6 +375,7 @@ class ComprehensiveBongardProcessor:
             perimeter = float('nan')
         centroid = PhysicsInference.centroid(verts)
         inertia = PhysicsInference.moment_of_inertia(verts)
+        convexity = PhysicsInference.convexity_ratio(verts)
         return {
             'bbox': bbox,
             'centroid': centroid,
@@ -382,7 +383,8 @@ class ComprehensiveBongardProcessor:
             'height': height,
             'area': area,
             'perimeter': perimeter,
-            'moment_of_inertia': inertia
+            'moment_of_inertia': inertia,
+            'convexity_ratio': convexity
         }
     def _calculate_homogeneity_score(self, modifier_sequence: list) -> float:
         """Homogeneity score using PhysicsInference.homogeneity_score (Simpson's index)."""
