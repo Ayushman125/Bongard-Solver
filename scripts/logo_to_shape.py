@@ -1000,7 +1000,6 @@ class ComprehensiveBongardProcessor:
         vertices = self.ensure_vertex_list(vertices)
         if not vertices:
             logger.debug("Image features: no vertices, returning empty dict")
-
             return {}
         try:
             from shapely.geometry import Polygon
@@ -1043,6 +1042,7 @@ class ComprehensiveBongardProcessor:
 
             features['is_convex'] = PhysicsInference.is_convex(poly) if poly else False
             features['compactness'] = self._calculate_compactness(features['area'], features['perimeter'])
+            # Use robust eccentricity calculation
             features['eccentricity'] = self._calculate_eccentricity(vertices)
 
             # Symmetry and compactness: None if area or perimeter is zero
@@ -1062,7 +1062,6 @@ class ComprehensiveBongardProcessor:
             else:
                 features['has_quadrangle'] = PhysicsInference.has_quadrangle(vertices)
 
-            
             features['geometric_complexity'] = PhysicsInference.geometric_complexity(vertices)
             # Improved visual complexity: alpha*(V-3)/(Vmax-3) + (1-alpha)*(S-1)/(Smax-1)
             alpha, V_max, S_max = 0.5, 30, 10
@@ -1076,64 +1075,7 @@ class ComprehensiveBongardProcessor:
             logger.warning(f"Error calculating image features: {e}")
             return {}
     
-    def _calculate_physics_features(self, vertices: List[tuple], centroid=None, strokes=None) -> Dict[str, Any]:
-        """Calculate physics-based features using PhysicsInference. Accepts centroid override and strokes for correct counting. Uses correct center_of_mass and stroke counts."""
-        import logging
-        logger = logging.getLogger(__name__)
-        if not vertices:
-            logger.debug("Physics features: no vertices, returning empty dict")
-            return {}
-        try:
-            poly = None
-            try:
-                poly = PhysicsInference.polygon_from_vertices(vertices)
-            except Exception as e:
-                logger.debug(f"Physics features: error in polygon_from_vertices: {e}")
-            # Use centroid from geometry if provided, else fallback to centroid of vertices
-            if centroid is not None:
-                center_of_mass = centroid
-            elif poly is not None:
-                center_of_mass = PhysicsInference.centroid(poly)
-            else:
-                xs = [v[0] for v in vertices]
-                ys = [v[1] for v in vertices]
-                center_of_mass = [sum(xs)/len(xs), sum(ys)/len(ys)] if xs and ys else [0.0, 0.0]
-            # Count actual LineAction and ArcAction objects if strokes provided
-            num_straight_segments = 0
-            num_arcs = 0
-            if strokes is not None:
-                try:
-                    from bongard.bongard import LineAction, ArcAction
-                    for s in strokes:
-                        if isinstance(s, LineAction):
-                            num_straight_segments += 1
-                        elif isinstance(s, ArcAction):
-                            num_arcs += 1
-                except Exception as e:
-                    logger.debug(f"Physics features: error in stroke counting: {e}")
-            else:
-                # fallback to geometry-based
-                num_straight_segments = PhysicsInference.count_straight_segments(vertices)
-                num_arcs = PhysicsInference.count_arcs(vertices)
-            features = {
-                # Core physics properties
-                'moment_of_inertia': PhysicsInference.moment_of_inertia(vertices),
-                'center_of_mass': center_of_mass,
-                # Shape metrics
-                'num_straight_segments': num_straight_segments,
-                'num_arcs': num_arcs,
-                'has_quadrangle': PhysicsInference.has_quadrangle(vertices),
-                'has_obtuse_angle': PhysicsInference.has_obtuse(vertices),
-                # Advanced metrics
-                'curvature_score': self._calculate_curvature_score(vertices),
-                'angular_variance': PhysicsInference.angular_variance(vertices),
-                'edge_length_variance': self._calculate_edge_length_variance(vertices)
-            }
-            logger.debug(f"Physics features: center_of_mass={center_of_mass}, num_straight_segments={num_straight_segments}, num_arcs={num_arcs}")
-            return features
-        except Exception as e:
-            logger.warning(f"Error calculating physics features: {e}")
-            return {}
+    # Duplicate definitions removed for clarity and to avoid context mismatch.
     def validate_features(self, features: dict) -> dict:
         """Validate key features and flag issues. Returns dict of issues found."""
         import numpy as np

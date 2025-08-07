@@ -17,70 +17,9 @@ import pymunk
 _POLY_CACHE: dict[str, Polygon] = {}
 # ─────────────────────────────────────────────────────────────────────
 
-def safe_feature(default=0.0):
-    """
-    Decorator: if the wrapped method throws any Exception,
-    log it once and return `default` instead.
-    """
-    def decorator(fn):
-        @functools.wraps(fn)
-        def wrapped(*args, **kwargs):
-            try:
-                return fn(*args, **kwargs)
-            except Exception as e:
-                logging.warning(
-                    f"Feature {fn.__name__} failed ({e!r}), returning default={default}"
-                )
-                return default
-        return wrapped
-    return decorator
 
-def safe_acos(x):
-    """
-    Clamp input to [-1, 1], then return arccos (in radians) for floats or numpy arrays.
-    Prevents math domain errors.
-    """
-    return np.arccos(np.clip(x, -1.0, 1.0))
 
-# ───────────── Polygon cache for geometry deduplication ─────────────
-_POLY_CACHE: dict[str, Polygon] = {}
-# ─────────────────────────────────────────────────────────────────────
 
-@staticmethod
-@safe_feature(default=1)
-def rotational_symmetry(vertices_or_poly):
-    """
-    Returns the best rotational symmetry order (2, 3, 4) by comparing RMSE after rotation.
-    Lower RMSE means higher symmetry. Returns best order or 1 if none found.
-    """
-    verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
-    if not verts or len(verts) < 3:
-        return 1
-    import numpy as np
-    def rmse(a, b):
-        a = np.array(a)
-        b = np.array(b)
-        if a.shape != b.shape:
-            return float('inf')
-        return np.sqrt(np.mean((a - b) ** 2))
-    best_order = 1
-    best_score = float('inf')
-    n = len(verts)
-    arr = np.array(verts)
-    centroid = np.mean(arr, axis=0)
-    for k in [2, 3, 4]:
-        theta = 2 * np.pi / k
-        rot_matrix = np.array([
-            [np.cos(theta), -np.sin(theta)],
-            [np.sin(theta),  np.cos(theta)]
-        ])
-        arr_centered = arr - centroid
-        arr_rot = (arr_centered @ rot_matrix.T) + centroid
-        score = rmse(arr, arr_rot)
-        if score < best_score:
-            best_score = score
-            best_order = k
-    return best_order
 
 def safe_feature(default=0.0):
     """
@@ -108,6 +47,62 @@ def safe_acos(x):
     return np.arccos(np.clip(x, -1.0, 1.0))
 
 class PhysicsInference:
+    @staticmethod
+    @safe_feature(default=1)
+    def rotational_symmetry(vertices_or_poly, max_order=None, rmse_threshold=0.02):
+        """
+        Detects the highest order of rotational symmetry for a polygon/polyline.
+        Compares the shape to its rotated versions for k=2,3,...,max_order (default n//2).
+        Returns the highest k (>=2) with mean RMSE below threshold, else 1 (no symmetry).
+        Args:
+            vertices_or_poly: list of (x, y) tuples or Polygon
+            max_order: maximum symmetry order to check (default: n//2)
+            rmse_threshold: RMSE threshold for symmetry (default: 0.02 for normalized shapes)
+        Returns:
+            int: highest symmetry order detected (>=2), or 1 if none
+        """
+        import numpy as np
+        verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
+        if not verts or len(verts) < 3:
+            return 1
+        arr = np.array(verts)
+        n = len(arr)
+        # Remove duplicate last point if closed
+        if n > 3 and np.allclose(arr[0], arr[-1]):
+            arr = arr[:-1]
+            n = len(arr)
+        centroid = np.mean(arr, axis=0)
+        arr_centered = arr - centroid
+        # Normalize scale for RMSE to be meaningful
+        scale = np.linalg.norm(arr_centered, axis=1).max()
+        if scale < 1e-8:
+            scale = 1.0
+        arr_norm = arr_centered / scale
+        best_order = 1
+        best_rmse = float('inf')
+        # By default, check up to n//2 (cannot have more symmetry than half the points)
+        max_k = max_order if max_order is not None else max(2, n // 2)
+        for k in range(2, max_k + 1):
+            theta = 2 * np.pi / k
+            rot_matrix = np.array([
+                [np.cos(theta), -np.sin(theta)],
+                [np.sin(theta),  np.cos(theta)]
+            ])
+            arr_rot = (arr_norm @ rot_matrix.T)
+            # Find best cyclic alignment (allow for cyclic permutation)
+            min_rmse = float('inf')
+            for shift in range(n):
+                arr_shift = np.roll(arr_norm, shift, axis=0)
+                if arr_shift.shape != arr_rot.shape:
+                    continue
+                rmse = np.sqrt(np.mean((arr_shift - arr_rot) ** 2))
+                if rmse < min_rmse:
+                    min_rmse = rmse
+            # If RMSE is below threshold, consider this symmetry order
+            if min_rmse < rmse_threshold and min_rmse < best_rmse:
+                best_order = k
+                best_rmse = min_rmse
+        return best_order
     @staticmethod
     @safe_feature(default=0.0)
     def angular_variance(vertices_or_poly):
