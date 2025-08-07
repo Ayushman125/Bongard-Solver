@@ -47,39 +47,52 @@ class PhysicsInference:
     def find_stroke_intersections(strokes):
         """
         Count the number of intersections between all pairs of strokes.
-        Each stroke is assumed to have a .vertices attribute (list of (x, y)).
+        Accepts a list of shapely geometries (LineString/Polygon) or action objects with .vertices.
+        Robust to degenerate/empty geometries.
         """
-        from shapely.geometry import LineString
+        import logging
         count = 0
         n = len(strokes)
         for i in range(n):
-            v1 = getattr(strokes[i], 'vertices', None)
-            if not v1 or len(v1) < 2:
+            l1 = strokes[i]
+            if l1 is None or not hasattr(l1, 'is_empty') or l1.is_empty:
+                logging.debug(f"find_stroke_intersections: skipping degenerate geometry at index {i}")
                 continue
-            l1 = LineString(v1)
             for j in range(i+1, n):
-                v2 = getattr(strokes[j], 'vertices', None)
-                if not v2 or len(v2) < 2:
+                l2 = strokes[j]
+                if l2 is None or not hasattr(l2, 'is_empty') or l2.is_empty:
+                    logging.debug(f"find_stroke_intersections: skipping degenerate geometry at index {j}")
                     continue
-                l2 = LineString(v2)
-                if l1.crosses(l2) or l1.intersects(l2):
-                    count += 1
+                try:
+                    if l1.crosses(l2) or l1.intersects(l2):
+                        count += 1
+                except Exception as e:
+                    logging.debug(f"find_stroke_intersections: error comparing geometries at {i},{j}: {e}")
         return count
 
     @staticmethod
     def strokes_touching(strokes):
         """
         Count the number of pairs of strokes that touch (share at least one endpoint).
+        Accepts a list of shapely geometries or action objects with .vertices.
+        Robust to degenerate/empty geometries.
         """
+        import logging
         count = 0
         n = len(strokes)
         for i in range(n):
-            v1 = getattr(strokes[i], 'vertices', None)
-            if not v1 or len(v1) < 2:
+            s1 = strokes[i]
+            if s1 is None or not hasattr(s1, 'coords') or s1.is_empty:
+                logging.debug(f"strokes_touching: skipping degenerate geometry at index {i}")
                 continue
+            v1 = list(s1.coords)
             for j in range(i+1, n):
-                v2 = getattr(strokes[j], 'vertices', None)
-                if not v2 or len(v2) < 2:
+                s2 = strokes[j]
+                if s2 is None or not hasattr(s2, 'coords') or s2.is_empty:
+                    logging.debug(f"strokes_touching: skipping degenerate geometry at index {j}")
+                    continue
+                v2 = list(s2.coords)
+                if not v1 or not v2:
                     continue
                 if v1[0] in v2 or v1[-1] in v2 or v2[0] in v1 or v2[-1] in v1:
                     count += 1
@@ -88,80 +101,94 @@ class PhysicsInference:
     @staticmethod
     def stroke_contains_stroke(strokes):
         """
-        Count the number of strokes whose vertices are all inside another stroke's polygon.
+        Count the number of strokes whose geometry is fully inside another stroke's polygon.
+        Accepts a list of shapely geometries or action objects with .vertices.
+        Robust to degenerate/empty geometries.
         """
-        from shapely.geometry import Polygon
+        import logging
         count = 0
         n = len(strokes)
         for i in range(n):
-            v1 = getattr(strokes[i], 'vertices', None)
-            if not v1 or len(v1) < 3:
+            poly1 = strokes[i]
+            if poly1 is None or not hasattr(poly1, 'is_empty') or poly1.is_empty:
+                logging.debug(f"stroke_contains_stroke: skipping degenerate geometry at index {i}")
                 continue
-            poly1 = Polygon(v1)
             for j in range(n):
                 if i == j:
                     continue
-                v2 = getattr(strokes[j], 'vertices', None)
-                if not v2 or len(v2) < 3:
+                poly2 = strokes[j]
+                if poly2 is None or not hasattr(poly2, 'is_empty') or poly2.is_empty:
+                    logging.debug(f"stroke_contains_stroke: skipping degenerate geometry at index {j}")
                     continue
-                poly2 = Polygon(v2)
-                if poly1.contains(poly2):
-                    count += 1
+                try:
+                    if poly1.contains(poly2):
+                        count += 1
+                except Exception as e:
+                    logging.debug(f"stroke_contains_stroke: error comparing geometries at {i},{j}: {e}")
         return count
 
     @staticmethod
     def stroke_overlap_area(strokes):
         """
         Compute the total area of overlap between all pairs of stroke polygons.
+        Accepts a list of shapely geometries or action objects with .vertices.
+        Robust to degenerate/empty geometries.
         """
-        from shapely.geometry import Polygon
+        import logging
         total_overlap = 0.0
         n = len(strokes)
         for i in range(n):
-            v1 = getattr(strokes[i], 'vertices', None)
-            if not v1 or len(v1) < 3:
+            poly1 = strokes[i]
+            if poly1 is None or not hasattr(poly1, 'is_empty') or poly1.is_empty:
+                logging.debug(f"stroke_overlap_area: skipping degenerate geometry at index {i}")
                 continue
-            poly1 = Polygon(v1)
             for j in range(i+1, n):
-                v2 = getattr(strokes[j], 'vertices', None)
-                if not v2 or len(v2) < 3:
+                poly2 = strokes[j]
+                if poly2 is None or not hasattr(poly2, 'is_empty') or poly2.is_empty:
+                    logging.debug(f"stroke_overlap_area: skipping degenerate geometry at index {j}")
                     continue
-                poly2 = Polygon(v2)
-                if poly1.intersects(poly2):
-                    total_overlap += poly1.intersection(poly2).area
+                try:
+                    if poly1.intersects(poly2):
+                        total_overlap += poly1.intersection(poly2).area
+                except Exception as e:
+                    logging.debug(f"stroke_overlap_area: error comparing geometries at {i},{j}: {e}")
         return total_overlap
 
     @staticmethod
-    def count_arcs(vertices_or_poly, angle_thresh=30):
+    def count_arcs(vertices_or_poly, angle_thresh=10):
         """
-        Estimate the number of arcs in a polyline or polygon.
-        An arc is defined as a contiguous segment where the angle between consecutive segments deviates from 180° by more than angle_thresh degrees.
+        Robustly estimate the number of arcs in a polyline or polygon using vertex-based curvature estimation.
+        An arc is a contiguous segment where the turning angle changes sign and exceeds angle_thresh (degrees).
         Args:
             vertices_or_poly: list of (x, y) tuples or Polygon
-            angle_thresh: minimum deviation from 180° to count as an arc (degrees)
+            angle_thresh: minimum deviation in degrees to count as an arc
         Returns:
             int: estimated number of arcs
         """
+        import numpy as np
+        logger = logging.getLogger(__name__)
         verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
         if not verts or len(verts) < 3:
             return 0
-        def angle_between(v1, v2):
-            v1 = np.array(v1)
-            v2 = np.array(v2)
-            cos_theta = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-8)
-            cos_theta = np.clip(cos_theta, -1.0, 1.0)
-            return np.degrees(np.arccos(cos_theta))
-
         n = len(verts)
-        arc_count = 0
+        angles = []
         for i in range(n):
-            p0 = verts[i - 1]
-            p1 = verts[i]
-            p2 = verts[(i + 1) % n]
-            v1 = (p1[0] - p0[0], p1[1] - p0[1])
-            v2 = (p2[0] - p1[0], p2[1] - p1[1])
-            ang = angle_between(v1, v2)
-            if abs(ang - 180) > angle_thresh:
+            p0 = np.array(verts[i - 1])
+            p1 = np.array(verts[i])
+            p2 = np.array(verts[(i + 1) % n])
+            v1 = p0 - p1
+            v2 = p2 - p1
+            norm1 = np.linalg.norm(v1)
+            norm2 = np.linalg.norm(v2)
+            if norm1 > 1e-6 and norm2 > 1e-6:
+                dot = np.clip(np.dot(v1, v2) / (norm1 * norm2), -1.0, 1.0)
+                angle = np.arccos(dot)
+                angle_deg = np.degrees(angle)
+                angles.append(angle_deg)
+        # Count sign changes in angle difference above threshold
+        arc_count = 0
+        for i in range(1, len(angles)):
+            if np.sign(angles[i] - angles[i-1]) != 0 and abs(angles[i] - angles[i-1]) > angle_thresh:
                 arc_count += 1
         return arc_count
 

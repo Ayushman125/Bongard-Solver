@@ -50,7 +50,59 @@ FLAGGING_THRESHOLDS = {
 
 
 
+from src.data_pipeline.logo_parser import ComprehensiveNVLabsParser, OneStrokeShape
+
 class ComprehensiveBongardProcessor:
+    def extract_position_and_rotation(self, vertices):
+        """Given a list of (x, y) normalized vertices, return centroid and orientation angle (degrees)."""
+        import numpy as np
+        try:
+            pts = np.array(vertices)
+            if pts.shape[0] < 2:
+                return {'centroid': [float(pts[0,0]), float(pts[0,1])] if pts.shape[0] == 1 else [0.5, 0.5], 'orientation_degrees': 0.0}
+            centroid = pts.mean(axis=0)
+            pts_centered = pts - centroid
+            # PCA: first principal axis
+            cov = np.cov(pts_centered.T)
+            eigvals, eigvecs = np.linalg.eigh(cov)
+            axis = eigvecs[:, np.argmax(eigvals)]
+            angle = np.degrees(np.arctan2(axis[1], axis[0]))
+            return {
+                'centroid': [float(centroid[0]), float(centroid[1])],
+                'orientation_degrees': float(angle)
+            }
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.warning(f"extract_position_and_rotation failed: {e}")
+            return {'centroid': [0.5, 0.5], 'orientation_degrees': 0.0}
+    def _actions_to_geometries(self, actions):
+        """Convert a list of action objects to shapely geometries (LineString for lines, polyline for arcs)."""
+        from shapely.geometry import LineString
+        geoms = []
+        for action in actions:
+            # Try to use .vertices if available
+            pts = getattr(action, 'vertices', None)
+            if pts and isinstance(pts, (list, tuple)) and len(pts) >= 2:
+                try:
+                    geoms.append(LineString(pts))
+                    continue
+                except Exception:
+                    pass
+            # Fallback: try to infer from parameters (for lines)
+            if hasattr(action, 'parameters') and isinstance(action.parameters, dict):
+                # Try to get endpoints for a line
+                if getattr(action, 'stroke_type', None) and getattr(action.stroke_type, 'value', None) == 'line':
+                    start = action.parameters.get('start')
+                    end = action.parameters.get('end')
+                    if start and end:
+                        try:
+                            geoms.append(LineString([start, end]))
+                            continue
+                        except Exception:
+                            pass
+            # Fallback: skip if cannot convert
+            continue
+        return geoms
     def _calculate_pattern_regularity_from_modifiers(self, modifier_sequence: List[str]) -> float:
         """Calculate regularity of a sequence of shape modifiers (pattern regularity) with correct formula and debug logging."""
         import logging
@@ -212,16 +264,6 @@ class ComprehensiveBongardProcessor:
     def process_single_image(self, action_commands: List[str], image_id: str, 
                            is_positive: bool, problem_id: str, category: str,
                            image_path: str) -> Optional[Dict[str, Any]]:
-        """
-        Parse action strings, then use Bongard-LOGO repo for all geometry, feature, and canonicalization calculations.
-        Implements robust normalization, polygon recovery, and always includes raw_vertices.
-        """
-        from src.data_pipeline.logo_parser import ComprehensiveNVLabsParser
-        from bongard.bongard import OneStrokeShape, LineAction, ArcAction
-        import sys, os
-        sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'Bongard-LOGO', 'Bongard-LOGO')))
-
-        self.processing_stats['total_processed'] += 1
         logger.debug(f"Processing image_id={image_id}, problem_id={problem_id}, is_positive={is_positive}")
         logger.debug(f"action_commands type: {type(action_commands)}, value: {action_commands}")
         import traceback
@@ -286,6 +328,9 @@ class ComprehensiveBongardProcessor:
             # --- Calculate geometry from normalized (possibly recovered) vertices ---
             geometry = self.calculate_geometry(norm_vertices_for_features)
 
+            # --- Derive position and rotation labels from normalized vertices ---
+            posrot_labels = self.extract_position_and_rotation(norm_vertices_for_features)
+
             # --- Calculate image features using robust polygon ---
             image_features = self._calculate_image_features(norm_vertices_for_features, getattr(shape, 'basic_actions', []), geometry)
             # Use actual centroid for center_of_mass
@@ -296,11 +341,13 @@ class ComprehensiveBongardProcessor:
 
             # --- Relational/Topological/Sequential Features ---
             from src.physics_inference import PhysicsInference
+            # Convert actions to shapely geometries for relational features
+            stroke_geometries = self._actions_to_geometries(getattr(shape, 'basic_actions', []))
             # Intersections, adjacency, containment, overlap (relational)
-            intersections = PhysicsInference.find_stroke_intersections(getattr(shape, 'basic_actions', []))
-            adjacency = PhysicsInference.strokes_touching(getattr(shape, 'basic_actions', []))
-            containment = PhysicsInference.stroke_contains_stroke(getattr(shape, 'basic_actions', []))
-            overlap = PhysicsInference.stroke_overlap_area(getattr(shape, 'basic_actions', []))
+            intersections = PhysicsInference.find_stroke_intersections(stroke_geometries)
+            adjacency = PhysicsInference.strokes_touching(stroke_geometries)
+            containment = PhysicsInference.stroke_contains_stroke(stroke_geometries)
+            overlap = PhysicsInference.stroke_overlap_area(stroke_geometries)
 
             # Sequential pattern features (n-gram, alternation, regularity)
             modifier_sequence = [self._extract_modifier_from_stroke(s) for s in getattr(shape, 'basic_actions', [])]
@@ -439,6 +486,8 @@ class ComprehensiveBongardProcessor:
                 'raw_vertices': vertices_raw,
                 'vertices': norm_vertices_for_features,
                 'num_vertices': len(norm_vertices_for_features) if norm_vertices_for_features else 0,
+                'position_label': posrot_labels.get('centroid'),
+                'rotation_label_degrees': posrot_labels.get('orientation_degrees'),
                 'image_features': image_features,
                 'physics_features': physics_features,
                 'composition_features': composition_features,
@@ -761,12 +810,21 @@ class ComprehensiveBongardProcessor:
         return features
     
     def _calculate_variance(self, values: List[float]) -> float:
-        """Calculate variance of a list of values"""
-        if len(values) < 2:
-            return 0.0
-        
-        mean = self.safe_divide(sum(values), len(values))
-        return self.safe_divide(sum((x - mean) ** 2 for x in values), len(values))
+        """Calculate variance of a list of values. For length 2, return squared diff. For length 1, return NaN and log."""
+        import numpy as np
+        logger = logging.getLogger(__name__)
+        n = len(values)
+        if n < 1:
+            logger.warning("Variance: empty list, returning NaN")
+            return float('nan')
+        if n == 1:
+            logger.warning("Variance: only one value, returning NaN")
+            return float('nan')
+        if n == 2:
+            diff = values[1] - values[0]
+            return diff * diff / 2.0
+        mean = self.safe_divide(sum(values), n)
+        return self.safe_divide(sum((x - mean) ** 2 for x in values), n)
     
     def _calculate_dominant_direction(self, line_features: List[Dict]) -> str:
         """Calculate the dominant direction of line strokes"""
@@ -780,10 +838,9 @@ class ComprehensiveBongardProcessor:
         
         return max(direction_counts.items(), key=lambda x: x[1])[0] if direction_counts else 'none'
     
-    def _calculate_image_features(self, vertices: List[tuple], strokes: List, 
-                                geometry: Dict[str, Any]) -> Dict[str, Any]:
-        """Calculate comprehensive image-level features with robust polygon recovery."""
-        import logging
+    def _calculate_image_features(self, vertices: List[tuple], strokes: List, geometry: Dict[str, Any]) -> Dict[str, Any]:
+        """Calculate comprehensive image-level features with robust polygon recovery and improved metrics."""
+        import numpy as np
         logger = logging.getLogger(__name__)
         vertices = self.ensure_vertex_list(vertices)
         if not vertices:
@@ -821,11 +878,12 @@ class ComprehensiveBongardProcessor:
             ar = max(FLAGGING_THRESHOLDS['min_aspect_ratio'], min(raw_ar, FLAGGING_THRESHOLDS['max_aspect_ratio']))
             features['aspect_ratio'] = ar
 
-            # Convexity ratio: None if poly is None, else compute
-            if poly is None:
-                features['convexity_ratio'] = None
+            # Convexity ratio: robust, clamp to [0,1], handle degenerate
+            if poly is None or poly.area == 0 or poly.convex_hull.area == 0:
+                features['convexity_ratio'] = 0.0
             else:
-                features['convexity_ratio'] = self.safe_divide(poly.area, poly.convex_hull.area)
+                ratio = self.safe_divide(poly.area, poly.convex_hull.area)
+                features['convexity_ratio'] = max(0.0, min(1.0, ratio))
 
             features['is_convex'] = PhysicsInference.is_convex(poly) if poly else False
             features['compactness'] = self._calculate_compactness(features['area'], features['perimeter'])
@@ -838,8 +896,8 @@ class ComprehensiveBongardProcessor:
             else:
                 features['symmetry_score'] = PhysicsInference.symmetry_score(vertices)
 
-            features['horizontal_symmetry'] = self._check_horizontal_symmetry(vertices)
-            features['vertical_symmetry'] = self._check_vertical_symmetry(vertices)
+            features['horizontal_symmetry'] = self._check_horizontal_symmetry(vertices, poly)
+            features['vertical_symmetry'] = self._check_vertical_symmetry(vertices, poly)
             features['rotational_symmetry'] = self._check_rotational_symmetry(vertices)
 
             # has_quadrangle: robust check for 4-vertex polygons
@@ -849,7 +907,11 @@ class ComprehensiveBongardProcessor:
                 features['has_quadrangle'] = PhysicsInference.has_quadrangle(vertices)
 
             features['geometric_complexity'] = self._calculate_geometric_complexity(vertices)
-            features['visual_complexity'] = len(strokes) + self.safe_divide(len(vertices), 30.0)
+            # Improved visual complexity: alpha*(V-3)/(Vmax-3) + (1-alpha)*(S-1)/(Smax-1)
+            alpha, V_max, S_max = 0.5, 30, 10
+            V, S = len(vertices), len(strokes)
+            vcomp = alpha * self.safe_divide(V-3, V_max-3) + (1-alpha) * self.safe_divide(S-1, S_max-1)
+            features['visual_complexity'] = max(0.0, vcomp)
             features['irregularity_score'] = self._calculate_irregularity(vertices)
             logger.debug(f"Image features: area={features['area']}, perimeter={features['perimeter']}, is_convex={features['is_convex']}")
             return self.json_safe(features)
@@ -1071,48 +1133,55 @@ class ComprehensiveBongardProcessor:
         except:
             return 0.0
     
-    def _check_horizontal_symmetry(self, vertices: List[tuple]) -> float:
-        """Check horizontal reflection symmetry."""
-        # Fix: Ensure vertices is a list of tuples, not a Polygon object
+    def _check_horizontal_symmetry(self, vertices: List[tuple], poly=None) -> float:
+        """Check horizontal reflection symmetry, normalized by polygon diagonal length."""
+        import numpy as np
         vertices = self.ensure_vertex_list(vertices)
         if len(vertices) < 2:
             return 0.0
-        
         try:
-            import numpy as np
             points = np.array(vertices)
             centroid = np.mean(points, axis=0)
-            
-            # Reflect points horizontally about centroid
             reflected = points.copy()
             reflected[:, 0] = 2 * centroid[0] - reflected[:, 0]
-            
-            # Calculate similarity (inverse of RMSE)
-            rmse = np.sqrt(np.mean((points - reflected)**2))
-            return max(0.0, 1.0 - self.safe_divide(rmse, 100.0))  # Normalize
-        except:
+            rmse = np.sqrt(np.mean((points - reflected) ** 2))
+            # Use polygon diagonal for normalization
+            if poly is not None and hasattr(poly, 'bounds'):
+                minx, miny, maxx, maxy = poly.bounds
+                diag = np.sqrt((maxx - minx) ** 2 + (maxy - miny) ** 2)
+            else:
+                diag = np.linalg.norm(points.max(axis=0) - points.min(axis=0))
+            if diag == 0:
+                return 1.0
+            score = 1.0 - self.safe_divide(rmse, diag)
+            return max(0.0, min(1.0, score))
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"Horizontal symmetry error: {e}")
             return 0.0
     
-    def _check_vertical_symmetry(self, vertices: List[tuple]) -> float:
-        """Check vertical reflection symmetry."""
-        # Fix: Ensure vertices is a list of tuples, not a Polygon object
+    def _check_vertical_symmetry(self, vertices: List[tuple], poly=None) -> float:
+        """Check vertical reflection symmetry, normalized by polygon diagonal length."""
+        import numpy as np
         vertices = self.ensure_vertex_list(vertices)
         if len(vertices) < 2:
             return 0.0
-        
         try:
-            import numpy as np
             points = np.array(vertices)
             centroid = np.mean(points, axis=0)
-            
-            # Reflect points vertically about centroid
             reflected = points.copy()
             reflected[:, 1] = 2 * centroid[1] - reflected[:, 1]
-            
-            # Calculate similarity (inverse of RMSE)
-            rmse = np.sqrt(np.mean((points - reflected)**2))
-            return max(0.0, 1.0 - self.safe_divide(rmse, 100.0))  # Normalize
-        except:
+            rmse = np.sqrt(np.mean((points - reflected) ** 2))
+            if poly is not None and hasattr(poly, 'bounds'):
+                minx, miny, maxx, maxy = poly.bounds
+                diag = np.sqrt((maxx - minx) ** 2 + (maxy - miny) ** 2)
+            else:
+                diag = np.linalg.norm(points.max(axis=0) - points.min(axis=0))
+            if diag == 0:
+                return 1.0
+            score = 1.0 - self.safe_divide(rmse, diag)
+            return max(0.0, min(1.0, score))
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"Vertical symmetry error: {e}")
             return 0.0
     
     def _check_rotational_symmetry(self, vertices: List[tuple]) -> int:
@@ -1179,29 +1248,51 @@ class ComprehensiveBongardProcessor:
             return 0.0
     
     def _calculate_curvature_score(self, vertices: List[tuple]) -> float:
-        """Calculate overall curvature score."""
-        # Fix: Ensure vertices is a list of tuples, not a Polygon object
+        """Calculate overall curvature score using vertex-based arc estimation."""
+        import numpy as np
         vertices = self.ensure_vertex_list(vertices)
-        return self.safe_divide(PhysicsInference.count_arcs(vertices), max(len(vertices), 1))
+        n = len(vertices)
+        if n < 3:
+            return 0.0
+        # Count arc-like segments by sign changes in turning angle sequence above threshold
+        angles = []
+        for i in range(n):
+            p0 = np.array(vertices[i - 1])
+            p1 = np.array(vertices[i])
+            p2 = np.array(vertices[(i + 1) % n])
+            v1 = p0 - p1
+            v2 = p2 - p1
+            norm1 = np.linalg.norm(v1)
+            norm2 = np.linalg.norm(v2)
+            if norm1 > 1e-6 and norm2 > 1e-6:
+                dot = np.clip(np.dot(v1, v2) / (norm1 * norm2), -1.0, 1.0)
+                angle = np.arccos(dot)
+                angles.append(angle)
+        # Detect sign changes in angle difference above threshold (10 deg)
+        arc_count = 0
+        threshold = np.deg2rad(10)
+        for i in range(1, len(angles)):
+            if np.sign(angles[i] - angles[i-1]) != 0 and abs(angles[i] - angles[i-1]) > threshold:
+                arc_count += 1
+        return self.safe_divide(arc_count, max(n, 1))
     
     def _calculate_angular_variance(self, vertices: List[tuple]) -> float:
-        """Calculate variance in angles between edges, capped at 180.0."""
-        import logging
+        """Calculate variance of interior angles (degrees) for polygon, robust to degenerate cases. Cap at 180.0. NaN if <2 angles."""
+        import numpy as np
         logger = logging.getLogger(__name__)
         vertices = self.ensure_vertex_list(vertices)
-        if len(vertices) < 3:
-            logger.debug("Angular variance: not enough vertices, returning 0.0")
-            return 0.0
+        n = len(vertices)
+        if n < 3:
+            logger.debug("Angular variance: not enough vertices, returning NaN")
+            return float('nan')
         try:
-            import numpy as np
             angles = []
-            n = len(vertices)
             for i in range(n):
+                p0 = np.array(vertices[i - 1])
                 p1 = np.array(vertices[i])
                 p2 = np.array(vertices[(i + 1) % n])
-                p3 = np.array(vertices[(i + 2) % n])
-                v1 = p2 - p1
-                v2 = p3 - p2
+                v1 = p0 - p1
+                v2 = p2 - p1
                 norm1 = np.linalg.norm(v1)
                 norm2 = np.linalg.norm(v2)
                 if norm1 > 1e-6 and norm2 > 1e-6:
@@ -1209,15 +1300,15 @@ class ComprehensiveBongardProcessor:
                     angle = np.arccos(dot)
                     angle_deg = np.degrees(angle)
                     angles.append(angle_deg)
-            if not angles:
-                logger.debug("Angular variance: no valid angles, returning 0.0")
-                return 0.0
+            if len(angles) < 2:
+                logger.warning("Angular variance: insufficient angles, returning NaN")
+                return float('nan')
             var = np.var(angles)
             logger.debug(f"Angular variance: angles={angles}, variance={var}")
             return self.json_safe(min(var, 180.0))
         except Exception as e:
             logger.warning(f"Angular variance: error {e}")
-            return 0.0
+            return float('nan')
     
     def _calculate_edge_length_variance(self, vertices: List[tuple]) -> float:
         """Calculate variance in edge lengths."""
@@ -1261,34 +1352,26 @@ class ComprehensiveBongardProcessor:
         return 1.0 - self.safe_divide(entropy, max_entropy) if max_entropy > 0 else 1.0
     
     def _calculate_pattern_regularity(self, strokes: List) -> float:
-        """Calculate regularity of stroke patterns."""
+        """Calculate regularity of stroke patterns: alternation, repetition, and diversity penalty."""
         if len(strokes) < 2:
             return 1.0
-        
-        # Check for repeated patterns
-        stroke_sequence = [s.shape_modifier.value for s in strokes]
-        
-        # Simple pattern detection
-        regularities = []
-        
-        # Check for alternating patterns
-        if len(stroke_sequence) >= 4:
-            alternating_score = 0
-            for i in range(len(stroke_sequence) - 1):
-                if i % 2 == 0:
-                    if stroke_sequence[i] == stroke_sequence[i + 2] if i + 2 < len(stroke_sequence) else True:
-                        alternating_score += 1
-            regularities.append(alternating_score / (len(stroke_sequence) // 2))
-        
-        # Check for repetition
-        if len(stroke_sequence) >= 2:
-            repetition_score = 0
-            for i in range(len(stroke_sequence) - 1):
-                if stroke_sequence[i] == stroke_sequence[i + 1]:
-                    repetition_score += 1
-            regularities.append(repetition_score / (len(stroke_sequence) - 1))
-        
-        return max(regularities) if regularities else 0.0
+        # Use shape_modifier string for each stroke
+        seq = [getattr(s.shape_modifier, 'value', str(getattr(s, 'shape_modifier', 'normal'))) for s in strokes]
+        n = len(seq)
+        # Alternation: strictly alternates between two values
+        if n >= 4:
+            a, b = seq[0], seq[1]
+            is_alt = all(seq[i] == (a if i % 2 == 0 else b) for i in range(n))
+            alt_score = 1.0 if is_alt and a != b else 0.0
+        else:
+            alt_score = 0.0
+        # Repetition: fraction of consecutive repeats
+        rep_score = sum(seq[i] == seq[i+1] for i in range(n-1)) / (n-1)
+        # Diversity penalty: 1 - (unique/total)
+        diversity_penalty = 1.0 - (len(set(seq)) / n)
+        # Combine: regularity = max(alt_score, rep_score) * (1 - diversity_penalty)
+        reg = max(alt_score, rep_score) * (1 - diversity_penalty)
+        return max(0.0, min(1.0, reg))
     
     def extract_action_type_prefixes(self, problems_data):
         """
