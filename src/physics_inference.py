@@ -108,7 +108,8 @@ class PhysicsInference:
     def angular_variance(vertices_or_poly):
         """
         Computes the variance of angles (in degrees) between consecutive segments of a polygon or polyline.
-        Returns 0.0 if not enough vertices.
+        Excludes near-zero angles (colinear/duplicate points) to avoid inflating variance.
+        Returns 0.0 if not enough valid angles.
         """
         verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
         if not verts or len(verts) < 3:
@@ -125,8 +126,9 @@ class PhysicsInference:
             norm2 = np.linalg.norm(v2)
             if norm1 > 1e-6 and norm2 > 1e-6:
                 dot = np.clip(np.dot(v1, v2) / (norm1 * norm2), -1.0, 1.0)
-                angle = np.degrees(np.arccos(dot))
-                angles.append(angle)
+                angle_deg = np.degrees(np.arccos(dot))
+                if angle_deg > 1.0:  # exclude near-zero angles
+                    angles.append(angle_deg)
         if len(angles) < 2:
             return 0.0
         return float(np.var(angles))
@@ -427,16 +429,16 @@ class PhysicsInference:
             return 0.0
 
     @staticmethod
-    @safe_feature(default=0.0)
+    @safe_feature(default=1.0)
     def geometric_complexity(vertices_or_poly):
         """
         Returns a finite geometric complexity value based on number of vertices and curvature.
         Circles: 8.0, Zigzag: 6.0, Triangle: 3.0, else: vertex count or curvature-based.
+        Always returns a numeric value (vertex count fallback).
         """
         verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
         if not verts or len(verts) < 3:
             return 1.0
-        # Heuristic: if all angles ~120, triangle; if all ~90, quadrangle; if all ~45, zigzag; if all ~360/len, circle
         n = len(verts)
         if n == 3:
             return 3.0
@@ -453,6 +455,8 @@ class PhysicsInference:
             if np.linalg.norm(v1) > 1e-6 and np.linalg.norm(v2) > 1e-6:
                 ang = np.degrees(np.arccos(np.clip(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2)), -1, 1)))
                 angles.append(ang)
+        # Fallback: use vertex count as complexity
+        return float(n)
     @staticmethod
     @safe_feature(default=1)
     def rotational_symmetry(vertices_or_poly, max_order=None, rmse_threshold=0.02):

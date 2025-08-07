@@ -44,7 +44,7 @@ FLAGGING_THRESHOLDS = {
     'max_aspect_ratio': 1000,
     'max_stroke_count': 50,
     'geometry_nan_tolerance': 0,
-    'symmetry_score_max': 1000,
+    'symmetry_score_max': 2.0,  # RMSE for [0,1] normalized points
     'suspicious_parameter_threshold': 1e6
 }
 
@@ -1020,16 +1020,26 @@ class ComprehensiveBongardProcessor:
                 except Exception as e:
                     logger.debug(f"Image features: error in convex hull: {e}")
                     poly = None
+            # Robust bounding box: fallback to min/max if geometry['bbox'] missing or invalid
+            bbox = geometry.get('bbox', None)
+            if not bbox or not isinstance(bbox, dict) or any(k not in bbox for k in ['xmin','ymin','xmax','ymax']):
+                xs = [v[0] for v in vertices]
+                ys = [v[1] for v in vertices]
+                bbox = {'xmin': float(np.min(xs)), 'ymin': float(np.min(ys)), 'xmax': float(np.max(xs)), 'ymax': float(np.max(ys))}
+            width = bbox['xmax'] - bbox['xmin']
+            height = bbox['ymax'] - bbox['ymin']
+            width = max(width, 1e-6)
+            height = max(height, 1e-6)
             features = {
-                'bounding_box': geometry.get('bbox', {}),
+                'bounding_box': bbox,
                 'centroid': geometry.get('centroid', [0.0, 0.0]),
-                'width': geometry.get('width', 0.0),
-                'height': geometry.get('height', 0.0),
+                'width': width,
+                'height': height,
                 'area': PhysicsInference.area(poly) if poly else 0.0,
                 'perimeter': self._calculate_perimeter(vertices),
             }
-            # Aspect ratio: clip and flag outliers
-            raw_ar = self.safe_divide(geometry.get('width', 1.0), geometry.get('height', 1.0), 1.0)
+            # Aspect ratio: always positive, robust to zero division, flag outliers
+            raw_ar = self.safe_divide(width, height, 1.0)
             ar = max(FLAGGING_THRESHOLDS['min_aspect_ratio'], min(raw_ar, FLAGGING_THRESHOLDS['max_aspect_ratio']))
             features['aspect_ratio'] = ar
 
@@ -1041,13 +1051,20 @@ class ComprehensiveBongardProcessor:
                 features['convexity_ratio'] = max(0.0, min(1.0, ratio))
 
             features['is_convex'] = PhysicsInference.is_convex(poly) if poly else False
-            features['compactness'] = self._calculate_compactness(features['area'], features['perimeter'])
-            # Use robust eccentricity calculation
-            features['eccentricity'] = self._calculate_eccentricity(vertices)
+            # Compactness: robust to zero area/perimeter
+            if features['perimeter'] == 0 or features['area'] == 0:
+                features['compactness'] = 0.0
+            else:
+                features['compactness'] = self._calculate_compactness(features['area'], features['perimeter'])
+            # Eccentricity: robust helper
+            try:
+                features['eccentricity'] = float(self._calculate_eccentricity(vertices))
+            except Exception as e:
+                logger.debug(f"Eccentricity calculation failed: {e}")
+                features['eccentricity'] = 0.0
 
             # Symmetry and compactness: None if area or perimeter is zero
             if features['perimeter'] == 0 or features['area'] == 0:
-                features['compactness'] = None
                 features['symmetry_score'] = None
             else:
                 features['symmetry_score'] = PhysicsInference.symmetry_score(vertices)
