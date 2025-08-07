@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """
 Logo to Shape Conversion Script - Complete End-to-End Pipeline
@@ -22,6 +23,7 @@ import math
 import time
 from pathlib import Path
 from typing import Dict, List, Any, Optional
+import numpy as np
 
 # Ensure src is importable
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -779,30 +781,42 @@ class ComprehensiveBongardProcessor:
 
     def _extract_ngram_features(self, sequence, n=2):
         """Extract n-gram counts from a sequence, with string keys for JSON compatibility."""
+        logger = logging.getLogger(__name__)
+        logger.debug(f"[_extract_ngram_features] INPUTS: sequence={sequence}, n={n}")
         from collections import Counter
         ngrams = zip(*[sequence[i:] for i in range(n)])
-        # Convert tuple n-grams to string keys (e.g., 'A|B')
         ngram_list = ['|'.join(map(str, ng)) for ng in ngrams]
-        return dict(Counter(ngram_list))
+        result = dict(Counter(ngram_list))
+        logger.debug(f"[_extract_ngram_features] OUTPUT: {result}")
+        return result
 
     def _detect_alternation(self, sequence):
         """Detect if sequence alternates between two values."""
+        logger = logging.getLogger(__name__)
+        logger.debug(f"[_detect_alternation] INPUTS: sequence={sequence}")
         if len(sequence) < 2:
+            logger.debug("[_detect_alternation] OUTPUT: False (sequence too short)")
             return False
         a, b = sequence[0], sequence[1]
         for i, val in enumerate(sequence):
             if val != (a if i % 2 == 0 else b):
+                logger.debug(f"[_detect_alternation] OUTPUT: False (failed at index {i})")
                 return False
+        logger.debug("[_detect_alternation] OUTPUT: True")
         return True
 
     def _extract_graph_features(self, strokes):
         """Detect chain/star/cycle topology and connectivity from stroke relationships."""
-        # Placeholder: count strokes, check for cycles (if all touch), star (one central), chain (ends=2)
+        logger = logging.getLogger(__name__)
+        logger.debug(f"[_extract_graph_features] INPUTS: strokes count={len(strokes) if strokes else 0}")
         n = len(strokes)
         if n == 0:
+            logger.debug("[_extract_graph_features] OUTPUT: {'type': 'none', 'connectivity': 0}")
             return {'type': 'none', 'connectivity': 0}
         # For now, just return counts; real implementation would use adjacency/intersection
-        return {'num_strokes': n}
+        result = {'num_strokes': n}
+        logger.debug(f"[_extract_graph_features] OUTPUT: {result}")
+        return result
     
     def _flag_case(self, image_id: str, problem_id: str, reason: str, flags: List[str]):
         """Add a case to the flagged cases list"""
@@ -917,31 +931,31 @@ class ComprehensiveBongardProcessor:
         return flags
     
     def _calculate_stroke_specific_features(self, stroke, stroke_index: int, stroke_type_val=None, shape_modifier_val=None, parameters=None) -> Dict[str, Any]:
-        """Calculate features specific to stroke type and shape modifier"""
-        import numpy as np
+
+        """Calculate features specific to stroke type and shape modifier, using robust geometric/physics formulas."""
+
+        logger = logging.getLogger(__name__)
+        logger.debug(f"[_calculate_stroke_specific_features] INPUTS: stroke_index={stroke_index}, stroke_type_val={stroke_type_val}, shape_modifier_val={shape_modifier_val}, parameters={parameters}")
         features = {'stroke_index': stroke_index}
         stype = stroke_type_val or type(stroke).__name__.replace('Action', '').lower()
         smod = shape_modifier_val or 'normal'
         params = parameters or {}
         verts = self._extract_stroke_vertices(stroke, stroke_index, None)
-        # Angular variance: only defined for polygons (>=3 points), else nan
+        logger.debug(f"[_calculate_stroke_specific_features] verts: {verts}")
+        # Angular variance: only defined for strokes with >=3 points
         if verts and len(verts) >= 3:
             features['angular_variance'] = PhysicsInference.angular_variance(verts)
         else:
             features['angular_variance'] = float('nan')
-        # Curvature and center of mass logic
+        # Curvature, center of mass, moment of inertia
         if stype == 'line':
             features.update(self._calculate_line_specific_features_from_params(params))
             if verts and len(verts) == 2:
+                features['curvature_score'] = PhysicsInference.line_curvature_score(verts)
                 p0, p1 = np.array(verts[0]), np.array(verts[1])
                 length = np.linalg.norm(p1 - p0)
-                # Curvature: 0 for normal, else use discrete for special modifiers
-                if smod in ['circle', 'triangle', 'zigzag']:
-                    features['curvature_score'] = self._discrete_curvature(verts)
-                else:
-                    features['curvature_score'] = 0.0
                 features['moment_of_inertia'] = PhysicsInference.line_moment_of_inertia(length)
-                features['center_of_mass'] = tuple((p0 + p1) / 2)
+                features['center_of_mass'] = PhysicsInference.polyline_weighted_center_of_mass(verts)
             else:
                 features['curvature_score'] = float('nan')
                 features['moment_of_inertia'] = float('nan')
@@ -958,30 +972,38 @@ class ComprehensiveBongardProcessor:
                 span_angle = float(span_angle)
             except Exception:
                 span_angle = 0.0
-            # Curvature: abs(span_angle) / abs(radius) (radians)
-            features['curvature_score'] = abs(span_angle) / abs(radius) if abs(radius) > 1e-8 else float('inf')
+            features['curvature_score'] = PhysicsInference.arc_curvature_score(radius, span_angle)
             features['moment_of_inertia'] = PhysicsInference.arc_moment_of_inertia(radius, span_angle)
-            # Center of mass for arc: ensure consistent coordinate system if possible
-            features['center_of_mass'] = (float('nan'), float('nan'))  # Placeholder, update if arc_center_of_mass signature matches
+            if verts and len(verts) >= 2:
+                features['center_of_mass'] = PhysicsInference.polyline_weighted_center_of_mass(verts)
+            else:
+                features['center_of_mass'] = (float('nan'), float('nan'))
         else:
-            # fallback for unknown stroke types
-            features['curvature_score'] = self._discrete_curvature(verts) if verts and len(verts) >= 3 else float('nan')
-            features['moment_of_inertia'] = PhysicsInference.moment_of_inertia(verts)
-            features['center_of_mass'] = PhysicsInference.centroid(verts)
+            # fallback for unknown stroke types (e.g., polygons, curves)
+            if verts and len(verts) >= 3:
+                features['curvature_score'] = PhysicsInference.curvature_score(verts)
+                features['moment_of_inertia'] = PhysicsInference.moment_of_inertia(verts)
+                features['center_of_mass'] = PhysicsInference.centroid(verts)
+            else:
+                features['curvature_score'] = float('nan')
+                features['moment_of_inertia'] = float('nan')
+                features['center_of_mass'] = (float('nan'), float('nan'))
         features.update(self._calculate_shape_modifier_features_from_val(smod))
+        logger.debug(f"[_calculate_stroke_specific_features] OUTPUT: {features}")
         return features
 
     def _calculate_line_specific_features_from_params(self, params: dict) -> Dict[str, Any]:
         length = params.get('param1', 0)
         angle = params.get('param2', 0)
-        # Normalize by canvas diagonal (sqrt(2) for unit square)
         diag = math.sqrt(2)
         length_norm = self.safe_divide(length, diag)
-        # Direction classification: ±10° for horizontal/vertical, else diagonal
-        angle_deg = (angle % 1.0) * 360.0
-        if abs(angle_deg) <= 10 or abs(angle_deg - 360) <= 10:
+        # Angle in degrees in [-180, 180]
+        angle_deg = ((angle % 1.0) * 360.0)
+        angle_deg = ((angle_deg + 180) % 360) - 180
+        # ±10° for horizontal/vertical, else diagonal
+        if abs(angle_deg) <= 10:
             direction = 'horizontal'
-        elif abs(angle_deg - 90) <= 10 or abs(angle_deg - 270) <= 10:
+        elif abs(angle_deg - 90) <= 10 or abs(angle_deg + 90) <= 10:
             direction = 'vertical'
         else:
             direction = 'diagonal'
@@ -1056,14 +1078,14 @@ class ComprehensiveBongardProcessor:
     
     def _calculate_stroke_type_differentiated_features(self, stroke_type_features: Dict, strokes: List) -> Dict[str, Any]:
         """Calculate features that differentiate between stroke types"""
+        logger = logging.getLogger(__name__)
+        logger.debug(f"[_calculate_stroke_type_differentiated_features] INPUTS: stroke_type_features keys: {list(stroke_type_features.keys())}, strokes count: {len(strokes)}")
         line_features = stroke_type_features['line_features']
         arc_features = stroke_type_features['arc_features']
-        
         # Basic counts
         num_lines = len(line_features)
         num_arcs = len(arc_features)
         total_strokes = num_lines + num_arcs
-        
         features = {
             'stroke_composition': {
                 'num_lines': num_lines,
@@ -1107,6 +1129,7 @@ class ComprehensiveBongardProcessor:
                 'curvature_complexity': len([f for f in arc_features if f['arc_curvature'] > 1.0])
             }
         
+        logger.debug(f"[_calculate_stroke_type_differentiated_features] OUTPUT: {features}")
         return features
     
     def _calculate_variance(self, values: List[float]) -> float:
@@ -1247,12 +1270,11 @@ class ComprehensiveBongardProcessor:
     
     def _calculate_image_features(self, vertices: List[tuple], strokes: List, geometry: Dict[str, Any]) -> Dict[str, Any]:
         """Calculate comprehensive image-level features with robust polygon recovery and improved metrics."""
-        import numpy as np
         logger = logging.getLogger(__name__)
+        logger.debug(f"[_calculate_image_features] INPUTS: vertices count={len(vertices) if vertices else 0}, strokes count={len(strokes) if strokes else 0}, geometry keys={list(geometry.keys()) if geometry else []}")
         vertices = self.ensure_vertex_list(vertices)
         if not vertices:
-            logger.debug("Image features: no vertices, returning empty dict")
-
+            logger.debug("[_calculate_image_features] No vertices, returning empty dict")
             return {}
         try:
             from shapely.geometry import Polygon
@@ -1260,18 +1282,18 @@ class ComprehensiveBongardProcessor:
             try:
                 poly = Polygon(vertices)
                 if not poly.is_valid or poly.area == 0:
-                    logger.debug("Image features: polygon invalid or zero area, applying buffer(0)")
+                    logger.debug("[_calculate_image_features] Polygon invalid or zero area, applying buffer(0)")
                     poly = poly.buffer(0)
             except Exception as e:
-                logger.debug(f"Image features: error in Polygon(vertices): {e}")
+                logger.debug(f"[_calculate_image_features] Error in Polygon(vertices): {e}")
                 poly = None
             if poly is None or not poly.is_valid or poly.is_empty:
                 # fallback: convex hull
                 try:
-                    logger.debug("Image features: falling back to convex hull")
+                    logger.debug("[_calculate_image_features] Falling back to convex hull")
                     poly = Polygon(vertices).convex_hull
                 except Exception as e:
-                    logger.debug(f"Image features: error in convex hull: {e}")
+                    logger.debug(f"[_calculate_image_features] Error in convex hull: {e}")
                     poly = None
             features = {
                 'bounding_box': geometry.get('bbox', {}),
@@ -1285,29 +1307,24 @@ class ComprehensiveBongardProcessor:
             raw_ar = self.safe_divide(geometry.get('width', 1.0), geometry.get('height', 1.0), 1.0)
             ar = max(FLAGGING_THRESHOLDS['min_aspect_ratio'], min(raw_ar, FLAGGING_THRESHOLDS['max_aspect_ratio']))
             features['aspect_ratio'] = ar
-
             # Convexity ratio: robust, clamp to [0,1], handle degenerate
             if poly is None or poly.area == 0 or poly.convex_hull.area == 0:
                 features['convexity_ratio'] = 0.0
             else:
                 ratio = self.safe_divide(poly.area, poly.convex_hull.area)
                 features['convexity_ratio'] = max(0.0, min(1.0, ratio))
-
             features['is_convex'] = PhysicsInference.is_convex(poly) if poly else False
             features['compactness'] = self._calculate_compactness(features['area'], features['perimeter'])
             features['eccentricity'] = self._calculate_eccentricity(vertices)
-
             # Symmetry and compactness: None if area or perimeter is zero
             if features['perimeter'] == 0 or features['area'] == 0:
                 features['compactness'] = None
                 features['symmetry_score'] = None
             else:
                 features['symmetry_score'] = PhysicsInference.symmetry_score(vertices)
-
             features['horizontal_symmetry'] = self._check_horizontal_symmetry(vertices, poly)
             features['vertical_symmetry'] = self._check_vertical_symmetry(vertices, poly)
             features['rotational_symmetry'] = self._check_rotational_symmetry(vertices)
-
             # has_quadrangle: robust check for 4-vertex polygons
             if poly and hasattr(poly, 'exterior') and hasattr(poly.exterior, 'coords') and len(poly.exterior.coords)-1 == 4:
                 features['has_quadrangle'] = True
@@ -1320,25 +1337,25 @@ class ComprehensiveBongardProcessor:
             vcomp = alpha * self.safe_divide(V-3, V_max-3) + (1-alpha) * self.safe_divide(S-1, S_max-1)
             features['visual_complexity'] = max(0.0, vcomp)
             features['irregularity_score'] = self._calculate_irregularity(vertices)
-            logger.debug(f"Image features: area={features['area']}, perimeter={features['perimeter']}, is_convex={features['is_convex']}")
+            logger.debug(f"[_calculate_image_features] OUTPUT: {features}")
             return self.json_safe(features)
         except Exception as e:
-            logger.warning(f"Error calculating image features: {e}")
+            logger.warning(f"[_calculate_image_features] Error: {e}")
             return {}
     
     def _calculate_physics_features(self, vertices: List[tuple], centroid=None, strokes=None) -> Dict[str, Any]:
         """Calculate physics-based features using PhysicsInference. Accepts centroid override and strokes for correct counting. Uses correct center_of_mass and stroke counts."""
-        import logging
         logger = logging.getLogger(__name__)
+        logger.debug(f"[_calculate_physics_features] INPUTS: vertices count={len(vertices) if vertices else 0}, centroid={centroid}, strokes count={len(strokes) if strokes else 0 if strokes is not None else 'None'}")
         if not vertices:
-            logger.debug("Physics features: no vertices, returning empty dict")
+            logger.debug("[_calculate_physics_features] No vertices, returning empty dict")
             return {}
         try:
             poly = None
             try:
                 poly = PhysicsInference.polygon_from_vertices(vertices)
             except Exception as e:
-                logger.debug(f"Physics features: error in polygon_from_vertices: {e}")
+                logger.debug(f"[_calculate_physics_features] Error in polygon_from_vertices: {e}")
             # Use centroid from geometry if provided, else fallback to centroid of vertices
             if centroid is not None:
                 center_of_mass = centroid
@@ -1360,7 +1377,7 @@ class ComprehensiveBongardProcessor:
                         elif isinstance(s, ArcAction):
                             num_arcs += 1
                 except Exception as e:
-                    logger.debug(f"Physics features: error in stroke counting: {e}")
+                    logger.debug(f"[_calculate_physics_features] Error in stroke counting: {e}")
             else:
                 # fallback to geometry-based
                 num_straight_segments = PhysicsInference.count_straight_segments(vertices)
@@ -1379,16 +1396,19 @@ class ComprehensiveBongardProcessor:
                 'angular_variance': self._calculate_angular_variance(vertices),
                 'edge_length_variance': self._calculate_edge_length_variance(vertices)
             }
-            logger.debug(f"Physics features: center_of_mass={center_of_mass}, num_straight_segments={num_straight_segments}, num_arcs={num_arcs}")
+            logger.debug(f"[_calculate_physics_features] OUTPUT: {features}")
             return features
         except Exception as e:
-            logger.warning(f"Error calculating physics features: {e}")
+            logger.warning(f"[_calculate_physics_features] Error: {e}")
             return {}
 
     
     def _calculate_composition_features(self, strokes: List) -> Dict[str, Any]:
         """Calculate features about stroke composition and relationships. FIXED: Use actual modifiers from strokes."""
+        logger = logging.getLogger(__name__)
+        logger.debug(f"[_calculate_composition_features] INPUTS: strokes count={len(strokes) if strokes else 0}")
         if not strokes:
+            logger.debug("[_calculate_composition_features] No strokes, returning empty dict")
             return {}
         try:
             stroke_types = {}
@@ -1413,9 +1433,10 @@ class ComprehensiveBongardProcessor:
                 'homogeneity_score': self._calculate_homogeneity(shape_modifiers),
                 'pattern_regularity': self._calculate_pattern_regularity_from_modifiers(modifier_sequence)
             })
+            logger.debug(f"[_calculate_composition_features] OUTPUT: {features}")
             return features
         except Exception as e:
-            logger.warning(f"Error calculating composition features: {e}")
+            logger.warning(f"[_calculate_composition_features] Error: {e}")
             return {}
 
     def _extract_modifier_from_stroke(self, stroke) -> str:
