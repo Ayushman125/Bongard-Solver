@@ -153,25 +153,56 @@ def _extract_stroke_vertices(stroke, stroke_index, all_vertices, bongard_image=N
     return []
 
 def _vertices_from_command(command, stroke_index):
-        logger.info(f"[_vertices_from_command] INPUT: command={command}, stroke_index={stroke_index}")
-        import numpy as np
-        """Generate vertices from action command string."""
-        try:
-            parts = command.split('_')
-            if len(parts) >= 3:
-                params = parts[2].split('-')
-                if len(params) >= 2:
-                    length = float(params[0])
-                    angle = float(params[1])
-                    start = (stroke_index * 0.2, 0.5)
-                    end_x = start[0] + length * np.cos(angle * 2 * np.pi)
-                    end_y = start[1] + length * np.sin(angle * 2 * np.pi)
-                    logger.info(f"[_vertices_from_command] OUTPUT: {[start, (end_x, end_y)]}")
-                    return [start, (end_x, end_y)]
-        except Exception as e:
-            logging.getLogger(__name__).debug(f"Failed to parse command {command}: {e}")
-        logger.info(f"[_vertices_from_command] Fallback: returning []")
-        return []
+    logger.info(f"[_vertices_from_command] INPUT: command={command}, stroke_index={stroke_index}")
+    import re
+    import math
+    try:
+        # Example regex: (arc|line)_(\w+)_([\d.]+)(?:_([\d.]+))?-([\d.]+)
+        pattern = r'^(arc|line)_(\w+)_([\d.]+)(?:_([\d.]+))?-([\d.]+)$'
+        match = re.match(pattern, command)
+        if match:
+            action_type = match.group(1)
+            modifier = match.group(2)
+            param1 = float(match.group(3))
+            param2 = float(match.group(4)) if match.group(4) else None
+            param3 = float(match.group(5))
+            logger.info(f"[_vertices_from_command] Parsed: action_type={action_type}, modifier={modifier}, param1={param1}, param2={param2}, param3={param3}")
+            # Turtle simulation for line
+            if action_type == 'line':
+                # Assume param1 = length, param3 = angle (normalized)
+                length = param1
+                angle = param3 * 360.0  # normalized to degrees
+                x0, y0 = 0.5, 0.5  # center start
+                x1 = x0 + length * math.cos(math.radians(angle))
+                y1 = y0 + length * math.sin(math.radians(angle))
+                vertices = [(x0, y0), (x1, y1)]
+                logger.info(f"[_vertices_from_command] OUTPUT: vertices={vertices}")
+                return vertices
+            elif action_type == 'arc':
+                # Assume param1 = radius, param2 = span angle, param3 = start angle
+                radius = param1
+                span = param2 if param2 is not None else 180.0
+                start_angle = param3 * 360.0  # normalized to degrees
+                num_points = max(8, int(abs(span) // 10))
+                vertices = []
+                cx, cy = 0.5, 0.5  # center
+                for i in range(num_points + 1):
+                    theta = math.radians(start_angle + (span * i / num_points))
+                    x = cx + radius * math.cos(theta)
+                    y = cy + radius * math.sin(theta)
+                    vertices.append((x, y))
+                logger.info(f"[_vertices_from_command] OUTPUT: vertices={vertices}")
+                return vertices
+        # Fallback: try to extract all floats and simulate as polyline
+        floats = [float(x) for x in re.findall(r'[\d.]+', command)]
+        if len(floats) >= 4:
+            vertices = [(floats[i], floats[i+1]) for i in range(0, len(floats)-1, 2)]
+            logger.info(f"[_vertices_from_command] Fallback float extraction: vertices={vertices}")
+            return vertices
+    except Exception as e:
+        logger.error(f"[_vertices_from_command] Failed to parse command {command}: {e}")
+    logger.info(f"[_vertices_from_command] Fallback: returning []")
+    return []
 
 def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_val=None, shape_modifier_val=None, parameters=None, bongard_image=None) -> Dict[str, Any]:
     logger.info(f"[_calculate_stroke_specific_features] Called with stroke={stroke}, stroke_index={stroke_index}, stroke_type_val={stroke_type_val}, shape_modifier_val={shape_modifier_val}, parameters={parameters}")
