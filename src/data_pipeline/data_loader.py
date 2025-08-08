@@ -1,4 +1,3 @@
-
 # --- Main Functions for Data Loading and Processing ---
 import os
 import pickle
@@ -251,6 +250,11 @@ def extract_features_from_actions(action_sequence):
     Returns:
         dict with extracted features including command counts, shape types, geometric properties, etc.
     """
+    try:
+        from src.Derive_labels.features import ensure_str_list
+        action_sequence = ensure_str_list(action_sequence)
+    except Exception:
+        pass
     parsed_commands = [parse_action_command(cmd) for cmd in action_sequence]
     
     # Count command types and shapes

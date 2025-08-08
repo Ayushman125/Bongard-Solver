@@ -390,7 +390,13 @@ class ComprehensiveNVLabsParser:
                 except Exception as e:
                     logger.error(f"Failed to parse command '{cmd}': {e}")
                     continue
-                    
+            # Robust serialization: ensure actions are stringified before any join/logging/serialization
+            try:
+                from src.Derive_labels.features import ensure_str_list
+                safe_actions = ensure_str_list(actions)
+                logger.debug(f"[ACTIONS_JOIN] {','.join(safe_actions)}")
+            except Exception as e:
+                logger.debug(f"[ACTIONS_JOIN] Could not stringify actions for logging: {e}")
             if not actions:
                 logger.error(f"No valid actions parsed from {commands}")
                 return None

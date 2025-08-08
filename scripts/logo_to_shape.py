@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """
 Logo to Shape Conversion Script - Complete End-to-End Pipeline
@@ -193,7 +192,9 @@ class ComprehensiveBongardProcessor:
             else:
                 logger.warning(f"[ATTR DEBUG] Shape {idx} has no vertices.")
             if hasattr(shape, 'basic_actions'):
-                logger.info(f"[ATTR DEBUG] Shape {idx} basic_actions: {shape.basic_actions}")
+                # Defensive: ensure all basic_actions are strings for logging
+                safe_basic_actions = ensure_str_list(shape.basic_actions)
+                logger.info(f"[ATTR DEBUG] Shape {idx} basic_actions: {safe_basic_actions}")
                 image_dict['strokes'] = [vars(a) for a in shape.basic_actions]
             else:
                 logger.warning(f"[ATTR DEBUG] Shape {idx} has no basic_actions.")
@@ -251,14 +252,16 @@ class ComprehensiveBongardProcessor:
             logger.info(f"[ATTR MAP] Mapping attributes for multi-object image: {image_id}")
             for idx, shape in enumerate(getattr(bongard_image, 'one_stroke_shapes', [])):
                 attrs = getattr(shape, 'attributes', None)
-                logger.info(f"[ATTR MAP] Shape {idx}: attributes={attrs}")
+                # Defensive: ensure attributes dict is json-safe
+                safe_attrs = json_safe(attrs)
+                logger.info(f"[ATTR MAP] Shape {idx}: attributes={safe_attrs}")
                 if attrs is None:
                     logger.warning(f"[ATTR MAP] Shape {idx} has no attributes.")
                 elif isinstance(attrs, dict):
-                    for k, v in attrs.items():
+                    for k, v in safe_attrs.items():
                         logger.info(f"[ATTR MAP] Shape {idx} attribute: {k}={v}")
                 else:
-                    logger.info(f"[ATTR MAP] Shape {idx} attributes (non-dict): {attrs}")
+                    logger.info(f"[ATTR MAP] Shape {idx} attributes (non-dict): {safe_attrs}")
             bongard_image = BongardImage(one_stroke_shapes)
             # --- Attribute mapping for multi-object images ---
             logger.info(f"[ATTR MAP] Mapping attributes for multi-object image: {image_id}")
@@ -277,7 +280,9 @@ class ComprehensiveBongardProcessor:
             vertices_raw = []
             for shape in getattr(bongard_image, 'one_stroke_shapes', []):
                 if hasattr(shape, 'vertices'):
-                    vertices_raw.extend(shape.vertices)
+                    # Defensive: ensure vertices are json-safe
+                    safe_vertices = json_safe(shape.vertices)
+                    vertices_raw.extend(safe_vertices)
 
             # --- Use standardize_coordinates for normalization ---
             from src.Derive_labels.shape_utils import standardize_coordinates, calculate_geometry_consistent
@@ -316,7 +321,9 @@ class ComprehensiveBongardProcessor:
             # --- Calculate image features using robust polygon ---
             all_actions = []
             for shape in getattr(bongard_image, 'one_stroke_shapes', []):
-                all_actions.extend(getattr(shape, 'basic_actions', []))
+                # Defensive: ensure all actions are strings for downstream use
+                safe_actions = ensure_str_list(getattr(shape, 'basic_actions', []))
+                all_actions.extend(safe_actions)
             image_features = self._calculate_image_features(norm_vertices_for_features, all_actions, geometry)
             centroid = geometry.get('centroid')
             composition_features = self._calculate_composition_features(all_actions)
@@ -375,10 +382,12 @@ class ComprehensiveBongardProcessor:
             canonical_shape_def = shape_def_map.get(canonical_key)
 
             for i, shape in enumerate(getattr(bongard_image, 'one_stroke_shapes', [])):
-                for j, action in enumerate(getattr(shape, 'basic_actions', [])):
-                    stroke_type_val = type(action).__name__.replace('Action', '').lower()
-                    raw_command = getattr(action, 'raw_command', None)
-                    function_name = getattr(action, 'function_name', None)
+                # Defensive: ensure all actions are strings for logging/serialization
+                safe_actions = ensure_str_list(getattr(shape, 'basic_actions', []))
+                for j, action in enumerate(safe_actions):
+                    stroke_type_val = type(action).__name__.replace('Action', '').lower() if not isinstance(action, str) else 'unknown'
+                    raw_command = getattr(action, 'raw_command', None) if not isinstance(action, str) else action
+                    function_name = getattr(action, 'function_name', None) if not isinstance(action, str) else None
                     if not raw_command and original_action_commands and j < len(original_action_commands):
                         if isinstance(original_action_commands[j], str):
                             raw_command = original_action_commands[j]
@@ -404,7 +413,7 @@ class ComprehensiveBongardProcessor:
                         parts = raw_command.split('_')
                         if len(parts) >= 2:
                             function_name = f"{parts[0]}_{parts[1]}"
-                    if not shape_modifier_val and hasattr(action, 'shape_modifier'):
+                    if not shape_modifier_val and not isinstance(action, str) and hasattr(action, 'shape_modifier'):
                         smod = getattr(action, 'shape_modifier')
                         if hasattr(smod, 'value'):
                             shape_modifier_val = smod.value
@@ -412,7 +421,7 @@ class ComprehensiveBongardProcessor:
                             shape_modifier_val = smod
                     if not shape_modifier_val:
                         shape_modifier_val = 'normal'
-                    is_valid = getattr(action, 'is_valid', True)
+                    is_valid = getattr(action, 'is_valid', True) if not isinstance(action, str) else True
                     stroke_specific_features = _calculate_stroke_specific_features(
                         action, j, stroke_type_val, shape_modifier_val, parameters, bongard_image=bongard_image)
                     if stroke_type_val == 'line':
@@ -445,30 +454,36 @@ class ComprehensiveBongardProcessor:
 
             action_program = []
             for shape in getattr(bongard_image, 'one_stroke_shapes', []):
-                for j, a in enumerate(getattr(shape, 'basic_actions', [])):
-                    rc = getattr(a, 'raw_command', None)
+                # Always convert basic_actions to strings before any join/logging/serialization
+                safe_actions = ensure_str_list(getattr(shape, 'basic_actions', []))
+                for j, a in enumerate(safe_actions):
+                    rc = getattr(a, 'raw_command', None) if not isinstance(a, str) else a
                     if isinstance(rc, str):
                         action_program.append(rc)
                     else:
-                        # Fallback to str(a) if raw_command is not available
                         action_str = str(a)
                         logger.warning(f"[SERIALIZE] raw_command not string for action {j}, using str(a): {action_str}")
                         action_program.append(action_str)
+                # Defensive: log joined basic_actions
+                logger.debug(f"[BASIC_ACTIONS_JOIN] {','.join(safe_actions)}")
             # Final check: ensure all items are strings using ensure_str_list
             action_program = ensure_str_list(action_program)
-            # If action_program is used in any join operation, ensure all items are strings
-            # Example: if you ever do ','.join(action_program), this will now be safe
-
-            image_canonical_summary = {
-                'unique_shape_functions': sorted(list(unique_shape_functions)),
-                'shape_function_counts': shape_function_counts,
-                'modifiers': sorted(list(unique_modifiers)),
+            logger.debug(f"[ACTION_PROGRAM_JOIN] {','.join(action_program)}")
+            # Defensive: ensure ngram features are stringified if joined/logged/serialized
+            safe_ngram = ensure_str_list(ngram_features) if isinstance(ngram_features, list) else ngram_features
+            logger.debug(f"[NGRAM_JOIN] {','.join(safe_ngram) if isinstance(safe_ngram, list) else safe_ngram}")
+            # Defensive: ensure stroke_features lists are stringified
+            for stroke in stroke_features:
+                for k, v in stroke.items():
+                    if isinstance(v, list):
+                        stroke[k] = ensure_str_list(v)
+            # Defensive: ensure sequential features are stringified
+            sequential_features = {
+                'ngram': ensure_str_list(ngram_features),
+                'alternation': ensure_str_list(alternation) if isinstance(alternation, list) else alternation,
+                'regularity': ensure_str_list(regularity) if isinstance(regularity, list) else regularity
             }
 
-        
-            action_program = ensure_str_list(action_program)
-            # If you ever join action_program, do it like this:
-            # joined_action_program = ','.join(ensure_str_list(action_program))
             complete_record = {
                 'image_id': image_id,
                 'problem_id': problem_id,
