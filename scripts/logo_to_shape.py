@@ -1053,20 +1053,17 @@ def main():
         for r in all_results:
             safe_r = {}
             for k, v in r.items():
-                if isinstance(v, list):
-                    logger.debug(f"[SERIALIZE DEBUG][main] Before ensure_all_strings: key={k}, value={v}")
-                    logger.debug(f"[SERIALIZE DEBUG][main] Types: {[type(x) for x in v]}")
+                # Patch: For 'actions' and 'action_program', always join using raw_command
+                if k in ['actions', 'action_program'] and isinstance(v, list):
+                    # If v is a list of lists, flatten and join each sublist
+                    if v and isinstance(v[0], list):
+                        safe_r[k] = [','.join([getattr(a, 'raw_command', str(a)) for a in sublist]) for sublist in v]
+                    else:
+                        safe_r[k] = ','.join([getattr(a, 'raw_command', str(a)) for a in v])
+                elif isinstance(v, list):
                     safe_r[k] = ensure_all_strings(recursive_flatten_and_stringify(v))
-                    logger.debug(f"[SERIALIZE DEBUG][main] After ensure_all_strings: key={k}, value={safe_r[k]}")
-                    logger.debug(f"[SERIALIZE DEBUG][main] Types after: {[type(x) for x in safe_r[k]]}")
                 else:
                     safe_r[k] = v
-            if 'action_program' in safe_r:
-                logger.debug(f"[SERIALIZE DEBUG][main] Before ensure_all_strings (action_program): {safe_r['action_program']}")
-                logger.debug(f"[SERIALIZE DEBUG][main] Types: {[type(x) for x in safe_r['action_program']]}")
-                safe_r['action_program'] = ensure_all_strings(recursive_flatten_and_stringify(safe_r['action_program']))
-                logger.debug(f"[SERIALIZE DEBUG][main] After ensure_all_strings (action_program): {safe_r['action_program']}")
-                logger.debug(f"[SERIALIZE DEBUG][main] Types after: {[type(x) for x in safe_r['action_program']]}")
             logger.debug(f"[SERIALIZE DEBUG][main] Before serialization: {safe_r}")
             processed_results.append(safe_r)
 
