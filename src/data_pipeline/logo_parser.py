@@ -6,6 +6,20 @@ Now using DIRECT NVLabs classes for exact compatibility.
 """
 
 import sys
+"""
+Global patch: Ensures any str() or join() on LineAction or ArcAction yields the raw command string always
+Should be applied exactly once, early in the main entry script or module import.
+"""
+try:
+    from bongard import LineAction, ArcAction
+    def action_to_str(self):
+        return getattr(self, "raw_command", super(self.__class__, self).__str__())
+    LineAction.__str__ = action_to_str
+    ArcAction.__str__ = action_to_str
+    LineAction.__repr__ = action_to_str
+    ArcAction.__repr__ = action_to_str
+except Exception:
+    pass
 import os
 from pathlib import Path
 import numpy as np
