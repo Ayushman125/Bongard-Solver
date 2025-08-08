@@ -1,3 +1,7 @@
+import logging
+from typing import Dict, List, Any, Optional
+from src.physics_inference import PhysicsInference
+
 def calculate_complexity(vertices: List[tuple]) -> float:
     """
     Compute a standardized shape complexity metric as a function of:
@@ -35,11 +39,6 @@ def calculate_complexity(vertices: List[tuple]) -> float:
     except Exception as e:
         logger.warning(f"calculate_complexity failed: {e}")
         return 0.0
-import logging
-from typing import Dict, List, Any, Optional
-from src.physics_inference import PhysicsInference
-
-
 
 
 def _calculate_compactness(area: float, perimeter: float) -> float:

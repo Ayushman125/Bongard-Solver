@@ -24,8 +24,6 @@ import time
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 import numpy as np
-from src.Derive_labels.features import extract_multiscale_features
-from src.Derive_labels.context_features import BongardFeatureExtractor
 
 # Ensure src is importable
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -62,6 +60,9 @@ from src.Derive_labels.features import _actions_to_geometries, _extract_ngram_fe
 from src.Derive_labels.features import _detect_alternation
 from src.Derive_labels.shape_utils import _calculate_homogeneity, _calculate_angular_variance,safe_divide, _calculate_compactness, _calculate_eccentricity, _check_horizontal_symmetry, _check_vertical_symmetry, _check_rotational_symmetry
 from src.Derive_labels.file_io import FileIO
+from src.Derive_labels.features import extract_multiscale_features
+from src.Derive_labels.context_features import BongardFeatureExtractor
+
 
 
 
@@ -139,8 +140,9 @@ class ComprehensiveBongardProcessor:
             if v is None and hasattr(a, 'get_world_coordinates'):
                 v = a.get_world_coordinates()
             context_strokes.append({'vertices': v if v is not None else []})
-        # Extract spatial relationships (adjacency, containment, intersection)
-        context_relationships = self.context_extractor.extract_spatial_relationships(context_strokes) if context_strokes else {}
+        # Extract robust spatial relationships (adjacency, intersection, containment, overlap)
+        from src.Derive_labels.features import extract_relational_features
+        context_relationships = extract_relational_features(context_strokes) if context_strokes else {}
         logger.info(f"[process_single_image] context_relationships: {context_relationships}")
         # Multi-scale features (using normalized vertices)
         multiscale_features = extract_multiscale_features(norm_vertices_for_features) if 'norm_vertices_for_features' in locals() else {}
@@ -224,41 +226,11 @@ class ComprehensiveBongardProcessor:
             logger.debug(f"Number of stroke geometries: {len(stroke_geometries)}")
             for idx, g in enumerate(stroke_geometries):
                 logger.debug(f"Geometry {idx}: type={g.geom_type}, is_valid={g.is_valid}")
-            # Intersections, adjacency, containment, overlap (relational) -- use buffered polygons for overlap/containment
-            buffer_amt = 0.001  # Smaller buffer for robust relational features (documented: use exact intersections for lines)
-            try:
-                # For lines, use exact intersections; for polygons/arcs, use small buffer
-                buffered_geoms = []
-                for g in stroke_geometries:
-                    if hasattr(g, 'geom_type') and g.geom_type == 'LineString':
-                        buffered_geoms.append(g)  # No buffer for lines
-                    elif hasattr(g, 'buffer'):
-                        buffered_geoms.append(g.buffer(buffer_amt))
-                    else:
-                        buffered_geoms.append(g)
-            except Exception as e:
-                logger.warning(f"Buffering error in relational features: {e}")
-                buffered_geoms = stroke_geometries
-            try:
-                intersections = PhysicsInference.find_stroke_intersections(stroke_geometries)
-            except Exception as e:
-                logger.warning(f"Intersections error: {e}")
-                intersections = None
-            try:
-                adjacency = PhysicsInference.strokes_touching(stroke_geometries)
-            except Exception as e:
-                logger.warning(f"Adjacency error: {e}")
-                adjacency = None
-            try:
-                containment = PhysicsInference.stroke_contains_stroke(buffered_geoms)
-            except Exception as e:
-                logger.warning(f"Containment error: {e}")
-                containment = None
-            try:
-                overlap = PhysicsInference.stroke_overlap_area(buffered_geoms)
-            except Exception as e:
-                logger.warning(f"Overlap error: {e}")
-                overlap = None
+            # Use robust context_relationships for all relational features
+            intersections = context_relationships.get('intersections')
+            adjacency = context_relationships.get('adjacency')
+            containment = context_relationships.get('containment')
+            overlap = context_relationships.get('overlap')
 
             # Sequential pattern features (n-gram, alternation, regularity)
             modifier_sequence = [_extract_modifier_from_stroke(s) for s in getattr(shape, 'basic_actions', [])]
@@ -456,7 +428,7 @@ class ComprehensiveBongardProcessor:
 
     
     def _calculate_image_features(self, vertices: List[tuple], strokes: List, geometry: Dict[str, Any]) -> Dict[str, Any]:
-        """Calculate comprehensive image-level features with robust polygon recovery and improved metrics. Now includes standardized complexity."""
+        """Calculate comprehensive image-level features with robust polygon recovery and improved metrics. Now includes standardized complexity. Outputs both raw and normalized values for area and perimeter."""
         logger = logging.getLogger(__name__)
         logger.debug(f"[_calculate_image_features] INPUTS: vertices count={len(vertices) if vertices else 0}, strokes count={len(strokes) if strokes else 0}, geometry keys={list(geometry.keys()) if geometry else []}")
         vertices = ensure_vertex_list(vertices)
@@ -486,21 +458,25 @@ class ComprehensiveBongardProcessor:
             # --- Robust, normalized feature extraction ---
             num_strokes = len(strokes)
             max_strokes = 50
-            perimeter = _calculate_perimeter(vertices)
-            hull_perimeter = perimeter
+            perimeter_raw = _calculate_perimeter(vertices)
+            area_raw = PhysicsInference.area(poly) if poly else 0.0
+            hull_perimeter = perimeter_raw
+            hull_area = area_raw
             if poly is not None and hasattr(poly, 'convex_hull'):
                 try:
                     hull_perimeter = poly.convex_hull.length
+                    hull_area = poly.convex_hull.area
                 except Exception:
                     pass
+            # Normalized perimeter and area (relative to convex hull)
+            perimeter_norm = min(max(perimeter_raw / hull_perimeter, 0.0), 1.0) if hull_perimeter else 0.0
+            area_norm = min(max(area_raw / hull_area, 0.0), 1.0) if hull_area else 0.0
+
             # Use robust, analytic, normalized formulas for all features:
             curvature_score = PhysicsInference.robust_curvature(vertices)
             angular_variance = PhysicsInference.robust_angular_variance(vertices)
             moment_of_inertia = PhysicsInference.moment_of_inertia(vertices)
-            visual_complexity = PhysicsInference.visual_complexity(num_strokes, max_strokes, perimeter, hull_perimeter, curvature_score)
-            # Normalize perimeter: max for [0,1] box is 4 (square), use 4 for safety
-            perimeter_norm = min(max(perimeter / 4.0, 0.0), 1.0) if perimeter is not None else 0.0
-            # Normalize visual_complexity: robust fallback, already [0,1] if implemented as such
+            visual_complexity = PhysicsInference.visual_complexity(num_strokes, max_strokes, perimeter_raw, hull_perimeter, curvature_score)
             visual_complexity_norm = min(max(visual_complexity, 0.0), 1.0) if visual_complexity is not None else 0.0
 
             # --- Standardized complexity metric ---
@@ -513,14 +489,16 @@ class ComprehensiveBongardProcessor:
                 'centroid': geometry.get('centroid', [0.0, 0.0]),
                 'width': geometry.get('width', 0.0),
                 'height': geometry.get('height', 0.0),
-                'area': PhysicsInference.area(poly) if poly else 0.0,
-                'perimeter': perimeter_norm,  # normalized [0,1]
+                'area_raw': area_raw,
+                'area_normalized': area_norm,
+                'perimeter_raw': perimeter_raw,
+                'perimeter_normalized': perimeter_norm,
                 'aspect_ratio': max(FLAGGING_THRESHOLDS['min_aspect_ratio'], min(safe_divide(geometry.get('width', 1.0), geometry.get('height', 1.0), 1.0), FLAGGING_THRESHOLDS['max_aspect_ratio'])),
                 'convexity_ratio': (max(0.0, min(1.0, safe_divide(poly.area, poly.convex_hull.area))) if poly and poly.area != 0 and poly.convex_hull.area != 0 else 0.0),
                 'is_convex': PhysicsInference.is_convex(poly) if poly else False,
-                'compactness': _calculate_compactness(PhysicsInference.area(poly) if poly else 0.0, perimeter),
+                'compactness': _calculate_compactness(area_raw, perimeter_raw),
                 'eccentricity': _calculate_eccentricity(vertices),
-                'symmetry_score': (PhysicsInference.symmetry_score(vertices) if perimeter > 0 and (PhysicsInference.area(poly) if poly else 0.0) > 0 else None),
+                'symmetry_score': (PhysicsInference.symmetry_score(vertices) if perimeter_raw > 0 and area_raw > 0 else None),
                 'horizontal_symmetry': _check_horizontal_symmetry(vertices, poly),
                 'vertical_symmetry': _check_vertical_symmetry(vertices, poly),
                 'rotational_symmetry': _check_rotational_symmetry(vertices),
@@ -682,6 +660,7 @@ def main():
     successful_images = 0
     problem_summaries = []
 
+
     for problem_id, problem_data in problems_data.items():
         try:
             # Determine category from problem_id
@@ -707,6 +686,7 @@ def main():
             num_images_in_problem = 0
 
             # Process positive examples
+            pos_results = []
             for i, action_commands in enumerate(positive_examples):
                 total_images += 1
                 num_images_in_problem += 1
@@ -718,11 +698,10 @@ def main():
                 )
 
                 if result:
-                    # Log the full label/data for this image
                     logger.info(f"[LABEL OUTPUT] Image: {image_id} | Problem: {problem_id}\n{json.dumps(result, indent=2, ensure_ascii=False)}")
+                    pos_results.append(result)
                     all_results.append(result)
                     successful_images += 1
-                    # Aggregate image-level canonical summary into problem-level
                     summary = result.get('image_canonical_summary', {})
                     for fn in summary.get('unique_shape_functions', []):
                         problem_unique_shape_functions.add(fn)
@@ -732,6 +711,7 @@ def main():
                         problem_modifiers.add(mod)
 
             # Process negative examples
+            neg_results = []
             for i, action_commands in enumerate(negative_examples):
                 total_images += 1
                 num_images_in_problem += 1
@@ -743,11 +723,10 @@ def main():
                 )
 
                 if result:
-                    # Log the full label/data for this image
                     logger.info(f"[LABEL OUTPUT] Image: {image_id} | Problem: {problem_id}\n{json.dumps(result, indent=2, ensure_ascii=False)}")
+                    neg_results.append(result)
                     all_results.append(result)
                     successful_images += 1
-                    # Aggregate image-level canonical summary into problem-level
                     summary = result.get('image_canonical_summary', {})
                     for fn in summary.get('unique_shape_functions', []):
                         problem_unique_shape_functions.add(fn)
@@ -755,6 +734,16 @@ def main():
                         problem_shape_function_counts[fn] = problem_shape_function_counts.get(fn, 0) + count
                     for mod in summary.get('modifiers', []):
                         problem_modifiers.add(mod)
+
+            # --- Compute and add support-set context features ---
+            from src.Derive_labels.context_features import BongardFeatureExtractor
+            context_extractor = BongardFeatureExtractor()
+            logger.info(f"[SUPPORT-SET CONTEXT] Calling extract_support_set_context for problem {problem_id}")
+            support_set_context = context_extractor.extract_support_set_context(pos_results, neg_results)
+            logger.info(f"[SUPPORT-SET CONTEXT] OUTPUT for problem {problem_id}: {json.dumps(support_set_context, indent=2, ensure_ascii=False)}")
+            # Add support_set_context to each image result
+            for r in pos_results + neg_results:
+                r['support_set_context'] = support_set_context
 
             # Save problem-level canonical summary
             problem_summary = {
@@ -764,7 +753,6 @@ def main():
                 'modifiers': sorted(list(problem_modifiers)),
                 'num_images': num_images_in_problem
             }
-            # Log the full problem-level summary
             logger.info(f"[PROBLEM SUMMARY] Problem: {problem_id}\n{json.dumps(problem_summary, indent=2, ensure_ascii=False)}")
             problem_summaries.append(problem_summary)
 

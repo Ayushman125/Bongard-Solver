@@ -92,6 +92,23 @@ def _actions_to_geometries(shape, arc_points=24):
                         logging.debug(f"Fallback: failed to create LineString for stroke {i}: {e}")
         logging.debug(f"Number of stroke geometries: {len(geoms)}")
         return geoms
+
+def extract_relational_features(strokes, buffer_amt=0.001):
+    """
+    Compute adjacency, intersection, containment, and overlap using robust buffered geometry (delegates to calculate_relationships).
+    Args:
+        strokes: list of stroke dicts or objects with 'vertices' attribute
+        buffer_amt: float, buffer size for robust geometry
+    Returns:
+        dict with keys: 'adjacency', 'intersections', 'containment', 'overlap'
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"[extract_relational_features] INPUT: {strokes}")
+    from src.Derive_labels.relational_features import calculate_relationships
+    rel = calculate_relationships(strokes, buffer_amt)
+    logger.info(f"[extract_relational_features] OUTPUT: {rel}")
+    return rel
     
 def _extract_ngram_features(sequence, n=2):
         """Extract n-gram counts from a sequence, with string keys for JSON compatibility."""

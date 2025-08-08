@@ -176,18 +176,28 @@ class PhysicsInference:
     def safe_finite(val, default=0.0, minval=None, maxval=None):
         """
         Ensure val is finite and optionally clamp to [minval, maxval].
+        Returns default if not finite.
         """
-        if not np.isfinite(val):
+        try:
+            if not np.isfinite(val):
+                return default
+            if minval is not None:
+                val = max(val, minval)
+            if maxval is not None:
+                val = min(val, maxval)
+            return val
+        except Exception as e:
+            logging.warning(f"safe_finite: Exception {e}, returning default={default}")
             return default
-        if minval is not None:
-            val = max(val, minval)
-        if maxval is not None:
-            val = min(val, maxval)
-        return val
+    @staticmethod
     @staticmethod
     def polyline_weighted_center_of_mass(vertices):
-        """Segment-length-weighted average of midpoints for open polylines."""
+        """
+        Segment-length-weighted average of midpoints for open polylines.
+        Returns (nan, nan) if degenerate, else robust center of mass.
+        """
         if not vertices or len(vertices) < 2:
+            logging.warning("[polyline_weighted_center_of_mass] Insufficient vertices (<2). Returning (nan, nan).")
             return (float('nan'), float('nan'))
         arr = np.array(vertices)
         n = len(arr)
@@ -201,21 +211,29 @@ class PhysicsInference:
             total += seg_len * mid
             total_len += seg_len
         if total_len < 1e-8:
+            logging.warning("[polyline_weighted_center_of_mass] Total segment length < 1e-8. Returning (nan, nan).")
             return (float('nan'), float('nan'))
         return tuple(total / total_len)
 
     @staticmethod
+    @staticmethod
     def convexity_ratio(vertices):
-        """Area / area of convex hull. Returns 1.0 for convex shapes, <1 for concave."""
+        """
+        Area / area of convex hull. Returns 1.0 for convex shapes, <1 for concave.
+        Returns nan for degenerate cases.
+        """
         verts = PhysicsInference.safe_extract_vertices(vertices)
         verts = PhysicsInference.dedup_vertices(verts)
         if len(verts) < 3:
+            logging.warning("[convexity_ratio] Insufficient vertices (<3). Returning nan.")
             return float('nan')
         poly = Polygon(verts)
         if not poly.is_valid or poly.area == 0:
+            logging.warning("[convexity_ratio] Invalid or zero-area polygon. Returning nan.")
             return float('nan')
         hull = poly.convex_hull
         if hull.area == 0:
+            logging.warning("[convexity_ratio] Convex hull area is zero. Returning nan.")
             return float('nan')
         return float(poly.area / hull.area)
     @staticmethod

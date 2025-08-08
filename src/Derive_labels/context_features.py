@@ -3,13 +3,45 @@ import logging
 
 class BongardFeatureExtractor:
     def extract_support_set_context(self, positive_images, negative_images):
-        """Compute features that depend on the whole support set (contrastive/discriminative)."""
-        logging.info(f"[extract_support_set_context] positive_images: {len(positive_images)}, negative_images: {len(negative_images)}")
+        """
+        Compute full statistics (mean, var, min, max) for each feature in both positive and negative sets,
+        and discriminative features (mean difference). Returns a dict with all these.
+        """
+        logging.info(f"[extract_support_set_context] INPUT: positive_images={len(positive_images)}, negative_images={len(negative_images)}")
         pos_features = [self.extract_image_features(img) for img in positive_images]
         neg_features = [self.extract_image_features(img) for img in negative_images]
+        pos_stats = self.compute_feature_statistics(pos_features, label='positive')
+        neg_stats = self.compute_feature_statistics(neg_features, label='negative')
         discriminative = self.compute_discriminative_features(pos_features, neg_features)
-        logging.info(f"[extract_support_set_context] discriminative features: {discriminative}")
-        return discriminative
+        context = {
+            'positive_stats': pos_stats,
+            'negative_stats': neg_stats,
+            'discriminative': discriminative
+        }
+        logging.info(f"[extract_support_set_context] OUTPUT: {context}")
+        return context
+
+    def compute_feature_statistics(self, features_list, label=None):
+        """
+        Compute mean, variance, min, max for each feature in a list of feature dicts.
+        """
+        import numpy as np
+        logging.info(f"[compute_feature_statistics] INPUT: label={label}, num_features={len(features_list)}")
+        if not features_list:
+            return {}
+        keys = set(features_list[0].keys())
+        stats = {}
+        for k in keys:
+            vals = np.array([f[k] for f in features_list if k in f and isinstance(f[k], (int, float, np.integer, np.floating))])
+            if vals.size:
+                stats[k] = {
+                    'mean': float(np.mean(vals)),
+                    'var': float(np.var(vals)),
+                    'min': float(np.min(vals)),
+                    'max': float(np.max(vals))
+                }
+        logging.info(f"[compute_feature_statistics] OUTPUT for label={label}: {stats}")
+        return stats
 
     def extract_image_features(self, image):
         """
@@ -100,68 +132,38 @@ class BongardFeatureExtractor:
             return {}
 
     def compute_discriminative_features(self, pos_features, neg_features):
-        # Example: difference of means for each feature
+        # Computes difference of means for each feature, skipping None/NaN values
+        import numpy as np
         if not pos_features or not neg_features:
             return {}
         keys = set(pos_features[0].keys()) & set(neg_features[0].keys())
         discriminative = {}
         for k in keys:
-            pos_vals = np.array([f[k] for f in pos_features if k in f])
-            neg_vals = np.array([f[k] for f in neg_features if k in f])
+            pos_vals = np.array([f[k] for f in pos_features if k in f and f[k] is not None and not (isinstance(f[k], float) and np.isnan(f[k])) and isinstance(f[k], (int, float, np.integer, np.floating))])
+            neg_vals = np.array([f[k] for f in neg_features if k in f and f[k] is not None and not (isinstance(f[k], float) and np.isnan(f[k])) and isinstance(f[k], (int, float, np.integer, np.floating))])
             if pos_vals.size and neg_vals.size:
                 discriminative[k] = float(np.mean(pos_vals) - np.mean(neg_vals))
         return discriminative
 
+
     def extract_spatial_relationships(self, strokes):
+        """
+        Compute robust relational features (adjacency, intersection, containment, overlap) using buffered polygons and Shapely.
+        Integrates extract_relational_features from features.py.
+        """
+        from src.Derive_labels.features import extract_relational_features
         logging.info(f"[extract_spatial_relationships] strokes: {len(strokes)}")
-        relationships = {}
-        relationships['adjacency_matrix'] = self.compute_stroke_adjacency(strokes)
-        relationships['containment'] = self.compute_containment_relations(strokes)
-        relationships['intersection_pattern'] = self.compute_intersection_topology(strokes)
+        rel = extract_relational_features(strokes)
+        relationships = {
+            'adjacency': rel.get('adjacency', 0),
+            'intersections': rel.get('intersections', 0),
+            'containment': rel.get('containment', 0),
+            'overlap': rel.get('overlap', 0.0)
+        }
         logging.info(f"[extract_spatial_relationships] relationships: {relationships}")
         return relationships
 
-    def compute_stroke_adjacency(self, strokes, threshold=0.05):
-        n = len(strokes)
-        adj = np.zeros((n, n), dtype=int)
-        for i in range(n):
-            for j in range(i+1, n):
-                if self.strokes_are_adjacent(strokes[i], strokes[j], threshold):
-                    adj[i, j] = adj[j, i] = 1
-        return adj.tolist()
-
-    def strokes_are_adjacent(self, s1, s2, threshold):
-        # Use endpoints or bounding boxes for adjacency
-        v1 = np.array(s1.get('vertices', []))
-        v2 = np.array(s2.get('vertices', []))
-        if v1.size == 0 or v2.size == 0:
-            return False
-        dists = np.linalg.norm(v1[:, None, :] - v2[None, :, :], axis=-1)
-        return np.any(dists < threshold)
-
-    def compute_containment_relations(self, strokes):
-        # Simple bounding box containment
-        n = len(strokes)
-        contained = [[0]*n for _ in range(n)]
-        for i, s1 in enumerate(strokes):
-            box1 = self.bounding_box(s1.get('vertices', []))
-            for j, s2 in enumerate(strokes):
-                if i != j:
-                    box2 = self.bounding_box(s2.get('vertices', []))
-                    if self.box_contains(box1, box2):
-                        contained[i][j] = 1
-        return contained
-
-    def bounding_box(self, verts):
-        if not verts:
-            return (0,0,0,0)
-        arr = np.array(verts)
-        return (arr[:,0].min(), arr[:,1].min(), arr[:,0].max(), arr[:,1].max())
-
-    def box_contains(self, box1, box2):
-        # box = (minx, miny, maxx, maxy)
-        return (box1[0] <= box2[0] and box1[1] <= box2[1] and
-                box1[2] >= box2[2] and box1[3] >= box2[3])
+    # ...existing code...
 
     def compute_intersection_topology(self, strokes):
         # Use bounding box overlap as proxy for intersection

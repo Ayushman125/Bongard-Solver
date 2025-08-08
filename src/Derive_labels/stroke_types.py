@@ -43,11 +43,12 @@ def _extract_stroke_vertices(stroke, stroke_index, all_vertices):
     """Robustly extract the full set of vertices for a stroke, not just endpoints."""
     import numpy as np
     logger = logging.getLogger(__name__)
-    logger.debug(f"[_extract_stroke_vertices] INPUT: stroke_index={stroke_index}, stroke={stroke}, all_vertices={all_vertices}")
+    logger.info(f"[_extract_stroke_vertices] INPUT: stroke_index={stroke_index}, stroke={stroke}, all_vertices={all_vertices}")
     try:
         # 1. Use stroke.vertices if available and has >2 points
         if hasattr(stroke, 'vertices') and stroke.vertices and len(stroke.vertices) > 2:
-            logger.debug(f"[_extract_stroke_vertices] Using stroke.vertices: {stroke.vertices}")
+            logger.info(f"[_extract_stroke_vertices] Using stroke.vertices: {stroke.vertices}")
+            logger.info(f"[_extract_stroke_vertices] OUTPUT: {stroke.vertices}")
             return stroke.vertices
         # 2. Robust arc interpolation if arc parameters are available
         stype = getattr(stroke, 'stroke_type', None)
@@ -90,36 +91,56 @@ def _extract_stroke_vertices(stroke, stroke_index, all_vertices):
                     theta2 += 2 * np.pi
                 thetas = np.linspace(theta1, theta2, num_points)
                 arc_points = [(cx + radius * np.cos(t), cy + radius * np.sin(t)) for t in thetas]
-                logger.debug(f"[_extract_stroke_vertices] Interpolated arc points: {arc_points}")
+                logger.info(f"[_extract_stroke_vertices] Interpolated arc points: {arc_points}")
+                logger.info(f"[_extract_stroke_vertices] OUTPUT: {arc_points}")
                 return arc_points
             except Exception as e:
                 logger.warning(f"[_extract_stroke_vertices] Arc interpolation failed: {e}")
         # 3. For polylines, use all available points
         if hasattr(stroke, 'polyline_points') and stroke.polyline_points and len(stroke.polyline_points) > 2:
-            logger.debug(f"[_extract_stroke_vertices] Using stroke.polyline_points: {stroke.polyline_points}")
+            logger.info(f"[_extract_stroke_vertices] Using stroke.polyline_points: {stroke.polyline_points}")
+            logger.info(f"[_extract_stroke_vertices] OUTPUT: {stroke.polyline_points}")
             return stroke.polyline_points
         # 4. Fallback: extract from shape_vertices using stroke boundaries (legacy)
         if all_vertices and len(all_vertices) > stroke_index + 2:
-            logger.debug(f"[_extract_stroke_vertices] Using all_vertices slice: {all_vertices[stroke_index:stroke_index+2]}")
+            logger.info(f"[_extract_stroke_vertices] Using all_vertices slice: {all_vertices[stroke_index:stroke_index+2]}")
+            logger.info(f"[_extract_stroke_vertices] OUTPUT: {all_vertices[stroke_index:stroke_index+2]}")
             return all_vertices[stroke_index:stroke_index+2]
         # 5. Last resort: use world coordinates if available
         if hasattr(stroke, 'get_world_coordinates') and callable(stroke.get_world_coordinates):
             verts = stroke.get_world_coordinates()
             if verts and len(verts) > 2:
-                logger.debug(f"[_extract_stroke_vertices] Using get_world_coordinates: {verts}")
+                logger.info(f"[_extract_stroke_vertices] Using get_world_coordinates: {verts}")
+                logger.info(f"[_extract_stroke_vertices] OUTPUT: {verts}")
                 return verts
         # 6. Fallback: try to synthesize from command string
         raw_command = getattr(stroke, 'raw_command', None)
         if raw_command:
             verts = _vertices_from_command(raw_command, stroke_index)
             if verts and len(verts) > 1:
-                logger.debug(f"[_extract_stroke_vertices] Synthesized from command: {verts}")
+                logger.info(f"[_extract_stroke_vertices] Synthesized from command: {verts}")
+                logger.info(f"[_extract_stroke_vertices] OUTPUT: {verts}")
                 return verts
         logger.warning(f"[_extract_stroke_vertices] Could not robustly extract vertices for stroke {stroke_index} (type={stype}). Returning empty list.")
+        logger.info(f"[_extract_stroke_vertices] OUTPUT: []")
         return []
     except Exception as e:
         logger.warning(f"[_extract_stroke_vertices] Exception for stroke {stroke_index}: {e}")
+        logger.info(f"[_extract_stroke_vertices] OUTPUT: []")
         return []
+    # 1. Try to use NVLabs parser: BongardImage.one_stroke_shapes[i].vertices if available
+    bongard_image = getattr(stroke, 'bongard_image', None)
+    if bongard_image is not None:
+        try:
+            if hasattr(bongard_image, 'one_stroke_shapes') and len(bongard_image.one_stroke_shapes) > stroke_index:
+                shape = bongard_image.one_stroke_shapes[stroke_index]
+                verts = getattr(shape, 'vertices', None)
+                if verts and len(verts) >= 2:
+                    logger.info(f"[_extract_stroke_vertices] Using NVLabs vertices: {verts}")
+                    logger.info(f"[_extract_stroke_vertices] OUTPUT: {verts}")
+                    return verts
+        except Exception as e:
+            logger.warning(f"[_extract_stroke_vertices] Exception accessing NVLabs vertices: {e}")
 
 def _vertices_from_command(command, stroke_index):
         import numpy as np
@@ -143,13 +164,14 @@ def _vertices_from_command(command, stroke_index):
 def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_val=None, shape_modifier_val=None, parameters=None) -> Dict[str, Any]:
     """Calculate features specific to stroke type and shape modifier, using robust geometric/physics formulas."""
     logger = logging.getLogger(__name__)
-    logger.debug(f"[_calculate_stroke_specific_features] INPUTS: stroke_index={stroke_index}, stroke_type_val={stroke_type_val}, shape_modifier_val={shape_modifier_val}, parameters={parameters}")
+    logger.info(f"[_calculate_stroke_specific_features] INPUTS: stroke_index={stroke_index}, stroke_type_val={stroke_type_val}, shape_modifier_val={shape_modifier_val}, parameters={parameters}")
     features = {'stroke_index': stroke_index}
     stype = stroke_type_val or type(stroke).__name__.replace('Action', '').lower()
     smod = shape_modifier_val or 'normal'
     params = parameters or {}
+    # Always try to use full NVLabs vertices if available
     verts = _extract_stroke_vertices(stroke, stroke_index, None)
-    logger.debug(f"[_calculate_stroke_specific_features] verts: {verts}")
+    logger.info(f"[_calculate_stroke_specific_features] verts: {verts}")
     # If not enough points for arcs, try to interpolate
     stype_lower = stype.lower() if stype else ''
     if verts and len(verts) <= 2 and 'arc' in stype_lower:
@@ -192,22 +214,24 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
         except Exception as e:
             logger.warning(f"[_calculate_stroke_specific_features] Arc interpolation failed: {e}")
     # Only compute geometric features if there are enough points
-    if verts and len(verts) > 2:
+    if verts and len(verts) >= 3:
         features['angular_variance'] = PhysicsInference.robust_angular_variance(verts)
         features['curvature_score'] = PhysicsInference.robust_curvature(verts)
         features['moment_of_inertia'] = PhysicsInference.robust_moment_of_inertia(verts, stype, params)
+        logger.info(f"[_calculate_stroke_specific_features] OUTPUT: angular_variance={features['angular_variance']}, curvature_score={features['curvature_score']}, moment_of_inertia={features['moment_of_inertia']}")
     else:
         features['angular_variance'] = None
         features['curvature_score'] = None
         features['moment_of_inertia'] = None
         logger.warning(f"[_calculate_stroke_specific_features] Insufficient vertices for geometric features (stroke_index={stroke_index}). verts: {verts}")
+        logger.info(f"[_calculate_stroke_specific_features] OUTPUT: angular_variance=None, curvature_score=None, moment_of_inertia=None")
     # For line strokes, add line_length, line_angle, etc.
     if stype == 'line':
         features.update(_calculate_line_specific_features_from_params(params))
     elif stype == 'arc':
         features.update(_calculate_arc_specific_features_from_params(params))
     features.update(_calculate_shape_modifier_features_from_val(smod))
-    logger.debug(f"[_calculate_stroke_specific_features] OUTPUT: {features}")
+    logger.info(f"[_calculate_stroke_specific_features] FINAL OUTPUT features: {features}")
     return features
 
 def _calculate_line_specific_features_from_params(params: dict) -> Dict[str, Any]:
