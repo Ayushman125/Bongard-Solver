@@ -1,0 +1,304 @@
+import logging
+from typing import Dict, List, Any, Optional
+from src.physics_inference import PhysicsInference
+
+
+
+
+def _calculate_compactness(area: float, perimeter: float) -> float:
+    """
+    Isoperimetric ratio: (4πA)/P². Returns 1 for a perfect circle, <1 otherwise.
+    No clamping or bounding is applied. Returns NaN for degenerate cases.
+    """
+    import math
+    try:
+        if area is None or perimeter is None or perimeter == 0 or area <= 0:
+            return float('nan')
+        return (4 * math.pi * area) / (perimeter ** 2)
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Compactness error: {e}")
+        return float('nan')
+
+def _calculate_angular_variance(vertices: list) -> float:
+    # Use robust angular variance, fallback to 0 for <3 points
+    return PhysicsInference.robust_angular_variance(vertices)
+
+
+def _calculate_pattern_regularity_from_modifiers(modifier_sequence: list) -> float:
+    """Pattern regularity using PhysicsInference.pattern_regularity. Returns NaN if sequence too short."""
+    return PhysicsInference.pattern_regularity(modifier_sequence)
+def _check_horizontal_symmetry(vertices, poly=None):
+    """Check horizontal symmetry using PhysicsInference or geometric comparison."""
+    try:
+        # Prefer PhysicsInference if available
+        if hasattr(PhysicsInference, 'horizontal_symmetry'):
+            return PhysicsInference.horizontal_symmetry(vertices)
+        # Fallback: compare top and bottom halves
+        if poly is not None and hasattr(poly, 'centroid'):
+            centroid_y = poly.centroid.y
+        else:
+            centroid_y = sum(v[1] for v in vertices) / len(vertices)
+        reflected = [(x, 2*centroid_y - y) for x, y in vertices]
+        # Compare original and reflected (simple mean distance)
+        import numpy as np
+        orig = np.array(vertices)
+        refl = np.array(reflected)
+        if orig.shape == refl.shape:
+            return float(np.mean(np.linalg.norm(orig - refl, axis=1)))
+        return 0.0
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Horizontal symmetry error: {e}")
+        return 0.0
+
+def _check_vertical_symmetry(vertices, poly=None):
+    """Check vertical symmetry using PhysicsInference or geometric comparison."""
+    try:
+        if hasattr(PhysicsInference, 'vertical_symmetry'):
+            return PhysicsInference.vertical_symmetry(vertices)
+        if poly is not None and hasattr(poly, 'centroid'):
+            centroid_x = poly.centroid.x
+        else:
+            centroid_x = sum(v[0] for v in vertices) / len(vertices)
+        reflected = [(2*centroid_x - x, y) for x, y in vertices]
+        import numpy as np
+        orig = np.array(vertices)
+        refl = np.array(reflected)
+        if orig.shape == refl.shape:
+            return float(np.mean(np.linalg.norm(orig - refl, axis=1)))
+        return 0.0
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Vertical symmetry error: {e}")
+        return 0.0
+
+def _calculate_edge_length_variance(vertices):
+    """Population variance of edge lengths, see PhysicsInference.edge_length_variance."""
+    return PhysicsInference.edge_length_variance(vertices)
+
+def normalize_vertices(vertices_raw):
+        """
+        Normalize coordinates to [0,1] in both axes, preserving aspect ratio and centering shape if needed.
+        Uses PhysicsInference.dedup_vertices and PhysicsInference.rounded_bbox.
+        """
+        import numpy as np
+        verts = ensure_vertex_list(vertices_raw)
+        verts = PhysicsInference.dedup_vertices(verts)
+        if len(verts) < 2:
+            return verts
+        minx, miny, maxx, maxy = PhysicsInference.rounded_bbox(verts)
+        width = maxx - minx
+        height = maxy - miny
+        if width < 1e-8 or height < 1e-8:
+            return verts
+        arr = np.array(verts)
+        arr = (arr - [minx, miny]) / [width, height]
+        arr[np.abs(arr) < 1e-10] = 0.0
+        return [tuple(pt) for pt in arr]
+
+def calculate_geometry(vertices):
+    """Calculate geometry properties from normalized vertices, robustly constructing polygon."""
+    if not vertices:
+        return {}
+    verts = PhysicsInference.dedup_vertices(list(vertices))
+    xs, ys = zip(*verts)
+    bbox = {'min_x': min(xs), 'max_x': max(xs), 'min_y': min(ys), 'max_y': max(ys)}
+    width = bbox['max_x'] - bbox['min_x']
+    height = bbox['max_y'] - bbox['min_y']
+    # Use shoelace area for raw vertex lists
+    area = PhysicsInference.shoelace_area(verts) if isinstance(vertices, list) else PhysicsInference.area(verts)
+    try:
+        from shapely.geometry import Polygon
+        poly = Polygon(verts)
+        perimeter = poly.length if poly.is_valid else float('nan')
+    except Exception:
+        perimeter = float('nan')
+    centroid = PhysicsInference.centroid(verts)
+    inertia = PhysicsInference.moment_of_inertia(verts)
+    convexity = PhysicsInference.convexity_ratio(verts)
+    return {
+        'bbox': bbox,
+        'centroid': centroid,
+        'width': width,
+        'height': height,
+        'area': area,
+        'perimeter': perimeter,
+        'moment_of_inertia': inertia,
+        'convexity_ratio': convexity
+    }
+
+def extract_position_and_rotation(vertices):
+    """Given a list of (x, y) normalized vertices, return centroid and orientation angle (degrees)."""
+    import numpy as np
+    try:
+        pts = np.array(vertices)
+        if pts.shape[0] < 2:
+            return {'centroid': [float(pts[0,0]), float(pts[0,1])] if pts.shape[0] == 1 else [0.5, 0.5], 'orientation_degrees': 0.0}
+        centroid = pts.mean(axis=0)
+        pts_centered = pts - centroid
+        # PCA: first principal axis
+        cov = np.cov(pts_centered.T)
+        eigvals, eigvecs = np.linalg.eigh(cov)
+        axis = eigvecs[:, np.argmax(eigvals)]
+        angle = np.degrees(np.arctan2(axis[1], axis[0]))
+        return {
+            'centroid': [float(centroid[0]), float(centroid[1])],
+            'orientation_degrees': float(angle)
+        }
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.warning(f"extract_position_and_rotation failed: {e}")
+        return {'centroid': [0.5, 0.5], 'orientation_degrees': 0.0}
+
+def ensure_vertex_list(vertices):
+    """Convert Polygon or similar geometry object to list of tuples."""
+    if hasattr(vertices, 'exterior') and hasattr(vertices.exterior, 'coords'):
+        return list(vertices.exterior.coords)
+    elif hasattr(vertices, 'coords'):
+        return list(vertices.coords)
+    return vertices
+    
+def safe_divide(a, b, default=0.0):
+    """Safe division avoiding zero/NaN."""
+    if abs(b) < 1e-10:
+        return default
+    return a / b
+
+def json_safe(obj):
+    """Recursively convert numpy types to Python native types for JSON serialization."""
+    import numpy as np
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, (np.integer, np.int8, np.int16, np.int32, np.int64)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float16, np.float32, np.float64)):
+        return float(obj)
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    elif isinstance(obj, dict):
+        return {k: json_safe(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [json_safe(v) for v in obj]
+    elif hasattr(obj, 'item'):  # numpy scalar
+        return obj.item()
+    return obj
+
+def _calculate_homogeneity_score(modifier_sequence: list) -> float:
+    """Homogeneity score using PhysicsInference.homogeneity_score (Simpson's index)."""
+    return PhysicsInference.homogeneity_score(modifier_sequence)
+
+def _calculate_variance(values: List[float]) -> float:
+    """Calculate variance of a list of values. For length 2, return squared diff. For length 1, return NaN and log."""
+    import numpy as np
+    logger = logging.getLogger(__name__)
+    n = len(values)
+    if n < 1:
+        logger.warning("Variance: empty list, returning NaN")
+        return float('nan')
+    if n == 1:
+        logger.warning("Variance: only one value, returning NaN")
+        return float('nan')
+    if n == 2:
+        diff = values[1] - values[0]
+        return diff * diff / 2.0
+    mean = safe_divide(sum(values), n)
+    return safe_divide(sum((x - mean) ** 2 for x in values), n)
+    
+def _calculate_dominant_direction(line_features: List[Dict]) -> str:
+    """Calculate the dominant direction of line strokes"""
+    if not line_features:
+        return 'none'
+    directions = [f['line_direction'] for f in line_features]
+    direction_counts = {}
+    for direction in directions:
+        direction_counts[direction] = direction_counts.get(direction, 0) + 1
+    return max(direction_counts.items(), key=lambda x: x[1])[0] if direction_counts else 'none'
+
+
+def _calculate_perimeter(vertices: List[tuple]) -> float:
+    """Calculate perimeter of the shape."""
+    # Fix: Ensure vertices is a list of tuples, not a Polygon object
+    vertices = ensure_vertex_list(vertices)
+    if len(vertices) < 2:
+        return 0.0
+    perimeter = 0.0
+    for i in range(len(vertices)):
+        p1 = vertices[i]
+        p2 = vertices[(i + 1) % len(vertices)]
+        perimeter += ((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2)**0.5
+    return json_safe(perimeter)
+
+def _calculate_convexity_ratio(poly) -> float:
+    """Calculate ratio of polygon area to convex hull area."""
+    try:
+        if poly.area == 0:
+            return 0.0
+        return safe_divide(poly.area, poly.convex_hull.area)
+    except:
+        return 0.0
+
+# (Removed duplicate _calculate_compactness)
+
+def _calculate_eccentricity(vertices: List[tuple]) -> float:
+    """Calculate eccentricity as 1 - (min_eigenvalue / max_eigenvalue) from PCA."""
+    import numpy as np
+    vertices = ensure_vertex_list(vertices)
+    if len(vertices) < 3:
+        return 0.0
+    try:
+        points = np.array(vertices)
+        centered = points - np.mean(points, axis=0)
+        cov_matrix = np.cov(centered.T)
+        eigenvals = np.linalg.eigvals(cov_matrix)
+        eigenvals = np.sort(np.abs(eigenvals))[::-1]
+        if eigenvals[0] == 0:
+            return 0.0
+        return json_safe(1.0 - safe_divide(eigenvals[-1], eigenvals[0]))
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Eccentricity error: {e}")
+        return 0.0
+
+
+def _check_rotational_symmetry(vertices: List[tuple]) -> int:
+    """Check rotational symmetry order using k-fold RMSE (k=2,3,4)."""
+    return PhysicsInference.rotational_symmetry(vertices)
+
+def _calculate_irregularity(vertices: List[tuple]) -> float:
+    """Calculate normalized mean absolute deviation from regular n-gon angle (0=regular, 1=irregular)."""
+    import numpy as np
+    vertices = ensure_vertex_list(vertices)
+    n = len(vertices)
+    if n < 3:
+        return 0.0
+    try:
+        angles = []
+        for i in range(n):
+            p1 = np.array(vertices[i])
+            p2 = np.array(vertices[(i + 1) % n])
+            p3 = np.array(vertices[(i + 2) % n])
+            v1 = p2 - p1
+            v2 = p3 - p2
+            if np.linalg.norm(v1) > 1e-6 and np.linalg.norm(v2) > 1e-6:
+                angle = np.arccos(np.clip(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2)), -1, 1))
+                angles.append(angle)
+        if not angles:
+            return 0.0
+        expected_angle = safe_divide((n - 2) * np.pi, n)
+        mad = np.mean([abs(angle - expected_angle) for angle in angles])
+        # Normalize: 0 = regular, 1 = max deviation (pi)
+        norm_mad = min(1.0, mad / np.pi)
+        return json_safe(norm_mad)
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Irregularity error: {e}")
+        return 0.0
+def _calculate_curvature_score(vertices: list) -> float:
+    """Curvature score: average absolute change in tangent angle per unit length (see PhysicsInference.curvature_score)."""
+    return PhysicsInference.curvature_score(vertices)
+
+def _calculate_homogeneity(modifier_distribution: dict) -> float:
+    """Calculate a simple homogeneity score: 1.0 if all modifiers are the same, lower otherwise (Gini impurity)."""
+    total = sum(modifier_distribution.values())
+    if total == 0:
+        return 1.0
+    probs = [v / total for v in modifier_distribution.values()]
+    gini = 1.0 - sum(p ** 2 for p in probs)
+    return 1.0 - gini  # 1.0 = homogeneous, 0 = maximally diverse
+

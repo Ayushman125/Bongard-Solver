@@ -53,197 +53,17 @@ FLAGGING_THRESHOLDS = {
 
 
 from src.data_pipeline.logo_parser import ComprehensiveNVLabsParser, OneStrokeShape
+from src.Derive_labels.stroke_types import extract_action_type_prefixes
+from src.Derive_labels.shape_utils import normalize_vertices, calculate_geometry, extract_position_and_rotation, ensure_vertex_list, _calculate_perimeter, _calculate_curvature_score, _calculate_edge_length_variance, json_safe, _calculate_irregularity
+from src.Derive_labels.stroke_types import _extract_modifier_from_stroke, _calculate_stroke_specific_features, _calculate_stroke_type_differentiated_features
+from src.Derive_labels.features import _actions_to_geometries, _extract_ngram_features, _extract_graph_features
+from src.Derive_labels.features import _detect_alternation
+from src.Derive_labels.shape_utils import _calculate_homogeneity, _calculate_angular_variance,safe_divide, _calculate_compactness, _calculate_eccentricity, _check_horizontal_symmetry, _check_vertical_symmetry, _check_rotational_symmetry
+from src.Derive_labels.file_io import FileIO
+
+
 
 class ComprehensiveBongardProcessor:
-    def _discrete_curvature(self, vertices):
-        """Compute discrete curvature for a sequence of vertices (for zigzag, triangle, etc)."""
-        import numpy as np
-        if not vertices or len(vertices) < 3:
-            return 0.0
-        total_curvature = 0.0
-        total_length = 0.0
-        n = len(vertices)
-        for i in range(1, n-1):
-            p0 = np.array(vertices[i-1])
-            p1 = np.array(vertices[i])
-            p2 = np.array(vertices[i+1])
-            v1 = p1 - p0
-            v2 = p2 - p1
-            len1 = np.linalg.norm(v1)
-            len2 = np.linalg.norm(v2)
-            if len1 > 1e-8 and len2 > 1e-8:
-                cos_theta = np.clip(np.dot(v1, v2) / (len1 * len2), -1.0, 1.0)
-                kappa = abs(np.arccos(cos_theta)) / ((len1 + len2) / 2)
-                total_curvature += kappa * (len1 + len2) / 2
-                total_length += (len1 + len2) / 2
-        return total_curvature / total_length if total_length > 0 else 0.0
-    def _calculate_compactness(self, area: float, perimeter: float) -> float:
-        """
-        Isoperimetric ratio: (4πA)/P². Returns 1 for a perfect circle, <1 otherwise.
-        No clamping or bounding is applied. Returns NaN for degenerate cases.
-        """
-        import math
-        try:
-            if area is None or perimeter is None or perimeter == 0 or area <= 0:
-                return float('nan')
-            return (4 * math.pi * area) / (perimeter ** 2)
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"Compactness error: {e}")
-            return float('nan')
-
-    def _calculate_angular_variance(self, vertices: list) -> float:
-        # Use robust angular variance, fallback to 0 for <3 points
-        return PhysicsInference.robust_angular_variance(vertices)
-
-    def _calculate_irregularity(self, vertices: list) -> float:
-        # Use variance of edge lengths and angles as irregularity
-        verts = self.ensure_vertex_list(vertices)
-        if not verts or len(verts) < 3:
-            return 0.0
-        edge_lengths = [np.linalg.norm(np.array(verts[(i+1)%len(verts)]) - np.array(verts[i])) for i in range(len(verts))]
-        length_var = np.var(edge_lengths) if len(edge_lengths) > 1 else 0.0
-        angle_var = self._calculate_angular_variance(verts)
-        return float(length_var + angle_var)
-
-    def _calculate_pattern_regularity_from_modifiers(self, modifier_sequence: list) -> float:
-        """Pattern regularity using PhysicsInference.pattern_regularity. Returns NaN if sequence too short."""
-        return PhysicsInference.pattern_regularity(modifier_sequence)
-    def _check_horizontal_symmetry(self, vertices, poly=None):
-        """Check horizontal symmetry using PhysicsInference or geometric comparison."""
-        try:
-            
-            # Prefer PhysicsInference if available
-            if hasattr(PhysicsInference, 'horizontal_symmetry'):
-                return PhysicsInference.horizontal_symmetry(vertices)
-            # Fallback: compare top and bottom halves
-            if poly is not None and hasattr(poly, 'centroid'):
-                centroid_y = poly.centroid.y
-            else:
-                centroid_y = sum(v[1] for v in vertices) / len(vertices)
-            reflected = [(x, 2*centroid_y - y) for x, y in vertices]
-            # Compare original and reflected (simple mean distance)
-            import numpy as np
-            orig = np.array(vertices)
-            refl = np.array(reflected)
-            if orig.shape == refl.shape:
-                return float(np.mean(np.linalg.norm(orig - refl, axis=1)))
-            return 0.0
-        except Exception as e:
-            logging.getLogger(__name__).warning(f"Horizontal symmetry error: {e}")
-            return 0.0
-
-    def _check_vertical_symmetry(self, vertices, poly=None):
-        """Check vertical symmetry using PhysicsInference or geometric comparison."""
-        try:
-            if hasattr(PhysicsInference, 'vertical_symmetry'):
-                return PhysicsInference.vertical_symmetry(vertices)
-            if poly is not None and hasattr(poly, 'centroid'):
-                centroid_x = poly.centroid.x
-            else:
-                centroid_x = sum(v[0] for v in vertices) / len(vertices)
-            reflected = [(2*centroid_x - x, y) for x, y in vertices]
-            import numpy as np
-            orig = np.array(vertices)
-            refl = np.array(reflected)
-            if orig.shape == refl.shape:
-                return float(np.mean(np.linalg.norm(orig - refl, axis=1)))
-            return 0.0
-        except Exception as e:
-            logging.getLogger(__name__).warning(f"Vertical symmetry error: {e}")
-            return 0.0
-
-    def _calculate_edge_length_variance(self, vertices):
-        """Population variance of edge lengths, see PhysicsInference.edge_length_variance."""
-        return PhysicsInference.edge_length_variance(vertices)
-
-
-    def extract_action_type_prefixes(self, problems_data):
-        """
-        Use BongardImage.import_from_action_string_list to robustly extract all unique action type prefixes from the dataset.
-        This mirrors hybrid.py's handling and avoids information loss from naive string splitting.
-        """
-        prefixes = set()
-        for problem_data in problems_data.values():
-            if not (isinstance(problem_data, list) and len(problem_data) == 2):
-                continue
-            for example_list in problem_data:
-                for action_commands in example_list:
-                    # Flatten if needed
-                    if isinstance(action_commands, list) and len(action_commands) == 1 and isinstance(action_commands[0], list):
-                        action_commands = action_commands[0]
-                    try:
-                        bongard_image = BongardImage.import_from_action_string_list(action_commands)
-                        for shape in getattr(bongard_image, 'one_stroke_shapes', []):
-                            stroke_type = getattr(shape, 'stroke_type', None)
-                            if hasattr(stroke_type, 'value'):
-                                prefix = stroke_type.value
-                            elif stroke_type is not None:
-                                prefix = str(stroke_type)
-                            else:
-                                prefix = shape.__class__.__name__
-                            prefixes.add(prefix)
-                    except Exception as e:
-                        logger.warning(f"[extract_action_type_prefixes] Failed to robustly parse action_commands: {action_commands} | Error: {e}")
-                        continue
-        return prefixes
-    
-    def _actions_to_geometries(self, shape, arc_points=24):
-        """
-        Convert all basic_actions in a shape to shapely geometries (LineString), using the true world-space vertices from shape.vertices.
-        Each stroke is a segment between consecutive vertices. Fallback to synthetic only if vertices are missing.
-        """
-        from shapely.geometry import LineString
-        import logging
-        verts = getattr(shape, 'vertices', None)
-        geoms = []
-        if verts and isinstance(verts, (list, tuple)) and len(verts) >= 2:
-            for i in range(len(verts) - 1):
-                try:
-                    seg = LineString([verts[i], verts[i+1]])
-                    if seg.is_valid and not seg.is_empty:
-                        geoms.append(seg)
-                    else:
-                        logging.debug(f"Stroke {i}: invalid or empty LineString from vertices {verts[i]}, {verts[i+1]}")
-                except Exception as e:
-                    logging.debug(f"Stroke {i}: failed to create LineString: {e}")
-        else:
-            # Fallback: try to synthesize as before (should rarely happen)
-            actions = getattr(shape, 'basic_actions', [])
-            for i, action in enumerate(actions):
-                v = getattr(action, 'vertices', None)
-                if v and isinstance(v, (list, tuple)) and len(v) >= 2:
-                    try:
-                        seg = LineString(v)
-                        if seg.is_valid and not seg.is_empty:
-                            geoms.append(seg)
-                    except Exception as e:
-                        logging.debug(f"Fallback: failed to create LineString for stroke {i}: {e}")
-        logging.debug(f"Number of stroke geometries: {len(geoms)}")
-        return geoms
-    
-    def extract_position_and_rotation(self, vertices):
-        """Given a list of (x, y) normalized vertices, return centroid and orientation angle (degrees)."""
-        import numpy as np
-        try:
-            pts = np.array(vertices)
-            if pts.shape[0] < 2:
-                return {'centroid': [float(pts[0,0]), float(pts[0,1])] if pts.shape[0] == 1 else [0.5, 0.5], 'orientation_degrees': 0.0}
-            centroid = pts.mean(axis=0)
-            pts_centered = pts - centroid
-            # PCA: first principal axis
-            cov = np.cov(pts_centered.T)
-            eigvals, eigvecs = np.linalg.eigh(cov)
-            axis = eigvecs[:, np.argmax(eigvals)]
-            angle = np.degrees(np.arctan2(axis[1], axis[0]))
-            return {
-                'centroid': [float(centroid[0]), float(centroid[1])],
-                'orientation_degrees': float(angle)
-            }
-        except Exception as e:
-            logger = logging.getLogger(__name__)
-            logger.warning(f"extract_position_and_rotation failed: {e}")
-            return {'centroid': [0.5, 0.5], 'orientation_degrees': 0.0}
 
     def _calculate_vertices_from_action(self, action, stroke_index):
         import numpy as np
@@ -264,43 +84,7 @@ class ComprehensiveBongardProcessor:
             logging.getLogger(__name__).debug(f"Failed to calculate vertices from action: {e}")
         return []
 
-    def _extract_stroke_vertices(self, stroke, stroke_index, all_vertices):
-        """Extract vertices for individual stroke from overall shape vertices."""
-        try:
-            # Method 1: Direct vertices from stroke
-            if hasattr(stroke, 'vertices') and stroke.vertices:
-                return stroke.vertices
-            # Method 2: Calculate from stroke parameters
-            if hasattr(stroke, 'raw_command'):
-                return self._vertices_from_command(stroke.raw_command, stroke_index)
-            # Method 3: Segment from overall vertices
-            if all_vertices and len(all_vertices) > stroke_index + 1:
-                return [all_vertices[stroke_index], all_vertices[stroke_index + 1]]
-            return []
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"Failed to extract vertices for stroke {stroke_index}: {e}")
-            return []
 
-    def _vertices_from_command(self, command, stroke_index):
-        import numpy as np
-        """Generate vertices from action command string."""
-        try:
-            parts = command.split('_')
-            if len(parts) >= 3:
-                params = parts[2].split('-')
-                if len(params) >= 2:
-                    length = float(params[0])
-                    angle = float(params[1])
-                    start = (stroke_index * 0.2, 0.5)
-                    end_x = start[0] + length * np.cos(angle * 2 * np.pi)
-                    end_y = start[1] + length * np.sin(angle * 2 * np.pi)
-                    return [start, (end_x, end_y)]
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).debug(f"Failed to parse command {command}: {e}")
-        return []
-    
     def _calculate_pattern_regularity_from_modifiers(self, modifier_sequence: list) -> float:
         """
         Pattern regularity using PhysicsInference.pattern_regularity. Returns NaN if sequence too short.
@@ -313,92 +97,9 @@ class ComprehensiveBongardProcessor:
         pattern_regularity = max(0.0, min(1.0, pattern_regularity))
         logger.debug(f"Pattern regularity: repetition_score={repetition_score}, alternation_score={alternation_score}, diversity_penalty={diversity_penalty}, result={pattern_regularity}")
         return pattern_regularity
-    def normalize_vertices(self, vertices_raw):
-        """
-        Normalize coordinates to [0,1] in both axes, preserving aspect ratio and centering shape if needed.
-        Uses PhysicsInference.dedup_vertices and PhysicsInference.rounded_bbox.
-        """
-        import numpy as np
-        verts = self.ensure_vertex_list(vertices_raw)
-        verts = PhysicsInference.dedup_vertices(verts)
-        if len(verts) < 2:
-            return verts
-        minx, miny, maxx, maxy = PhysicsInference.rounded_bbox(verts)
-        width = maxx - minx
-        height = maxy - miny
-        if width < 1e-8 or height < 1e-8:
-            return verts
-        arr = np.array(verts)
-        arr = (arr - [minx, miny]) / [width, height]
-        arr[np.abs(arr) < 1e-10] = 0.0
-        return [tuple(pt) for pt in arr]
-
-    def calculate_geometry(self, vertices):
-        """Calculate geometry properties from normalized vertices, robustly constructing polygon."""
-        if not vertices:
-            return {}
-        verts = PhysicsInference.dedup_vertices(list(vertices))
-        xs, ys = zip(*verts)
-        bbox = {'min_x': min(xs), 'max_x': max(xs), 'min_y': min(ys), 'max_y': max(ys)}
-        width = bbox['max_x'] - bbox['min_x']
-        height = bbox['max_y'] - bbox['min_y']
-        # Use shoelace area for raw vertex lists
-        area = PhysicsInference.shoelace_area(verts) if isinstance(vertices, list) else PhysicsInference.area(verts)
-        try:
-            from shapely.geometry import Polygon
-            poly = Polygon(verts)
-            perimeter = poly.length if poly.is_valid else float('nan')
-        except Exception:
-            perimeter = float('nan')
-        centroid = PhysicsInference.centroid(verts)
-        inertia = PhysicsInference.moment_of_inertia(verts)
-        convexity = PhysicsInference.convexity_ratio(verts)
-        return {
-            'bbox': bbox,
-            'centroid': centroid,
-            'width': width,
-            'height': height,
-            'area': area,
-            'perimeter': perimeter,
-            'moment_of_inertia': inertia,
-            'convexity_ratio': convexity
-        }
-    def _calculate_homogeneity_score(self, modifier_sequence: list) -> float:
-        """Homogeneity score using PhysicsInference.homogeneity_score (Simpson's index)."""
-        return PhysicsInference.homogeneity_score(modifier_sequence)
-    # Load TSVs once for all instances
-    _shape_attributes = None
-    _shape_defs = None
-
-    @staticmethod
-    def _load_tsv(path):
-        if not os.path.exists(path):
-            return []
-        with open(path, newline='', encoding='utf-8') as f:
-            return list(csv.DictReader(f, delimiter='\t'))
-
-    @classmethod
-    def get_shape_attributes(cls):
-        if cls._shape_attributes is None:
-            tsv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'Bongard-LOGO', 'data', 'human_designed_shapes_attributes.tsv'))
-            cls._shape_attributes = cls._load_tsv(tsv_path)
-        return cls._shape_attributes
-
-    @classmethod
-    def get_shape_defs(cls):
-        if cls._shape_defs is None:
-            tsv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'Bongard-LOGO', 'data', 'human_designed_shapes.tsv'))
-            cls._shape_defs = cls._load_tsv(tsv_path)
-        return cls._shape_defs
-
-    @classmethod
-    def get_shape_attribute_map(cls):
-        # Map from shape function name to attribute dict
-        return {row['shape function name']: row for row in cls.get_shape_attributes() if row.get('shape function name')}
-
-    @classmethod
-    def get_shape_def_map(cls):
-        return {row['shape function name']: row for row in cls.get_shape_defs() if row.get('shape function name')}
+    
+    
+    
     """
     Enhanced comprehensive processor for Bongard-LOGO data that handles:
     - Multi-stroke image composition with stroke-type specific calculations
@@ -407,40 +108,7 @@ class ComprehensiveBongardProcessor:
     - Comprehensive flagging logic for suspicious entries
     - Physics and geometry computation with validation
     """
-    
-    def ensure_vertex_list(self, vertices):
-        """Convert Polygon or similar geometry object to list of tuples."""
-        if hasattr(vertices, 'exterior') and hasattr(vertices.exterior, 'coords'):
-            return list(vertices.exterior.coords)
-        elif hasattr(vertices, 'coords'):
-            return list(vertices.coords)
-        return vertices
-    
-    def safe_divide(self, a, b, default=0.0):
-        """Safe division avoiding zero/NaN."""
-        if abs(b) < 1e-10:
-            return default
-        return a / b
-    
-    def json_safe(self, obj):
-        """Recursively convert numpy types to Python native types for JSON serialization."""
-        import numpy as np
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-        elif isinstance(obj, (np.integer, np.int8, np.int16, np.int32, np.int64)):
-            return int(obj)
-        elif isinstance(obj, (np.floating, np.float16, np.float32, np.float64)):
-            return float(obj)
-        elif isinstance(obj, np.bool_):
-            return bool(obj)
-        elif isinstance(obj, dict):
-            return {k: self.json_safe(v) for k, v in obj.items()}
-        elif isinstance(obj, (list, tuple)):
-            return [self.json_safe(v) for v in obj]
-        elif hasattr(obj, 'item'):  # numpy scalar
-            return obj.item()
-        return obj
-    
+
     def __init__(self):
         # No longer use HybridAugmentor for parsing; use BongardImage.import_from_action_string_list
         logger.info("[INFO] BongardImage.import_from_action_string_list will be used for action program parsing.")
@@ -489,7 +157,7 @@ class ComprehensiveBongardProcessor:
             vertices_raw = getattr(shape, 'vertices', [])
 
             # --- Normalize vertices (aspect ratio preserved, centered) ---
-            normalized_vertices = self.normalize_vertices(vertices_raw)
+            normalized_vertices = normalize_vertices(vertices_raw)
 
             # --- Robust polygon recovery on normalized vertices ---
             from shapely.geometry import Polygon
@@ -518,10 +186,10 @@ class ComprehensiveBongardProcessor:
                 norm_vertices_for_features = normalized_vertices
 
             # --- Calculate geometry from normalized (possibly recovered) vertices ---
-            geometry = self.calculate_geometry(norm_vertices_for_features)
+            geometry = calculate_geometry(norm_vertices_for_features)
 
             # --- Derive position and rotation labels from normalized vertices ---
-            posrot_labels = self.extract_position_and_rotation(norm_vertices_for_features)
+            posrot_labels = extract_position_and_rotation(norm_vertices_for_features)
 
             # --- Calculate image features using robust polygon ---
             image_features = self._calculate_image_features(norm_vertices_for_features, getattr(shape, 'basic_actions', []), geometry)
@@ -533,7 +201,7 @@ class ComprehensiveBongardProcessor:
 
             # --- Relational/Topological/Sequential Features ---
             # Convert actions to shapely geometries for relational features
-            stroke_geometries = self._actions_to_geometries(shape)
+            stroke_geometries = _actions_to_geometries(shape)
             logger.debug(f"Number of stroke geometries: {len(stroke_geometries)}")
             for idx, g in enumerate(stroke_geometries):
                 logger.debug(f"Geometry {idx}: type={g.geom_type}, is_valid={g.is_valid}")
@@ -574,20 +242,20 @@ class ComprehensiveBongardProcessor:
                 overlap = None
 
             # Sequential pattern features (n-gram, alternation, regularity)
-            modifier_sequence = [self._extract_modifier_from_stroke(s) for s in getattr(shape, 'basic_actions', [])]
-            ngram_features = self._extract_ngram_features(modifier_sequence)
-            alternation = self._detect_alternation(modifier_sequence)
+            modifier_sequence = [_extract_modifier_from_stroke(s) for s in getattr(shape, 'basic_actions', [])]
+            ngram_features = _extract_ngram_features(modifier_sequence)
+            alternation = _detect_alternation(modifier_sequence)
             regularity = self._calculate_pattern_regularity_from_modifiers(modifier_sequence)
 
             # Topological features (chain/star/cycle detection, connectivity)
-            graph_features = self._extract_graph_features(getattr(shape, 'basic_actions', []))
+            graph_features = _extract_graph_features(getattr(shape, 'basic_actions', []))
 
             # --- Aggregate line and arc features for stroke_type_features ---
             line_features = []
             arc_features = []
             stroke_features = []
-            shape_attr_map = self.get_shape_attribute_map()
-            shape_def_map = self.get_shape_def_map()
+            shape_attr_map = FileIO.get_shape_attribute_map()
+            shape_def_map = FileIO.get_shape_def_map()
             unique_shape_functions = set()
             shape_function_counts = {}
             unique_modifiers = set()
@@ -651,7 +319,7 @@ class ComprehensiveBongardProcessor:
                 is_valid = getattr(action, 'is_valid', True)
                 # --- Use canonical_name for all strokes ---
                 # No per-stroke lookup; all strokes get the same canonical attributes/def
-                stroke_specific_features = self._calculate_stroke_specific_features(
+                stroke_specific_features = _calculate_stroke_specific_features(
                     action, i, stroke_type_val, shape_modifier_val, parameters)
                 if stroke_type_val == 'line':
                     line_features.append(stroke_specific_features)
@@ -679,7 +347,7 @@ class ComprehensiveBongardProcessor:
                     shape_function_counts[function_name] = shape_function_counts.get(function_name, 0) + 1
 
             # --- Calculate stroke_type_features with correct aggregation ---
-            differentiated_features = self._calculate_stroke_type_differentiated_features(
+            differentiated_features = _calculate_stroke_type_differentiated_features(
                 {'line_features': line_features, 'arc_features': arc_features}, getattr(shape, 'basic_actions', []))
 
             # --- Robust action_program: always use best available command string ---
@@ -738,7 +406,7 @@ class ComprehensiveBongardProcessor:
                 'topological_features': graph_features
             }
             self.processing_stats['successful'] += 1
-            return self.json_safe(complete_record)
+            return json_safe(complete_record)
         except Exception as e:
             error_msg = f"Error processing image {image_id}: {e}"
             stack_trace = traceback.format_exc()
@@ -754,456 +422,13 @@ class ComprehensiveBongardProcessor:
                 logger.error(f"[process_single_image] Could not write to flagged_issues.txt: {file_exc}")
             return None
 
-    def _extract_ngram_features(self, sequence, n=2):
-        """Extract n-gram counts from a sequence, with string keys for JSON compatibility."""
-        logger = logging.getLogger(__name__)
-        logger.debug(f"[_extract_ngram_features] INPUTS: sequence={sequence}, n={n}")
-        from collections import Counter
-        ngrams = zip(*[sequence[i:] for i in range(n)])
-        ngram_list = ['|'.join(map(str, ng)) for ng in ngrams]
-        result = dict(Counter(ngram_list))
-        logger.debug(f"[_extract_ngram_features] OUTPUT: {result}")
-        return result
-
-    def _detect_alternation(self, sequence):
-        """Compute maximal alternation score using PhysicsInference.alternation_score."""
-        logger = logging.getLogger(__name__)
-        logger.debug(f"[_detect_alternation] INPUTS: sequence={sequence}")
-        score = PhysicsInference.alternation_score(sequence)
-        logger.debug(f"[_detect_alternation] OUTPUT: {score}")
-        return score
-
-    def _extract_graph_features(self, strokes):
-        """Detect chain/star/cycle topology and connectivity from stroke relationships."""
-        logger = logging.getLogger(__name__)
-        logger.debug(f"[_extract_graph_features] INPUTS: strokes count={len(strokes) if strokes else 0}")
-        n = len(strokes)
-        if n == 0:
-            logger.debug("[_extract_graph_features] OUTPUT: {'type': 'none', 'connectivity': 0}")
-            return {'type': 'none', 'connectivity': 0}
-        # For now, just return counts; real implementation would use adjacency/intersection
-        result = {'num_strokes': n}
-        logger.debug(f"[_extract_graph_features] OUTPUT: {result}")
-        return result
-    
-    def _flag_case(self, image_id: str, problem_id: str, reason: str, flags: List[str]):
-        """Add a case to the flagged cases list"""
-        self.flagged_cases.append({
-            'image_id': image_id,
-            'problem_id': problem_id,
-            'reason': reason,
-            'flags': flags,
-            'timestamp': time.time()
-        })
-        logger.warning(f"Flagged case: {image_id} - {reason}")
-    
-    def _validate_stroke_parameters(self, stroke) -> List[str]:
-        """Validate stroke parameters for suspicious values"""
-        flags = []
-        
-        for param_name, value in stroke.parameters.items():
-            if not isinstance(value, (int, float)):
-                flags.append(f"invalid_parameter_type_{param_name}")
-                continue
-                
-            if math.isnan(value) or math.isinf(value):
-                flags.append(f"invalid_parameter_value_{param_name}")
-                continue
-                
-            if abs(value) > FLAGGING_THRESHOLDS['suspicious_parameter_threshold']:
-                flags.append(f"suspicious_parameter_{param_name}")
-        
-        # Stroke-type specific validation
-        if stroke.stroke_type.value == 'line':
-            length = stroke.parameters.get('length', 0)
-            if length <= 0 or length > 10:
-                flags.append("suspicious_line_length")
-        elif stroke.stroke_type.value == 'arc':
-            radius = stroke.parameters.get('radius', 0)
-            if radius <= 0 or radius > 10:
-                flags.append("suspicious_arc_radius")
-            span_angle = stroke.parameters.get('span_angle', 0)
-            if abs(span_angle) > 720:  # More than 2 full rotations
-                flags.append("suspicious_arc_span")
-        
-        return flags
-    
-    def _validate_vertices(self, vertices: List[tuple]) -> List[str]:
-        """Validate vertex data"""
-        flags = []
-        
-        if len(vertices) < FLAGGING_THRESHOLDS['min_vertices']:
-            flags.append("insufficient_vertices")
-        
-        if len(vertices) > FLAGGING_THRESHOLDS['max_vertices']:
-            flags.append("excessive_vertices")
-        
-        # Check for NaN or infinite coordinates
-        for i, (x, y) in enumerate(vertices):
-            if not (isinstance(x, (int, float)) and isinstance(y, (int, float))):
-                flags.append("invalid_vertex_type")
-                break
-            if math.isnan(x) or math.isnan(y) or math.isinf(x) or math.isinf(y):
-                flags.append("invalid_vertex_coordinates")
-                break
-        
-        # Check for duplicate consecutive vertices
-        duplicate_count = 0
-        for i in range(len(vertices) - 1):
-            if vertices[i] == vertices[i + 1]:
-                duplicate_count += 1
-        
-        if duplicate_count > len(vertices) * 0.5:
-            flags.append("excessive_duplicate_vertices")
-        
-        return flags
-    
-    def _validate_image_features(self, features: Dict[str, Any]) -> List[str]:
-        """Validate computed image features"""
-        flags = []
-        
-        area = features.get('area', 0)
-        if area < FLAGGING_THRESHOLDS['min_area']:
-            flags.append("suspicious_area_too_small")
-        elif area > FLAGGING_THRESHOLDS['max_area']:
-            flags.append("suspicious_area_too_large")
-        
-        aspect_ratio = features.get('aspect_ratio', 1)
-        if aspect_ratio < FLAGGING_THRESHOLDS['min_aspect_ratio']:
-            flags.append("suspicious_aspect_ratio_too_small")
-        elif aspect_ratio > FLAGGING_THRESHOLDS['max_aspect_ratio']:
-            flags.append("suspicious_aspect_ratio_too_large")
-        
-        # Check for NaN values in critical features
-        critical_features = ['area', 'perimeter', 'aspect_ratio', 'compactness']
-        for feature_name in critical_features:
-            value = features.get(feature_name)
-            if value is not None and (math.isnan(value) or math.isinf(value)):
-                flags.append(f"invalid_feature_{feature_name}")
-        
-        return flags
-    
-    def _validate_physics_features(self, features: Dict[str, Any]) -> List[str]:
-        """Validate physics computation results"""
-        flags = []
-        
-        symmetry_score = features.get('symmetry_score', 0)
-        if symmetry_score > FLAGGING_THRESHOLDS['symmetry_score_max']:
-            flags.append("suspicious_symmetry_score")
-        
-        # Check moment of inertia
-        moi = features.get('moment_of_inertia', 0)
-        if moi < 0:
-            flags.append("negative_moment_of_inertia")
-        
-        return flags
-    
-    def _calculate_stroke_specific_features(self, stroke, stroke_index: int, stroke_type_val=None, shape_modifier_val=None, parameters=None) -> Dict[str, Any]:
-        """Calculate features specific to stroke type and shape modifier, using robust geometric/physics formulas."""
-        logger = logging.getLogger(__name__)
-        logger.debug(f"[_calculate_stroke_specific_features] INPUTS: stroke_index={stroke_index}, stroke_type_val={stroke_type_val}, shape_modifier_val={shape_modifier_val}, parameters={parameters}")
-        features = {'stroke_index': stroke_index}
-        stype = stroke_type_val or type(stroke).__name__.replace('Action', '').lower()
-        smod = shape_modifier_val or 'normal'
-        params = parameters or {}
-        verts = self._extract_stroke_vertices(stroke, stroke_index, None)
-        logger.debug(f"[_calculate_stroke_specific_features] verts: {verts}")
-        # Angular variance
-        features['angular_variance'] = PhysicsInference.robust_angular_variance(verts)
-        # Curvature
-        features['curvature_score'] = PhysicsInference.robust_curvature(verts)
-        # Moment of inertia
-        features['moment_of_inertia'] = PhysicsInference.robust_moment_of_inertia(verts, stype, params)
-        # For line strokes, add line_length, line_angle, etc.
-        if stype == 'line':
-            features.update(self._calculate_line_specific_features_from_params(params))
-        elif stype == 'arc':
-            features.update(self._calculate_arc_specific_features_from_params(params))
-        features.update(self._calculate_shape_modifier_features_from_val(smod))
-        logger.debug(f"[_calculate_stroke_specific_features] OUTPUT: {features}")
-        return features
-
-    def _calculate_line_specific_features_from_params(self, params: dict) -> Dict[str, Any]:
-        length = params.get('param1', 0)
-        angle = params.get('param2', 0)
-        diag = math.sqrt(2)
-        length_norm = self.safe_divide(length, diag)
-        # Angle in degrees in [-180, 180]
-        angle_deg = ((angle % 1.0) * 360.0)
-        angle_deg = ((angle_deg + 180) % 360) - 180
-        # ±10° for horizontal/vertical, else diagonal
-        if abs(angle_deg) <= 10:
-            direction = 'horizontal'
-        elif abs(angle_deg - 90) <= 10 or abs(angle_deg + 90) <= 10:
-            direction = 'vertical'
-        else:
-            direction = 'diagonal'
-        return {
-            'line_length': length,
-            'line_angle': angle,
-            'line_length_normalized': length_norm,
-            'line_angle_normalized': (angle % 1.0),
-            'line_direction': direction,
-            'line_is_short': PhysicsInference.is_short_line(length, diag),
-            'line_is_long': PhysicsInference.is_long_line(length, diag)
-        }
-
-    def _calculate_arc_specific_features_from_params(self, params: dict) -> Dict[str, Any]:
-        # Robustly convert parameters to float, fallback to 0 if conversion fails
-        def to_float(val):
-            try:
-                return float(val)
-            except (ValueError, TypeError):
-                return 0.0
-
-        radius = to_float(params.get('param1', 0))
-        span_angle = to_float(params.get('param2', 0))
-        end_angle = to_float(params.get('param3', 0))
-
-        arc_length = abs(span_angle) * radius * self.safe_divide(math.pi, 180) if radius > 0 else 0
-        is_major_arc = abs(span_angle) > 180
-        is_full_circle = abs(span_angle) >= 350
-        return {
-            'arc_radius': radius,
-            'arc_span_angle': span_angle,
-            'arc_end_angle': end_angle,
-            'arc_length': arc_length,
-            'arc_curvature': self.safe_divide(1.0, max(radius, 1e-6)),
-            'arc_is_major': is_major_arc,
-            'arc_is_full_circle': is_full_circle,
-            'arc_direction': 'clockwise' if span_angle < 0 else 'counterclockwise',
-            'arc_radius_normalized': self.safe_divide(min(radius, 2.0), 2.0),
-            'arc_span_normalized': self.safe_divide(abs(span_angle), 360.0),
-            'arc_is_small': radius < 0.3,
-            'arc_is_large': radius > 1.5,
-            'arc_is_tight': abs(span_angle) > 270,
-            'arc_is_gentle': abs(span_angle) < 90
-        }
-    
-
-    def _calculate_shape_modifier_features_from_val(self, modifier: str) -> Dict[str, Any]:
-        """Calculate features based on shape modifier string value (not from action object)"""
-        base_features = {
-            'shape_modifier': modifier,
-            'is_normal': modifier == 'normal',
-            'is_geometric': modifier in ['circle', 'square', 'triangle'],
-            'is_pattern': modifier == 'zigzag'
-        }
-        # Shape-specific features
-        if modifier == 'triangle':
-            base_features['geometric_complexity'] = 3
-            base_features['has_sharp_angles'] = True
-        elif modifier == 'square':
-            base_features['geometric_complexity'] = 4
-            base_features['has_right_angles'] = True
-        elif modifier == 'circle':
-            base_features['geometric_complexity'] = 10  # Use a large but finite value for circles
-            base_features['has_curved_edges'] = True
-        elif modifier == 'zigzag':
-            base_features['pattern_complexity'] = 'high'
-            base_features['has_repetitive_pattern'] = True
-        else:  # normal or unknown
-            base_features['geometric_complexity'] = 1
-            base_features['is_simple'] = True
-        return base_features
-    
-    def _calculate_stroke_type_differentiated_features(self, stroke_type_features: Dict, strokes: List) -> Dict[str, Any]:
-        """Calculate features that differentiate between stroke types"""
-        logger = logging.getLogger(__name__)
-        logger.debug(f"[_calculate_stroke_type_differentiated_features] INPUTS: stroke_type_features keys: {list(stroke_type_features.keys())}, strokes count: {len(strokes)}")
-        line_features = stroke_type_features['line_features']
-        arc_features = stroke_type_features['arc_features']
-        # Basic counts
-        num_lines = len(line_features)
-        num_arcs = len(arc_features)
-        total_strokes = num_lines + num_arcs
-        features = {
-            'stroke_composition': {
-                'num_lines': num_lines,
-                'num_arcs': num_arcs,
-                'line_ratio': self.safe_divide(num_lines, max(total_strokes, 1)),
-                'arc_ratio': self.safe_divide(num_arcs, max(total_strokes, 1)),
-                'stroke_diversity': 1 if num_lines > 0 and num_arcs > 0 else 0
-            }
-        }
-        
-        # Line-specific aggregate features
-        if line_features:
-            line_lengths = [f['line_length'] for f in line_features]
-            line_angles = [f['line_angle'] for f in line_features]
-            
-            features['line_aggregate'] = {
-                'total_line_length': sum(line_lengths),
-                'avg_line_length': self.safe_divide(sum(line_lengths), len(line_lengths)),
-                'line_length_variance': self._calculate_variance(line_lengths),
-                'line_angle_variance': self._calculate_variance(line_angles),
-                'has_short_lines': any(f['line_is_short'] for f in line_features),
-                'has_long_lines': any(f['line_is_long'] for f in line_features),
-                'dominant_direction': self._calculate_dominant_direction(line_features)
-            }
-        
-        # Arc-specific aggregate features  
-        if arc_features:
-            arc_radii = [f['arc_radius'] for f in arc_features]
-            arc_spans = [f['arc_span_angle'] for f in arc_features]
-            arc_lengths = [f['arc_length'] for f in arc_features]
-            
-            features['arc_aggregate'] = {
-                'total_arc_length': sum(arc_lengths),
-                'avg_arc_radius': self.safe_divide(sum(arc_radii), len(arc_radii)),
-                'avg_arc_span': self.safe_divide(sum(arc_spans), len(arc_spans)),
-                'arc_radius_variance': self._calculate_variance(arc_radii),
-                'arc_span_variance': self._calculate_variance(arc_spans),
-                'total_curvature': sum(f['arc_curvature'] for f in arc_features),
-                'has_full_circles': any(f['arc_is_full_circle'] for f in arc_features),
-                'has_major_arcs': any(f['arc_is_major'] for f in arc_features),
-                'curvature_complexity': len([f for f in arc_features if f['arc_curvature'] > 1.0])
-            }
-        
-        logger.debug(f"[_calculate_stroke_type_differentiated_features] OUTPUT: {features}")
-        return features
-    
-    def _calculate_variance(self, values: List[float]) -> float:
-        """Calculate variance of a list of values. For length 2, return squared diff. For length 1, return NaN and log."""
-        import numpy as np
-        logger = logging.getLogger(__name__)
-        n = len(values)
-        if n < 1:
-            logger.warning("Variance: empty list, returning NaN")
-            return float('nan')
-        if n == 1:
-            logger.warning("Variance: only one value, returning NaN")
-            return float('nan')
-        if n == 2:
-            diff = values[1] - values[0]
-            return diff * diff / 2.0
-        mean = self.safe_divide(sum(values), n)
-        return self.safe_divide(sum((x - mean) ** 2 for x in values), n)
-    
-    def _calculate_dominant_direction(self, line_features: List[Dict]) -> str:
-        """Calculate the dominant direction of line strokes"""
-        if not line_features:
-            return 'none'
-        
-        directions = [f['line_direction'] for f in line_features]
-        direction_counts = {}
-        for direction in directions:
-            direction_counts[direction] = direction_counts.get(direction, 0) + 1
-        
-        return max(direction_counts.items(), key=lambda x: x[1])[0] if direction_counts else 'none'
-    
-    
-    def validate_features(self, features: dict) -> dict:
-        """Validate key features and flag issues. Returns dict of issues found."""
-        import numpy as np
-        issues = {}
-        # Area
-        area = features.get('image_features', {}).get('area', None)
-        if area is not None and (area <= 0 or not np.isfinite(area)):
-            issues['area'] = area
-        # Center of mass
-        com = features.get('physics_features', {}).get('center_of_mass', None)
-        if com is not None and (not isinstance(com, (list, tuple)) or len(com) != 2 or not all(np.isfinite(c) for c in com)):
-            issues['center_of_mass'] = com
-        # Stroke counts
-        nline = features.get('physics_features', {}).get('num_straight_segments', None)
-        narc = features.get('physics_features', {}).get('num_arcs', None)
-        if nline is not None and nline < 0:
-            issues['num_straight_segments'] = nline
-        if narc is not None and narc < 0:
-            issues['num_arcs'] = narc
-        # Angular variance
-        angvar = features.get('physics_features', {}).get('angular_variance', None)
-        if angvar is not None and (angvar < 0 or angvar > 180):
-            issues['angular_variance'] = angvar
-        # Pattern regularity
-        preg = features.get('composition_features', {}).get('pattern_regularity', None)
-        if preg is not None and (preg < 0 or preg > 1):
-            issues['pattern_regularity'] = preg
-        return issues
-
-    def _extract_modifier_from_stroke(self, stroke) -> str:
-        """Extract the actual shape modifier from a stroke object, robustly, with debug logging."""
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.debug(f'Stroke type: {type(stroke)}, attributes: {dir(stroke)}')
-        logger.debug(f'Raw command: {getattr(stroke, "raw_command", None)}')
-        logger.debug(f'Shape modifier: {getattr(stroke, "shape_modifier", None)}')
-        # Priority: attribute > raw_command > function_name > fallback
-        if hasattr(stroke, 'shape_modifier'):
-            smod = getattr(stroke, 'shape_modifier')
-            if hasattr(smod, 'value'):
-                if smod.value:
-                    logger.debug(f"Extracted modifier from .shape_modifier.value: {smod.value}")
-                    return str(smod.value)
-            elif isinstance(smod, str) and smod:
-                logger.debug(f"Extracted modifier from .shape_modifier: {smod}")
-                return smod
-        raw_command = getattr(stroke, 'raw_command', None)
-        if raw_command and isinstance(raw_command, str):
-            parts = raw_command.split('_')
-            if len(parts) >= 2 and parts[1]:
-                logger.debug(f"Extracted modifier from raw_command: {parts[1]}")
-                return parts[1]
-        function_name = getattr(stroke, 'function_name', None)
-        if function_name and isinstance(function_name, str):
-            fn_parts = function_name.split('_')
-            if len(fn_parts) >= 2 and fn_parts[1]:
-                logger.debug(f"Extracted modifier from function_name: {fn_parts[1]}")
-                return fn_parts[1]
-        logger.debug("Falling back to 'normal' modifier")
-        return 'normal'
-
-
-
-    def _calculate_irregularity(self, vertices: List[tuple]) -> float:
-        """Calculate normalized mean absolute deviation from regular n-gon angle (0=regular, 1=irregular)."""
-        import numpy as np
-        vertices = self.ensure_vertex_list(vertices)
-        n = len(vertices)
-        if n < 3:
-            return 0.0
-        try:
-            angles = []
-            for i in range(n):
-                p1 = np.array(vertices[i])
-                p2 = np.array(vertices[(i + 1) % n])
-                p3 = np.array(vertices[(i + 2) % n])
-                v1 = p2 - p1
-                v2 = p3 - p2
-                if np.linalg.norm(v1) > 1e-6 and np.linalg.norm(v2) > 1e-6:
-                    angle = np.arccos(np.clip(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2)), -1, 1))
-                    angles.append(angle)
-            if not angles:
-                return 0.0
-            expected_angle = self.safe_divide((n - 2) * np.pi, n)
-            mad = np.mean([abs(angle - expected_angle) for angle in angles])
-            # Normalize: 0 = regular, 1 = max deviation (pi)
-            norm_mad = min(1.0, mad / np.pi)
-            return self.json_safe(norm_mad)
-        except Exception as e:
-            logging.getLogger(__name__).warning(f"Irregularity error: {e}")
-            return 0.0
-    def _calculate_curvature_score(self, vertices: list) -> float:
-        """Curvature score: average absolute change in tangent angle per unit length (see PhysicsInference.curvature_score)."""
-        return PhysicsInference.curvature_score(vertices)
-
-    def _calculate_homogeneity(self, modifier_distribution: dict) -> float:
-        """Calculate a simple homogeneity score: 1.0 if all modifiers are the same, lower otherwise (Gini impurity)."""
-        total = sum(modifier_distribution.values())
-        if total == 0:
-            return 1.0
-        probs = [v / total for v in modifier_distribution.values()]
-        gini = 1.0 - sum(p ** 2 for p in probs)
-        return 1.0 - gini  # 1.0 = homogeneous, 0 = maximally diverse
-
 
     
     def _calculate_image_features(self, vertices: List[tuple], strokes: List, geometry: Dict[str, Any]) -> Dict[str, Any]:
         """Calculate comprehensive image-level features with robust polygon recovery and improved metrics."""
         logger = logging.getLogger(__name__)
         logger.debug(f"[_calculate_image_features] INPUTS: vertices count={len(vertices) if vertices else 0}, strokes count={len(strokes) if strokes else 0}, geometry keys={list(geometry.keys()) if geometry else []}")
-        vertices = self.ensure_vertex_list(vertices)
+        vertices = ensure_vertex_list(vertices)
         if not vertices:
             logger.debug("[_calculate_image_features] No vertices, returning empty dict")
             return {}
@@ -1230,7 +455,7 @@ class ComprehensiveBongardProcessor:
             # --- Robust, normalized feature extraction ---
             num_strokes = len(strokes)
             max_strokes = 50
-            perimeter = self._calculate_perimeter(vertices)
+            perimeter = _calculate_perimeter(vertices)
             hull_perimeter = perimeter
             if poly is not None and hasattr(poly, 'convex_hull'):
                 try:
@@ -1253,25 +478,25 @@ class ComprehensiveBongardProcessor:
                 'height': geometry.get('height', 0.0),
                 'area': PhysicsInference.area(poly) if poly else 0.0,
                 'perimeter': perimeter_norm,  # normalized [0,1]
-                'aspect_ratio': max(FLAGGING_THRESHOLDS['min_aspect_ratio'], min(self.safe_divide(geometry.get('width', 1.0), geometry.get('height', 1.0), 1.0), FLAGGING_THRESHOLDS['max_aspect_ratio'])),
-                'convexity_ratio': (max(0.0, min(1.0, self.safe_divide(poly.area, poly.convex_hull.area))) if poly and poly.area != 0 and poly.convex_hull.area != 0 else 0.0),
+                'aspect_ratio': max(FLAGGING_THRESHOLDS['min_aspect_ratio'], min(safe_divide(geometry.get('width', 1.0), geometry.get('height', 1.0), 1.0), FLAGGING_THRESHOLDS['max_aspect_ratio'])),
+                'convexity_ratio': (max(0.0, min(1.0, safe_divide(poly.area, poly.convex_hull.area))) if poly and poly.area != 0 and poly.convex_hull.area != 0 else 0.0),
                 'is_convex': PhysicsInference.is_convex(poly) if poly else False,
-                'compactness': self._calculate_compactness(PhysicsInference.area(poly) if poly else 0.0, perimeter),
-                'eccentricity': self._calculate_eccentricity(vertices),
+                'compactness': _calculate_compactness(PhysicsInference.area(poly) if poly else 0.0, perimeter),
+                'eccentricity': _calculate_eccentricity(vertices),
                 'symmetry_score': (PhysicsInference.symmetry_score(vertices) if perimeter > 0 and (PhysicsInference.area(poly) if poly else 0.0) > 0 else None),
-                'horizontal_symmetry': self._check_horizontal_symmetry(vertices, poly),
-                'vertical_symmetry': self._check_vertical_symmetry(vertices, poly),
-                'rotational_symmetry': self._check_rotational_symmetry(vertices),
+                'horizontal_symmetry': _check_horizontal_symmetry(vertices, poly),
+                'vertical_symmetry': _check_vertical_symmetry(vertices, poly),
+                'rotational_symmetry': _check_rotational_symmetry(vertices),
                 'has_quadrangle': (True if poly and hasattr(poly, 'exterior') and hasattr(poly.exterior, 'coords') and len(poly.exterior.coords)-1 == 4 else PhysicsInference.has_quadrangle(vertices)),
                 'geometric_complexity': PhysicsInference.geometric_complexity(vertices),
                 'visual_complexity': visual_complexity_norm,  # normalized [0,1]
                 'curvature_score': curvature_score,  # analytic, normalized
                 'angular_variance': angular_variance,  # analytic, normalized
                 'moment_of_inertia': moment_of_inertia,  # analytic, normalized
-                'irregularity_score': self._calculate_irregularity(vertices),
+                'irregularity_score': _calculate_irregularity(vertices),
             }
             logger.debug(f"[_calculate_image_features] OUTPUT: {features}")
-            return self.json_safe(features)
+            return json_safe(features)
         except Exception as e:
             logger.warning(f"[_calculate_image_features] Error: {e}")
             return {}
@@ -1325,9 +550,9 @@ class ComprehensiveBongardProcessor:
                 'has_quadrangle': PhysicsInference.has_quadrangle(vertices),
                 'has_obtuse_angle': PhysicsInference.has_obtuse(vertices),
                 # Advanced metrics
-                'curvature_score': self._calculate_curvature_score(vertices),
-                'angular_variance': self._calculate_angular_variance(vertices),
-                'edge_length_variance': self._calculate_edge_length_variance(vertices)
+                'curvature_score': _calculate_curvature_score(vertices),
+                'angular_variance': _calculate_angular_variance(vertices),
+                'edge_length_variance':_calculate_edge_length_variance(vertices)
             }
             logger.debug(f"[_calculate_physics_features] OUTPUT: {features}")
             return features
@@ -1349,7 +574,7 @@ class ComprehensiveBongardProcessor:
             modifier_sequence = []
             for stroke in strokes:
                 stroke_type = type(stroke).__name__.replace('Action', '').lower()
-                modifier = self._extract_modifier_from_stroke(stroke)
+                modifier = _extract_modifier_from_stroke(stroke)
                 stroke_types[stroke_type] = stroke_types.get(stroke_type, 0) + 1
                 shape_modifiers[modifier] = shape_modifiers.get(modifier, 0) + 1
                 modifier_sequence.append(modifier)
@@ -1363,7 +588,7 @@ class ComprehensiveBongardProcessor:
             }
             features.update({
                 'composition_complexity': len(strokes) + len(shape_modifiers),
-                'homogeneity_score': self._calculate_homogeneity(shape_modifiers),
+                'homogeneity_score': _calculate_homogeneity(shape_modifiers),
                 'pattern_regularity': self._calculate_pattern_regularity_from_modifiers(modifier_sequence)
             })
             logger.debug(f"[_calculate_composition_features] OUTPUT: {features}")
@@ -1372,91 +597,9 @@ class ComprehensiveBongardProcessor:
             logger.warning(f"[_calculate_composition_features] Error: {e}")
             return {}
 
-    def _extract_modifier_from_stroke(self, stroke) -> str:
-        """Extract the actual shape modifier from a stroke object, robustly, with debug logging."""
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.debug(f'Stroke type: {type(stroke)}, attributes: {dir(stroke)}')
-        logger.debug(f'Raw command: {getattr(stroke, "raw_command", None)}')
-        logger.debug(f'Shape modifier: {getattr(stroke, "shape_modifier", None)}')
-        # Priority: attribute > raw_command > function_name > fallback
-        if hasattr(stroke, 'shape_modifier'):
-            smod = getattr(stroke, 'shape_modifier')
-            if hasattr(smod, 'value'):
-                if smod.value:
-                    logger.debug(f"Extracted modifier from .shape_modifier.value: {smod.value}")
-                    return str(smod.value)
-            elif isinstance(smod, str) and smod:
-                logger.debug(f"Extracted modifier from .shape_modifier: {smod}")
-                return smod
-        raw_command = getattr(stroke, 'raw_command', None)
-        if raw_command and isinstance(raw_command, str):
-            parts = raw_command.split('_')
-            if len(parts) >= 2 and parts[1]:
-                logger.debug(f"Extracted modifier from raw_command: {parts[1]}")
-                return parts[1]
-        function_name = getattr(stroke, 'function_name', None)
-        if function_name and isinstance(function_name, str):
-            fn_parts = function_name.split('_')
-            if len(fn_parts) >= 2 and fn_parts[1]:
-                logger.debug(f"Extracted modifier from function_name: {fn_parts[1]}")
-                return fn_parts[1]
-        logger.debug("Falling back to 'normal' modifier")
-        return 'normal'
 
-    # Helper methods for feature calculation
-    def _calculate_perimeter(self, vertices: List[tuple]) -> float:
-        """Calculate perimeter of the shape."""
-        # Fix: Ensure vertices is a list of tuples, not a Polygon object
-        vertices = self.ensure_vertex_list(vertices)
-        if len(vertices) < 2:
-            return 0.0
-        
-        perimeter = 0.0
-        for i in range(len(vertices)):
-            p1 = vertices[i]
-            p2 = vertices[(i + 1) % len(vertices)]
-            perimeter += ((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2)**0.5
-        
-        return self.json_safe(perimeter)
-    
-    def _calculate_convexity_ratio(self, poly) -> float:
-        """Calculate ratio of polygon area to convex hull area."""
-        try:
-            if poly.area == 0:
-                return 0.0
-            return self.safe_divide(poly.area, poly.convex_hull.area)
-        except:
-            return 0.0
-    
-    # (Removed duplicate _calculate_compactness)
-    
-    def _calculate_eccentricity(self, vertices: List[tuple]) -> float:
-        """Calculate eccentricity as 1 - (min_eigenvalue / max_eigenvalue) from PCA."""
-        import numpy as np
-        vertices = self.ensure_vertex_list(vertices)
-        if len(vertices) < 3:
-            return 0.0
-        try:
-            points = np.array(vertices)
-            centered = points - np.mean(points, axis=0)
-            cov_matrix = np.cov(centered.T)
-            eigenvals = np.linalg.eigvals(cov_matrix)
-            eigenvals = np.sort(np.abs(eigenvals))[::-1]
-            if eigenvals[0] == 0:
-                return 0.0
-            return self.json_safe(1.0 - self.safe_divide(eigenvals[-1], eigenvals[0]))
-        except Exception as e:
-            logging.getLogger(__name__).warning(f"Eccentricity error: {e}")
-            return 0.0
 
-    # (Removed duplicate _calculate_angular_variance)
-    
-    def _check_rotational_symmetry(self, vertices: List[tuple]) -> int:
-        """Check rotational symmetry order using k-fold RMSE (k=2,3,4)."""
-        return PhysicsInference.rotational_symmetry(vertices)
 
-    # (Removed duplicate _calculate_irregularity)
 
 def main():
     parser = argparse.ArgumentParser(description='Generate comprehensive derived labels for Bongard-LOGO dataset')
@@ -1490,8 +633,7 @@ def main():
         return 1
 
     # --- DEBUG: Extract and log all unique action type prefixes in the dataset ---
-    processor = ComprehensiveBongardProcessor()
-    action_type_prefixes = processor.extract_action_type_prefixes(problems_data)
+    action_type_prefixes = extract_action_type_prefixes(problems_data)
     logger.info(f"[DEBUG] Unique action type prefixes in dataset: {sorted(action_type_prefixes)}")
     # --- END DEBUG ---
 
