@@ -409,6 +409,12 @@ class ComprehensiveNVLabsParser:
                     start_orientation=None,
                     scaling_factors=None
                 )
+            # --- Patch: Log degenerate shapes ---
+            num_vertices = len(getattr(shape, 'vertices', [])) if hasattr(shape, 'vertices') else 0
+            if num_vertices < 3:
+                logger.warning(f"[LOGOPARSER] Degenerate shape detected for problem_id={problem_id}: num_vertices={num_vertices}, actions={actions}")
+            else:
+                logger.info(f"[LOGOPARSER] Shape for problem_id={problem_id} has {num_vertices} vertices.")
             # Log vertices before normalization
             if hasattr(shape, 'vertices'):
                 verts = np.array(shape.vertices)

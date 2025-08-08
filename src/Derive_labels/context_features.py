@@ -25,7 +25,6 @@ class BongardFeatureExtractor:
         """
         Compute mean, variance, min, max for each feature in a list of feature dicts.
         """
-        import numpy as np
         logging.info(f"[compute_feature_statistics] INPUT: label={label}, num_features={len(features_list)}")
         if not features_list:
             return {}
@@ -72,7 +71,6 @@ class BongardFeatureExtractor:
             if verts and len(verts) < min_vertices:
                 # Interpolate to minimum vertices if possible
                 if len(verts) == 2:
-                    import numpy as np
                     x0, y0 = verts[0]
                     x1, y1 = verts[1]
                     xs = np.linspace(x0, x1, min_vertices)
@@ -222,7 +220,6 @@ class BongardFeatureExtractor:
 
     def compute_discriminative_features(self, pos_features, neg_features):
         # Computes difference of means for each feature, skipping None/NaN values
-        import numpy as np
         if not pos_features or not neg_features:
             return {}
         keys = set(pos_features[0].keys()) & set(neg_features[0].keys())

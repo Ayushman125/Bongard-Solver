@@ -1,3 +1,12 @@
+def ensure_str_list(obj):
+    """Recursively convert all items in a list (or nested lists/tuples) to strings."""
+    if isinstance(obj, list):
+        return [ensure_str_list(x) for x in obj]
+    elif isinstance(obj, tuple):
+        return tuple(ensure_str_list(x) for x in obj)
+    elif not isinstance(obj, str):
+        return str(obj)
+    return obj
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
 def extract_multiscale_features(shape_vertices, scales=[0.1, 0.3, 0.5, 1.0, 2.0]):
@@ -117,7 +126,7 @@ def _extract_ngram_features(sequence, n=2):
         logger.debug(f"[_extract_ngram_features] INPUTS: sequence={sequence}, n={n}")
         from collections import Counter
         ngrams = zip(*[sequence[i:] for i in range(n)])
-        ngram_list = ['|'.join(map(str, ng)) for ng in ngrams]
+        ngram_list = ['|'.join(ensure_str_list(ng)) for ng in ngrams]
         result = dict(Counter(ngram_list))
         logger.debug(f"[_extract_ngram_features] OUTPUT: {result}")
         return result

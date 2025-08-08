@@ -277,6 +277,8 @@ def safe_divide(a, b, default=0.0):
 def json_safe(obj):
     """Recursively convert numpy types to Python native types for JSON serialization."""
     import numpy as np
+    import logging
+    logger = logging.getLogger(__name__)
     if isinstance(obj, np.ndarray):
         return obj.tolist()
     elif isinstance(obj, (np.integer, np.int8, np.int16, np.int32, np.int64)):
@@ -291,6 +293,10 @@ def json_safe(obj):
         return [json_safe(v) for v in obj]
     elif hasattr(obj, 'item'):  # numpy scalar
         return obj.item()
+    # If it's a custom object (e.g., LineAction, ArcAction), convert to string
+    elif hasattr(obj, '__str__') and not isinstance(obj, (str, bytes)):
+        logger.debug(f"[json_safe] Converting custom object to string: {type(obj).__name__}")
+        return str(obj)
     return obj
 
 def _calculate_homogeneity_score(modifier_sequence: list) -> float:

@@ -30,7 +30,15 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.data_pipeline.data_loader import load_action_programs
 from src.bongard_augmentor.hybrid import HybridAugmentor
-from bongard.bongard import BongardImage
+from src.Derive_labels.features import ensure_str_list
+# Fix BongardImage import if needed
+try:
+    from bongard.bongard import BongardImage
+except ImportError:
+    try:
+        from Bongard_LOGO.bongard.bongard import BongardImage
+    except ImportError:
+        from Bongard_LOGO.bongard.bongard import BongardImage
 from src.physics_inference import PhysicsInference
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -126,50 +134,144 @@ class ComprehensiveBongardProcessor:
     def process_single_image(self, action_commands: List[str], image_id: str, 
                            is_positive: bool, problem_id: str, category: str,
                            image_path: str) -> Optional[Dict[str, Any]]:
-        logger.debug(f"Processing image_id={image_id}, problem_id={problem_id}, is_positive={is_positive}")
-        logger.debug(f"action_commands type: {type(action_commands)}, value: {action_commands}")
-        import traceback
-        try:
-            # Flatten action_commands if it is a nested list (e.g., [[...]]), as in hybrid.py
-            if isinstance(action_commands, list) and len(action_commands) == 1 and isinstance(action_commands[0], list):
-                action_commands = action_commands[0]
+        logger.info(f"[INPUT] Processing image_id={image_id}, problem_id={problem_id}, is_positive={is_positive}")
+        logger.info(f"[INPUT] action_commands type: {type(action_commands)}, value: {action_commands}")
+        # Improved shape splitting logic
+        logger.info(f"[SHAPE SPLIT] Raw action_commands: {action_commands}")
+        shapes_commands = []
+        if isinstance(action_commands, list) and action_commands and all(isinstance(cmd, list) for cmd in action_commands):
+            # List of lists: each sublist is a shape/object
+            for idx, sublist in enumerate(action_commands):
+                logger.info(f"[SHAPE SPLIT] Sublist {idx}: {sublist}")
+                valid_sublist = [cmd for cmd in sublist if isinstance(cmd, str) and cmd.strip()]
+                if not valid_sublist:
+                    logger.warning(f"[SHAPE SPLIT] Sublist {idx} is empty or invalid: {sublist}")
+                else:
+                    shapes_commands.append(valid_sublist)
+            logger.info(f"[SHAPE SPLIT] Parsed shapes_commands (multi-object): {shapes_commands}")
+        elif isinstance(action_commands, list) and all(isinstance(cmd, str) for cmd in action_commands):
+            # Flat list: single shape
+            valid_flat = [cmd for cmd in action_commands if isinstance(cmd, str) and cmd.strip()]
+            if not valid_flat:
+                logger.warning(f"[SHAPE SPLIT] Flat action_commands is empty or invalid: {action_commands}")
+            else:
+                shapes_commands.append(valid_flat)
+            logger.info(f"[SHAPE SPLIT] Parsed shapes_commands (single-object): {shapes_commands}")
+        else:
+            logger.error(f"[SHAPE SPLIT] action_commands format not recognized: {action_commands}")
+            return None
 
-            parser = ComprehensiveNVLabsParser()
-            parsed_actions = parser.parse_action_commands(action_commands, problem_id)
-            if not parsed_actions:
-                logger.error(f"[process_single_image] Failed to parse action_commands: {action_commands}")
-                # Save to flagged_issues.txt
-                try:
-                    output_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'output'))
-                    os.makedirs(output_dir, exist_ok=True)
-                    flag_path = os.path.join(output_dir, 'flagged_issues.txt')
-                    with open(flag_path, 'a', encoding='utf-8') as f:
-                        f.write(f"[FAILED PARSE] image_id={image_id}, problem_id={problem_id}, action_commands={action_commands}\n")
-                except Exception as file_exc:
-                    logger.error(f"[process_single_image] Could not write to flagged_issues.txt: {file_exc}")
-                return None
-
-            # --- Use NVLabs parser to create OneStrokeShape(s), then BongardImage ---
+        # Parse each shape separately
+        parser = ComprehensiveNVLabsParser()
+        one_stroke_shapes = []
+        for idx, shape_cmds in enumerate(shapes_commands):
+            logger.info(f"[PARSER] Parsing shape {idx} commands: {shape_cmds}")
+            parsed_shape = parser.parse_action_commands(shape_cmds, problem_id)
+            if isinstance(parsed_shape, list):
+                one_stroke_shapes.extend(parsed_shape)
+            else:
+                one_stroke_shapes.append(parsed_shape)
+            # Safe logging for parsed_shape
             try:
-                logger.info(f"[process_single_image] Parsing action_commands to OneStrokeShape(s) using ComprehensiveNVLabsParser for problem_id: {problem_id}")
-                # Always flatten if nested (hybrid.py logic)
-                if isinstance(action_commands, list) and len(action_commands) == 1 and isinstance(action_commands[0], list):
-                    action_commands_flat = action_commands[0]
+                if hasattr(parsed_shape, 'basic_actions'):
+                    action_types = [type(a).__name__ for a in getattr(parsed_shape, 'basic_actions', [])]
+                    logger.info(f"[PARSER] Parsed shape {idx}: type={type(parsed_shape).__name__}, num_actions={len(getattr(parsed_shape, 'basic_actions', []))}, action_types={action_types}, attributes={getattr(parsed_shape, 'attributes', None)}")
                 else:
-                    action_commands_flat = action_commands
+                    logger.info(f"[PARSER] Parsed shape {idx}: {type(parsed_shape).__name__}")
+            except Exception as log_exc:
+                logger.warning(f"[PARSER] Could not log parsed shape {idx}: {log_exc}")
+        # --- Patch: Assign aggregated features to each shape's attributes property ---
+        feature_extractor = BongardFeatureExtractor()
 
-                parser = ComprehensiveNVLabsParser()
-                one_stroke_shape = parser.parse_action_commands(action_commands_flat, problem_id)
-                # parser returns a list or a single OneStrokeShape; wrap if needed
-                if isinstance(one_stroke_shape, list):
-                    one_stroke_shapes = one_stroke_shape
-                else:
-                    one_stroke_shapes = [one_stroke_shape]
-                logger.info(f"[process_single_image] Parsed OneStrokeShape(s): {one_stroke_shapes}")
-                bongard_image = BongardImage(one_stroke_shapes)
+        for idx, shape in enumerate(one_stroke_shapes):
+            image_dict = {}
+            # Log shape object before feature extraction
+            logger.info(f"[ATTR DEBUG] Shape {idx} raw object: {shape}")
+            if hasattr(shape, 'vertices'):
+                logger.info(f"[ATTR DEBUG] Shape {idx} vertices: {shape.vertices}")
+                image_dict['vertices'] = shape.vertices
+            else:
+                logger.warning(f"[ATTR DEBUG] Shape {idx} has no vertices.")
+            if hasattr(shape, 'basic_actions'):
+                logger.info(f"[ATTR DEBUG] Shape {idx} basic_actions: {shape.basic_actions}")
+                image_dict['strokes'] = [vars(a) for a in shape.basic_actions]
+            else:
+                logger.warning(f"[ATTR DEBUG] Shape {idx} has no basic_actions.")
+            # Check for degenerate shapes
+            if not image_dict.get('vertices') or not image_dict.get('strokes'):
+                logger.warning(f"[ATTR DEBUG] Shape {idx} is degenerate (missing vertices or strokes). Skipping feature extraction.")
+                shape.attributes = {}
+                continue
+            # Log input to feature extraction
+            logger.info(f"[ATTR DEBUG] Shape {idx} image_dict for feature extraction: {image_dict}")
+            try:
+                shape.attributes = feature_extractor.extract_image_features(image_dict)
+                logger.info(f"[ATTR DEBUG] Shape {idx} extracted attributes: {shape.attributes}")
             except Exception as e:
-                logger.error(f"[process_single_image] NVLabs parser or BongardImage construction failed: {e}")
-                return None
+                logger.warning(f"[ATTR ASSIGN] Failed to extract features for shape {idx}: {e}")
+                shape.attributes = {}
+
+
+        # --- Validation: Check shape/stroke count match ---
+        expected_strokes = sum(len(cmds) for cmds in shapes_commands)
+        actual_shapes = len(one_stroke_shapes)
+        logger.info(f"[VALIDATION] expected_strokes={expected_strokes}, actual_shapes={actual_shapes}")
+        # Accept if both are 1 (single-object image)
+        if len(shapes_commands) > 1 and len(one_stroke_shapes) != len(shapes_commands):
+            logger.error(f"[DATA ISSUE] image_id={image_id}, problem_id={problem_id}: Number of action commands ({expected_strokes}) does not match number of parsed shapes ({actual_shapes}).\n    Action commands: {shapes_commands}\n    Parsed shapes: {one_stroke_shapes}")
+            self._flag_case(
+                category="data_issue",
+                problem_id=problem_id,
+                message=f"Number of action commands ({expected_strokes}) does not match number of parsed shapes ({actual_shapes}).",
+                tags=["action_shape_mismatch"]
+            )
+            return None
+        else:
+            logger.info(f"[VALIDATION] image_id={image_id}, problem_id={problem_id}: Number of action commands matches number of parsed shapes ({expected_strokes})")
+        # --- Only construct BongardImage and run downstream logic if shape count matches ---
+        try:
+            # Determine if input is multi-object (list of lists) or single-object (flat list)
+            is_multi_object = isinstance(action_commands, list) and action_commands and all(isinstance(cmd, list) for cmd in action_commands)
+            actual_shapes = len(one_stroke_shapes)
+            if is_multi_object:
+                expected_shapes = len(shapes_commands)
+                # Accept if number of parsed shapes matches number of sublists
+                if actual_shapes != expected_shapes or actual_shapes == 0:
+                    logger.error(f"[DATA ISSUE] image_id={image_id}, problem_id={problem_id}: Number of sublists ({expected_shapes}) does not match number of parsed shapes ({actual_shapes}).\nAction commands: {shapes_commands}\nParsed shapes: {one_stroke_shapes}")
+                    self._flag_case('data_issue', problem_id, f"Number of sublists ({expected_shapes}) does not match number of parsed shapes ({actual_shapes})", ['data_issue'])
+                    return None
+            else:
+                # Single-object: accept if exactly one shape is parsed
+                if actual_shapes != 1:
+                    logger.error(f"[DATA ISSUE] image_id={image_id}, problem_id={problem_id}: Expected 1 parsed shape for single-object, got {actual_shapes}.\nAction commands: {shapes_commands}\nParsed shapes: {one_stroke_shapes}")
+                    self._flag_case('data_issue', problem_id, f"Expected 1 parsed shape for single-object, got {actual_shapes}", ['data_issue'])
+                    return None
+            # Now construct BongardImage and run attribute mapping
+            bongard_image = BongardImage(one_stroke_shapes)
+            logger.info(f"[ATTR MAP] Mapping attributes for multi-object image: {image_id}")
+            for idx, shape in enumerate(getattr(bongard_image, 'one_stroke_shapes', [])):
+                attrs = getattr(shape, 'attributes', None)
+                logger.info(f"[ATTR MAP] Shape {idx}: attributes={attrs}")
+                if attrs is None:
+                    logger.warning(f"[ATTR MAP] Shape {idx} has no attributes.")
+                elif isinstance(attrs, dict):
+                    for k, v in attrs.items():
+                        logger.info(f"[ATTR MAP] Shape {idx} attribute: {k}={v}")
+                else:
+                    logger.info(f"[ATTR MAP] Shape {idx} attributes (non-dict): {attrs}")
+            bongard_image = BongardImage(one_stroke_shapes)
+            # --- Attribute mapping for multi-object images ---
+            logger.info(f"[ATTR MAP] Mapping attributes for multi-object image: {image_id}")
+            for idx, shape in enumerate(getattr(bongard_image, 'one_stroke_shapes', [])):
+                attrs = getattr(shape, 'attributes', None)
+                logger.info(f"[ATTR MAP] Shape {idx}: attributes={attrs}")
+                if attrs is None:
+                    logger.warning(f"[ATTR MAP] Shape {idx} has no attributes.")
+                elif isinstance(attrs, dict):
+                    for k, v in attrs.items():
+                        logger.info(f"[ATTR MAP] Shape {idx} attribute: {k}={v}")
+                else:
+                    logger.info(f"[ATTR MAP] Shape {idx} attributes (non-dict): {attrs}")
 
             # --- Always include raw vertices from BongardImage ---
             vertices_raw = []
@@ -185,8 +287,12 @@ class ComprehensiveBongardProcessor:
 
             # --- Use calculate_geometry_consistent for geometry ---
             logger.info(f"[calculate_geometry_consistent] INPUT: {normalized_vertices}")
-            geometry = calculate_geometry_consistent(normalized_vertices)
-            logger.info(f"[calculate_geometry_consistent] OUTPUT: {geometry}")
+            try:
+                geometry = calculate_geometry_consistent(normalized_vertices)
+                logger.info(f"[calculate_geometry_consistent] OUTPUT: {geometry}")
+            except Exception as geo_exc:
+                logger.error(f"[FALLBACK LOGIC] image_id={image_id}, problem_id={problem_id}: Geometry calculation failed, fallback logic triggered. Error: {geo_exc}\nVertices: {normalized_vertices}")
+                geometry = {}
 
             # For downstream compatibility, use normalized_vertices for features
             norm_vertices_for_features = normalized_vertices
@@ -255,7 +361,7 @@ class ComprehensiveBongardProcessor:
             unique_shape_functions = set()
             shape_function_counts = {}
             unique_modifiers = set()
-            original_action_commands = action_commands if isinstance(action_commands, list) else []
+            original_action_commands = [cmd for sublist in shapes_commands for cmd in sublist]
 
             # --- NEW: Extract canonical problem name for TSV lookup (robust normalization) ---
             canonical_name = problem_id
@@ -339,11 +445,19 @@ class ComprehensiveBongardProcessor:
 
             action_program = []
             for shape in getattr(bongard_image, 'one_stroke_shapes', []):
-                for a in getattr(shape, 'basic_actions', []):
+                for j, a in enumerate(getattr(shape, 'basic_actions', [])):
                     rc = getattr(a, 'raw_command', None)
-                    if not rc:
-                        rc = str(a)
-                    action_program.append(rc)
+                    if isinstance(rc, str):
+                        action_program.append(rc)
+                    else:
+                        # Fallback to str(a) if raw_command is not available
+                        action_str = str(a)
+                        logger.warning(f"[SERIALIZE] raw_command not string for action {j}, using str(a): {action_str}")
+                        action_program.append(action_str)
+            # Final check: ensure all items are strings using ensure_str_list
+            action_program = ensure_str_list(action_program)
+            # If action_program is used in any join operation, ensure all items are strings
+            # Example: if you ever do ','.join(action_program), this will now be safe
 
             image_canonical_summary = {
                 'unique_shape_functions': sorted(list(unique_shape_functions)),
@@ -351,6 +465,10 @@ class ComprehensiveBongardProcessor:
                 'modifiers': sorted(list(unique_modifiers)),
             }
 
+        
+            action_program = ensure_str_list(action_program)
+            # If you ever join action_program, do it like this:
+            # joined_action_program = ','.join(ensure_str_list(action_program))
             complete_record = {
                 'image_id': image_id,
                 'problem_id': problem_id,
@@ -396,9 +514,11 @@ class ComprehensiveBongardProcessor:
             self.processing_stats['successful'] += 1
             return json_safe(complete_record)
         except Exception as e:
+            import traceback
             error_msg = f"Error processing image {image_id}: {e}"
             stack_trace = traceback.format_exc()
             logger.error(f"{error_msg}\n{stack_trace}")
+            self._flag_case('unknown', problem_id, error_msg, ['image_processing_error'])
             # Save to flagged_issues.txt
             try:
                 output_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'output'))
@@ -409,6 +529,16 @@ class ComprehensiveBongardProcessor:
             except Exception as file_exc:
                 logger.error(f"[process_single_image] Could not write to flagged_issues.txt: {file_exc}")
             return None
+    def _flag_case(self, category, problem_id, message, tags=None):
+        """Log and store flagged cases for inspection."""
+        logger.warning(f"[FLAG CASE] category={category}, problem_id={problem_id}, message={message}, tags={tags}")
+        case = {
+            'category': category,
+            'problem_id': problem_id,
+            'message': message,
+            'tags': tags if tags else []
+        }
+        self.flagged_cases.append(case)
 
 
     
@@ -426,18 +556,18 @@ class ComprehensiveBongardProcessor:
             try:
                 poly = Polygon(vertices)
                 if not poly.is_valid or poly.area == 0:
-                    logger.debug("[_calculate_image_features] Polygon invalid or zero area, applying buffer(0)")
+                    logger.error(f"[FALLBACK LOGIC] Polygon invalid or zero area for vertices: {vertices}. Applying buffer(0) fallback.")
                     poly = poly.buffer(0)
             except Exception as e:
-                logger.debug(f"[_calculate_image_features] Error in Polygon(vertices): {e}")
+                logger.error(f"[FALLBACK LOGIC] Error in Polygon(vertices): {e}. Attempting convex hull fallback for vertices: {vertices}")
                 poly = None
             if poly is None or not poly.is_valid or poly.is_empty:
                 # fallback: convex hull
                 try:
-                    logger.debug("[_calculate_image_features] Falling back to convex hull")
+                    logger.error(f"[FALLBACK LOGIC] Polygon still invalid or empty after buffer(0). Falling back to convex hull for vertices: {vertices}")
                     poly = Polygon(vertices).convex_hull
                 except Exception as e:
-                    logger.debug(f"[_calculate_image_features] Error in convex hull: {e}")
+                    logger.error(f"[FALLBACK LOGIC] Error in convex hull: {e}. Geometry cannot be recovered for vertices: {vertices}")
                     poly = None
 
             # --- Robust, normalized feature extraction ---
@@ -750,12 +880,15 @@ def main():
 
     # Save results
     try:
+        from src.Derive_labels.shape_utils import json_safe
         output_dir = os.path.dirname(args.output)
         if output_dir and not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
+        # Ensure all_results is json_safe
+        safe_results = json_safe(all_results)
         with open(args.output, 'w', encoding='utf-8') as f:
-            json.dump(all_results, f, indent=2, ensure_ascii=False)
+            json.dump(safe_results, f, indent=2, ensure_ascii=False)
 
         logger.info(f"Successfully processed {successful_images}/{total_images} images")
         logger.info(f"Saved {len(all_results)} records to {args.output}")
@@ -763,8 +896,9 @@ def main():
         # Save flagged cases
         if processor.flagged_cases:
             flagged_path = os.path.join(output_dir, 'flagged_cases.json')
+            safe_flagged = json_safe(processor.flagged_cases)
             with open(flagged_path, 'w', encoding='utf-8') as f:
-                json.dump(processor.flagged_cases, f, indent=2, ensure_ascii=False)
+                json.dump(safe_flagged, f, indent=2, ensure_ascii=False)
             logger.info(f"Saved {len(processor.flagged_cases)} flagged cases to {flagged_path}")
 
         # Save processing statistics
@@ -775,14 +909,16 @@ def main():
         }
 
         stats_path = os.path.join(output_dir, 'processing_statistics.json')
+        safe_stats = json_safe(processor.processing_stats)
         with open(stats_path, 'w', encoding='utf-8') as f:
-            json.dump(processor.processing_stats, f, indent=2, ensure_ascii=False)
+            json.dump(safe_stats, f, indent=2, ensure_ascii=False)
         logger.info(f"Saved processing statistics to {stats_path}")
 
         # Save problem-level canonical summaries
         problem_summary_path = os.path.join(output_dir, 'problem_summaries.json')
+        safe_summaries = json_safe(problem_summaries)
         with open(problem_summary_path, 'w', encoding='utf-8') as f:
-            json.dump(problem_summaries, f, indent=2, ensure_ascii=False)
+            json.dump(safe_summaries, f, indent=2, ensure_ascii=False)
         logger.info(f"Saved {len(problem_summaries)} problem-level canonical summaries to {problem_summary_path}")
 
         return 0
