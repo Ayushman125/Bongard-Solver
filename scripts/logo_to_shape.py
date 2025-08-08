@@ -127,26 +127,12 @@ class ComprehensiveBongardProcessor:
             'shape_modifier_counts': {}
         }
         
+
     def process_single_image(self, action_commands: List[str], image_id: str, 
                            is_positive: bool, problem_id: str, category: str,
                            image_path: str) -> Optional[Dict[str, Any]]:
         logger.debug(f"Processing image_id={image_id}, problem_id={problem_id}, is_positive={is_positive}")
         logger.debug(f"action_commands type: {type(action_commands)}, value: {action_commands}")
-        # --- Contextual/relational feature extraction ---
-        # Prepare strokes as dicts with 'vertices' for context extractor
-        context_strokes = []
-        for a in getattr(shape, 'basic_actions', []) if 'shape' in locals() else []:
-            v = getattr(a, 'vertices', None)
-            if v is None and hasattr(a, 'get_world_coordinates'):
-                v = a.get_world_coordinates()
-            context_strokes.append({'vertices': v if v is not None else []})
-        # Extract robust spatial relationships (adjacency, intersection, containment, overlap)
-        from src.Derive_labels.features import extract_relational_features
-        context_relationships = extract_relational_features(context_strokes) if context_strokes else {}
-        logger.info(f"[process_single_image] context_relationships: {context_relationships}")
-        # Multi-scale features (using normalized vertices)
-        multiscale_features = extract_multiscale_features(norm_vertices_for_features) if 'norm_vertices_for_features' in locals() else {}
-        logger.info(f"[process_single_image] multiscale_features: {multiscale_features}")
         import traceback
         try:
             # Flatten action_commands if it is a nested list (e.g., [[...]]), as in hybrid.py
@@ -168,15 +154,33 @@ class ComprehensiveBongardProcessor:
                     logger.error(f"[process_single_image] Could not write to flagged_issues.txt: {file_exc}")
                 return None
 
-            # If parser returns a list of actions, wrap in OneStrokeShape; if already OneStrokeShape, use as is
-            if hasattr(parsed_actions, 'basic_actions'):
-                shape = parsed_actions
-            else:
-                shape = OneStrokeShape(basic_actions=parsed_actions)
+            # --- Use NVLabs parser to create OneStrokeShape(s), then BongardImage ---
+            try:
+                logger.info(f"[process_single_image] Parsing action_commands to OneStrokeShape(s) using ComprehensiveNVLabsParser for problem_id: {problem_id}")
+                # Always flatten if nested (hybrid.py logic)
+                if isinstance(action_commands, list) and len(action_commands) == 1 and isinstance(action_commands[0], list):
+                    action_commands_flat = action_commands[0]
+                else:
+                    action_commands_flat = action_commands
 
+                parser = ComprehensiveNVLabsParser()
+                one_stroke_shape = parser.parse_action_commands(action_commands_flat, problem_id)
+                # parser returns a list or a single OneStrokeShape; wrap if needed
+                if isinstance(one_stroke_shape, list):
+                    one_stroke_shapes = one_stroke_shape
+                else:
+                    one_stroke_shapes = [one_stroke_shape]
+                logger.info(f"[process_single_image] Parsed OneStrokeShape(s): {one_stroke_shapes}")
+                bongard_image = BongardImage(one_stroke_shapes)
+            except Exception as e:
+                logger.error(f"[process_single_image] NVLabs parser or BongardImage construction failed: {e}")
+                return None
 
-            # --- Always include raw vertices ---
-            vertices_raw = getattr(shape, 'vertices', [])
+            # --- Always include raw vertices from BongardImage ---
+            vertices_raw = []
+            for shape in getattr(bongard_image, 'one_stroke_shapes', []):
+                if hasattr(shape, 'vertices'):
+                    vertices_raw.extend(shape.vertices)
 
             # --- Use standardize_coordinates for normalization ---
             from src.Derive_labels.shape_utils import standardize_coordinates, calculate_geometry_consistent
@@ -195,37 +199,49 @@ class ComprehensiveBongardProcessor:
             # --- Derive position and rotation labels from normalized vertices ---
             posrot_labels = extract_position_and_rotation(norm_vertices_for_features)
 
+            # --- Contextual/relational feature extraction ---
+            # Prepare strokes as dicts with 'vertices' for context extractor
+            context_strokes = []
+            for shape in getattr(bongard_image, 'one_stroke_shapes', []):
+                v = getattr(shape, 'vertices', None)
+                context_strokes.append({'vertices': v if v is not None else []})
+            from src.Derive_labels.features import extract_relational_features
+            context_relationships = extract_relational_features(context_strokes) if context_strokes else {}
+            logger.info(f"[process_single_image] context_relationships: {context_relationships}")
+            # Multi-scale features (using normalized vertices)
+            multiscale_features = extract_multiscale_features(norm_vertices_for_features) if norm_vertices_for_features else {}
+            logger.info(f"[process_single_image] multiscale_features: {multiscale_features}")
+
             # --- Calculate image features using robust polygon ---
-            image_features = self._calculate_image_features(norm_vertices_for_features, getattr(shape, 'basic_actions', []), geometry)
-            # Use actual centroid for center_of_mass
+            all_actions = []
+            for shape in getattr(bongard_image, 'one_stroke_shapes', []):
+                all_actions.extend(getattr(shape, 'basic_actions', []))
+            image_features = self._calculate_image_features(norm_vertices_for_features, all_actions, geometry)
             centroid = geometry.get('centroid')
-            # Count actual LineAction and ArcAction objects for stroke counting
-            composition_features = self._calculate_composition_features(getattr(shape, 'basic_actions', []))
-            physics_features = self._calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=getattr(shape, 'basic_actions', []))
+            composition_features = self._calculate_composition_features(all_actions)
+            physics_features = self._calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
 
             # --- Relational/Topological/Sequential Features ---
             # Convert actions to shapely geometries for robust relational features
-            stroke_geometries = _actions_to_geometries(shape)
+            from src.Derive_labels.features import _actions_to_geometries
+            stroke_geometries = _actions_to_geometries(bongard_image)
             logger.debug(f"Number of stroke geometries: {len(stroke_geometries)}")
             for idx, g in enumerate(stroke_geometries):
                 logger.debug(f"Geometry {idx}: type={g.geom_type}, is_valid={g.is_valid}")
-            # Use robust Shapely-based relational features
             from src.Derive_labels.features import extract_relational_features as extract_relational_features_geom
             robust_relational_features = extract_relational_features_geom(stroke_geometries) if stroke_geometries else {}
-            # Use context_relationships for context-based features as before
             intersections = context_relationships.get('intersections')
             adjacency = context_relationships.get('adjacency')
             containment = context_relationships.get('containment')
             overlap = context_relationships.get('overlap')
 
             # Sequential pattern features (n-gram, alternation, regularity)
-            modifier_sequence = [_extract_modifier_from_stroke(s) for s in getattr(shape, 'basic_actions', [])]
+            modifier_sequence = [_extract_modifier_from_stroke(s) for s in all_actions]
             ngram_features = _extract_ngram_features(modifier_sequence)
             alternation = _detect_alternation(modifier_sequence)
             regularity = self._calculate_pattern_regularity_from_modifiers(modifier_sequence)
 
             # Topological features (chain/star/cycle detection, connectivity)
-            # Use context adjacency matrix for graph topology detection
             context_adj = context_relationships.get('adjacency_matrix')
             if context_adj is not None:
                 graph_features = _extract_graph_features({'adjacency_matrix': context_adj})
@@ -251,100 +267,88 @@ class ComprehensiveBongardProcessor:
             if '_' in canonical_name:
                 if canonical_name.startswith('bd_') or canonical_name.startswith('ff_') or canonical_name.startswith('hd_'):
                     canonical_name = canonical_name.split('_', 1)[1]
-            # Remove numeric suffix (e.g. _0000)
             import re
             canonical_base = re.sub(r'(_\d+)?$', '', canonical_name)
-            # Normalize: lowercase, replace hyphens/spaces, remove trailing underscores
             canonical_key = canonical_base.lower().replace('-', '_').replace(' ', '_').rstrip('_')
             canonical_shape_attributes = shape_attr_map.get(canonical_key)
             canonical_shape_def = shape_def_map.get(canonical_key)
 
-            for i, action in enumerate(getattr(shape, 'basic_actions', [])):
-                stroke_type_val = type(action).__name__.replace('Action', '').lower()
-                raw_command = getattr(action, 'raw_command', None)
-                function_name = getattr(action, 'function_name', None)
-                # Fallback: if raw_command is None, try to reconstruct from original_action_commands
-                if not raw_command and original_action_commands and i < len(original_action_commands):
-                    if isinstance(original_action_commands[i], str):
-                        raw_command = original_action_commands[i]
-                shape_modifier_val = None
-                parameters = {}
-                # 1. Try raw_command (preferred)
-                if raw_command and isinstance(raw_command, str):
-                    parts = raw_command.split('_')
-                    if len(parts) >= 2:
-                        shape_modifier_val = parts[1]
-                    # Extract parameters from the rest of the string
-                    param_str = '_'.join(parts[2:]) if len(parts) > 2 else ''
-                    if param_str:
-                        main_params = param_str.split('-')
-                        for idx, p in enumerate(main_params):
-                            try:
-                                parameters[f'param{idx+1}'] = float(p)
-                            except Exception:
-                                parameters[f'param{idx+1}'] = p
-                # 2. Try function_name if not found
-                if not shape_modifier_val and function_name and isinstance(function_name, str):
-                    fn_parts = function_name.split('_')
-                    if len(fn_parts) >= 2:
-                        shape_modifier_val = fn_parts[1]
-                if not function_name and raw_command and isinstance(raw_command, str):
-                    # fallback: use first two parts as function_name
-                    parts = raw_command.split('_')
-                    if len(parts) >= 2:
-                        function_name = f"{parts[0]}_{parts[1]}"
-                if not shape_modifier_val and hasattr(action, 'shape_modifier'):
-                    smod = getattr(action, 'shape_modifier')
-                    if hasattr(smod, 'value'):
-                        shape_modifier_val = smod.value
-                    elif isinstance(smod, str):
-                        shape_modifier_val = smod
-                if not shape_modifier_val:
-                    shape_modifier_val = 'normal'
-                is_valid = getattr(action, 'is_valid', True)
-                # --- Use canonical_name for all strokes ---
-                # No per-stroke lookup; all strokes get the same canonical attributes/def
-                stroke_specific_features = _calculate_stroke_specific_features(
-                    action, i, stroke_type_val, shape_modifier_val, parameters)
-                if stroke_type_val == 'line':
-                    line_features.append(stroke_specific_features)
-                elif stroke_type_val == 'arc':
-                    arc_features.append(stroke_specific_features)
-                stroke_data = {
-                    'stroke_id': f"{image_id}_stroke_{i}",
-                    'stroke_type': stroke_type_val,
-                    'shape_modifier': shape_modifier_val,
-                    'parameters': parameters,
-                    'raw_command': raw_command,
-                    'function_name': function_name,
-                    'is_valid': is_valid,
-                    'specific_features': stroke_specific_features,
-                }
-                if canonical_shape_attributes:
-                    stroke_data['canonical_shape_attributes'] = canonical_shape_attributes
-                if canonical_shape_def:
-                    stroke_data['canonical_shape_def'] = canonical_shape_def
-                stroke_features.append(stroke_data)
-                if shape_modifier_val:
-                    unique_modifiers.add(shape_modifier_val)
-                if function_name:
-                    unique_shape_functions.add(function_name)
-                    shape_function_counts[function_name] = shape_function_counts.get(function_name, 0) + 1
+            for i, shape in enumerate(getattr(bongard_image, 'one_stroke_shapes', [])):
+                for j, action in enumerate(getattr(shape, 'basic_actions', [])):
+                    stroke_type_val = type(action).__name__.replace('Action', '').lower()
+                    raw_command = getattr(action, 'raw_command', None)
+                    function_name = getattr(action, 'function_name', None)
+                    if not raw_command and original_action_commands and j < len(original_action_commands):
+                        if isinstance(original_action_commands[j], str):
+                            raw_command = original_action_commands[j]
+                    shape_modifier_val = None
+                    parameters = {}
+                    if raw_command and isinstance(raw_command, str):
+                        parts = raw_command.split('_')
+                        if len(parts) >= 2:
+                            shape_modifier_val = parts[1]
+                        param_str = '_'.join(parts[2:]) if len(parts) > 2 else ''
+                        if param_str:
+                            main_params = param_str.split('-')
+                            for idx, p in enumerate(main_params):
+                                try:
+                                    parameters[f'param{idx+1}'] = float(p)
+                                except Exception:
+                                    parameters[f'param{idx+1}'] = p
+                    if not shape_modifier_val and function_name and isinstance(function_name, str):
+                        fn_parts = function_name.split('_')
+                        if len(fn_parts) >= 2:
+                            shape_modifier_val = fn_parts[1]
+                    if not function_name and raw_command and isinstance(raw_command, str):
+                        parts = raw_command.split('_')
+                        if len(parts) >= 2:
+                            function_name = f"{parts[0]}_{parts[1]}"
+                    if not shape_modifier_val and hasattr(action, 'shape_modifier'):
+                        smod = getattr(action, 'shape_modifier')
+                        if hasattr(smod, 'value'):
+                            shape_modifier_val = smod.value
+                        elif isinstance(smod, str):
+                            shape_modifier_val = smod
+                    if not shape_modifier_val:
+                        shape_modifier_val = 'normal'
+                    is_valid = getattr(action, 'is_valid', True)
+                    stroke_specific_features = _calculate_stroke_specific_features(
+                        action, j, stroke_type_val, shape_modifier_val, parameters)
+                    if stroke_type_val == 'line':
+                        line_features.append(stroke_specific_features)
+                    elif stroke_type_val == 'arc':
+                        arc_features.append(stroke_specific_features)
+                    stroke_data = {
+                        'stroke_id': f"{image_id}_stroke_{i}_{j}",
+                        'stroke_type': stroke_type_val,
+                        'shape_modifier': shape_modifier_val,
+                        'parameters': parameters,
+                        'raw_command': raw_command,
+                        'function_name': function_name,
+                        'is_valid': is_valid,
+                        'specific_features': stroke_specific_features,
+                    }
+                    if canonical_shape_attributes:
+                        stroke_data['canonical_shape_attributes'] = canonical_shape_attributes
+                    if canonical_shape_def:
+                        stroke_data['canonical_shape_def'] = canonical_shape_def
+                    stroke_features.append(stroke_data)
+                    if shape_modifier_val:
+                        unique_modifiers.add(shape_modifier_val)
+                    if function_name:
+                        unique_shape_functions.add(function_name)
+                        shape_function_counts[function_name] = shape_function_counts.get(function_name, 0) + 1
 
-            # --- Calculate stroke_type_features with correct aggregation ---
             differentiated_features = _calculate_stroke_type_differentiated_features(
-                {'line_features': line_features, 'arc_features': arc_features}, getattr(shape, 'basic_actions', []))
+                {'line_features': line_features, 'arc_features': arc_features}, all_actions)
 
-            # --- Robust action_program: always use best available command string ---
             action_program = []
-            for i, a in enumerate(getattr(shape, 'basic_actions', [])):
-                rc = getattr(a, 'raw_command', None)
-                if not rc and original_action_commands and i < len(original_action_commands):
-                    if isinstance(original_action_commands[i], str):
-                        rc = original_action_commands[i]
-                if not rc:
-                    rc = str(a)
-                action_program.append(rc)
+            for shape in getattr(bongard_image, 'one_stroke_shapes', []):
+                for a in getattr(shape, 'basic_actions', []):
+                    rc = getattr(a, 'raw_command', None)
+                    if not rc:
+                        rc = str(a)
+                    action_program.append(rc)
 
             image_canonical_summary = {
                 'unique_shape_functions': sorted(list(unique_shape_functions)),
@@ -376,7 +380,6 @@ class ComprehensiveBongardProcessor:
                 },
                 'action_program': action_program,
                 'geometry': geometry,
-                # --- New relational/topological/sequential features ---
                 'relational_features': robust_relational_features,
                 'context_relational_features': {
                     'intersections': intersections,

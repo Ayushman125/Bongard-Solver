@@ -1,3 +1,11 @@
+
+"""
+IMPORTANT PIPELINE NOTE:
+All feature extraction and stroke vertex extraction in this module should use the painter-generated BongardImage context.
+Always pass the bongard_image argument to _extract_stroke_vertices and _calculate_stroke_specific_features.
+Only use fallback/synthesized vertices if bongard_image.one_stroke_shapes[stroke_index].vertices is missing or too short, and log a warning if you do.
+"""
+
 import math
 import logging
 from typing import Dict, List, Any, Optional
@@ -47,28 +55,39 @@ def _extract_stroke_vertices(stroke, stroke_index, all_vertices, bongard_image=N
     import numpy as np
     logger = logging.getLogger(__name__)
     logger.info(f"[_extract_stroke_vertices] INPUT: stroke_index={stroke_index}, stroke={stroke}, all_vertices={all_vertices}")
-    # --- FIX: Use NVLabs API correctly ---
-    logger.info(f"[_extract_stroke_vertices] INPUT: stroke_index={stroke_index}, stroke={stroke}, all_vertices={all_vertices}")
+    # Warn if bongard_image is not passed
+    if bongard_image is None:
+        logger.warning(f"[_extract_stroke_vertices] WARNING: bongard_image context not provided. Feature extraction may be incomplete or inaccurate.")
     # Try to use BongardImage.one_stroke_shapes[stroke_index].vertices if available
     if bongard_image and hasattr(bongard_image, 'one_stroke_shapes'):
         try:
-            for shape_idx, shape in enumerate(bongard_image.one_stroke_shapes):
-                if hasattr(shape, 'basic_actions') and stroke_index < len(bongard_image.one_stroke_shapes):
-                    if shape_idx == stroke_index:
-                        verts = getattr(shape, 'vertices', None)
-                        if verts and len(verts) > 2:
-                            logger.info(f"[_extract_stroke_vertices] Using NVLabs vertices: {verts}")
-                            logger.info(f"[_extract_stroke_vertices] OUTPUT: {verts}")
-                            return verts
+            if stroke_index < len(bongard_image.one_stroke_shapes):
+                shape = bongard_image.one_stroke_shapes[stroke_index]
+                verts = getattr(shape, 'vertices', None)
+                if verts and len(verts) > 2:
+                    logger.info(f"[_extract_stroke_vertices] Using NVLabs vertices from one_stroke_shapes[{stroke_index}]: {verts}")
+                    return verts
         except Exception as e:
             logger.warning(f"[_extract_stroke_vertices] NVLabs vertex extraction failed: {e}")
     # Fallbacks as before
     # 1. Use stroke.vertices if available and has >2 points
     if hasattr(stroke, 'vertices') and stroke.vertices and len(stroke.vertices) > 2:
         logger.info(f"[_extract_stroke_vertices] Using stroke.vertices: {stroke.vertices}")
-        logger.info(f"[_extract_stroke_vertices] OUTPUT: {stroke.vertices}")
         return stroke.vertices
-    # 2. Robust arc interpolation if arc parameters are available
+    # 2. For polylines, use all available points
+    if hasattr(stroke, 'polyline_points') and stroke.polyline_points and len(stroke.polyline_points) > 2:
+        logger.info(f"[_extract_stroke_vertices] Using stroke.polyline_points: {stroke.polyline_points}")
+        return stroke.polyline_points
+    # 3. Use world coordinates if available
+    if hasattr(stroke, 'get_world_coordinates') and callable(stroke.get_world_coordinates):
+        try:
+            verts = stroke.get_world_coordinates()
+            if verts and len(verts) > 2:
+                logger.info(f"[_extract_stroke_vertices] Using get_world_coordinates: {verts}")
+                return verts
+        except Exception as e:
+            logger.warning(f"[_extract_stroke_vertices] get_world_coordinates failed: {e}")
+    # 4. Robust arc interpolation if arc parameters are available
     stype = getattr(stroke, 'stroke_type', None)
     if hasattr(stype, 'value'):
         stype = stype.value
@@ -114,37 +133,21 @@ def _extract_stroke_vertices(stroke, stroke_index, all_vertices, bongard_image=N
             thetas = np.linspace(theta1, theta2, num_points)
             arc_points = [(cx + radius * np.cos(t), cy + radius * np.sin(t)) for t in thetas]
             logger.info(f"[_extract_stroke_vertices] Interpolated arc points: {arc_points}")
-            logger.info(f"[_extract_stroke_vertices] OUTPUT: {arc_points}")
             return arc_points
         except Exception as e:
             logger.warning(f"[_extract_stroke_vertices] Arc interpolation failed: {e}")
-    # 3. For polylines, use all available points
-    if hasattr(stroke, 'polyline_points') and stroke.polyline_points and len(stroke.polyline_points) > 2:
-        logger.info(f"[_extract_stroke_vertices] Using stroke.polyline_points: {stroke.polyline_points}")
-        logger.info(f"[_extract_stroke_vertices] OUTPUT: {stroke.polyline_points}")
-        return stroke.polyline_points
-    # 4. Fallback: extract from shape_vertices using stroke boundaries (legacy)
+    # 5. Fallback: extract from shape_vertices using stroke boundaries (legacy)
     if all_vertices and len(all_vertices) > stroke_index + 2:
-        logger.info(f"[_extract_stroke_vertices] Using all_vertices slice: {all_vertices[stroke_index:stroke_index+2]}")
-        logger.info(f"[_extract_stroke_vertices] OUTPUT: {all_vertices[stroke_index:stroke_index+2]}")
-        return all_vertices[stroke_index:stroke_index+2]
-    # 5. Last resort: use world coordinates if available
-    if hasattr(stroke, 'get_world_coordinates') and callable(stroke.get_world_coordinates):
-        verts = stroke.get_world_coordinates()
-        if verts and len(verts) > 2:
-            logger.info(f"[_extract_stroke_vertices] Using get_world_coordinates: {verts}")
-            logger.info(f"[_extract_stroke_vertices] OUTPUT: {verts}")
-            return verts
+        logger.info(f"[_extract_stroke_vertices] Using all_vertices fallback: {all_vertices}")
+        return all_vertices
     # 6. Fallback: try to synthesize from command string
     raw_command = getattr(stroke, 'raw_command', None)
     if raw_command:
         verts = _vertices_from_command(raw_command, stroke_index)
         if verts and len(verts) > 1:
-            logger.info(f"[_extract_stroke_vertices] Synthesized from command: {verts}")
-            logger.info(f"[_extract_stroke_vertices] OUTPUT: {verts}")
+            logger.warning(f"[_extract_stroke_vertices] Fallback: synthesized {len(verts)} vertices from command string for stroke {stroke_index}.")
             return verts
     logger.warning(f"[_extract_stroke_vertices] Could not robustly extract vertices for stroke {stroke_index} (type={stype}). Returning empty list.")
-    logger.info(f"[_extract_stroke_vertices] OUTPUT: []")
     return []
 
 def _vertices_from_command(command, stroke_index):
