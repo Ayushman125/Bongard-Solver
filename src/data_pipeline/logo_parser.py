@@ -26,8 +26,11 @@ import numpy as np
 import cv2
 import logging
 def debug_join(label, items):
-    from src.Derive_labels.shape_utils import json_safe
-    safe_items = json_safe(items)
+    import logging
+    from src.Derive_labels.shape_utils import json_safe, ensure_flat_str_list
+    # Always robustly flatten and stringify
+    safe_items = ensure_flat_str_list(items)
+    safe_items = json_safe(safe_items)
     if safe_items and not all(isinstance(x, str) for x in safe_items):
         logging.error(f"[DEBUG JOIN] {label}: Non-string found in list: {[type(x) for x in safe_items]}")
     logging.debug(f"[DEBUG JOIN] {label}: Joining items: {safe_items}")
@@ -422,8 +425,9 @@ class ComprehensiveNVLabsParser:
                     continue
             # Robust serialization: ensure actions are stringified before any join/logging/serialization
             try:
-                from src.Derive_labels.shape_utils import json_safe
-                safe_cmds = json_safe([getattr(a, "raw_command", a) for a in actions])
+                from src.Derive_labels.shape_utils import json_safe, ensure_flat_str_list
+                safe_cmds = ensure_flat_str_list([getattr(a, "raw_command", a) for a in actions])
+                safe_cmds = json_safe(safe_cmds)
                 logger.debug(f"[ACTIONS_JOIN] {debug_join('ACTIONS_JOIN', safe_cmds)}")
                 # Patch: Log action types and attributes for robust output
                 safe_types = json_safe([type(a).__name__ for a in actions])
@@ -452,8 +456,9 @@ class ComprehensiveNVLabsParser:
                 )
             # Patch: Robustly convert shape actions and attributes for output serialization
             try:
-                from src.Derive_labels.shape_utils import json_safe
-                safe_shape_actions = json_safe([getattr(a, "raw_command", a) for a in getattr(shape, 'basic_actions', [])])
+                from src.Derive_labels.shape_utils import json_safe, ensure_flat_str_list
+                safe_shape_actions = ensure_flat_str_list([getattr(a, "raw_command", a) for a in getattr(shape, 'basic_actions', [])])
+                safe_shape_actions = json_safe(safe_shape_actions)
                 logger.debug(f"[OUTPUT_SHAPE_ACTIONS] {safe_shape_actions}")
                 safe_shape_types = json_safe([type(a).__name__ for a in getattr(shape, 'basic_actions', [])])
                 logger.debug(f"[OUTPUT_SHAPE_TYPES] {safe_shape_types}")

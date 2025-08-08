@@ -107,6 +107,7 @@ def _actions_to_geometries(shape, arc_points=24):
         """
         from shapely.geometry import LineString
         import logging
+        logger = logging.getLogger(__name__)
         verts = getattr(shape, 'vertices', None)
         geoms = []
         if verts and isinstance(verts, (list, tuple)) and len(verts) >= 2:
@@ -116,12 +117,16 @@ def _actions_to_geometries(shape, arc_points=24):
                     if seg.is_valid and not seg.is_empty:
                         geoms.append(seg)
                     else:
-                        logging.debug(f"Stroke {i}: invalid or empty LineString from vertices {verts[i]}, {verts[i+1]}")
+                        logger.debug(f"Stroke {i}: invalid or empty LineString from vertices {verts[i]}, {verts[i+1]}")
                 except Exception as e:
-                    logging.debug(f"Stroke {i}: failed to create LineString: {e}")
+                    logger.debug(f"Stroke {i}: failed to create LineString: {e}")
         else:
             # Fallback: try to synthesize as before (should rarely happen)
             actions = getattr(shape, 'basic_actions', [])
+            logger.debug(f"[actions_to_geometries] Raw actions before stringification: {actions}")
+            from src.Derive_labels.features import ensure_str_list
+            actions_str = ensure_str_list(actions)
+            logger.debug(f"[actions_to_geometries] Actions after stringification: {actions_str}")
             for i, action in enumerate(actions):
                 v = getattr(action, 'vertices', None)
                 if v and isinstance(v, (list, tuple)) and len(v) >= 2:
@@ -130,8 +135,15 @@ def _actions_to_geometries(shape, arc_points=24):
                         if seg.is_valid and not seg.is_empty:
                             geoms.append(seg)
                     except Exception as e:
-                        logging.debug(f"Fallback: failed to create LineString for stroke {i}: {e}")
-        logging.debug(f"Number of stroke geometries: {len(geoms)}")
+                        logger.debug(f"Fallback: failed to create LineString for stroke {i}: {e}")
+        logger.debug(f"Number of stroke geometries: {len(geoms)}")
+        # Ensure output is serializable
+        try:
+            import json
+            json.dumps([str(g) for g in geoms])
+            logger.debug(f"[actions_to_geometries] Output is JSON serializable.")
+        except Exception as e:
+            logger.error(f"[actions_to_geometries] Output not JSON serializable: {e}")
         return geoms
 
 def extract_relational_features(strokes, buffer_amt=0.001):
@@ -147,34 +159,66 @@ def extract_relational_features(strokes, buffer_amt=0.001):
     logger = logging.getLogger(__name__)
     logger.info(f"[extract_relational_features] INPUT: {strokes}")
     from src.Derive_labels.relational_features import calculate_relationships
-    rel = calculate_relationships(strokes, buffer_amt)
+    from src.Derive_labels.shape_utils import ensure_flat_str_list
+    from src.Derive_labels.features import ensure_str_list
+    # Ensure all strokes are robustly stringified for relationships
+    logger.debug(f"[extract_relational_features] Raw strokes before stringification: {strokes}")
+    strokes_str = [ensure_str_list(s) if not isinstance(s, dict) else s for s in strokes]
+    logger.debug(f"[extract_relational_features] Strokes after stringification: {strokes_str}")
+    strokes_flat = [ensure_flat_str_list(s) if not isinstance(s, dict) else s for s in strokes_str]
+    rel = calculate_relationships(strokes_flat, buffer_amt)
     logger.info(f"[extract_relational_features] OUTPUT: {rel}")
+    # Validate output is JSON serializable
+    try:
+        import json
+        json.dumps(rel)
+        logger.debug(f"[extract_relational_features] Output is JSON serializable.")
+    except Exception as e:
+        logger.error(f"[extract_relational_features] Output not JSON serializable: {e}")
     return rel
 
     
 def _extract_ngram_features(sequence, n=2):
     """Extract n-gram counts from a sequence, with string keys for JSON compatibility."""
     logger = logging.getLogger(__name__)
-    try:
-        from src.Derive_labels.features import ensure_str_list
-        sequence = ensure_str_list(sequence)
-    except Exception:
-        pass
+    from src.Derive_labels.shape_utils import ensure_flat_str_list
+    from src.Derive_labels.features import ensure_str_list
     logger.debug(f"[_extract_ngram_features] INPUTS: sequence={sequence}, n={n}")
     from collections import Counter
-    ngrams = zip(*[sequence[i:] for i in range(n)])
-    ngram_list = ['|'.join(ensure_str_list(ng)) for ng in ngrams]
-    ngram_list = ensure_str_list(ngram_list)
+    # Ensure sequence is stringified
+    sequence_str = ensure_str_list(sequence)
+    logger.debug(f"[_extract_ngram_features] Sequence after stringification: {sequence_str}")
+    ngrams = zip(*[sequence_str[i:] for i in range(n)])
+    ngram_list = ['|'.join(ensure_flat_str_list(ng)) for ng in ngrams]
+    ngram_list = ensure_flat_str_list(ngram_list)
     result = dict(Counter(ngram_list))
     logger.debug(f"[_extract_ngram_features] OUTPUT: {result}")
+    # Validate output is JSON serializable
+    try:
+        import json
+        json.dumps(result)
+        logger.debug(f"[_extract_ngram_features] Output is JSON serializable.")
+    except Exception as e:
+        logger.error(f"[_extract_ngram_features] Output not JSON serializable: {e}")
     return result
 
 def _detect_alternation(sequence):
         """Compute maximal alternation score using PhysicsInference.alternation_score."""
         logger = logging.getLogger(__name__)
+        from src.Derive_labels.features import ensure_str_list
         logger.debug(f"[_detect_alternation] INPUTS: sequence={sequence}")
-        score = PhysicsInference.alternation_score(sequence)
+        # Ensure sequence is stringified
+        sequence_str = ensure_str_list(sequence)
+        logger.debug(f"[_detect_alternation] Sequence after stringification: {sequence_str}")
+        score = PhysicsInference.alternation_score(sequence_str)
         logger.debug(f"[_detect_alternation] OUTPUT: {score}")
+        # Validate output is JSON serializable
+        try:
+            import json
+            json.dumps(score)
+            logger.debug(f"[_detect_alternation] Output is JSON serializable.")
+        except Exception as e:
+            logger.error(f"[_detect_alternation] Output not JSON serializable: {e}")
         return score
 
 def _extract_graph_features(strokes):

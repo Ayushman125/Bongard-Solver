@@ -250,11 +250,23 @@ def extract_features_from_actions(action_sequence):
     Returns:
         dict with extracted features including command counts, shape types, geometric properties, etc.
     """
+    import logging
     try:
         from src.Derive_labels.features import ensure_str_list
         action_sequence = ensure_str_list(action_sequence)
-    except Exception:
-        pass
+        logging.debug(f"[DATA_LOADER] Action sequence after ensure_str_list: {[type(a) for a in action_sequence]}")
+    except Exception as e:
+        logging.error(f"[DATA_LOADER] ensure_str_list failed: {e}")
+        # Fallback: try shape_utils
+        try:
+            from src.Derive_labels.shape_utils import ensure_flat_str_list
+            action_sequence = ensure_flat_str_list(action_sequence)
+            logging.debug(f"[DATA_LOADER] Action sequence after ensure_flat_str_list: {[type(a) for a in action_sequence]}")
+        except Exception as e2:
+            logging.error(f"[DATA_LOADER] ensure_flat_str_list failed: {e2}")
+            # Fallback: convert all to str
+            action_sequence = [str(a) for a in action_sequence]
+            logging.debug(f"[DATA_LOADER] Action sequence after str fallback: {[type(a) for a in action_sequence]}")
     parsed_commands = [parse_action_command(cmd) for cmd in action_sequence]
     
     # Count command types and shapes

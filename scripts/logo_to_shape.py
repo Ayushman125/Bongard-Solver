@@ -15,6 +15,21 @@ Handles complex images composed of multiple strokes and calculates:
 - Semantic and structural properties
 """
 
+
+
+def robust_action_join(actions):
+    # Defensive: ensure all items are strings before joining
+    logger = logging.getLogger(__name__)
+    logger.debug(f"[SERIALIZE DEBUG][robust_action_join] Input actions: {actions}")
+    logger.debug(f"[SERIALIZE DEBUG][robust_action_join] Input types: {[type(x) for x in actions]}")
+    safe = ensure_flat_str_list(actions)
+    logger.debug(f"[SERIALIZE DEBUG][robust_action_join] After ensure_flat_str_list: {safe}")
+    logger.debug(f"[SERIALIZE DEBUG][robust_action_join] Types after ensure_flat_str_list: {[type(x) for x in safe]}")
+    # Convert any non-str items to str
+    safe_str = [str(x) if not isinstance(x, str) else x for x in safe]
+    logger.debug(f"[SERIALIZE DEBUG][robust_action_join] Final safe_str: {safe_str}")
+    return ','.join(safe_str)
+
 import argparse
 import csv
 import sys
@@ -29,6 +44,7 @@ import numpy as np
 
 # Ensure src is importable
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from src.Derive_labels.shape_utils import ensure_flat_str_list
 
 from src.data_pipeline.data_loader import load_action_programs
 from src.bongard_augmentor.hybrid import HybridAugmentor
@@ -220,7 +236,7 @@ class ComprehensiveBongardProcessor:
                             action.raw_command = f"arc_{action.arc_type}_{action.arc_radius}_{action.arc_angle}-{getattr(action, 'turn_angle', 0.5)}"
                         else:
                             action.raw_command = str(action)
-            image_dict['strokes'] = ensure_str_list(image_dict.get('strokes', []))
+            image_dict['strokes'] = ensure_flat_str_list(image_dict.get('strokes', []))
             logger.info(f"[ATTR DEBUG] Shape {idx} image_dict for feature extraction: {image_dict}")
             try:
                 shape.attributes = feature_extractor.extract_image_features(image_dict)
@@ -362,9 +378,9 @@ class ComprehensiveBongardProcessor:
             all_actions = []
             for shape in getattr(bongard_image, 'one_stroke_shapes', []):
                 # Defensive: ensure all actions are strings
-                for a in ensure_str_list(getattr(shape, 'basic_actions', [])):
+                for a in ensure_flat_str_list(getattr(shape, 'basic_actions', [])):
                     all_actions.append(a)
-            all_actions = ensure_str_list(all_actions)
+            all_actions = ensure_flat_str_list(all_actions)
             image_features = self._calculate_image_features(norm_vertices_for_features, all_actions, geometry)
             centroid = geometry.get('centroid')
             composition_features = self._calculate_composition_features(all_actions)  # all_actions is now a list of strings
@@ -373,7 +389,7 @@ class ComprehensiveBongardProcessor:
             # --- Relational/Topological/Sequential Features ---
             # Convert actions to shapely geometries for robust relational features
             from src.Derive_labels.features import _actions_to_geometries
-            stroke_geometries = _actions_to_geometries(ensure_str_list(all_actions))  # Pass list of strings
+            stroke_geometries = _actions_to_geometries(ensure_flat_str_list(all_actions))  # Pass list of strings
             logger.debug(f"Number of stroke geometries: {len(stroke_geometries)}")
             for idx, g in enumerate(stroke_geometries):
                 logger.debug(f"Geometry {idx}: type={g.geom_type}, is_valid={g.is_valid}")
@@ -507,43 +523,73 @@ class ComprehensiveBongardProcessor:
                         all_actions.append(action.raw_command)
                     else:
                         all_actions.append(str(action))
-                all_actions = ensure_str_list(all_actions)
-                # Inline debug logging before join
-                if all_actions and not all(isinstance(a, str) for a in all_actions):
-                    logger.error(f"[ACTION_PROGRAM_JOIN] Non-string found in all_actions before join: {[type(a) for a in all_actions]}")
-                logger.debug(f"[ACTION_PROGRAM_JOIN] Joining items: {all_actions}")
+                logger.debug(f"[OUTPUT PATCH][action_program] Sublist types: {[type(x) for x in all_actions]}")
+                logger.debug(f"[OUTPUT PATCH][action_program] Sublist before flatten: {all_actions}")
                 try:
-                    joined_actions = ','.join([str(a) for a in all_actions])
-                    logger.debug(f"[ACTION_PROGRAM_JOIN] {joined_actions}")
-                except Exception as join_exc:
-                    logger.error(f"[ACTION_PROGRAM_JOIN] Failed to join all_actions: {join_exc}")
-                action_program.append(all_actions)
+                    safe = ensure_flat_str_list(all_actions)
+                    logger.debug(f"[OUTPUT PATCH][action_program] Sublist after flatten: {safe}")
+                    joined = ",".join([str(x) if not isinstance(x, str) else x for x in safe])
+                    logger.debug(f"[OUTPUT PATCH][action_program] Sublist joined: {joined}")
+                except Exception as e:
+                    logger.error(f"FINAL JOIN EXCEPTION: {e}")
+                    raise
+                # Failsafe: ensure all items are strings
+                safe_str = [str(x) if not isinstance(x, str) else x for x in safe]
+                logger.debug(f"[OUTPUT PATCH][action_program] Sublist after stringification: {safe_str}")
+                action_program.append(safe_str)
+                logger.debug(f"[OUTPUT PATCH][action_program] Final action_program before serialization: {action_program}")
             # Defensive: ensure ngram features are stringified if joined/logged/serialized
-            safe_ngram = ensure_str_list(ngram_features) if isinstance(ngram_features, list) else ngram_features
-            if isinstance(safe_ngram, list):
-                # Inline debug logging before join
-                safe_ngram_strs = ensure_str_list(safe_ngram)
-                if safe_ngram_strs and not all(isinstance(a, str) for a in safe_ngram_strs):
-                    logger.error(f"[NGRAM_JOIN] Non-string found in safe_ngram before join: {[type(a) for a in safe_ngram_strs]}")
-                logger.debug(f"[NGRAM_JOIN] {','.join(safe_ngram_strs)}")
-            else:
-                logger.debug(f"[NGRAM_JOIN] {safe_ngram}")
+                safe_ngram = ensure_flat_str_list(ngram_features) if isinstance(ngram_features, list) else ngram_features
+                if isinstance(safe_ngram, list):
+                    print("[DEBUG FINAL NGRAM JOIN] types", [type(x) for x in safe_ngram])
+                    print("[DEBUG FINAL NGRAM JOIN] vals", safe_ngram)
+                    try:
+                        safe_ngram_strs = ensure_flat_str_list(safe_ngram)
+                        print("[DEBUG FINAL NGRAM after flatten]", safe_ngram_strs)
+                        joined_ngram = ",".join(safe_ngram_strs)
+                        print("[DEBUG FINAL NGRAM joined]", joined_ngram)
+                    except Exception as e:
+                        print("FINAL NGRAM JOIN EXCEPTION:", e)
+                        raise
+                else:
+                    print("[DEBUG FINAL NGRAM JOIN]", safe_ngram)
             # Defensive: ensure stroke_features lists are stringified
             for stroke in stroke_features:
                 for k, v in stroke.items():
                     if isinstance(v, list):
-                        stroke[k] = ensure_str_list(v)
+                        print(f"[DEBUG FINAL STROKE JOIN] {k} types", [type(x) for x in v])
+                        print(f"[DEBUG FINAL STROKE JOIN] {k} vals", v)
+                        try:
+                            safe_v = ensure_flat_str_list(v)
+                            print(f"[DEBUG FINAL STROKE after flatten] {k}", safe_v)
+                            joined_v = ",".join(safe_v)
+                            print(f"[DEBUG FINAL STROKE joined] {k}", joined_v)
+                        except Exception as e:
+                            print(f"FINAL STROKE JOIN EXCEPTION {k}:", e)
+                            raise
+                        stroke[k] = safe_v
             # Defensive: ensure sequential features are stringified
             sequential_features = {
-                'ngram': ensure_str_list(ngram_features),
-                'alternation': ensure_str_list(alternation) if isinstance(alternation, list) else alternation,
-                'regularity': ensure_str_list(regularity) if isinstance(regularity, list) else regularity
+                'ngram': ensure_flat_str_list(ngram_features),
+                'alternation': ensure_flat_str_list(alternation) if isinstance(alternation, list) else alternation,
+                'regularity': ensure_flat_str_list(regularity) if isinstance(regularity, list) else regularity
             }
 
             from src.Derive_labels.shape_utils import json_safe
             # Defensive: ensure all action lists are json_safe before output
-            safe_stroke_features = json_safe(stroke_features)
-            safe_action_program = json_safe(action_program)
+            # PATCH: Robust stringification and diagnostics before serialization
+            def robust_stringify_list(lst):
+                logger.debug(f"[PATCH][robust_stringify_list] Before: types={[type(x) for x in lst]}, values={lst}")
+                result = [getattr(x, 'raw_command', str(x)) if type(x).__name__ in ['LineAction', 'ArcAction'] else str(x) if not isinstance(x, str) else x for x in lst]
+                logger.debug(f"[PATCH][robust_stringify_list] After: types={[type(x) for x in result]}, values={result}")
+                return result
+
+            safe_action_program = [robust_stringify_list(sublist) if isinstance(sublist, list) else robust_stringify_list([sublist]) for sublist in action_program]
+            logger.debug(f"[PATCH][process_single_image] Final safe_action_program before serialization: {safe_action_program}")
+            safe_stroke_features = [
+                {k: robust_stringify_list(v) if isinstance(v, list) else v for k, v in stroke.items()} for stroke in stroke_features
+            ]
+            logger.debug(f"[PATCH][process_single_image] Final safe_stroke_features before serialization: {safe_stroke_features}")
             safe_vertices_raw = json_safe(vertices_raw)
             safe_vertices = json_safe(norm_vertices_for_features)
             safe_relational_features = json_safe(robust_relational_features)
@@ -558,9 +604,9 @@ class ComprehensiveBongardProcessor:
                 'multiscale_features': multiscale_features
             })
             safe_sequential_features = json_safe({
-                'ngram': ngram_features,
-                'alternation': alternation,
-                'regularity': regularity
+                'ngram': ensure_flat_str_list(ngram_features),
+                'alternation': ensure_flat_str_list(alternation) if isinstance(alternation, list) else alternation,
+                'regularity': ensure_flat_str_list(regularity) if isinstance(regularity, list) else regularity
             })
             logger.debug(f"[OUTPUT PATCH] Types in stroke_features: {[type(x) for x in stroke_features]}")
             logger.debug(f"[OUTPUT PATCH] Types in action_program: {[type(x) for x in action_program]}")
@@ -989,8 +1035,49 @@ def main():
 
         # Ensure all_results is json_safe
         safe_results = json_safe(all_results)
-        with open(args.output, 'w', encoding='utf-8') as f:
-            json.dump(safe_results, f, indent=2, ensure_ascii=False)
+        # Defensive output patch: ensure all action lists are flattened and stringified before output
+        from src.Derive_labels.shape_utils import ensure_flat_str_list
+        # Before saving all_results
+        def recursive_flatten_and_stringify(obj):
+            if isinstance(obj, list):
+                return [recursive_flatten_and_stringify(x) for x in obj]
+            elif type(obj).__name__ in ['LineAction', 'ArcAction']:
+                # Use raw_command if available, else str
+                return getattr(obj, 'raw_command', str(obj))
+            else:
+                return obj
+
+        # Robustly flatten and stringify all action lists before output
+        processed_results = []
+        for r in all_results:
+            safe_r = {}
+            for k, v in r.items():
+                if isinstance(v, list):
+                    logger.debug(f"[SERIALIZE DEBUG][main] Before ensure_flat_str_list: key={k}, value={v}")
+                    logger.debug(f"[SERIALIZE DEBUG][main] Types: {[type(x) for x in v]}")
+                    safe_r[k] = ensure_flat_str_list(recursive_flatten_and_stringify(v))
+                    logger.debug(f"[SERIALIZE DEBUG][main] After ensure_flat_str_list: key={k}, value={safe_r[k]}")
+                    logger.debug(f"[SERIALIZE DEBUG][main] Types after: {[type(x) for x in safe_r[k]]}")
+                else:
+                    safe_r[k] = v
+            if 'action_program' in safe_r:
+                logger.debug(f"[SERIALIZE DEBUG][main] Before ensure_flat_str_list (action_program): {safe_r['action_program']}")
+                logger.debug(f"[SERIALIZE DEBUG][main] Types: {[type(x) for x in safe_r['action_program']]}")
+                safe_r['action_program'] = ensure_flat_str_list(recursive_flatten_and_stringify(safe_r['action_program']))
+                logger.debug(f"[SERIALIZE DEBUG][main] After ensure_flat_str_list (action_program): {safe_r['action_program']}")
+                logger.debug(f"[SERIALIZE DEBUG][main] Types after: {[type(x) for x in safe_r['action_program']]}")
+            logger.debug(f"[SERIALIZE DEBUG][main] Before json_safe: {safe_r}")
+            processed_result = json_safe(safe_r)
+            logger.debug(f"[SERIALIZE DEBUG][main] After json_safe: {processed_result}")
+            processed_results.append(processed_result)
+
+        logger.info(f"[SERIALIZE DEBUG][main] Final processed_results before writing: {processed_results}")
+        try:
+            with open(args.output, 'w', encoding='utf-8') as f:
+                json.dump(processed_results, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[SERIALIZE DEBUG][main] Exception during output serialization: {e}")
+            raise
 
         logger.info(f"Successfully processed {successful_images}/{total_images} images")
         logger.info(f"Saved {len(all_results)} records to {args.output}")
@@ -998,10 +1085,29 @@ def main():
         # Save flagged cases
         if processor.flagged_cases:
             flagged_path = os.path.join(output_dir, 'flagged_cases.json')
-            safe_flagged = json_safe(processor.flagged_cases)
-            with open(flagged_path, 'w', encoding='utf-8') as f:
-                json.dump(safe_flagged, f, indent=2, ensure_ascii=False)
-            logger.info(f"Saved {len(processor.flagged_cases)} flagged cases to {flagged_path}")
+            processed_flagged = []
+            for case in processor.flagged_cases:
+                safe_case = {}
+                for k, v in case.items():
+                    if isinstance(v, list):
+                        logger.debug(f"[SERIALIZE DEBUG][main][flagged_cases] Before ensure_flat_str_list: key={k}, value={v}")
+                        logger.debug(f"[SERIALIZE DEBUG][main][flagged_cases] Types: {[type(x) for x in v]}")
+                        safe_case[k] = ensure_flat_str_list(recursive_flatten_and_stringify(v))
+                        logger.debug(f"[SERIALIZE DEBUG][main][flagged_cases] After ensure_flat_str_list: key={k}, value={safe_case[k]}")
+                        logger.debug(f"[SERIALIZE DEBUG][main][flagged_cases] Types after: {[type(x) for x in safe_case[k]]}")
+                    else:
+                        safe_case[k] = v
+                logger.debug(f"[SERIALIZE DEBUG][main][flagged_cases] Before json_safe: {safe_case}")
+                processed_flagged_case = json_safe(safe_case)
+                logger.debug(f"[SERIALIZE DEBUG][main][flagged_cases] After json_safe: {processed_flagged_case}")
+                processed_flagged.append(processed_flagged_case)
+            logger.info(f"[SERIALIZE DEBUG][main][flagged_cases] Final processed_flagged before writing: {processed_flagged}")
+            try:
+                with open(flagged_path, 'w', encoding='utf-8') as f:
+                    json.dump(processed_flagged, f, indent=2, ensure_ascii=False)
+            except Exception as e:
+                logger.error(f"[SERIALIZE DEBUG][main][flagged_cases] Exception during flagged case serialization: {e}")
+                raise
 
         # Save processing statistics
         processor.processing_stats['processing_summary'] = {

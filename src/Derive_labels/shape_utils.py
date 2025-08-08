@@ -420,3 +420,15 @@ def _calculate_homogeneity(modifier_distribution: dict) -> float:
     gini = 1.0 - sum(p ** 2 for p in probs)
     return 1.0 - gini  # 1.0 = homogeneous, 0 = maximally diverse
 
+def ensure_flat_str_list(obj):
+    """Recursively flattens any nested list/tuple and ensures all items are str."""
+    out = []
+    if isinstance(obj, (list, tuple)):
+        for x in obj:
+            out.extend(ensure_flat_str_list(x))
+    elif hasattr(obj, 'raw_command') and isinstance(obj.raw_command, str):
+        out.append(obj.raw_command)
+    else:
+        out.append(str(obj))
+    return out
+
