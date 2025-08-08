@@ -204,12 +204,15 @@ class ComprehensiveBongardProcessor:
             physics_features = self._calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=getattr(shape, 'basic_actions', []))
 
             # --- Relational/Topological/Sequential Features ---
-            # Convert actions to shapely geometries for relational features
+            # Convert actions to shapely geometries for robust relational features
             stroke_geometries = _actions_to_geometries(shape)
             logger.debug(f"Number of stroke geometries: {len(stroke_geometries)}")
             for idx, g in enumerate(stroke_geometries):
                 logger.debug(f"Geometry {idx}: type={g.geom_type}, is_valid={g.is_valid}")
-            # Use robust context_relationships for all relational features
+            # Use robust Shapely-based relational features
+            from src.Derive_labels.features import extract_relational_features as extract_relational_features_geom
+            robust_relational_features = extract_relational_features_geom(stroke_geometries) if stroke_geometries else {}
+            # Use context_relationships for context-based features as before
             intersections = context_relationships.get('intersections')
             adjacency = context_relationships.get('adjacency')
             containment = context_relationships.get('containment')
@@ -374,7 +377,8 @@ class ComprehensiveBongardProcessor:
                 'action_program': action_program,
                 'geometry': geometry,
                 # --- New relational/topological/sequential features ---
-                'relational_features': {
+                'relational_features': robust_relational_features,
+                'context_relational_features': {
                     'intersections': intersections,
                     'adjacency': adjacency,
                     'containment': containment,

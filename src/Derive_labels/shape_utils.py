@@ -160,33 +160,71 @@ def normalize_vertices(vertices_raw):
 
 def calculate_geometry(vertices):
     """Calculate geometry properties from normalized vertices, robustly constructing polygon."""
-    if not vertices:
-        return {}
-    verts = PhysicsInference.dedup_vertices(list(vertices))
+    import numpy as np
+    if not vertices or len(vertices) < 2:
+        # Degenerate: not enough points for geometry
+        return {
+            'bbox': {'min_x': 0, 'max_x': 0, 'min_y': 0, 'max_y': 0},
+            'centroid': [0.0, 0.0],
+            'width': 0.0,
+            'height': 0.0,
+            'area': 0.0,
+            'perimeter': 0.0,
+            'moment_of_inertia': 0.0,
+            'convexity_ratio': 0.0
+        }
+    # Always normalize vertices for geometry calculations
+    verts = normalize_vertices(list(vertices))
+    if len(verts) < 2:
+        # Defensive: normalization may collapse points
+        return {
+            'bbox': {'min_x': 0, 'max_x': 0, 'min_y': 0, 'max_y': 0},
+            'centroid': [0.0, 0.0],
+            'width': 0.0,
+            'height': 0.0,
+            'area': 0.0,
+            'perimeter': 0.0,
+            'moment_of_inertia': 0.0,
+            'convexity_ratio': 0.0
+        }
     xs, ys = zip(*verts)
     bbox = {'min_x': min(xs), 'max_x': max(xs), 'min_y': min(ys), 'max_y': max(ys)}
     width = bbox['max_x'] - bbox['min_x']
     height = bbox['max_y'] - bbox['min_y']
     # Use shoelace area for raw vertex lists
-    area = PhysicsInference.shoelace_area(verts) if isinstance(vertices, list) else PhysicsInference.area(verts)
+    area = PhysicsInference.shoelace_area(verts) if len(verts) >= 3 else 0.0
     try:
         from shapely.geometry import Polygon
-        poly = Polygon(verts)
-        perimeter = poly.length if poly.is_valid else float('nan')
+        poly = Polygon(verts) if len(verts) >= 3 else None
+        perimeter = poly.length if (poly is not None and poly.is_valid) else float(np.linalg.norm(np.array(verts[1]) - np.array(verts[0]))) if len(verts) == 2 else 0.0
     except Exception:
-        perimeter = float('nan')
-    centroid = PhysicsInference.centroid(verts)
-    inertia = PhysicsInference.moment_of_inertia(verts)
-    convexity = PhysicsInference.convexity_ratio(verts)
+        perimeter = 0.0
+    centroid = PhysicsInference.centroid(verts) if len(verts) >= 2 else [0.0, 0.0]
+    inertia = PhysicsInference.moment_of_inertia(verts) if len(verts) >= 2 else 0.0
+    # Robust convexity: only defined for >=3 points, else 0.0
+    if len(verts) >= 3:
+        try:
+            convexity = PhysicsInference.convexity_ratio(verts)
+            if convexity != convexity:  # NaN check
+                convexity = 0.0
+        except Exception:
+            convexity = 0.0
+    else:
+        convexity = 0.0
+    # Ensure all outputs are JSON-safe
+    def _json_safe(x):
+        if isinstance(x, float) and (np.isnan(x) or np.isinf(x)):
+            return 0.0
+        return float(x) if isinstance(x, float) else x
     return {
-        'bbox': bbox,
-        'centroid': centroid,
-        'width': width,
-        'height': height,
-        'area': area,
-        'perimeter': perimeter,
-        'moment_of_inertia': inertia,
-        'convexity_ratio': convexity
+        'bbox': {k: _json_safe(v) for k, v in bbox.items()},
+        'centroid': [_json_safe(c) for c in centroid],
+        'width': _json_safe(width),
+        'height': _json_safe(height),
+        'area': _json_safe(area),
+        'perimeter': _json_safe(perimeter),
+        'moment_of_inertia': _json_safe(inertia),
+        'convexity_ratio': _json_safe(convexity)
     }
 
 def extract_position_and_rotation(vertices):

@@ -42,7 +42,7 @@ def extract_action_type_prefixes(problems_data):
     logger.info(f"[extract_action_type_prefixes] OUTPUT: {prefixes}")
     return prefixes
 
-def _extract_stroke_vertices(stroke, stroke_index, all_vertices):
+def _extract_stroke_vertices(stroke, stroke_index, all_vertices, bongard_image=None):
     """Robustly extract the full set of vertices for a stroke, not just endpoints."""
     import numpy as np
     logger = logging.getLogger(__name__)
@@ -50,7 +50,6 @@ def _extract_stroke_vertices(stroke, stroke_index, all_vertices):
     # --- FIX: Use NVLabs API correctly ---
     logger.info(f"[_extract_stroke_vertices] INPUT: stroke_index={stroke_index}, stroke={stroke}, all_vertices={all_vertices}")
     # Try to use BongardImage.one_stroke_shapes[stroke_index].vertices if available
-    bongard_image = getattr(stroke, 'bongard_image', None)
     if bongard_image and hasattr(bongard_image, 'one_stroke_shapes'):
         try:
             for shape_idx, shape in enumerate(bongard_image.one_stroke_shapes):
@@ -169,7 +168,7 @@ def _vertices_from_command(command, stroke_index):
         logger.info(f"[_vertices_from_command] Fallback: returning []")
         return []
 
-def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_val=None, shape_modifier_val=None, parameters=None) -> Dict[str, Any]:
+def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_val=None, shape_modifier_val=None, parameters=None, bongard_image=None) -> Dict[str, Any]:
     logger.info(f"[_calculate_stroke_specific_features] Called with stroke={stroke}, stroke_index={stroke_index}, stroke_type_val={stroke_type_val}, shape_modifier_val={shape_modifier_val}, parameters={parameters}")
     """Calculate features specific to stroke type and shape modifier, using robust geometric/physics formulas."""
     # Use module-level logger only (fix UnboundLocalError)
@@ -179,7 +178,7 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
     smod = shape_modifier_val or 'normal'
     params = parameters or {}
     # Always try to use full NVLabs vertices if available
-    verts = _extract_stroke_vertices(stroke, stroke_index, None)
+    verts = _extract_stroke_vertices(stroke, stroke_index, None, bongard_image=bongard_image)
     logger.info(f"[_calculate_stroke_specific_features] verts: {verts}")
     # If not enough points for arcs, try to interpolate
     stype_lower = stype.lower() if stype else ''
@@ -239,7 +238,7 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
     if stype == 'line':
         features.update(_calculate_line_specific_features_from_params(params))
     elif stype == 'arc':
-        features.update(_calculate_arc_specific_features_from_params(params))
+        features.update(_calculate_arc_specific_features_from_params(params, stroke=stroke))
     features.update(_calculate_shape_modifier_features_from_val(smod))
     logger.info(f"[_calculate_stroke_specific_features] FINAL OUTPUT features: {features}")
     return features
@@ -272,37 +271,21 @@ def _calculate_line_specific_features_from_params(params: dict) -> Dict[str, Any
             'line_is_long': PhysicsInference.is_long_line(length, diag)
         }
 
-def _calculate_arc_specific_features_from_params(params: dict) -> Dict[str, Any]:
+def _calculate_arc_specific_features_from_params(params: dict, stroke=None) -> Dict[str, Any]:
     logger = logging.getLogger(__name__)
     logger.info(f"[_calculate_arc_specific_features_from_params] INPUT: params={params}")
-    # Try NVLabs ArcAction attributes first
-    radius = None
-    span_angle = None
-    end_angle = None
-    # Try to get from params (robust)
-    param1 = params.get('param1', None)
-    param2 = params.get('param2', None)
-    param3 = params.get('param3', None)
-    # Try to parse "radius_span" like "0.500_0.625"
-    if param1 and isinstance(param1, str) and '_' in param1:
-        try:
-            radius_str, span_str = param1.split('_')
-            radius = float(radius_str)
-            span_angle = float(span_str) * 360
-        except Exception:
-            radius = float(param1)
-            span_angle = float(param2) if param2 is not None else 90
-    else:
-        try:
-            radius = float(param1) if param1 is not None else 0.0
-            span_angle = float(param2) if param2 is not None else 90
-        except Exception:
-            radius = 0.0
-            span_angle = 90
+    # Prefer stroke.arc_radius and stroke.arc_angle if available
+    radius = getattr(stroke, 'arc_radius', None) if stroke is not None else None
+    span = getattr(stroke, 'arc_angle', None) if stroke is not None else None
+    if radius is None:
+        radius = float(params.get('param1', 0))
+    if span is None:
+        span = float(params.get('param2', 0))
     try:
-        end_angle = float(param3) if param3 is not None else span_angle
+        end_angle = float(params.get('param3', span))
     except Exception:
-        end_angle = span_angle
+        end_angle = span
+    span_angle = span
     arc_length = abs(span_angle) * radius * safe_divide(math.pi, 180) if radius > 0 else 0
     is_major_arc = abs(span_angle) > 180
     is_full_circle = abs(span_angle) >= 350
