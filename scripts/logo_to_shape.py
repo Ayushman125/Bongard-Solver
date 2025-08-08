@@ -1,3 +1,5 @@
+import importlib.util
+import sys
 #!/usr/bin/env python3
 """
 Logo to Shape Conversion Script - Complete End-to-End Pipeline
@@ -163,13 +165,16 @@ class ComprehensiveBongardProcessor:
         # Parse each shape separately
         parser = ComprehensiveNVLabsParser()
         one_stroke_shapes = []
+        original_action_commands = []
         for idx, shape_cmds in enumerate(shapes_commands):
             logger.info(f"[PARSER] Parsing shape {idx} commands: {shape_cmds}")
             parsed_shape = parser.parse_action_commands(shape_cmds, problem_id)
             if isinstance(parsed_shape, list):
                 one_stroke_shapes.extend(parsed_shape)
+                original_action_commands.extend(shape_cmds)
             else:
                 one_stroke_shapes.append(parsed_shape)
+                original_action_commands.extend(shape_cmds)
             # Safe logging for parsed_shape
             try:
                 if hasattr(parsed_shape, 'basic_actions'):
@@ -181,10 +186,8 @@ class ComprehensiveBongardProcessor:
                 logger.warning(f"[PARSER] Could not log parsed shape {idx}: {log_exc}")
         # --- Patch: Assign aggregated features to each shape's attributes property ---
         feature_extractor = BongardFeatureExtractor()
-
         for idx, shape in enumerate(one_stroke_shapes):
             image_dict = {}
-            # Log shape object before feature extraction
             logger.info(f"[ATTR DEBUG] Shape {idx} raw object: {shape}")
             if hasattr(shape, 'vertices'):
                 logger.info(f"[ATTR DEBUG] Shape {idx} vertices: {shape.vertices}")
@@ -192,7 +195,6 @@ class ComprehensiveBongardProcessor:
             else:
                 logger.warning(f"[ATTR DEBUG] Shape {idx} has no vertices.")
             if hasattr(shape, 'basic_actions'):
-                # Defensive: ensure all basic_actions are strings for logging and serialization
                 safe_basic_actions = ensure_str_list(shape.basic_actions)
                 logger.info(f"[ATTR DEBUG] Shape {idx} basic_actions: {safe_basic_actions}")
                 image_dict['strokes'] = safe_basic_actions
@@ -203,8 +205,18 @@ class ComprehensiveBongardProcessor:
                 logger.warning(f"[ATTR DEBUG] Shape {idx} is degenerate (missing vertices or strokes). Skipping feature extraction.")
                 shape.attributes = {}
                 continue
-            # Log input to feature extraction
-            # Defensive: ensure strokes are strings before feature extraction
+            # Defensive: ensure all basic_actions have raw_command
+            for i, action in enumerate(getattr(shape, 'basic_actions', [])):
+                if not hasattr(action, 'raw_command') or action.raw_command is None:
+                    if i < len(original_action_commands):
+                        action.raw_command = original_action_commands[i]
+                    else:
+                        if hasattr(action, 'line_type'):
+                            action.raw_command = f"line_{action.line_type}_{action.line_length}-{getattr(action, 'turn_angle', 0.5)}"
+                        elif hasattr(action, 'arc_type'):
+                            action.raw_command = f"arc_{action.arc_type}_{action.arc_radius}_{action.arc_angle}-{getattr(action, 'turn_angle', 0.5)}"
+                        else:
+                            action.raw_command = str(action)
             image_dict['strokes'] = ensure_str_list(image_dict.get('strokes', []))
             logger.info(f"[ATTR DEBUG] Shape {idx} image_dict for feature extraction: {image_dict}")
             try:
@@ -251,6 +263,29 @@ class ComprehensiveBongardProcessor:
                     return None
             # Now construct BongardImage and run attribute mapping
             bongard_image = BongardImage(one_stroke_shapes)
+            # Ensure all basic_actions have raw_command set before downstream processing
+            try:
+                spec = importlib.util.spec_from_file_location("bongard_module", "Bongard-LOGO/bongard/bongard.py")
+                bongard_module = importlib.util.module_from_spec(spec)
+                sys.modules["bongard_module"] = bongard_module
+                spec.loader.exec_module(bongard_module)
+                LineAction = bongard_module.LineAction
+                ArcAction = bongard_module.ArcAction
+                for shape in getattr(bongard_image, 'one_stroke_shapes', []):
+                    for i, action in enumerate(getattr(shape, 'basic_actions', [])):
+                        if not hasattr(action, 'raw_command') or action.raw_command is None:
+                            if i < len(original_action_commands):
+                                action.raw_command = original_action_commands[i]
+                            else:
+                                if hasattr(action, 'line_type'):
+                                    action.raw_command = f"line_{action.line_type}_{action.line_length}-{getattr(action, 'turn_angle', 0.5)}"
+                                elif hasattr(action, 'arc_type'):
+                                    action.raw_command = f"arc_{action.arc_type}_{action.arc_radius}_{action.arc_angle}-{getattr(action, 'turn_angle', 0.5)}"
+                                else:
+                                    action.raw_command = str(action)
+            except Exception as e:
+                logger.warning(f"Failed to set raw_command attributes: {e}")
+
             logger.info(f"[ATTR MAP] Mapping attributes for multi-object image: {image_id}")
             for idx, shape in enumerate(getattr(bongard_image, 'one_stroke_shapes', [])):
                 attrs = getattr(shape, 'attributes', None)
@@ -381,8 +416,8 @@ class ComprehensiveBongardProcessor:
             import re
             canonical_base = re.sub(r'(_\d+)?$', '', canonical_name)
             canonical_key = canonical_base.lower().replace('-', '_').replace(' ', '_').rstrip('_')
-            canonical_shape_attributes = shape_attr_map.get(canonical_key)
-            canonical_shape_def = shape_def_map.get(canonical_key)
+            canonical_shape_attributes = shape_attr_map.get(canonical_key, {})
+            canonical_shape_def = shape_def_map.get(canonical_key, {})
 
             for i, shape in enumerate(getattr(bongard_image, 'one_stroke_shapes', [])):
                 # Defensive: ensure all actions are strings for logging/serialization
@@ -509,7 +544,7 @@ class ComprehensiveBongardProcessor:
                 'physics_features': physics_features,
                 'composition_features': composition_features,
                 'stroke_type_features': differentiated_features,
-                'image_canonical_summary': image_canonical_summary,
+                'image_canonical_summary': {},
                 'processing_metadata': {
                     'processing_timestamp': time.time(),
                     'feature_count': len(image_features) + len(physics_features) + len(composition_features)
@@ -660,6 +695,7 @@ class ComprehensiveBongardProcessor:
     
     def _calculate_physics_features(self, vertices: List[tuple], centroid=None, strokes=None) -> Dict[str, Any]:
         """Calculate physics-based features using PhysicsInference. Accepts centroid override and strokes for correct counting. Uses correct center_of_mass and stroke counts."""
+        # Implementation goes here
         logger = logging.getLogger(__name__)
         logger.debug(f"[_calculate_physics_features] INPUTS: vertices count={len(vertices) if vertices else 0}, centroid={centroid}, strokes count={len(strokes) if strokes else 0 if strokes is not None else 'None'}")
         if not vertices:
@@ -685,7 +721,14 @@ class ComprehensiveBongardProcessor:
             num_arcs = 0
             if strokes is not None:
                 try:
-                    from bongard.bongard import LineAction, ArcAction
+                    import importlib.util
+                    import sys
+                    spec = importlib.util.spec_from_file_location("bongard_module", "Bongard-LOGO/bongard/bongard.py")
+                    bongard_module = importlib.util.module_from_spec(spec)
+                    sys.modules["bongard_module"] = bongard_module
+                    spec.loader.exec_module(bongard_module)
+                    LineAction = bongard_module.LineAction
+                    ArcAction = bongard_module.ArcAction
                     for s in strokes:
                         if isinstance(s, LineAction):
                             num_straight_segments += 1
@@ -697,6 +740,7 @@ class ComprehensiveBongardProcessor:
                 # fallback to geometry-based
                 num_straight_segments = PhysicsInference.count_straight_segments(vertices)
                 num_arcs = PhysicsInference.count_arcs(vertices)
+
             features = {
                 # Core physics properties
                 'moment_of_inertia': PhysicsInference.moment_of_inertia(vertices),
@@ -709,7 +753,7 @@ class ComprehensiveBongardProcessor:
                 # Advanced metrics
                 'curvature_score': _calculate_curvature_score(vertices),
                 'angular_variance': _calculate_angular_variance(vertices),
-                'edge_length_variance':_calculate_edge_length_variance(vertices)
+                'edge_length_variance': _calculate_edge_length_variance(vertices)
             }
             logger.debug(f"[_calculate_physics_features] OUTPUT: {features}")
             return features

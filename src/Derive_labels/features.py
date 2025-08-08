@@ -5,6 +5,18 @@ def ensure_str_list(obj):
     elif isinstance(obj, tuple):
         return tuple(ensure_str_list(x) for x in obj)
     elif not isinstance(obj, str):
+        # Special handling for action objects
+        if hasattr(obj, 'raw_command') and obj.raw_command is not None:
+            return str(obj.raw_command)
+        # Check if it's a LineAction or ArcAction without raw_command
+        elif hasattr(obj, 'line_type') or hasattr(obj, 'arc_type'):
+            try:
+                if hasattr(obj, 'line_type'):  # LineAction
+                    return f"line_{obj.line_type}_{obj.line_length}-{getattr(obj, 'turn_angle', 0.5)}"
+                elif hasattr(obj, 'arc_type'):  # ArcAction
+                    return f"arc_{obj.arc_type}_{obj.arc_radius}_{obj.arc_angle}-{getattr(obj, 'turn_angle', 0.5)}"
+            except Exception:
+                pass
         return str(obj)
     return obj
 import numpy as np
