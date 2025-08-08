@@ -457,15 +457,10 @@ class ComprehensiveNVLabsParser:
                     continue
             # Robust serialization: ensure actions are stringified before any join/logging/serialization
             try:
-                from src.Derive_labels.shape_utils import json_safe, ensure_flat_str_list
-                safe_cmds = ensure_flat_str_list([getattr(a, "raw_command", a) for a in actions])
-                safe_cmds = json_safe(safe_cmds)
-                logger.debug(f"[ACTIONS_JOIN] {debug_join('ACTIONS_JOIN', safe_cmds)}")
-                # Patch: Log action types and attributes for robust output
-                safe_types = json_safe([type(a).__name__ for a in actions])
-                logger.debug(f"[ACTIONS_TYPES] {safe_types}")
-                safe_attrs = json_safe([getattr(a, '__dict__', str(a)) for a in actions])
-                logger.debug(f"[ACTIONS_ATTRS] {safe_attrs}")
+                # Use new robust utilities for stringification and joining
+                logger.debug(f"[ACTIONS_JOIN] {safe_join(actions)}")
+                logger.debug(f"[ACTIONS_TYPES] {[type(a).__name__ for a in actions]}")
+                logger.debug(f"[ACTIONS_ATTRS] {[getattr(a, '__dict__', str(a)) for a in actions]}")
             except Exception as e:
                 logger.debug(f"[ACTIONS_JOIN] Could not stringify actions for logging: {e}")
             if not actions:
@@ -488,20 +483,15 @@ class ComprehensiveNVLabsParser:
                 )
             # Patch: Robustly convert shape actions and attributes for output serialization
             try:
-                from src.Derive_labels.shape_utils import json_safe, ensure_flat_str_list
-                safe_shape_actions = ensure_flat_str_list([getattr(a, "raw_command", a) for a in getattr(shape, 'basic_actions', [])])
-                safe_shape_actions = json_safe(safe_shape_actions)
-                logger.debug(f"[OUTPUT_SHAPE_ACTIONS] {safe_shape_actions}")
-                safe_shape_types = json_safe([type(a).__name__ for a in getattr(shape, 'basic_actions', [])])
-                logger.debug(f"[OUTPUT_SHAPE_TYPES] {safe_shape_types}")
-                safe_shape_attrs = json_safe([getattr(a, '__dict__', str(a)) for a in getattr(shape, 'basic_actions', [])])
-                logger.debug(f"[OUTPUT_SHAPE_ATTRS] {safe_shape_attrs}")
+                logger.debug(f"[OUTPUT_SHAPE_ACTIONS] {safe_join(getattr(shape, 'basic_actions', []))}")
+                logger.debug(f"[OUTPUT_SHAPE_TYPES] {[type(a).__name__ for a in getattr(shape, 'basic_actions', [])]}")
+                logger.debug(f"[OUTPUT_SHAPE_ATTRS] {[getattr(a, '__dict__', str(a)) for a in getattr(shape, 'basic_actions', [])]}")
             except Exception as e:
                 logger.debug(f"[OUTPUT_SHAPE_ACTIONS] Could not robustly convert shape actions for output: {e}")
             # --- Patch: Log degenerate shapes ---
             num_vertices = len(getattr(shape, 'vertices', [])) if hasattr(shape, 'vertices') else 0
             if num_vertices < 3:
-                logger.warning(f"[LOGOPARSER] Degenerate shape detected for problem_id={problem_id}: num_vertices={num_vertices}, actions={json_safe([getattr(a, 'raw_command', a) for a in actions])}")
+                logger.warning(f"[LOGOPARSER] Degenerate shape detected for problem_id={problem_id}: num_vertices={num_vertices}, actions={safe_join(actions)}")
             else:
                 logger.info(f"[LOGOPARSER] Shape for problem_id={problem_id} has {num_vertices} vertices.")
             # Log vertices before normalization
