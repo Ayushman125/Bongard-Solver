@@ -419,10 +419,19 @@ def _calculate_shape_modifier_features_from_val(modifier: str) -> Dict[str, Any]
             from src.Derive_labels.shape_utils import _calculate_compactness
             compactness = _calculate_compactness(area, perimeter)
         # Clamp/sanitize convexity and compactness
-        if not convexity or convexity != convexity or not compactness or compactness != compactness or convexity < 1e-6 or compactness < 1e-6:
-            complexity = num_vertices
+        # Ensure convexity is a float and not None
+        if convexity is None or not isinstance(convexity, (float, int)) or convexity != convexity:
+            convexity = 1e-6
+        else:
             convexity = max(convexity, 1e-6)
+        # Ensure compactness is a float and not None
+        if compactness is None or not isinstance(compactness, (float, int)) or compactness != compactness:
+            compactness = 1e-6
+        else:
             compactness = max(compactness, 1e-6)
+        # Compute complexity
+        if convexity < 1e-6 or compactness < 1e-6:
+            complexity = num_vertices
         else:
             complexity = num_vertices * (1.0 / convexity)
             if compactness > 0:
@@ -430,8 +439,7 @@ def _calculate_shape_modifier_features_from_val(modifier: str) -> Dict[str, Any]
         base_features['geometric_complexity'] = round(complexity, 3)
         base_features['num_vertices'] = num_vertices
         base_features['convexity_ratio'] = convexity
-        if compactness:
-            base_features['compactness'] = compactness
+        base_features['compactness'] = compactness
         logger.info(f"[_calculate_shape_modifier_features_from_val] Calculated geometry-based features: {base_features}")
     # Add shape-specific tags
     if modifier == 'triangle':

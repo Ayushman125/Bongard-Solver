@@ -64,20 +64,33 @@ class BongardFeatureExtractor:
             if not bbox or bbox == (0, 0, 0, 0):
                 bbox = _compute_bounding_box(vertices)
                 logger.info(f"[extract_image_features] Computed bounding box: {bbox}")
-            # Robust polygon validation and repair
+            # Robust vertex extraction and polygon validation
             poly = None
             valid_geom = False
-            if vertices and len(vertices) >= 3:
+            min_vertices = 3
+            verts = vertices
+            if verts and len(verts) < min_vertices:
+                # Interpolate to minimum vertices if possible
+                if len(verts) == 2:
+                    import numpy as np
+                    x0, y0 = verts[0]
+                    x1, y1 = verts[1]
+                    xs = np.linspace(x0, x1, min_vertices)
+                    ys = np.linspace(y0, y1, min_vertices)
+                    verts = list(zip(xs, ys))
+                else:
+                    verts = []
+            if verts and len(verts) >= min_vertices:
                 try:
-                    poly = Polygon(vertices)
+                    poly = Polygon(verts)
                     if not poly.is_valid or poly.area == 0:
                         poly = poly.buffer(0)
                     if not poly.is_valid or poly.area == 0:
-                        poly = Polygon(vertices).convex_hull
+                        poly = Polygon(verts).convex_hull
                     valid_geom = poly.is_valid and poly.area > 0
                 except Exception as e:
                     logger.warning(f"Polygon construction failed: {e}")
-            # Clamp/sanitize compactness and convexity
+            # Safe feature computations
             area = poly.area if valid_geom else 0.0
             perimeter = poly.length if valid_geom else 0.0
             centroid = list(poly.centroid.coords[0]) if valid_geom else [0.0, 0.0]
@@ -88,23 +101,23 @@ class BongardFeatureExtractor:
                 convexity_ratio = area / convex_hull.area if convex_hull and convex_hull.area > 1e-6 else 1e-6
             except Exception:
                 convexity_ratio = 1e-6
-            # Enforce minimum vertex count for curvature, angular variance, complexity
-            num_vertices = len(vertices)
+            # Curvature, angular variance, complexity
+            num_vertices = len(verts)
             curvature = 0.0
             angular_variance = 0.0
             complexity = 0.0
-            if num_vertices >= 3 and valid_geom:
-                # Placeholder: replace with robust curvature/variance calculation
+            if num_vertices >= min_vertices and valid_geom:
                 edge_angles = []
                 for i in range(num_vertices):
-                    p1 = np.array(vertices[i])
-                    p2 = np.array(vertices[(i+1)%num_vertices])
+                    p1 = np.array(verts[i])
+                    p2 = np.array(verts[(i+1)%num_vertices])
                     v = p2 - p1
                     angle = np.arctan2(v[1], v[0])
                     edge_angles.append(angle)
                 angular_variance = float(np.var(edge_angles))
                 curvature = float(np.mean(np.abs(np.diff(edge_angles))))
-                complexity = curvature + angular_variance + num_vertices
+                irregularity = float(np.mean(np.abs(np.diff(sorted(edge_angles)))))
+                complexity = curvature + angular_variance + irregularity + num_vertices
             # Stroke statistics
             strokes = image.get('strokes', [])
             num_strokes = len(strokes)
