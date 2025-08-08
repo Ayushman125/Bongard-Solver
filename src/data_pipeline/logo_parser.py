@@ -6,35 +6,67 @@ Now using DIRECT NVLabs classes for exact compatibility.
 """
 
 import sys
-"""
-Global patch: Ensures any str() or join() on LineAction or ArcAction yields the raw command string always
-Should be applied exactly once, early in the main entry script or module import.
-"""
+from pathlib import Path
+# --- SINGLE, EARLY MONKEY-PATCH ---
+nvlabs_path = Path(__file__).parent.parent.parent / "Bongard-LOGO"
+sys.path.insert(0, str(nvlabs_path))
 try:
     from bongard import LineAction, ArcAction
-    def action_to_str(self):
-        return getattr(self, "raw_command", super(self.__class__, self).__str__())
-    LineAction.__str__ = action_to_str
-    ArcAction.__str__ = action_to_str
-    LineAction.__repr__ = action_to_str
-    ArcAction.__repr__ = action_to_str
-except Exception:
-    pass
+    def _universal_action_str(self):
+        if hasattr(self, 'raw_command') and isinstance(self.raw_command, str):
+            return self.raw_command
+        if hasattr(self, 'line_type'):
+            length = getattr(self, 'line_length', 0)
+            turn = getattr(self, 'turn_angle', 0.5)
+            return f"line_{self.line_type}_{length}-{turn}"
+        elif hasattr(self, 'arc_type'):
+            radius = getattr(self, 'arc_radius', 0)
+            angle = getattr(self, 'arc_angle', 0)
+            turn = getattr(self, 'turn_angle', 0.5)
+            return f"arc_{self.arc_type}_{radius}_{angle}-{turn}"
+        return f"<{self.__class__.__name__} at {hex(id(self))}>"
+    LineAction.__str__ = _universal_action_str
+    LineAction.__repr__ = _universal_action_str
+    ArcAction.__str__ = _universal_action_str
+    ArcAction.__repr__ = _universal_action_str
+    print("✅ Successfully patched LineAction/ArcAction string methods")
+except ImportError as e:
+    print(f"⚠️ Could not patch NVLabs classes: {e}")
 import os
 from pathlib import Path
 import numpy as np
 import cv2
 import logging
+def ensure_all_strings(obj):
+    """
+    Recursively convert any object to strings, handling all action types.
+    This is the ONLY string conversion function needed.
+    """
+    if isinstance(obj, str):
+        return obj
+    elif isinstance(obj, (list, tuple)):
+        return [ensure_all_strings(item) for item in obj]
+    elif hasattr(obj, '__str__'):
+        return str(obj)
+    else:
+        return str(obj)
+
+def safe_join(items, separator=','):
+    """
+    Join any iterable into a string, converting all items to strings first.
+    """
+    str_items = ensure_all_strings(items)
+    if isinstance(str_items, list):
+        return separator.join(str_items)
+    return str(str_items)
+
 def debug_join(label, items):
     import logging
-    from src.Derive_labels.shape_utils import json_safe, ensure_flat_str_list
-    # Always robustly flatten and stringify
-    safe_items = ensure_flat_str_list(items)
-    safe_items = json_safe(safe_items)
-    if safe_items and not all(isinstance(x, str) for x in safe_items):
+    safe_items = ensure_all_strings(items)
+    if safe_items and isinstance(safe_items, list) and not all(isinstance(x, str) for x in safe_items):
         logging.error(f"[DEBUG JOIN] {label}: Non-string found in list: {[type(x) for x in safe_items]}")
     logging.debug(f"[DEBUG JOIN] {label}: Joining items: {safe_items}")
-    return ','.join(safe_items)
+    return safe_join(safe_items)
 import json
 import math
 from typing import List, Tuple, Optional, Dict, Any
