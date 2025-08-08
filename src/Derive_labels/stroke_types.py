@@ -166,11 +166,11 @@ def _vertices_from_command(command, stroke_index):
             param2 = float(match.group(4)) if match.group(4) else None
             param3 = float(match.group(5))
             logger.info(f"[_vertices_from_command] Parsed: action_type={action_type}, modifier={modifier}, param1={param1}, param2={param2}, param3={param3}")
-            # Circle modifier: sample 12 points
+            # Circle modifier: sample 20 points
             if modifier == 'circle':
                 center = (0.5, 0.5)
                 radius = param1 if param1 else 0.3
-                num_points = 12
+                num_points = 20
                 vertices = []
                 for i in range(num_points):
                     theta = 2 * math.pi * i / num_points
@@ -191,6 +191,8 @@ def _vertices_from_command(command, stroke_index):
                         x = center[0] + size * math.cos(theta)
                         y = center[1] + size * math.sin(theta)
                         vertices.append((x, y))
+                    # Close polygon for triangle
+                    vertices.append(vertices[0])
                     logger.info(f"[_vertices_from_command] Triangle vertices: {vertices}")
                     return vertices
                 elif modifier == 'square':
@@ -200,6 +202,8 @@ def _vertices_from_command(command, stroke_index):
                         x = center[0] + size * math.cos(theta)
                         y = center[1] + size * math.sin(theta)
                         vertices.append((x, y))
+                    # Close polygon for square
+                    vertices.append(vertices[0])
                     logger.info(f"[_vertices_from_command] Square vertices: {vertices}")
                     return vertices
             # Turtle simulation for line
@@ -209,7 +213,7 @@ def _vertices_from_command(command, stroke_index):
                 x0, y0 = 0.5, 0.5  # center start
                 x1 = x0 + length * math.cos(math.radians(angle))
                 y1 = y0 + length * math.sin(math.radians(angle))
-                num_samples = max(3, min(8, int(length * 10)))
+                num_samples = max(8, min(20, int(length * 20)))
                 xs = np.linspace(x0, x1, num_samples)
                 ys = np.linspace(y0, y1, num_samples)
                 vertices = list(zip(xs, ys))
@@ -219,7 +223,7 @@ def _vertices_from_command(command, stroke_index):
                 radius = param1
                 span = param2 if param2 is not None else 90.0
                 start_angle = param3 * 360.0  # normalized to degrees
-                num_points = max(12, int(abs(span) // 10))
+                num_points = max(20, int(abs(span) // 5))
                 cx, cy = 0.5, 0.5  # center
                 vertices = []
                 for i in range(num_points + 1):
@@ -233,7 +237,7 @@ def _vertices_from_command(command, stroke_index):
             if modifier == 'zigzag':
                 length = param1 if param1 else 0.3
                 angle = param3 * 360.0 if param3 else 0.0
-                num_zigs = 5
+                num_zigs = 8
                 x0, y0 = 0.5, 0.5
                 vertices = [(x0, y0)]
                 for i in range(1, num_zigs + 1):
@@ -414,12 +418,14 @@ def _calculate_shape_modifier_features_from_val(modifier: str) -> Dict[str, Any]
         if area and perimeter:
             from src.Derive_labels.shape_utils import _calculate_compactness
             compactness = _calculate_compactness(area, perimeter)
-        # Clamp complexity if convexity or compactness is zero/None/NaN
-        if not convexity or convexity != convexity or not compactness or compactness != compactness:
+        # Clamp/sanitize convexity and compactness
+        if not convexity or convexity != convexity or not compactness or compactness != compactness or convexity < 1e-6 or compactness < 1e-6:
             complexity = num_vertices
+            convexity = max(convexity, 1e-6)
+            compactness = max(compactness, 1e-6)
         else:
-            complexity = num_vertices * (1.0 / convexity if convexity > 0 else 1.0)
-            if compactness and compactness > 0:
+            complexity = num_vertices * (1.0 / convexity)
+            if compactness > 0:
                 complexity *= (1.0 / compactness)
         base_features['geometric_complexity'] = round(complexity, 3)
         base_features['num_vertices'] = num_vertices
