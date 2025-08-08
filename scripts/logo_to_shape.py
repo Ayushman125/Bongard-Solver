@@ -497,21 +497,16 @@ class ComprehensiveBongardProcessor:
 
             action_program = []
             for shape in getattr(bongard_image, 'one_stroke_shapes', []):
-                # Always convert basic_actions to strings before any join/logging/serialization
-                safe_actions = ensure_str_list(getattr(shape, 'basic_actions', []))
-                for j, a in enumerate(safe_actions):
-                    rc = getattr(a, 'raw_command', None) if not isinstance(a, str) else a
-                    if isinstance(rc, str):
-                        action_program.append(rc)
+                # Always build all_actions as strings before any join/logging/serialization
+                all_actions = []
+                for action in getattr(shape, 'basic_actions', []):
+                    if hasattr(action, 'raw_command') and isinstance(action.raw_command, str):
+                        all_actions.append(action.raw_command)
                     else:
-                        action_str = str(a)
-                        logger.warning(f"[SERIALIZE] raw_command not string for action {j}, using str(a): {action_str}")
-                        action_program.append(action_str)
-                # Defensive: log joined basic_actions
-                logger.debug(f"[BASIC_ACTIONS_JOIN] {','.join(ensure_str_list(safe_actions))}")
-            # Final check: ensure all items are strings using ensure_str_list
-            action_program = ensure_str_list(action_program)
-            logger.debug(f"[ACTION_PROGRAM_JOIN] {','.join(ensure_str_list(action_program))}")
+                        all_actions.append(str(action))
+                all_actions = ensure_str_list(all_actions)
+                logger.debug(f"[ACTION_PROGRAM_JOIN] {','.join(all_actions)}")
+                action_program = all_actions
             # Defensive: ensure ngram features are stringified if joined/logged/serialized
             safe_ngram = ensure_str_list(ngram_features) if isinstance(ngram_features, list) else ngram_features
             logger.debug(f"[NGRAM_JOIN] {','.join(ensure_str_list(safe_ngram)) if isinstance(safe_ngram, list) else safe_ngram}")

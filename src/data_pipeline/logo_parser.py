@@ -392,9 +392,9 @@ class ComprehensiveNVLabsParser:
                     continue
             # Robust serialization: ensure actions are stringified before any join/logging/serialization
             try:
-                from src.Derive_labels.features import ensure_str_list
-                safe_actions = ensure_str_list(actions)
-                logger.debug(f"[ACTIONS_JOIN] {','.join(ensure_str_list(safe_actions))}")
+                # Always log the original command strings, never the action objects
+                raw_cmds = [getattr(a, "raw_command", str(a)) for a in actions]
+                logger.debug(f"[ACTIONS_JOIN] {','.join(raw_cmds)}")
             except Exception as e:
                 logger.debug(f"[ACTIONS_JOIN] Could not stringify actions for logging: {e}")
             if not actions:
