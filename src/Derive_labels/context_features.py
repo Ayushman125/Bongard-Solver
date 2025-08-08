@@ -57,6 +57,11 @@ class BongardFeatureExtractor:
             # Geometry
             geometry = image.get('geometry', {})
             vertices = image.get('vertices', [])
+            from src.Derive_labels.stroke_types import _compute_bounding_box
+            bbox = image.get('bounding_box')
+            if not bbox or bbox == (0, 0, 0, 0):
+                bbox = _compute_bounding_box(vertices)
+                logger.info(f"[extract_image_features] Computed bounding box: {bbox}")
             # Stroke statistics
             strokes = image.get('strokes', [])
             num_strokes = len(strokes)
@@ -100,6 +105,7 @@ class BongardFeatureExtractor:
                 'centroid_y': geometry.get('centroid', [0.0, 0.0])[1],
                 'width': geometry.get('width'),
                 'height': geometry.get('height'),
+                'bounding_box': bbox,
                 # Stroke statistics
                 'num_strokes': num_strokes,
                 'stroke_type_distribution': stroke_types,
@@ -163,7 +169,6 @@ class BongardFeatureExtractor:
         logging.info(f"[extract_spatial_relationships] relationships: {relationships}")
         return relationships
 
-    # ...existing code...
 
     def compute_intersection_topology(self, strokes):
         # Use bounding box overlap as proxy for intersection

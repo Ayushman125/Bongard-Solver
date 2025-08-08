@@ -156,8 +156,8 @@ def _vertices_from_command(command, stroke_index):
     logger.info(f"[_vertices_from_command] INPUT: command={command}, stroke_index={stroke_index}")
     import re
     import math
+    import numpy as np
     try:
-        # Example regex: (arc|line)_(\w+)_([\d.]+)(?:_([\d.]+))?-([\d.]+)
         pattern = r'^(arc|line)_(\w+)_([\d.]+)(?:_([\d.]+))?-([\d.]+)$'
         match = re.match(pattern, command)
         if match:
@@ -167,31 +167,69 @@ def _vertices_from_command(command, stroke_index):
             param2 = float(match.group(4)) if match.group(4) else None
             param3 = float(match.group(5))
             logger.info(f"[_vertices_from_command] Parsed: action_type={action_type}, modifier={modifier}, param1={param1}, param2={param2}, param3={param3}")
+            # Geometric templates for modifiers
+            if modifier in ['triangle', 'square']:
+                center = (0.5, 0.5)
+                size = param1 if param1 else 0.3
+                angle_offset = param2 * 360.0 if param2 else 0.0
+                if modifier == 'triangle':
+                    vertices = []
+                    for i in range(3):
+                        theta = math.radians(angle_offset + i * 120)
+                        x = center[0] + size * math.cos(theta)
+                        y = center[1] + size * math.sin(theta)
+                        vertices.append((x, y))
+                    logger.info(f"[_vertices_from_command] Triangle vertices: {vertices}")
+                    return vertices
+                elif modifier == 'square':
+                    vertices = []
+                    for i in range(4):
+                        theta = math.radians(angle_offset + i * 90)
+                        x = center[0] + size * math.cos(theta)
+                        y = center[1] + size * math.sin(theta)
+                        vertices.append((x, y))
+                    logger.info(f"[_vertices_from_command] Square vertices: {vertices}")
+                    return vertices
             # Turtle simulation for line
             if action_type == 'line':
-                # Assume param1 = length, param3 = angle (normalized)
                 length = param1
                 angle = param3 * 360.0  # normalized to degrees
                 x0, y0 = 0.5, 0.5  # center start
                 x1 = x0 + length * math.cos(math.radians(angle))
                 y1 = y0 + length * math.sin(math.radians(angle))
-                vertices = [(x0, y0), (x1, y1)]
+                num_samples = max(3, min(8, int(length * 10)))
+                xs = np.linspace(x0, x1, num_samples)
+                ys = np.linspace(y0, y1, num_samples)
+                vertices = list(zip(xs, ys))
                 logger.info(f"[_vertices_from_command] OUTPUT: vertices={vertices}")
                 return vertices
             elif action_type == 'arc':
-                # Assume param1 = radius, param2 = span angle, param3 = start angle
                 radius = param1
-                span = param2 if param2 is not None else 180.0
+                span = param2 if param2 is not None else 90.0
                 start_angle = param3 * 360.0  # normalized to degrees
                 num_points = max(8, int(abs(span) // 10))
-                vertices = []
                 cx, cy = 0.5, 0.5  # center
+                vertices = []
                 for i in range(num_points + 1):
                     theta = math.radians(start_angle + (span * i / num_points))
                     x = cx + radius * math.cos(theta)
                     y = cy + radius * math.sin(theta)
                     vertices.append((x, y))
                 logger.info(f"[_vertices_from_command] OUTPUT: vertices={vertices}")
+                return vertices
+            # Zigzag modifier: generate a polyline with alternating y
+            if modifier == 'zigzag':
+                length = param1 if param1 else 0.3
+                angle = param3 * 360.0 if param3 else 0.0
+                num_zigs = 5
+                x0, y0 = 0.5, 0.5
+                vertices = [(x0, y0)]
+                for i in range(1, num_zigs + 1):
+                    frac = i / num_zigs
+                    x = x0 + length * frac * math.cos(math.radians(angle))
+                    y = y0 + length * frac * math.sin(math.radians(angle)) + ((-1) ** i) * 0.05
+                    vertices.append((x, y))
+                logger.info(f"[_vertices_from_command] Zigzag vertices: {vertices}")
                 return vertices
         # Fallback: try to extract all floats and simulate as polyline
         floats = [float(x) for x in re.findall(r'[\d.]+', command)]
@@ -213,111 +251,107 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
     stype = stroke_type_val or type(stroke).__name__.replace('Action', '').lower()
     smod = shape_modifier_val or 'normal'
     params = parameters or {}
-    # Always try to use full NVLabs vertices if available
     verts = _extract_stroke_vertices(stroke, stroke_index, None, bongard_image=bongard_image)
     logger.info(f"[_calculate_stroke_specific_features] verts: {verts}")
-    stype_lower = stype.lower() if stype else ''
-    # Prefer arc_radius and arc_angle attributes for arcs
-    arc_radius = getattr(stroke, 'arc_radius', None)
-    arc_angle = getattr(stroke, 'arc_angle', None)
-    if verts and len(verts) <= 2 and 'arc' in stype_lower:
-        logger.info(f"[_calculate_stroke_specific_features] Only {len(verts)} points for arc, attempting interpolation.")
-        # Prefer NVLabs attributes if present
-        if arc_radius is not None and arc_angle is not None:
-            try:
-                cx = getattr(stroke, 'center_x', 0.5)
-                cy = getattr(stroke, 'center_y', 0.5)
-                num_points = 24
-                theta1 = 0
-                theta2 = float(arc_angle)
-                thetas = np.linspace(np.deg2rad(theta1), np.deg2rad(theta2), num_points)
-                arc_points = [(cx + arc_radius * np.cos(t), cy + arc_radius * np.sin(t)) for t in thetas]
-                verts = arc_points
-                logger.info(f"[_calculate_stroke_specific_features] Interpolated arc points from NVLabs attributes: {arc_points}")
-            except Exception as e:
-                logger.warning(f"[_calculate_stroke_specific_features] Arc interpolation from NVLabs attributes failed: {e}")
+    # Calculate basic geometric features from vertices
+    if verts and len(verts) > 1:
+        # Calculate line length for lines or arc length for arcs
+        total_length = 0
+        for i in range(len(verts) - 1):
+            dx = verts[i+1][0] - verts[i][0]
+            dy = verts[i+1][1] - verts[i][1]
+            total_length += math.sqrt(dx*dx + dy*dy)
+        # Calculate angle (direction of first segment)
+        if len(verts) > 1:
+            dx = verts[1][0] - verts[0][0]
+            dy = verts[1][1] - verts[0][1]
+            angle = math.atan2(dy, dx) * 180 / math.pi
         else:
-            # Fallback to parameters dict
-            params = parameters or getattr(stroke, 'parameters', {}) or {}
-            cx = params.get('center_x') or params.get('cx') or params.get('param4')
-            cy = params.get('center_y') or params.get('cy') or params.get('param5')
-            radius = params.get('radius') or params.get('param1')
-            start_angle = params.get('start_angle') or params.get('param2')
-            end_angle = params.get('end_angle') or params.get('param3')
-            if None in [cx, cy, radius, start_angle, end_angle]:
-                raw_command = getattr(stroke, 'raw_command', None)
-                # ...existing fallback parsing...
-            try:
-                radius = float(radius)
-                cx = float(cx)
-                cy = float(cy)
-                start_angle = float(start_angle)
-                end_angle = float(end_angle)
-                num_points = 24
-                theta1 = np.deg2rad(start_angle)
-                theta2 = np.deg2rad(end_angle)
-                if theta2 < theta1:
-                    theta2 += 2 * np.pi
-                thetas = np.linspace(theta1, theta2, num_points)
-                arc_points = [(cx + radius * np.cos(t), cy + radius * np.sin(t)) for t in thetas]
-                verts = arc_points
-                logger.info(f"[_calculate_stroke_specific_features] Interpolated arc points from parameters: {arc_points}")
-            except Exception as e:
-                logger.warning(f"[_calculate_stroke_specific_features] Arc interpolation from parameters failed: {e}")
-    # Only compute geometric features if there are enough points
-    if verts and len(verts) >= 3:
-        features['angular_variance'] = PhysicsInference.robust_angular_variance(verts)
-        features['curvature_score'] = PhysicsInference.robust_curvature(verts)
-        features['moment_of_inertia'] = PhysicsInference.robust_moment_of_inertia(verts, stype, params)
-        logger.info(f"[_calculate_stroke_specific_features] OUTPUT: angular_variance={features['angular_variance']}, curvature_score={features['curvature_score']}, moment_of_inertia={features['moment_of_inertia']}")
+            angle = 0
+        # Add stroke-type specific features
+        if 'line' in stype.lower():
+            features.update({
+                'line_length': total_length,
+                'line_angle': angle,
+                'line_is_short': total_length < 1.0,
+                'line_is_long': total_length > 2.0,
+                'line_is_horizontal': abs(angle) < 20 or abs(angle) > 160,
+                'line_is_vertical': 70 < abs(angle) < 110,
+                'line_direction_category': _categorize_direction(angle)
+            })
+        elif 'arc' in stype.lower():
+            # Estimate arc features
+            radius = params.get('radius', 0.5)
+            span_angle = params.get('span_angle', 90)
+            arc_length = abs(span_angle) * radius * safe_divide(math.pi, 180) if radius > 0 else total_length
+            features.update({
+                'arc_radius': radius,
+                'arc_span_angle': span_angle,
+                'arc_length': arc_length,
+                'arc_curvature': safe_divide(1.0, max(radius, 1e-6)),
+                'arc_is_major': abs(span_angle) > 180,
+                'arc_is_full_circle': abs(span_angle) >= 350,
+                'arc_direction': 'clockwise' if span_angle < 0 else 'counterclockwise',
+                'arc_is_small': radius < 0.3,
+                'arc_is_large': radius > 1.5
+            })
     else:
-        features['angular_variance'] = None
-        features['curvature_score'] = None
-        features['moment_of_inertia'] = None
-        logger.warning(f"[_calculate_stroke_specific_features] Insufficient vertices for geometric features (stroke_index={stroke_index}). verts: {verts}")
-        logger.info(f"[_calculate_stroke_specific_features] OUTPUT: angular_variance=None, curvature_score=None, moment_of_inertia=None")
-    # For line strokes, add line_length, line_angle, etc.
-    if stype == 'line':
-        features.update(_calculate_line_specific_features_from_params(params))
-    elif stype == 'arc':
-        features.update(_calculate_arc_specific_features_from_params(params, stroke=stroke))
+        # Fallback values when no vertices available
+        if 'line' in stype.lower():
+            features.update({
+                'line_length': 0.5,
+                'line_angle': 0,
+                'line_is_short': False,
+                'line_is_long': False,
+                'line_is_horizontal': False,
+                'line_is_vertical': False,
+                'line_direction_category': 'horizontal'
+            })
+        elif 'arc' in stype.lower():
+            features.update({
+                'arc_radius': 0.5,
+                'arc_span_angle': 90,
+                'arc_length': 0.5,
+                'arc_curvature': 2.0,
+                'arc_is_major': False,
+                'arc_is_full_circle': False,
+                'arc_direction': 'counterclockwise',
+                'arc_is_small': False,
+                'arc_is_large': False
+            })
+    # Add shape modifier features
     features.update(_calculate_shape_modifier_features_from_val(smod))
-    logger.info(f"[_calculate_stroke_specific_features] FINAL OUTPUT features: {features}")
     return features
 
-def _calculate_line_specific_features_from_params(params: dict) -> Dict[str, Any]:
-        logger = logging.getLogger(__name__)
-        logger.info(f"[_calculate_line_specific_features_from_params] INPUT: params={params}")
-        length = params.get('param1', 0)
-        angle = params.get('param2', 0)
-        diag = math.sqrt(2)
-        length_norm = safe_divide(length, diag)
-        # Angle in degrees in [-180, 180]
-        angle_deg = ((angle % 1.0) * 360.0)
-        angle_deg = ((angle_deg + 180) % 360) - 180
-        # ±10° for horizontal/vertical, else diagonal
-        if abs(angle_deg) <= 10:
-            direction = 'horizontal'
-        elif abs(angle_deg - 90) <= 10 or abs(angle_deg + 90) <= 10:
-            direction = 'vertical'
-        else:
-            direction = 'diagonal'
-            logger.info(f"[_calculate_line_specific_features_from_params] OUTPUT: length={length}, angle={angle}, direction={direction}")
-        return {
-            'line_length': length,
-            'line_angle': angle,
-            'line_length_normalized': length_norm,
-            'line_angle_normalized': (angle % 1.0),
-            'line_direction': direction,
-            'line_is_short': PhysicsInference.is_short_line(length, diag),
-            'line_is_long': PhysicsInference.is_long_line(length, diag)
-        }
+def _categorize_direction(angle):
+    """Categorize line direction based on angle."""
+    angle = angle % 360
+    if angle >= 337.5 or angle < 22.5:
+        return 'horizontal'
+    elif 22.5 <= angle < 67.5:
+        return 'diagonal-up'
+    elif 67.5 <= angle < 112.5:
+        return 'vertical'
+    elif 112.5 <= angle < 157.5:
+        return 'diagonal-down'
+    elif 157.5 <= angle < 202.5:
+        return 'horizontal'
+    elif 202.5 <= angle < 247.5:
+        return 'diagonal-up'
+    elif 247.5 <= angle < 292.5:
+        return 'vertical'
+    elif 292.5 <= angle < 337.5:
+        return 'diagonal-down'
+    return 'unknown'
 
-def _calculate_arc_specific_features_from_params(params: dict, stroke=None) -> Dict[str, Any]:
-    logger = logging.getLogger(__name__)
-    logger.info(f"[_calculate_arc_specific_features_from_params] INPUT: params={params}")
-    # Prefer stroke.arc_radius and stroke.arc_angle if available
-    radius = getattr(stroke, 'arc_radius', None) if stroke is not None else None
+def _compute_bounding_box(vertices):
+    if not vertices or len(vertices) < 1:
+        return (0, 0, 0, 0)
+    xs = [v[0] for v in vertices]
+    ys = [v[1] for v in vertices]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    return (min_x, min_y, max_x, max_y)
     span = getattr(stroke, 'arc_angle', None) if stroke is not None else None
     if radius is None:
         radius = float(params.get('param1', 0))
@@ -402,9 +436,35 @@ def _calculate_stroke_type_differentiated_features(stroke_type_features: Dict, s
     logger.info(f"[_calculate_stroke_type_differentiated_features] INPUT: stroke_type_features keys={list(stroke_type_features.keys())}, strokes count={len(strokes)}")
     """Calculate features that differentiate between stroke types"""
     logger.debug(f"[_calculate_stroke_type_differentiated_features] INPUTS: stroke_type_features keys: {list(stroke_type_features.keys())}, strokes count: {len(strokes)}")
-    line_features = stroke_type_features['line_features']
-    arc_features = stroke_type_features['arc_features']
-    # Basic counts
+    def flatten_feature_list(features):
+        if not features:
+            return []
+        if isinstance(features[0], list):
+            return [item for sublist in features for item in sublist]
+        return features
+
+    def ensure_feature_dict(feature):
+        """Ensure feature is a dictionary, not a tuple or other type."""
+        if isinstance(feature, dict):
+            return feature
+        elif isinstance(feature, (list, tuple)) and len(feature) >= 2:
+            logger.warning(f"Converting non-dict feature to dict: {feature}")
+            return {'stroke_index': feature[0] if len(feature) > 0 else 0}
+        else:
+            logger.warning(f"Invalid feature type: {type(feature)}, value: {feature}")
+            return {'stroke_index': 0}
+
+    line_features = flatten_feature_list(stroke_type_features.get('line_features', []))
+    arc_features = flatten_feature_list(stroke_type_features.get('arc_features', []))
+
+    # Ensure all features are dictionaries
+    line_features = [ensure_feature_dict(f) for f in line_features]
+    arc_features = [ensure_feature_dict(f) for f in arc_features]
+
+    # Filter out invalid features
+    line_features = [f for f in line_features if 'line_length' in f]
+    arc_features = [f for f in arc_features if 'arc_radius' in f]
+
     num_lines = len(line_features)
     num_arcs = len(arc_features)
     total_strokes = num_lines + num_arcs
@@ -420,39 +480,38 @@ def _calculate_stroke_type_differentiated_features(stroke_type_features: Dict, s
 
     # Line-specific aggregate features
     if line_features:
-        line_lengths = [f['line_length'] for f in line_features]
-        line_angles = [f['line_angle'] for f in line_features]
+        line_lengths = [f.get('line_length', 0) for f in line_features]
+        line_angles = [f.get('line_angle', 0) for f in line_features]
 
         features['line_aggregate'] = {
             'total_line_length': sum(line_lengths),
             'avg_line_length': safe_divide(sum(line_lengths), len(line_lengths)),
-            'line_length_variance': _calculate_variance(line_lengths),
-            'line_angle_variance': _calculate_variance(line_angles),
-            'has_short_lines': any(f['line_is_short'] for f in line_features),
-            'has_long_lines': any(f['line_is_long'] for f in line_features),
-            'dominant_direction': _calculate_dominant_direction(line_features)
+            'line_length_variance': _calculate_variance(line_lengths) if line_lengths else 0,
+            'line_angle_variance': _calculate_variance(line_angles) if line_angles else 0,
+            'has_short_lines': any(f.get('line_is_short', False) for f in line_features),
+            'has_long_lines': any(f.get('line_is_long', False) for f in line_features),
+            'dominant_direction': _calculate_dominant_direction(line_features) if line_features else 'none'
         }
 
     # Arc-specific aggregate features
     if arc_features:
-        arc_radii = [f['arc_radius'] for f in arc_features]
-        arc_spans = [f['arc_span_angle'] for f in arc_features]
-        arc_lengths = [f['arc_length'] for f in arc_features]
+        arc_radii = [f.get('arc_radius', 0) for f in arc_features]
+        arc_spans = [f.get('arc_span_angle', 0) for f in arc_features]
+        arc_lengths = [f.get('arc_length', 0) for f in arc_features]
 
         features['arc_aggregate'] = {
             'total_arc_length': sum(arc_lengths),
             'avg_arc_radius': safe_divide(sum(arc_radii), len(arc_radii)),
             'avg_arc_span': safe_divide(sum(arc_spans), len(arc_spans)),
-            'arc_radius_variance': _calculate_variance(arc_radii),
-            'arc_span_variance': _calculate_variance(arc_spans),
-            'total_curvature': sum(f['arc_curvature'] for f in arc_features),
-            'has_full_circles': any(f['arc_is_full_circle'] for f in arc_features),
-            'has_major_arcs': any(f['arc_is_major'] for f in arc_features),
-            'curvature_complexity': len([f for f in arc_features if f['arc_curvature'] > 1.0])
+            'arc_radius_variance': _calculate_variance(arc_radii) if arc_radii else 0,
+            'arc_span_variance': _calculate_variance(arc_spans) if arc_spans else 0,
+            'total_curvature': sum(f.get('arc_curvature', 0) for f in arc_features),
+            'has_full_circles': any(f.get('arc_is_full_circle', False) for f in arc_features),
+            'has_major_arcs': any(f.get('arc_is_major', False) for f in arc_features),
+            'curvature_complexity': len([f for f in arc_features if f.get('arc_curvature', 0) > 1.0])
         }
 
     logger.info(f"[_calculate_stroke_type_differentiated_features] OUTPUT: {features}")
-    logger.debug(f"[_calculate_stroke_type_differentiated_features] OUTPUT: {features}")
     return features
 
 def _extract_modifier_from_stroke(stroke) -> str:

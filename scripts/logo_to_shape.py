@@ -71,23 +71,18 @@ class ComprehensiveBongardProcessor:
         # ...existing code...
         self.context_extractor = BongardFeatureExtractor()
 
-    def _calculate_vertices_from_action(self, action, stroke_index):
-        import numpy as np
-        """Calculate line segment vertices for a single action."""
+    def _calculate_vertices_from_action(self, action, stroke_index, bongard_image=None):
+        from src.Derive_labels.stroke_types import _extract_stroke_vertices, _compute_bounding_box
+        """Calculate line segment vertices for a single action, using bongard_image context."""
         try:
-            if hasattr(action, 'parameters'):
-                params = action.parameters
-                length = params.get('param1', 0.1)
-                angle = params.get('param2', 0.5)
-                # Convert normalized values to actual coordinates
-                start_x = stroke_index * 0.1
-                start_y = 0.5
-                end_x = start_x + length * np.cos(angle * 2 * np.pi)
-                end_y = start_y + length * np.sin(angle * 2 * np.pi)
-                return [(start_x, start_y), (end_x, end_y)]
+            verts = _extract_stroke_vertices(action, stroke_index, None, bongard_image=bongard_image)
+            bbox = None
+            if verts:
+                bbox = _compute_bounding_box(verts)
+                logger.info(f"[_calculate_vertices_from_action] Bounding box: {bbox}")
+            return verts
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).debug(f"Failed to calculate vertices from action: {e}")
+            logger.debug(f"Failed to calculate vertices from action: {e}")
         return []
 
 
@@ -313,7 +308,7 @@ class ComprehensiveBongardProcessor:
                         shape_modifier_val = 'normal'
                     is_valid = getattr(action, 'is_valid', True)
                     stroke_specific_features = _calculate_stroke_specific_features(
-                        action, j, stroke_type_val, shape_modifier_val, parameters)
+                        action, j, stroke_type_val, shape_modifier_val, parameters, bongard_image=bongard_image)
                     if stroke_type_val == 'line':
                         line_features.append(stroke_specific_features)
                     elif stroke_type_val == 'arc':
@@ -474,8 +469,11 @@ class ComprehensiveBongardProcessor:
             complexity = calculate_complexity(vertices)
             logger.info(f"[complexity] Output for vertices count {len(vertices)}: {complexity}")
 
+            from src.Derive_labels.stroke_types import _compute_bounding_box
+            bbox = _compute_bounding_box(vertices)
+            logger.info(f"[_calculate_image_features] Bounding box: {bbox}")
             features = {
-                'bounding_box': geometry.get('bbox', {}),
+                'bounding_box': bbox,
                 'centroid': geometry.get('centroid', [0.0, 0.0]),
                 'width': geometry.get('width', 0.0),
                 'height': geometry.get('height', 0.0),
