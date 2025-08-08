@@ -40,6 +40,9 @@ try:
     NVLabsLineAction = LineAction
     NVLabsArcAction = ArcAction
     NVLabsOneStrokeShape = OneStrokeShape
+    # Force any str(LineAction) or str(ArcAction) to return the raw_command
+    LineAction.__str__ = lambda self: getattr(self, "raw_command", super(LineAction, self).__str__())
+    ArcAction.__str__ = lambda self: getattr(self, "raw_command", super(ArcAction, self).__str__())
     
 except ImportError as e:
     print(f"⚠️ NVLabs classes not available, using fallback: {e}")
