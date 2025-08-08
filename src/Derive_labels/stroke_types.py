@@ -9,6 +9,7 @@ Only use fallback/synthesized vertices if bongard_image.one_stroke_shapes[stroke
 import math
 import logging
 from typing import Dict, List, Any, Optional
+import numpy as np
 from src.physics_inference import PhysicsInference
 from bongard.bongard import BongardImage
 from src.Derive_labels.shape_utils import safe_divide, _calculate_dominant_direction, _calculate_variance
@@ -58,15 +59,16 @@ def _extract_stroke_vertices(stroke, stroke_index, all_vertices, bongard_image=N
     # Warn if bongard_image is not passed
     if bongard_image is None:
         logger.warning(f"[_extract_stroke_vertices] WARNING: bongard_image context not provided. Feature extraction may be incomplete or inaccurate.")
-    # Try to use BongardImage.one_stroke_shapes[stroke_index].vertices if available
+    # Directly index into one_stroke_shapes for this stroke
     if bongard_image and hasattr(bongard_image, 'one_stroke_shapes'):
         try:
-            if stroke_index < len(bongard_image.one_stroke_shapes):
-                shape = bongard_image.one_stroke_shapes[stroke_index]
-                verts = getattr(shape, 'vertices', None)
-                if verts and len(verts) > 2:
-                    logger.info(f"[_extract_stroke_vertices] Using NVLabs vertices from one_stroke_shapes[{stroke_index}]: {verts}")
-                    return verts
+            shape = bongard_image.one_stroke_shapes[stroke_index]
+            verts = getattr(shape, 'vertices', None)
+            if verts and len(verts) >= 3:
+                logger.info(f"[_extract_stroke_vertices] Using NVLabs vertices from one_stroke_shapes[{stroke_index}]: {verts}")
+                return verts
+            else:
+                logger.warning(f"[_extract_stroke_vertices] Insufficient vertices for geometric features (stroke_index={stroke_index}). verts: {verts}")
         except Exception as e:
             logger.warning(f"[_extract_stroke_vertices] NVLabs vertex extraction failed: {e}")
     # Fallbacks as before
@@ -183,48 +185,54 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
     # Always try to use full NVLabs vertices if available
     verts = _extract_stroke_vertices(stroke, stroke_index, None, bongard_image=bongard_image)
     logger.info(f"[_calculate_stroke_specific_features] verts: {verts}")
-    # If not enough points for arcs, try to interpolate
     stype_lower = stype.lower() if stype else ''
+    # Prefer arc_radius and arc_angle attributes for arcs
+    arc_radius = getattr(stroke, 'arc_radius', None)
+    arc_angle = getattr(stroke, 'arc_angle', None)
     if verts and len(verts) <= 2 and 'arc' in stype_lower:
         logger.info(f"[_calculate_stroke_specific_features] Only {len(verts)} points for arc, attempting interpolation.")
-        # Try to interpolate arc points using parameters or command string
-        import numpy as np
-        params = parameters or getattr(stroke, 'parameters', {}) or {}
-        cx = params.get('center_x') or params.get('cx') or params.get('param4')
-        cy = params.get('center_y') or params.get('cy') or params.get('param5')
-        radius = params.get('radius') or params.get('param1')
-        start_angle = params.get('start_angle') or params.get('param2')
-        end_angle = params.get('end_angle') or params.get('param3')
-        # Fallback: try to parse from raw_command
-        if None in [cx, cy, radius, start_angle, end_angle]:
-            raw_command = getattr(stroke, 'raw_command', None)
-            if raw_command and isinstance(raw_command, str):
-                parts = raw_command.split('_')
-                if len(parts) >= 4:
-                    try:
-                        radius = float(parts[2])
-                        start_angle = float(parts[3])
-                        end_angle = float(parts[4]) if len(parts) > 4 else start_angle + 90
-                        cx, cy = 0.5, 0.5  # fallback center
-                        logger.info(f"[_calculate_stroke_specific_features] Fallback: arc params from raw_command: radius={radius}, start_angle={start_angle}, end_angle={end_angle}, cx={cx}, cy={cy}")
-                    except Exception:
-                        pass
-        try:
-            radius = float(radius)
-            cx = float(cx)
-            cy = float(cy)
-            start_angle = float(start_angle)
-            end_angle = float(end_angle)
-            num_points = 8  # minimum for geometric calculation
-            theta1 = np.deg2rad(start_angle)
-            theta2 = np.deg2rad(end_angle)
-            if theta2 < theta1:
-                theta2 += 2 * np.pi
-            thetas = np.linspace(theta1, theta2, num_points)
-            verts = [(cx + radius * np.cos(t), cy + radius * np.sin(t)) for t in thetas]
-            logger.info(f"[_calculate_stroke_specific_features] Interpolated arc points for geometric features: {verts}")
-        except Exception as e:
-            logger.warning(f"[_calculate_stroke_specific_features] Arc interpolation failed: {e}")
+        # Prefer NVLabs attributes if present
+        if arc_radius is not None and arc_angle is not None:
+            try:
+                cx = getattr(stroke, 'center_x', 0.5)
+                cy = getattr(stroke, 'center_y', 0.5)
+                num_points = 24
+                theta1 = 0
+                theta2 = float(arc_angle)
+                thetas = np.linspace(np.deg2rad(theta1), np.deg2rad(theta2), num_points)
+                arc_points = [(cx + arc_radius * np.cos(t), cy + arc_radius * np.sin(t)) for t in thetas]
+                verts = arc_points
+                logger.info(f"[_calculate_stroke_specific_features] Interpolated arc points from NVLabs attributes: {arc_points}")
+            except Exception as e:
+                logger.warning(f"[_calculate_stroke_specific_features] Arc interpolation from NVLabs attributes failed: {e}")
+        else:
+            # Fallback to parameters dict
+            params = parameters or getattr(stroke, 'parameters', {}) or {}
+            cx = params.get('center_x') or params.get('cx') or params.get('param4')
+            cy = params.get('center_y') or params.get('cy') or params.get('param5')
+            radius = params.get('radius') or params.get('param1')
+            start_angle = params.get('start_angle') or params.get('param2')
+            end_angle = params.get('end_angle') or params.get('param3')
+            if None in [cx, cy, radius, start_angle, end_angle]:
+                raw_command = getattr(stroke, 'raw_command', None)
+                # ...existing fallback parsing...
+            try:
+                radius = float(radius)
+                cx = float(cx)
+                cy = float(cy)
+                start_angle = float(start_angle)
+                end_angle = float(end_angle)
+                num_points = 24
+                theta1 = np.deg2rad(start_angle)
+                theta2 = np.deg2rad(end_angle)
+                if theta2 < theta1:
+                    theta2 += 2 * np.pi
+                thetas = np.linspace(theta1, theta2, num_points)
+                arc_points = [(cx + radius * np.cos(t), cy + radius * np.sin(t)) for t in thetas]
+                verts = arc_points
+                logger.info(f"[_calculate_stroke_specific_features] Interpolated arc points from parameters: {arc_points}")
+            except Exception as e:
+                logger.warning(f"[_calculate_stroke_specific_features] Arc interpolation from parameters failed: {e}")
     # Only compute geometric features if there are enough points
     if verts and len(verts) >= 3:
         features['angular_variance'] = PhysicsInference.robust_angular_variance(verts)

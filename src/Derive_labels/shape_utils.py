@@ -195,9 +195,19 @@ def calculate_geometry(vertices):
     area = PhysicsInference.shoelace_area(verts) if len(verts) >= 3 else 0.0
     try:
         from shapely.geometry import Polygon
-        poly = Polygon(verts) if len(verts) >= 3 else None
-        perimeter = poly.length if (poly is not None and poly.is_valid) else float(np.linalg.norm(np.array(verts[1]) - np.array(verts[0]))) if len(verts) == 2 else 0.0
+        if len(verts) >= 3:
+            poly = Polygon(verts)
+            if not poly.is_valid:
+                poly = poly.buffer(0)
+            perimeter = poly.length
+        elif len(verts) == 2:
+            poly = None
+            perimeter = float(np.linalg.norm(np.array(verts[1]) - np.array(verts[0])))
+        else:
+            poly = None
+            perimeter = 0.0
     except Exception:
+        poly = None
         perimeter = 0.0
     centroid = PhysicsInference.centroid(verts) if len(verts) >= 2 else [0.0, 0.0]
     inertia = PhysicsInference.moment_of_inertia(verts) if len(verts) >= 2 else 0.0

@@ -27,6 +27,27 @@ def test_calculate_geometry_triangle():
     assert g['perimeter'] > 0
     assert 0.0 < g['convexity_ratio'] <= 1.0
 
+def test_vertex_count_and_geometric_features():
+    # Simulate a stroke with >=3 vertices (polygon)
+    poly = [(0,0), (1,0), (1,1), (0,1)]
+    g = shape_utils.calculate_geometry(poly)
+    assert len(poly) >= 3
+    assert g['area'] > 0
+    assert g['perimeter'] > 0
+    assert g['convexity_ratio'] > 0
+
+def test_arc_geometric_features():
+    # Simulate arc with interpolated points
+    import numpy as np
+    cx, cy, r = 0.5, 0.5, 0.3
+    thetas = np.linspace(0, np.pi/2, 12)
+    arc = [(cx + r * np.cos(t), cy + r * np.sin(t)) for t in thetas]
+    g = shape_utils.calculate_geometry(arc)
+    assert len(arc) >= 3
+    assert g['area'] >= 0
+    assert g['perimeter'] > 0
+    assert g['convexity_ratio'] >= 0
+
 def test_calculate_geometry_nan_safety():
     # Pathological: all points same
     g = shape_utils.calculate_geometry([(0, 0), (0, 0), (0, 0)])

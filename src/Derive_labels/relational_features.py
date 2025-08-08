@@ -1,3 +1,18 @@
+def extract_support_set_context(positive_images, negative_images, buffer_amt=0.001):
+    """
+    Aggregate relational features across support set (positive and negative images).
+    Returns dict keyed by image index with context_relational_features.
+    """
+    from .relational_features import calculate_relationships
+    context = {}
+    for idx, img in enumerate(positive_images + negative_images):
+        strokes = getattr(img, 'strokes', None) or getattr(img, 'one_stroke_shapes', None)
+        if strokes:
+            rel = calculate_relationships(strokes, buffer_amt)
+            context[idx] = rel
+        else:
+            context[idx] = {}
+    return context
 import logging
 from shapely.geometry import LineString
 
@@ -26,15 +41,17 @@ def calculate_relationships(strokes, buffer_amt=0.001):
         logger.warning("calculate_relationships: No valid geometries found.")
         logger.info(f"[calculate_relationships] OUTPUT: {{'adjacency': 0, 'intersections': 0, 'containment': 0, 'overlap': 0.0}}")
         return {'adjacency': 0, 'intersections': 0, 'containment': 0, 'overlap': 0.0}
+    # Buffer each geometry to robustly handle degenerate lines
+    buffered = [g.buffer(buffer_amt) for g in geoms if g.is_valid]
     adj = 0
     inter = 0
     cont = 0
     ov = 0.0
-    n = len(geoms)
+    n = len(buffered)
     for i in range(n):
-        poly1 = geoms[i].buffer(buffer_amt)
+        poly1 = buffered[i]
         for j in range(i+1, n):
-            poly2 = geoms[j].buffer(buffer_amt)
+            poly2 = buffered[j]
             if poly1.touches(poly2):
                 adj += 1
             if poly1.intersects(poly2):

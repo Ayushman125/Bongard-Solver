@@ -109,6 +109,7 @@ def extract_relational_features(strokes, buffer_amt=0.001):
     rel = calculate_relationships(strokes, buffer_amt)
     logger.info(f"[extract_relational_features] OUTPUT: {rel}")
     return rel
+
     
 def _extract_ngram_features(sequence, n=2):
         """Extract n-gram counts from a sequence, with string keys for JSON compatibility."""

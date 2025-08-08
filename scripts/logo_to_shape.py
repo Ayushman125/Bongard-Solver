@@ -726,10 +726,9 @@ def main():
                         problem_modifiers.add(mod)
 
             # --- Compute and add support-set context features ---
-            from src.Derive_labels.context_features import BongardFeatureExtractor
-            context_extractor = BongardFeatureExtractor()
-            logger.info(f"[SUPPORT-SET CONTEXT] Calling extract_support_set_context for problem {problem_id}")
-            support_set_context = context_extractor.extract_support_set_context(pos_results, neg_results)
+            from src.Derive_labels.relational_features import extract_support_set_context as extract_relational_support_set_context
+            logger.info(f"[SUPPORT-SET CONTEXT] Calling extract_relational_support_set_context for problem {problem_id}")
+            support_set_context = extract_relational_support_set_context(pos_results, neg_results)
             logger.info(f"[SUPPORT-SET CONTEXT] OUTPUT for problem {problem_id}: {json.dumps(support_set_context, indent=2, ensure_ascii=False)}")
             # Add support_set_context to each image result
             for r in pos_results + neg_results:
