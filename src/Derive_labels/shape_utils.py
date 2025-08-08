@@ -2,6 +2,34 @@ import logging
 from typing import Dict, List, Any, Optional
 from src.physics_inference import PhysicsInference
 
+def standardize_coordinates(vertices, target_range=(0, 1)):
+    """Ensure all vertices are in consistent coordinate system [target_range]."""
+    import numpy as np
+    if not vertices or len(vertices) < 2:
+        return vertices
+    arr = np.array(vertices)
+    min_x, min_y = np.min(arr, axis=0)
+    max_x, max_y = np.max(arr, axis=0)
+    width = max_x - min_x
+    height = max_y - min_y
+    if width > 0 and height > 0:
+        normalized = (arr - [min_x, min_y]) / [width, height]
+        return normalized.tolist()
+    return arr.tolist()
+
+def calculate_geometry_consistent(vertices):
+    """Calculate geometry with consistent coordinate normalization."""
+    from shapely.geometry import Polygon
+    if not vertices or len(vertices) < 3:
+        return {'area': 0, 'perimeter': 0, 'centroid': [0, 0], 'bounds': [0, 0, 0, 0]}
+    poly = Polygon(vertices)
+    return {
+        'area': poly.area,
+        'perimeter': poly.length,
+        'centroid': list(poly.centroid.coords[0]),
+        'bounds': list(poly.bounds)
+    }
+
 def calculate_complexity(vertices: List[tuple]) -> float:
     """
     Compute a standardized shape complexity metric as a function of:

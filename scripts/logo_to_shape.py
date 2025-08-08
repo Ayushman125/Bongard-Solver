@@ -174,40 +174,23 @@ class ComprehensiveBongardProcessor:
             else:
                 shape = OneStrokeShape(basic_actions=parsed_actions)
 
+
             # --- Always include raw vertices ---
             vertices_raw = getattr(shape, 'vertices', [])
 
-            # --- Normalize vertices (aspect ratio preserved, centered) ---
-            normalized_vertices = normalize_vertices(vertices_raw)
+            # --- Use standardize_coordinates for normalization ---
+            from src.Derive_labels.shape_utils import standardize_coordinates, calculate_geometry_consistent
+            logger.info(f"[standardize_coordinates] INPUT: {vertices_raw}")
+            normalized_vertices = standardize_coordinates(vertices_raw)
+            logger.info(f"[standardize_coordinates] OUTPUT: {normalized_vertices}")
 
-            # --- Robust polygon recovery on normalized vertices ---
-            from shapely.geometry import Polygon
-            from shapely.ops import polygonize
-            poly = None
+            # --- Use calculate_geometry_consistent for geometry ---
+            logger.info(f"[calculate_geometry_consistent] INPUT: {normalized_vertices}")
+            geometry = calculate_geometry_consistent(normalized_vertices)
+            logger.info(f"[calculate_geometry_consistent] OUTPUT: {geometry}")
+
+            # For downstream compatibility, use normalized_vertices for features
             norm_vertices_for_features = normalized_vertices
-            try:
-                poly = Polygon(normalized_vertices)
-                if not poly.is_valid or poly.area == 0:
-                    # Try buffer(0) fix
-                    poly = poly.buffer(0)
-                if not poly.is_valid or poly.area == 0:
-                    # Try polygonize
-                    polys = list(polygonize([normalized_vertices]))
-                    if polys:
-                        poly = polys[0]
-                if (not poly.is_valid or poly.area == 0) and len(normalized_vertices) >= 3:
-                    # Fallback: convex hull
-                    poly = Polygon(normalized_vertices).convex_hull
-                if poly.is_valid and poly.area > 0:
-                    norm_vertices_for_features = list(poly.exterior.coords)
-                else:
-                    poly = None
-            except Exception:
-                poly = None
-                norm_vertices_for_features = normalized_vertices
-
-            # --- Calculate geometry from normalized (possibly recovered) vertices ---
-            geometry = calculate_geometry(norm_vertices_for_features)
 
             # --- Derive position and rotation labels from normalized vertices ---
             posrot_labels = extract_position_and_rotation(norm_vertices_for_features)
