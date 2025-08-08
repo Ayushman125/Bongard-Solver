@@ -1,23 +1,43 @@
 def ensure_str_list(obj):
     """Recursively convert all items in a list (or nested lists/tuples) to strings."""
     if isinstance(obj, list):
-        return [ensure_str_list(x) for x in obj]
+        # Debug log for list conversion
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"[ensure_str_list] Converting list: {obj}")
+        result = [ensure_str_list(x) for x in obj]
+        logger.debug(f"[ensure_str_list] Result: {result}")
+        return result
     elif isinstance(obj, tuple):
-        return tuple(ensure_str_list(x) for x in obj)
+        logger = logging.getLogger(__name__)
+        logger.debug(f"[ensure_str_list] Converting tuple: {obj}")
+        result = tuple(ensure_str_list(x) for x in obj)
+        logger.debug(f"[ensure_str_list] Result: {result}")
+        return result
     elif not isinstance(obj, str):
+        logger = logging.getLogger(__name__)
+        logger.debug(f"[ensure_str_list] Non-str object: {obj} (type: {type(obj)})")
         # Special handling for action objects
         if hasattr(obj, 'raw_command') and obj.raw_command is not None:
+            logger.debug(f"[ensure_str_list] Using raw_command: {obj.raw_command}")
             return str(obj.raw_command)
         # Check if it's a LineAction or ArcAction without raw_command
         elif hasattr(obj, 'line_type') or hasattr(obj, 'arc_type'):
             try:
                 if hasattr(obj, 'line_type'):  # LineAction
-                    return f"line_{obj.line_type}_{obj.line_length}-{getattr(obj, 'turn_angle', 0.5)}"
+                    val = f"line_{obj.line_type}_{obj.line_length}-{getattr(obj, 'turn_angle', 0.5)}"
+                    logger.debug(f"[ensure_str_list] LineAction string: {val}")
+                    return val
                 elif hasattr(obj, 'arc_type'):  # ArcAction
-                    return f"arc_{obj.arc_type}_{obj.arc_radius}_{obj.arc_angle}-{getattr(obj, 'turn_angle', 0.5)}"
-            except Exception:
-                pass
-        return str(obj)
+                    val = f"arc_{obj.arc_type}_{obj.arc_radius}_{obj.arc_angle}-{getattr(obj, 'turn_angle', 0.5)}"
+                    logger.debug(f"[ensure_str_list] ArcAction string: {val}")
+                    return val
+            except Exception as e:
+                logger.error(f"[ensure_str_list] Failed to convert action object: {e}")
+        val = str(obj)
+        logger.debug(f"[ensure_str_list] Fallback string conversion: {val}")
+        return val
+    logger.debug(f"[ensure_str_list] Returning string: {obj}")
     return obj
 import numpy as np
 from scipy.ndimage import gaussian_filter1d

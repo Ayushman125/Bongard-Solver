@@ -1,3 +1,4 @@
+import logging
 import importlib.util
 import sys
 #!/usr/bin/env python3
@@ -195,7 +196,9 @@ class ComprehensiveBongardProcessor:
             else:
                 logger.warning(f"[ATTR DEBUG] Shape {idx} has no vertices.")
             if hasattr(shape, 'basic_actions'):
-                safe_basic_actions = ensure_str_list(shape.basic_actions)
+                # Always log the raw_command of each action
+                # Use json_safe for robust conversion
+                safe_basic_actions = json_safe(shape.basic_actions)
                 logger.info(f"[ATTR DEBUG] Shape {idx} basic_actions: {safe_basic_actions}")
                 image_dict['strokes'] = safe_basic_actions
             else:
@@ -505,11 +508,26 @@ class ComprehensiveBongardProcessor:
                     else:
                         all_actions.append(str(action))
                 all_actions = ensure_str_list(all_actions)
-                logger.debug(f"[ACTION_PROGRAM_JOIN] {','.join(all_actions)}")
-                action_program = all_actions
+                # Inline debug logging before join
+                if all_actions and not all(isinstance(a, str) for a in all_actions):
+                    logger.error(f"[ACTION_PROGRAM_JOIN] Non-string found in all_actions before join: {[type(a) for a in all_actions]}")
+                logger.debug(f"[ACTION_PROGRAM_JOIN] Joining items: {all_actions}")
+                try:
+                    joined_actions = ','.join([str(a) for a in all_actions])
+                    logger.debug(f"[ACTION_PROGRAM_JOIN] {joined_actions}")
+                except Exception as join_exc:
+                    logger.error(f"[ACTION_PROGRAM_JOIN] Failed to join all_actions: {join_exc}")
+                action_program.append(all_actions)
             # Defensive: ensure ngram features are stringified if joined/logged/serialized
             safe_ngram = ensure_str_list(ngram_features) if isinstance(ngram_features, list) else ngram_features
-            logger.debug(f"[NGRAM_JOIN] {','.join(ensure_str_list(safe_ngram)) if isinstance(safe_ngram, list) else safe_ngram}")
+            if isinstance(safe_ngram, list):
+                # Inline debug logging before join
+                safe_ngram_strs = ensure_str_list(safe_ngram)
+                if safe_ngram_strs and not all(isinstance(a, str) for a in safe_ngram_strs):
+                    logger.error(f"[NGRAM_JOIN] Non-string found in safe_ngram before join: {[type(a) for a in safe_ngram_strs]}")
+                logger.debug(f"[NGRAM_JOIN] {','.join(safe_ngram_strs)}")
+            else:
+                logger.debug(f"[NGRAM_JOIN] {safe_ngram}")
             # Defensive: ensure stroke_features lists are stringified
             for stroke in stroke_features:
                 for k, v in stroke.items():
@@ -522,17 +540,41 @@ class ComprehensiveBongardProcessor:
                 'regularity': ensure_str_list(regularity) if isinstance(regularity, list) else regularity
             }
 
+            from src.Derive_labels.shape_utils import json_safe
+            # Defensive: ensure all action lists are json_safe before output
+            safe_stroke_features = json_safe(stroke_features)
+            safe_action_program = json_safe(action_program)
+            safe_vertices_raw = json_safe(vertices_raw)
+            safe_vertices = json_safe(norm_vertices_for_features)
+            safe_relational_features = json_safe(robust_relational_features)
+            safe_context_relational_features = json_safe({
+                'intersections': intersections,
+                'adjacency': adjacency,
+                'containment': containment,
+                'overlap': overlap,
+                'context_adjacency_matrix': context_relationships.get('adjacency_matrix'),
+                'context_containment': context_relationships.get('containment'),
+                'context_intersection_pattern': context_relationships.get('intersection_pattern'),
+                'multiscale_features': multiscale_features
+            })
+            safe_sequential_features = json_safe({
+                'ngram': ngram_features,
+                'alternation': alternation,
+                'regularity': regularity
+            })
+            logger.debug(f"[OUTPUT PATCH] Types in stroke_features: {[type(x) for x in stroke_features]}")
+            logger.debug(f"[OUTPUT PATCH] Types in action_program: {[type(x) for x in action_program]}")
             complete_record = {
                 'image_id': image_id,
                 'problem_id': problem_id,
                 'category': category,
                 'label': 'positive' if is_positive else 'negative',
                 'image_path': image_path,
-                'strokes': stroke_features,
-                'num_strokes': len(stroke_features),
-                'raw_vertices': vertices_raw,
-                'vertices': norm_vertices_for_features,
-                'num_vertices': len(norm_vertices_for_features) if norm_vertices_for_features else 0,
+                'strokes': safe_stroke_features,
+                'num_strokes': len(safe_stroke_features),
+                'raw_vertices': safe_vertices_raw,
+                'vertices': safe_vertices,
+                'num_vertices': len(safe_vertices) if safe_vertices else 0,
                 'position_label': posrot_labels.get('centroid'),
                 'rotation_label_degrees': posrot_labels.get('orientation_degrees'),
                 'image_features': image_features,
@@ -544,24 +586,11 @@ class ComprehensiveBongardProcessor:
                     'processing_timestamp': time.time(),
                     'feature_count': len(image_features) + len(physics_features) + len(composition_features)
                 },
-                'action_program': action_program,
+                'action_program': safe_action_program,
                 'geometry': geometry,
-                'relational_features': robust_relational_features,
-                'context_relational_features': {
-                    'intersections': intersections,
-                    'adjacency': adjacency,
-                    'containment': containment,
-                    'overlap': overlap,
-                    'context_adjacency_matrix': context_relationships.get('adjacency_matrix'),
-                    'context_containment': context_relationships.get('containment'),
-                    'context_intersection_pattern': context_relationships.get('intersection_pattern'),
-                    'multiscale_features': multiscale_features
-                },
-                'sequential_features': {
-                    'ngram': ngram_features,
-                    'alternation': alternation,
-                    'regularity': regularity
-                },
+                'relational_features': safe_relational_features,
+                'context_relational_features': safe_context_relational_features,
+                'sequential_features': safe_sequential_features,
                 'topological_features': graph_features
             }
             self.processing_stats['successful'] += 1

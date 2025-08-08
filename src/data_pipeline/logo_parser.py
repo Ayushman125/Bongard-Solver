@@ -11,6 +11,13 @@ from pathlib import Path
 import numpy as np
 import cv2
 import logging
+def debug_join(label, items):
+    from src.Derive_labels.shape_utils import json_safe
+    safe_items = json_safe(items)
+    if safe_items and not all(isinstance(x, str) for x in safe_items):
+        logging.error(f"[DEBUG JOIN] {label}: Non-string found in list: {[type(x) for x in safe_items]}")
+    logging.debug(f"[DEBUG JOIN] {label}: Joining items: {safe_items}")
+    return ','.join(safe_items)
 import json
 import math
 from typing import List, Tuple, Optional, Dict, Any
@@ -392,9 +399,9 @@ class ComprehensiveNVLabsParser:
                     continue
             # Robust serialization: ensure actions are stringified before any join/logging/serialization
             try:
-                # Always log the original command strings, never the action objects
-                raw_cmds = [getattr(a, "raw_command", str(a)) for a in actions]
-                logger.debug(f"[ACTIONS_JOIN] {','.join(raw_cmds)}")
+                from src.Derive_labels.shape_utils import json_safe
+                safe_cmds = json_safe([getattr(a, "raw_command", a) for a in actions])
+                logger.debug(f"[ACTIONS_JOIN] {debug_join('ACTIONS_JOIN', safe_cmds)}")
             except Exception as e:
                 logger.debug(f"[ACTIONS_JOIN] Could not stringify actions for logging: {e}")
             if not actions:
