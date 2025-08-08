@@ -1,4 +1,3 @@
-
 """
 IMPORTANT PIPELINE NOTE:
 All feature extraction and stroke vertex extraction in this module should use the painter-generated BongardImage context.
@@ -167,6 +166,19 @@ def _vertices_from_command(command, stroke_index):
             param2 = float(match.group(4)) if match.group(4) else None
             param3 = float(match.group(5))
             logger.info(f"[_vertices_from_command] Parsed: action_type={action_type}, modifier={modifier}, param1={param1}, param2={param2}, param3={param3}")
+            # Circle modifier: sample 12 points
+            if modifier == 'circle':
+                center = (0.5, 0.5)
+                radius = param1 if param1 else 0.3
+                num_points = 12
+                vertices = []
+                for i in range(num_points):
+                    theta = 2 * math.pi * i / num_points
+                    x = center[0] + radius * math.cos(theta)
+                    y = center[1] + radius * math.sin(theta)
+                    vertices.append((x, y))
+                logger.info(f"[_vertices_from_command] Circle vertices: {vertices}")
+                return vertices
             # Geometric templates for modifiers
             if modifier in ['triangle', 'square']:
                 center = (0.5, 0.5)
@@ -207,7 +219,7 @@ def _vertices_from_command(command, stroke_index):
                 radius = param1
                 span = param2 if param2 is not None else 90.0
                 start_angle = param3 * 360.0  # normalized to degrees
-                num_points = max(8, int(abs(span) // 10))
+                num_points = max(12, int(abs(span) // 10))
                 cx, cy = 0.5, 0.5  # center
                 vertices = []
                 for i in range(num_points + 1):
@@ -277,7 +289,7 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
                 'line_is_vertical': 70 < abs(angle) < 110,
                 'line_direction': _categorize_direction(angle)
             })
-        elif 'arc' in stype_lower:
+        elif 'arc' in stype_lower or shape_modifier_val == 'circle':
             radius = params.get('radius', 0.5)
             span_angle = params.get('span_angle', 90)
             arc_length = abs(span_angle) * radius * safe_divide(math.pi, 180) if radius > 0 else total_length
@@ -402,9 +414,13 @@ def _calculate_shape_modifier_features_from_val(modifier: str) -> Dict[str, Any]
         if area and perimeter:
             from src.Derive_labels.shape_utils import _calculate_compactness
             compactness = _calculate_compactness(area, perimeter)
-        complexity = num_vertices * (1.0 / convexity if convexity > 0 else 1.0)
-        if compactness:
-            complexity *= (1.0 / compactness if compactness > 0 else 1.0)
+        # Clamp complexity if convexity or compactness is zero/None/NaN
+        if not convexity or convexity != convexity or not compactness or compactness != compactness:
+            complexity = num_vertices
+        else:
+            complexity = num_vertices * (1.0 / convexity if convexity > 0 else 1.0)
+            if compactness and compactness > 0:
+                complexity *= (1.0 / compactness)
         base_features['geometric_complexity'] = round(complexity, 3)
         base_features['num_vertices'] = num_vertices
         base_features['convexity_ratio'] = convexity
