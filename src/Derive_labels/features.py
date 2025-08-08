@@ -121,20 +121,21 @@ def extract_relational_features(strokes, buffer_amt=0.001):
 
     
 def _extract_ngram_features(sequence, n=2):
-        """Extract n-gram counts from a sequence, with string keys for JSON compatibility."""
-        logger = logging.getLogger(__name__)
-        try:
-            from src.Derive_labels.features import ensure_str_list
-            sequence = ensure_str_list(sequence)
-        except Exception:
-            pass
-        logger.debug(f"[_extract_ngram_features] INPUTS: sequence={sequence}, n={n}")
-        from collections import Counter
-        ngrams = zip(*[sequence[i:] for i in range(n)])
-        ngram_list = ['|'.join(ensure_str_list(ng)) for ng in ngrams]
-        result = dict(Counter(ngram_list))
-        logger.debug(f"[_extract_ngram_features] OUTPUT: {result}")
-        return result
+    """Extract n-gram counts from a sequence, with string keys for JSON compatibility."""
+    logger = logging.getLogger(__name__)
+    try:
+        from src.Derive_labels.features import ensure_str_list
+        sequence = ensure_str_list(sequence)
+    except Exception:
+        pass
+    logger.debug(f"[_extract_ngram_features] INPUTS: sequence={sequence}, n={n}")
+    from collections import Counter
+    ngrams = zip(*[sequence[i:] for i in range(n)])
+    ngram_list = ['|'.join(ensure_str_list(ng)) for ng in ngrams]
+    ngram_list = ensure_str_list(ngram_list)
+    result = dict(Counter(ngram_list))
+    logger.debug(f"[_extract_ngram_features] OUTPUT: {result}")
+    return result
 
 def _detect_alternation(sequence):
         """Compute maximal alternation score using PhysicsInference.alternation_score."""

@@ -192,10 +192,10 @@ class ComprehensiveBongardProcessor:
             else:
                 logger.warning(f"[ATTR DEBUG] Shape {idx} has no vertices.")
             if hasattr(shape, 'basic_actions'):
-                # Defensive: ensure all basic_actions are strings for logging
+                # Defensive: ensure all basic_actions are strings for logging and serialization
                 safe_basic_actions = ensure_str_list(shape.basic_actions)
                 logger.info(f"[ATTR DEBUG] Shape {idx} basic_actions: {safe_basic_actions}")
-                image_dict['strokes'] = [vars(a) for a in shape.basic_actions]
+                image_dict['strokes'] = safe_basic_actions
             else:
                 logger.warning(f"[ATTR DEBUG] Shape {idx} has no basic_actions.")
             # Check for degenerate shapes
@@ -204,6 +204,8 @@ class ComprehensiveBongardProcessor:
                 shape.attributes = {}
                 continue
             # Log input to feature extraction
+            # Defensive: ensure strokes are strings before feature extraction
+            image_dict['strokes'] = ensure_str_list(image_dict.get('strokes', []))
             logger.info(f"[ATTR DEBUG] Shape {idx} image_dict for feature extraction: {image_dict}")
             try:
                 shape.attributes = feature_extractor.extract_image_features(image_dict)
@@ -321,18 +323,19 @@ class ComprehensiveBongardProcessor:
             # --- Calculate image features using robust polygon ---
             all_actions = []
             for shape in getattr(bongard_image, 'one_stroke_shapes', []):
-                # Defensive: ensure all actions are strings for downstream use
-                safe_actions = ensure_str_list(getattr(shape, 'basic_actions', []))
-                all_actions.extend(safe_actions)
+                # Defensive: ensure all actions are strings
+                for a in ensure_str_list(getattr(shape, 'basic_actions', [])):
+                    all_actions.append(a)
+            all_actions = ensure_str_list(all_actions)
             image_features = self._calculate_image_features(norm_vertices_for_features, all_actions, geometry)
             centroid = geometry.get('centroid')
-            composition_features = self._calculate_composition_features(all_actions)
-            physics_features = self._calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
+            composition_features = self._calculate_composition_features(all_actions)  # all_actions is now a list of strings
+            physics_features = self._calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)  # all_actions is now a list of strings
 
             # --- Relational/Topological/Sequential Features ---
             # Convert actions to shapely geometries for robust relational features
             from src.Derive_labels.features import _actions_to_geometries
-            stroke_geometries = _actions_to_geometries(bongard_image)
+            stroke_geometries = _actions_to_geometries(ensure_str_list(all_actions))  # Pass list of strings
             logger.debug(f"Number of stroke geometries: {len(stroke_geometries)}")
             for idx, g in enumerate(stroke_geometries):
                 logger.debug(f"Geometry {idx}: type={g.geom_type}, is_valid={g.is_valid}")
@@ -385,8 +388,13 @@ class ComprehensiveBongardProcessor:
                 # Defensive: ensure all actions are strings for logging/serialization
                 safe_actions = ensure_str_list(getattr(shape, 'basic_actions', []))
                 for j, action in enumerate(safe_actions):
+                    # Defensive: if action is not a string, convert to string
+                    if not isinstance(action, str):
+                        action_str = str(action)
+                    else:
+                        action_str = action
                     stroke_type_val = type(action).__name__.replace('Action', '').lower() if not isinstance(action, str) else 'unknown'
-                    raw_command = getattr(action, 'raw_command', None) if not isinstance(action, str) else action
+                    raw_command = getattr(action, 'raw_command', None) if not isinstance(action, str) else action_str
                     function_name = getattr(action, 'function_name', None) if not isinstance(action, str) else None
                     if not raw_command and original_action_commands and j < len(original_action_commands):
                         if isinstance(original_action_commands[j], str):
@@ -465,13 +473,13 @@ class ComprehensiveBongardProcessor:
                         logger.warning(f"[SERIALIZE] raw_command not string for action {j}, using str(a): {action_str}")
                         action_program.append(action_str)
                 # Defensive: log joined basic_actions
-                logger.debug(f"[BASIC_ACTIONS_JOIN] {','.join(safe_actions)}")
+                logger.debug(f"[BASIC_ACTIONS_JOIN] {','.join(ensure_str_list(safe_actions))}")
             # Final check: ensure all items are strings using ensure_str_list
             action_program = ensure_str_list(action_program)
-            logger.debug(f"[ACTION_PROGRAM_JOIN] {','.join(action_program)}")
+            logger.debug(f"[ACTION_PROGRAM_JOIN] {','.join(ensure_str_list(action_program))}")
             # Defensive: ensure ngram features are stringified if joined/logged/serialized
             safe_ngram = ensure_str_list(ngram_features) if isinstance(ngram_features, list) else ngram_features
-            logger.debug(f"[NGRAM_JOIN] {','.join(safe_ngram) if isinstance(safe_ngram, list) else safe_ngram}")
+            logger.debug(f"[NGRAM_JOIN] {','.join(ensure_str_list(safe_ngram)) if isinstance(safe_ngram, list) else safe_ngram}")
             # Defensive: ensure stroke_features lists are stringified
             for stroke in stroke_features:
                 for k, v in stroke.items():
@@ -710,9 +718,14 @@ class ComprehensiveBongardProcessor:
             return {}
 
     
-    def _calculate_composition_features(self, strokes: List) -> Dict[str, Any]:
-        """Calculate features about stroke composition and relationships. FIXED: Use actual modifiers from strokes."""
+    def _calculate_composition_features(self, action_commands: List[str]) -> Dict[str, Any]:
+        """
+        Calculate features about stroke composition and relationships.
+        Expects a list of action command strings (not objects).
+        Defensive: always convert to strings before any operation.
+        """
         logger = logging.getLogger(__name__)
+        strokes = ensure_str_list(action_commands)
         logger.debug(f"[_calculate_composition_features] INPUTS: strokes count={len(strokes) if strokes else 0}")
         if not strokes:
             logger.debug("[_calculate_composition_features] No strokes, returning empty dict")
@@ -722,8 +735,14 @@ class ComprehensiveBongardProcessor:
             shape_modifiers = {}
             modifier_sequence = []
             for stroke in strokes:
-                stroke_type = type(stroke).__name__.replace('Action', '').lower()
-                modifier = _extract_modifier_from_stroke(stroke)
+                # Defensive: parse type and modifier from string
+                if isinstance(stroke, str):
+                    parts = stroke.split('_')
+                    stroke_type = parts[0] if parts else 'unknown'
+                    modifier = parts[1] if len(parts) > 1 else 'normal'
+                else:
+                    stroke_type = type(stroke).__name__.replace('Action', '').lower()
+                    modifier = _extract_modifier_from_stroke(stroke)
                 stroke_types[stroke_type] = stroke_types.get(stroke_type, 0) + 1
                 shape_modifiers[modifier] = shape_modifiers.get(modifier, 0) + 1
                 modifier_sequence.append(modifier)

@@ -394,7 +394,7 @@ class ComprehensiveNVLabsParser:
             try:
                 from src.Derive_labels.features import ensure_str_list
                 safe_actions = ensure_str_list(actions)
-                logger.debug(f"[ACTIONS_JOIN] {','.join(safe_actions)}")
+                logger.debug(f"[ACTIONS_JOIN] {','.join(ensure_str_list(safe_actions))}")
             except Exception as e:
                 logger.debug(f"[ACTIONS_JOIN] Could not stringify actions for logging: {e}")
             if not actions:
