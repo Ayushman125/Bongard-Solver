@@ -1039,29 +1039,28 @@ def main():
         # Defensive output patch: ensure all action lists are flattened and stringified before output
 
         # Before saving all_results
-        def recursive_flatten_and_stringify(obj):
-            if isinstance(obj, list):
-                return [recursive_flatten_and_stringify(x) for x in obj]
-            elif type(obj).__name__ in ['LineAction', 'ArcAction']:
-                # Use raw_command if available, else str
-                return getattr(obj, 'raw_command', str(obj))
-            else:
-                return obj
 
-        # Robustly flatten and stringify all action lists before output
+        def robust_action_list_to_str(lst):
+            # Converts a list of actions (possibly nested) to a list of strings using raw_command
+            if isinstance(lst, list):
+                return [robust_action_list_to_str(x) for x in lst] if lst and isinstance(lst[0], list) else [getattr(x, 'raw_command', str(x)) if type(x).__name__ in ['LineAction', 'ArcAction'] else str(x) for x in lst]
+            elif type(lst).__name__ in ['LineAction', 'ArcAction']:
+                return getattr(lst, 'raw_command', str(lst))
+            else:
+                return str(lst)
+
         processed_results = []
         for r in all_results:
             safe_r = {}
             for k, v in r.items():
-                # Patch: For 'actions' and 'action_program', always join using raw_command
                 if k in ['actions', 'action_program'] and isinstance(v, list):
                     # If v is a list of lists, flatten and join each sublist
                     if v and isinstance(v[0], list):
-                        safe_r[k] = [','.join([getattr(a, 'raw_command', str(a)) for a in sublist]) for sublist in v]
+                        safe_r[k] = [','.join(robust_action_list_to_str(sublist)) for sublist in v]
                     else:
-                        safe_r[k] = ','.join([getattr(a, 'raw_command', str(a)) for a in v])
+                        safe_r[k] = ','.join(robust_action_list_to_str(v))
                 elif isinstance(v, list):
-                    safe_r[k] = ensure_all_strings(recursive_flatten_and_stringify(v))
+                    safe_r[k] = ensure_all_strings(robust_action_list_to_str(v))
                 else:
                     safe_r[k] = v
             logger.debug(f"[SERIALIZE DEBUG][main] Before serialization: {safe_r}")
@@ -1088,7 +1087,7 @@ def main():
                     if isinstance(v, list):
                         logger.debug(f"[SERIALIZE DEBUG][main][flagged_cases] Before ensure_all_strings: key={k}, value={v}")
                         logger.debug(f"[SERIALIZE DEBUG][main][flagged_cases] Types: {[type(x) for x in v]}")
-                        safe_case[k] = ensure_all_strings(recursive_flatten_and_stringify(v))
+                        safe_case[k] = ensure_all_strings(robust_action_list_to_str(v))
                         logger.debug(f"[SERIALIZE DEBUG][main][flagged_cases] After ensure_all_strings: key={k}, value={safe_case[k]}")
                         logger.debug(f"[SERIALIZE DEBUG][main][flagged_cases] Types after: {[type(x) for x in safe_case[k]]}")
                     else:
