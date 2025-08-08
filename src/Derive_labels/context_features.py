@@ -57,11 +57,54 @@ class BongardFeatureExtractor:
             # Geometry
             geometry = image.get('geometry', {})
             vertices = image.get('vertices', [])
+            from shapely.geometry import Polygon
+            from shapely.ops import unary_union
             from src.Derive_labels.stroke_types import _compute_bounding_box
             bbox = image.get('bounding_box')
             if not bbox or bbox == (0, 0, 0, 0):
                 bbox = _compute_bounding_box(vertices)
                 logger.info(f"[extract_image_features] Computed bounding box: {bbox}")
+            # Robust polygon validation and repair
+            poly = None
+            valid_geom = False
+            if vertices and len(vertices) >= 3:
+                try:
+                    poly = Polygon(vertices)
+                    if not poly.is_valid or poly.area == 0:
+                        poly = poly.buffer(0)
+                    if not poly.is_valid or poly.area == 0:
+                        poly = Polygon(vertices).convex_hull
+                    valid_geom = poly.is_valid and poly.area > 0
+                except Exception as e:
+                    logger.warning(f"Polygon construction failed: {e}")
+            # Clamp/sanitize compactness and convexity
+            area = poly.area if valid_geom else 0.0
+            perimeter = poly.length if valid_geom else 0.0
+            centroid = list(poly.centroid.coords[0]) if valid_geom else [0.0, 0.0]
+            aspect_ratio = (bbox[2] - bbox[0]) / (bbox[3] - bbox[1]) if bbox and (bbox[3] - bbox[1]) != 0 else 1.0
+            compactness = (4 * np.pi * area) / (perimeter ** 2) if perimeter and perimeter > 1e-6 else 1e-6
+            try:
+                convex_hull = poly.convex_hull if valid_geom else None
+                convexity_ratio = area / convex_hull.area if convex_hull and convex_hull.area > 1e-6 else 1e-6
+            except Exception:
+                convexity_ratio = 1e-6
+            # Enforce minimum vertex count for curvature, angular variance, complexity
+            num_vertices = len(vertices)
+            curvature = 0.0
+            angular_variance = 0.0
+            complexity = 0.0
+            if num_vertices >= 3 and valid_geom:
+                # Placeholder: replace with robust curvature/variance calculation
+                edge_angles = []
+                for i in range(num_vertices):
+                    p1 = np.array(vertices[i])
+                    p2 = np.array(vertices[(i+1)%num_vertices])
+                    v = p2 - p1
+                    angle = np.arctan2(v[1], v[0])
+                    edge_angles.append(angle)
+                angular_variance = float(np.var(edge_angles))
+                curvature = float(np.mean(np.abs(np.diff(edge_angles))))
+                complexity = curvature + angular_variance + num_vertices
             # Stroke statistics
             strokes = image.get('strokes', [])
             num_strokes = len(strokes)
@@ -85,49 +128,42 @@ class BongardFeatureExtractor:
             stroke_complexity = stroke_complexity / num_strokes if num_strokes > 0 else 0.0
             # Relational/topological
             rel = image.get('relational_features', {})
-            # Multi-scale
             multiscale = rel.get('multiscale_features', {}) or image.get('multiscale_features', {})
-            # Physics-based
             physics = image.get('physics_features', {})
-            # Sequential/pattern
             seq = image.get('sequential_features', {})
-            # Canonical/conceptual
             canonical = image.get('image_canonical_summary', {})
-            # Compose feature dict
+            # Compose feature dict with safe defaults
             features = {
-                # Geometry
-                'area': geometry.get('area'),
-                'perimeter': geometry.get('perimeter'),
-                'convexity_ratio': geometry.get('convexity_ratio'),
-                'compactness': geometry.get('compactness'),
-                'aspect_ratio': geometry.get('aspect_ratio'),
-                'centroid_x': geometry.get('centroid', [0.0, 0.0])[0],
-                'centroid_y': geometry.get('centroid', [0.0, 0.0])[1],
-                'width': geometry.get('width'),
-                'height': geometry.get('height'),
+                'area': area,
+                'perimeter': perimeter,
+                'convexity_ratio': convexity_ratio,
+                'compactness': compactness,
+                'aspect_ratio': aspect_ratio,
+                'centroid_x': centroid[0],
+                'centroid_y': centroid[1],
+                'width': bbox[2] - bbox[0] if bbox else 0.0,
+                'height': bbox[3] - bbox[1] if bbox else 0.0,
                 'bounding_box': bbox,
-                # Stroke statistics
+                'num_vertices': num_vertices,
+                'curvature': curvature,
+                'angular_variance': angular_variance,
+                'complexity': complexity,
                 'num_strokes': num_strokes,
                 'stroke_type_distribution': stroke_types,
                 'modifier_distribution': modifiers,
                 'avg_stroke_length': avg_stroke_length,
                 'stroke_complexity': stroke_complexity,
-                # Relational/topological
                 'adjacency_matrix': rel.get('context_adjacency_matrix'),
                 'containment': rel.get('context_containment'),
                 'intersection_pattern': rel.get('context_intersection_pattern'),
-                # Multi-scale (flattened for main scales)
                 'multiscale': multiscale,
-                # Physics-based
                 'moment_of_inertia': physics.get('moment_of_inertia'),
                 'center_of_mass_x': (physics.get('center_of_mass') or [0.0, 0.0])[0],
                 'center_of_mass_y': (physics.get('center_of_mass') or [0.0, 0.0])[1],
                 'symmetry_score': physics.get('symmetry_score'),
-                # Sequential/pattern
                 'ngram': seq.get('ngram'),
                 'alternation': seq.get('alternation'),
                 'regularity': seq.get('regularity'),
-                # Canonical/conceptual
                 'dominant_shape_functions': canonical.get('unique_shape_functions'),
                 'dominant_modifiers': canonical.get('modifiers'),
             }
@@ -135,7 +171,41 @@ class BongardFeatureExtractor:
             return features
         except Exception as e:
             logger.warning(f"[extract_image_features] Exception: {e}")
-            return {}
+            # Return safe defaults for all keys
+            return {
+                'area': 0.0,
+                'perimeter': 0.0,
+                'convexity_ratio': 1e-6,
+                'compactness': 1e-6,
+                'aspect_ratio': 1.0,
+                'centroid_x': 0.0,
+                'centroid_y': 0.0,
+                'width': 0.0,
+                'height': 0.0,
+                'bounding_box': (0,0,0,0),
+                'num_vertices': 0,
+                'curvature': 0.0,
+                'angular_variance': 0.0,
+                'complexity': 0.0,
+                'num_strokes': 0,
+                'stroke_type_distribution': {},
+                'modifier_distribution': {},
+                'avg_stroke_length': 0.0,
+                'stroke_complexity': 0.0,
+                'adjacency_matrix': None,
+                'containment': None,
+                'intersection_pattern': None,
+                'multiscale': {},
+                'moment_of_inertia': 0.0,
+                'center_of_mass_x': 0.0,
+                'center_of_mass_y': 0.0,
+                'symmetry_score': 0.0,
+                'ngram': None,
+                'alternation': None,
+                'regularity': None,
+                'dominant_shape_functions': None,
+                'dominant_modifiers': None,
+            }
 
     def compute_discriminative_features(self, pos_features, neg_features):
         # Computes difference of means for each feature, skipping None/NaN values
