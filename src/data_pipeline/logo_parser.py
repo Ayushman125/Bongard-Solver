@@ -50,7 +50,7 @@ try:
     from bongard import LineAction, ArcAction, OneStrokeShape, BongardImage
     from bongard.bongard import BasicAction  # Import BasicAction directly from bongard.py
     from bongard.bongard_painter import BongardImagePainter, BongardProblemPainter, BongardShapePainter
-    print("✅ Successfully imported ALL NVLabs classes directly from Bongard-LOGO repo")
+    print("Successfully imported ALL NVLabs classes directly from Bongard-LOGO repo")
     NVLABS_AVAILABLE = True
     
     # We can use these directly without any wrapper classes!

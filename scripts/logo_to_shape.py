@@ -539,25 +539,29 @@ class ComprehensiveBongardProcessor:
                 action_program.append(safe_str)
                 logger.debug(f"[OUTPUT PATCH][action_program] Final action_program before serialization: {action_program}")
             # Defensive: ensure ngram features are stringified if joined/logged/serialized
-                safe_ngram = ensure_flat_str_list(ngram_features) if isinstance(ngram_features, list) else ngram_features
-                if isinstance(safe_ngram, list):
-                    print("[DEBUG FINAL NGRAM JOIN] types", [type(x) for x in safe_ngram])
-                    print("[DEBUG FINAL NGRAM JOIN] vals", safe_ngram)
-                    try:
-                        safe_ngram_strs = ensure_flat_str_list(safe_ngram)
-                        print("[DEBUG FINAL NGRAM after flatten]", safe_ngram_strs)
-                        joined_ngram = ",".join(safe_ngram_strs)
-                        print("[DEBUG FINAL NGRAM joined]", joined_ngram)
-                    except Exception as e:
-                        print("FINAL NGRAM JOIN EXCEPTION:", e)
-                        raise
-                else:
-                    print("[DEBUG FINAL NGRAM JOIN]", safe_ngram)
+            safe_ngram = ensure_flat_str_list(ngram_features) if isinstance(ngram_features, list) else ngram_features
+            if isinstance(safe_ngram, list):
+                print("[DEBUG FINAL NGRAM JOIN] types", [type(x) for x in safe_ngram])
+                print("[DEBUG FINAL NGRAM JOIN] vals", safe_ngram)
+                try:
+                    safe_ngram_strs = ensure_flat_str_list(safe_ngram)
+                    print("[DEBUG FINAL NGRAM after flatten]", safe_ngram_strs)
+                    joined_ngram = ",".join(safe_ngram_strs)
+                    print("[DEBUG FINAL NGRAM joined]", joined_ngram)
+                except Exception as e:
+                    print("FINAL NGRAM JOIN EXCEPTION:", e)
+                    raise
+            else:
+                print("[DEBUG FINAL NGRAM JOIN]", safe_ngram)
             # Defensive: ensure stroke_features lists are stringified
             for stroke in stroke_features:
                 for k, v in stroke.items():
                     if isinstance(v, list):
                         print(f"[DEBUG FINAL STROKE JOIN] {k} types", [type(x) for x in v])
+
+            # FINAL FAILSAFE: ensure action_program is fully flattened and stringified before any output/serialization
+                        action_program = [ensure_flat_str_list(cmds) for cmds in action_program]
+                        logger.debug(f"[FINAL FAILSAFE][action_program] After ensure_flat_str_list: {action_program}")
                         print(f"[DEBUG FINAL STROKE JOIN] {k} vals", v)
                         try:
                             safe_v = ensure_flat_str_list(v)
