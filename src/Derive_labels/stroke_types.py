@@ -253,23 +253,21 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
     params = parameters or {}
     verts = _extract_stroke_vertices(stroke, stroke_index, None, bongard_image=bongard_image)
     logger.info(f"[_calculate_stroke_specific_features] verts: {verts}")
+    stype_lower = stype.lower() if stype else ''
     # Calculate basic geometric features from vertices
     if verts and len(verts) > 1:
-        # Calculate line length for lines or arc length for arcs
         total_length = 0
         for i in range(len(verts) - 1):
             dx = verts[i+1][0] - verts[i][0]
             dy = verts[i+1][1] - verts[i][1]
             total_length += math.sqrt(dx*dx + dy*dy)
-        # Calculate angle (direction of first segment)
         if len(verts) > 1:
             dx = verts[1][0] - verts[0][0]
             dy = verts[1][1] - verts[0][1]
             angle = math.atan2(dy, dx) * 180 / math.pi
         else:
             angle = 0
-        # Add stroke-type specific features
-        if 'line' in stype.lower():
+        if 'line' in stype_lower:
             features.update({
                 'line_length': total_length,
                 'line_angle': angle,
@@ -277,10 +275,9 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
                 'line_is_long': total_length > 2.0,
                 'line_is_horizontal': abs(angle) < 20 or abs(angle) > 160,
                 'line_is_vertical': 70 < abs(angle) < 110,
-                'line_direction_category': _categorize_direction(angle)
+                'line_direction': _categorize_direction(angle)
             })
-        elif 'arc' in stype.lower():
-            # Estimate arc features
+        elif 'arc' in stype_lower:
             radius = params.get('radius', 0.5)
             span_angle = params.get('span_angle', 90)
             arc_length = abs(span_angle) * radius * safe_divide(math.pi, 180) if radius > 0 else total_length
@@ -296,8 +293,7 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
                 'arc_is_large': radius > 1.5
             })
     else:
-        # Fallback values when no vertices available
-        if 'line' in stype.lower():
+        if 'line' in stype_lower:
             features.update({
                 'line_length': 0.5,
                 'line_angle': 0,
@@ -305,9 +301,9 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
                 'line_is_long': False,
                 'line_is_horizontal': False,
                 'line_is_vertical': False,
-                'line_direction_category': 'horizontal'
+                'line_direction': 'horizontal'
             })
-        elif 'arc' in stype.lower():
+        elif 'arc' in stype_lower:
             features.update({
                 'arc_radius': 0.5,
                 'arc_span_angle': 90,
@@ -319,7 +315,6 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
                 'arc_is_small': False,
                 'arc_is_large': False
             })
-    # Add shape modifier features
     features.update(_calculate_shape_modifier_features_from_val(smod))
     return features
 
@@ -436,34 +431,12 @@ def _calculate_stroke_type_differentiated_features(stroke_type_features: Dict, s
     logger.info(f"[_calculate_stroke_type_differentiated_features] INPUT: stroke_type_features keys={list(stroke_type_features.keys())}, strokes count={len(strokes)}")
     """Calculate features that differentiate between stroke types"""
     logger.debug(f"[_calculate_stroke_type_differentiated_features] INPUTS: stroke_type_features keys: {list(stroke_type_features.keys())}, strokes count: {len(strokes)}")
-    def flatten_feature_list(features):
-        if not features:
-            return []
-        if isinstance(features[0], list):
-            return [item for sublist in features for item in sublist]
-        return features
+    raw_line_feats = stroke_type_features.get('line_features', [])
+    raw_arc_feats  = stroke_type_features.get('arc_features', [])
 
-    def ensure_feature_dict(feature):
-        """Ensure feature is a dictionary, not a tuple or other type."""
-        if isinstance(feature, dict):
-            return feature
-        elif isinstance(feature, (list, tuple)) and len(feature) >= 2:
-            logger.warning(f"Converting non-dict feature to dict: {feature}")
-            return {'stroke_index': feature[0] if len(feature) > 0 else 0}
-        else:
-            logger.warning(f"Invalid feature type: {type(feature)}, value: {feature}")
-            return {'stroke_index': 0}
-
-    line_features = flatten_feature_list(stroke_type_features.get('line_features', []))
-    arc_features = flatten_feature_list(stroke_type_features.get('arc_features', []))
-
-    # Ensure all features are dictionaries
-    line_features = [ensure_feature_dict(f) for f in line_features]
-    arc_features = [ensure_feature_dict(f) for f in arc_features]
-
-    # Filter out invalid features
-    line_features = [f for f in line_features if 'line_length' in f]
-    arc_features = [f for f in arc_features if 'arc_radius' in f]
+    # Only keep dicts with required keys
+    line_features = [f for f in raw_line_feats if isinstance(f, dict) and 'line_length' in f and 'line_direction' in f]
+    arc_features  = [f for f in raw_arc_feats  if isinstance(f, dict) and 'arc_radius' in f]
 
     num_lines = len(line_features)
     num_arcs = len(arc_features)
@@ -478,11 +451,9 @@ def _calculate_stroke_type_differentiated_features(stroke_type_features: Dict, s
         }
     }
 
-    # Line-specific aggregate features
     if line_features:
         line_lengths = [f.get('line_length', 0) for f in line_features]
         line_angles = [f.get('line_angle', 0) for f in line_features]
-
         features['line_aggregate'] = {
             'total_line_length': sum(line_lengths),
             'avg_line_length': safe_divide(sum(line_lengths), len(line_lengths)),
@@ -493,12 +464,10 @@ def _calculate_stroke_type_differentiated_features(stroke_type_features: Dict, s
             'dominant_direction': _calculate_dominant_direction(line_features) if line_features else 'none'
         }
 
-    # Arc-specific aggregate features
     if arc_features:
         arc_radii = [f.get('arc_radius', 0) for f in arc_features]
         arc_spans = [f.get('arc_span_angle', 0) for f in arc_features]
         arc_lengths = [f.get('arc_length', 0) for f in arc_features]
-
         features['arc_aggregate'] = {
             'total_arc_length': sum(arc_lengths),
             'avg_arc_radius': safe_divide(sum(arc_radii), len(arc_radii)),
