@@ -24,6 +24,8 @@ import time
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 import numpy as np
+from src.Derive_labels.features import extract_multiscale_features
+from src.Derive_labels.context_features import BongardFeatureExtractor
 
 # Ensure src is importable
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -54,7 +56,7 @@ FLAGGING_THRESHOLDS = {
 
 from src.data_pipeline.logo_parser import ComprehensiveNVLabsParser, OneStrokeShape
 from src.Derive_labels.stroke_types import extract_action_type_prefixes
-from src.Derive_labels.shape_utils import normalize_vertices, calculate_geometry, extract_position_and_rotation, ensure_vertex_list, _calculate_perimeter, _calculate_curvature_score, _calculate_edge_length_variance, json_safe, _calculate_irregularity
+from src.Derive_labels.shape_utils import normalize_vertices, calculate_geometry, extract_position_and_rotation, ensure_vertex_list, _calculate_perimeter, _calculate_curvature_score, _calculate_edge_length_variance, json_safe, _calculate_irregularity, calculate_complexity
 from src.Derive_labels.stroke_types import _extract_modifier_from_stroke, _calculate_stroke_specific_features, _calculate_stroke_type_differentiated_features
 from src.Derive_labels.features import _actions_to_geometries, _extract_ngram_features, _extract_graph_features
 from src.Derive_labels.features import _detect_alternation
@@ -64,6 +66,9 @@ from src.Derive_labels.file_io import FileIO
 
 
 class ComprehensiveBongardProcessor:
+    def __init__(self):
+        # ...existing code...
+        self.context_extractor = BongardFeatureExtractor()
 
     def _calculate_vertices_from_action(self, action, stroke_index):
         import numpy as np
@@ -126,6 +131,20 @@ class ComprehensiveBongardProcessor:
                            image_path: str) -> Optional[Dict[str, Any]]:
         logger.debug(f"Processing image_id={image_id}, problem_id={problem_id}, is_positive={is_positive}")
         logger.debug(f"action_commands type: {type(action_commands)}, value: {action_commands}")
+        # --- Contextual/relational feature extraction ---
+        # Prepare strokes as dicts with 'vertices' for context extractor
+        context_strokes = []
+        for a in getattr(shape, 'basic_actions', []) if 'shape' in locals() else []:
+            v = getattr(a, 'vertices', None)
+            if v is None and hasattr(a, 'get_world_coordinates'):
+                v = a.get_world_coordinates()
+            context_strokes.append({'vertices': v if v is not None else []})
+        # Extract spatial relationships (adjacency, containment, intersection)
+        context_relationships = self.context_extractor.extract_spatial_relationships(context_strokes) if context_strokes else {}
+        logger.info(f"[process_single_image] context_relationships: {context_relationships}")
+        # Multi-scale features (using normalized vertices)
+        multiscale_features = extract_multiscale_features(norm_vertices_for_features) if 'norm_vertices_for_features' in locals() else {}
+        logger.info(f"[process_single_image] multiscale_features: {multiscale_features}")
         import traceback
         try:
             # Flatten action_commands if it is a nested list (e.g., [[...]]), as in hybrid.py
@@ -248,7 +267,15 @@ class ComprehensiveBongardProcessor:
             regularity = self._calculate_pattern_regularity_from_modifiers(modifier_sequence)
 
             # Topological features (chain/star/cycle detection, connectivity)
-            graph_features = _extract_graph_features(getattr(shape, 'basic_actions', []))
+            # Use context adjacency matrix for graph topology detection
+            context_adj = context_relationships.get('adjacency_matrix')
+            if context_adj is not None:
+                graph_features = _extract_graph_features({'adjacency_matrix': context_adj})
+                logger.info(f"[logo_to_shape] Graph topology INPUT adjacency_matrix: {context_adj}")
+                logger.info(f"[logo_to_shape] Graph topology OUTPUT: {graph_features}")
+            else:
+                graph_features = {'type': 'none', 'connectivity': 0}
+                logger.warning(f"[logo_to_shape] No adjacency matrix for graph topology detection.")
 
             # --- Aggregate line and arc features for stroke_type_features ---
             line_features = []
@@ -396,7 +423,11 @@ class ComprehensiveBongardProcessor:
                     'intersections': intersections,
                     'adjacency': adjacency,
                     'containment': containment,
-                    'overlap': overlap
+                    'overlap': overlap,
+                    'context_adjacency_matrix': context_relationships.get('adjacency_matrix'),
+                    'context_containment': context_relationships.get('containment'),
+                    'context_intersection_pattern': context_relationships.get('intersection_pattern'),
+                    'multiscale_features': multiscale_features
                 },
                 'sequential_features': {
                     'ngram': ngram_features,
@@ -425,7 +456,7 @@ class ComprehensiveBongardProcessor:
 
     
     def _calculate_image_features(self, vertices: List[tuple], strokes: List, geometry: Dict[str, Any]) -> Dict[str, Any]:
-        """Calculate comprehensive image-level features with robust polygon recovery and improved metrics."""
+        """Calculate comprehensive image-level features with robust polygon recovery and improved metrics. Now includes standardized complexity."""
         logger = logging.getLogger(__name__)
         logger.debug(f"[_calculate_image_features] INPUTS: vertices count={len(vertices) if vertices else 0}, strokes count={len(strokes) if strokes else 0}, geometry keys={list(geometry.keys()) if geometry else []}")
         vertices = ensure_vertex_list(vertices)
@@ -471,6 +502,12 @@ class ComprehensiveBongardProcessor:
             perimeter_norm = min(max(perimeter / 4.0, 0.0), 1.0) if perimeter is not None else 0.0
             # Normalize visual_complexity: robust fallback, already [0,1] if implemented as such
             visual_complexity_norm = min(max(visual_complexity, 0.0), 1.0) if visual_complexity is not None else 0.0
+
+            # --- Standardized complexity metric ---
+            logger.info(f"[complexity] Calling calculate_complexity with vertices: {vertices}")
+            complexity = calculate_complexity(vertices)
+            logger.info(f"[complexity] Output for vertices count {len(vertices)}: {complexity}")
+
             features = {
                 'bounding_box': geometry.get('bbox', {}),
                 'centroid': geometry.get('centroid', [0.0, 0.0]),
@@ -494,6 +531,7 @@ class ComprehensiveBongardProcessor:
                 'angular_variance': angular_variance,  # analytic, normalized
                 'moment_of_inertia': moment_of_inertia,  # analytic, normalized
                 'irregularity_score': _calculate_irregularity(vertices),
+                'standardized_complexity': complexity
             }
             logger.debug(f"[_calculate_image_features] OUTPUT: {features}")
             return json_safe(features)

@@ -1,3 +1,40 @@
+def calculate_complexity(vertices: List[tuple]) -> float:
+    """
+    Compute a standardized shape complexity metric as a function of:
+      - Number of vertices (normalized)
+      - Curvature score (normalized)
+      - Irregularity (normalized)
+      - Optionally, compactness (inverse)
+    All features are computed from the normalized, deduplicated, and complete set of vertices.
+    Returns a value in [0, 1], higher = more complex.
+    """
+    import logging
+    import numpy as np
+    logger = logging.getLogger(__name__)
+    try:
+        verts = normalize_vertices(vertices)
+        n = len(verts)
+        if n < 3:
+            logger.info(f"Complexity: <3 vertices, returning 0.0")
+            return 0.0
+        # Number of vertices (normalized: 0 for triangle, 1 for >=20)
+        n_norm = min(1.0, (n - 3) / 17.0)
+        # Curvature score (normalized: 0 = line, 1 = highly curved)
+        curvature = _calculate_curvature_score(verts)
+        curvature_norm = min(1.0, curvature / 2.0)  # Empirical scaling
+        # Irregularity (already normalized 0-1)
+        irregularity = _calculate_irregularity(verts)
+        # Optionally, compactness (inverse: 0 = circle, 1 = non-compact)
+        geom = calculate_geometry(verts)
+        compactness = _calculate_compactness(geom.get('area', 0.0), geom.get('perimeter', 0.0))
+        compactness_inv = 1.0 - min(1.0, compactness) if compactness == compactness else 1.0  # NaN-safe
+        # Weighted sum (weights can be tuned)
+        complexity = 0.3 * n_norm + 0.3 * curvature_norm + 0.2 * irregularity + 0.2 * compactness_inv
+        logger.info(f"Complexity: n={n}, n_norm={n_norm:.2f}, curvature={curvature:.2f}, curvature_norm={curvature_norm:.2f}, irregularity={irregularity:.2f}, compactness_inv={compactness_inv:.2f}, result={complexity:.2f}")
+        return float(np.clip(complexity, 0.0, 1.0))
+    except Exception as e:
+        logger.warning(f"calculate_complexity failed: {e}")
+        return 0.0
 import logging
 from typing import Dict, List, Any, Optional
 from src.physics_inference import PhysicsInference

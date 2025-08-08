@@ -74,9 +74,11 @@ class PhysicsInference:
         """
         For polylines: sum of absolute turn angles divided by number of segments.
         For arcs: use normalized arc angle if available.
+        Return 0.0 if input is degenerate (<3 points).
         """
         verts = PhysicsInference.safe_extract_vertices(vertices)
         if not verts or len(verts) < 3:
+            logging.warning("[robust_curvature] Insufficient vertices (<3) for curvature calculation. Returning 0.0.")
             return 0.0
         n = len(verts)
         total_angle = 0.0
@@ -94,10 +96,11 @@ class PhysicsInference:
     @staticmethod
     def robust_angular_variance(vertices):
         """
-        Variance of successive segment angles. For <3 points, return 0.
+        Variance of successive segment angles. For <3 points, return 0.0.
         """
         verts = PhysicsInference.safe_extract_vertices(vertices)
         if not verts or len(verts) < 3:
+            logging.warning("[robust_angular_variance] Insufficient vertices (<3) for angular variance calculation. Returning 0.0.")
             return 0.0
         n = len(verts)
         angles = []
@@ -111,15 +114,19 @@ class PhysicsInference:
                 angle = np.arccos(dot)
                 angles.append(angle)
         if len(angles) < 2:
+            logging.warning("[robust_angular_variance] Not enough angles for variance calculation. Returning 0.0.")
             return 0.0
         return float(np.var(angles))
 
     @staticmethod
     def robust_moment_of_inertia(vertices, stroke_type=None, params=None):
         """
-        For lines: I = L^3/12. For arcs: use arc formula. For polygons: use standard formula.
+        For lines: I = L^3/12. For arcs: use arc formula. For polygons: use centroid-based formula. Return 0.0 if not enough points.
         """
         verts = PhysicsInference.safe_extract_vertices(vertices)
+        if verts is None or len(verts) < 3:
+            logging.warning("[robust_moment_of_inertia] Insufficient vertices (<3) for moment of inertia calculation. Returning 0.0.")
+            return 0.0
         if stroke_type == 'line' and params is not None:
             length = params.get('length', None)
             if length is not None:
@@ -130,10 +137,11 @@ class PhysicsInference:
             if radius is not None and delta_theta is not None:
                 arc_length = abs(radius * delta_theta)
                 return arc_length * (radius ** 2)
-        # Fallback: polygonal moment
-        if verts and len(verts) >= 3:
-            return PhysicsInference.moment_of_inertia(verts)
-        return 0.0
+        # Centroid-based moment of inertia for polygons
+        verts_np = np.array(verts)
+        centroid = np.mean(verts_np, axis=0)
+        r_squared = np.sum((verts_np - centroid) ** 2, axis=1)
+        return np.sum(r_squared) / len(verts_np)
 
     @staticmethod
     def alternation_score(seq):

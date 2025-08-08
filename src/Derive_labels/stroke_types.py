@@ -40,22 +40,86 @@ def extract_action_type_prefixes(problems_data):
         return prefixes
 
 def _extract_stroke_vertices(stroke, stroke_index, all_vertices):
-        """Extract vertices for individual stroke from overall shape vertices."""
-        try:
-            # Method 1: Direct vertices from stroke
-            if hasattr(stroke, 'vertices') and stroke.vertices:
-                return stroke.vertices
-            # Method 2: Calculate from stroke parameters
-            if hasattr(stroke, 'raw_command'):
-                return _vertices_from_command(stroke.raw_command, stroke_index)
-            # Method 3: Segment from overall vertices
-            if all_vertices and len(all_vertices) > stroke_index + 1:
-                return [all_vertices[stroke_index], all_vertices[stroke_index + 1]]
-            return []
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"Failed to extract vertices for stroke {stroke_index}: {e}")
-            return []
+    """Robustly extract the full set of vertices for a stroke, not just endpoints."""
+    import numpy as np
+    logger = logging.getLogger(__name__)
+    logger.debug(f"[_extract_stroke_vertices] INPUT: stroke_index={stroke_index}, stroke={stroke}, all_vertices={all_vertices}")
+    try:
+        # 1. Use stroke.vertices if available and has >2 points
+        if hasattr(stroke, 'vertices') and stroke.vertices and len(stroke.vertices) > 2:
+            logger.debug(f"[_extract_stroke_vertices] Using stroke.vertices: {stroke.vertices}")
+            return stroke.vertices
+        # 2. Robust arc interpolation if arc parameters are available
+        stype = getattr(stroke, 'stroke_type', None)
+        if hasattr(stype, 'value'):
+            stype = stype.value
+        if stype is None and hasattr(stroke, 'function_name'):
+            stype = str(stroke.function_name).split('_')[0]
+        if stype and 'arc' in str(stype).lower():
+            # Try to get arc params: center, radius, start_angle, end_angle
+            params = getattr(stroke, 'parameters', None) or {}
+            cx = params.get('center_x') or params.get('cx') or params.get('param4')
+            cy = params.get('center_y') or params.get('cy') or params.get('param5')
+            radius = params.get('radius') or params.get('param1')
+            start_angle = params.get('start_angle') or params.get('param2')
+            end_angle = params.get('end_angle') or params.get('param3')
+            # Fallback: try to parse from raw_command
+            if None in [cx, cy, radius, start_angle, end_angle]:
+                raw_command = getattr(stroke, 'raw_command', None)
+                if raw_command and isinstance(raw_command, str):
+                    parts = raw_command.split('_')
+                    if len(parts) >= 4:
+                        try:
+                            radius = float(parts[2])
+                            start_angle = float(parts[3])
+                            end_angle = float(parts[4]) if len(parts) > 4 else start_angle + 90
+                            cx, cy = 0.5, 0.5  # fallback center
+                        except Exception:
+                            pass
+            try:
+                radius = float(radius)
+                cx = float(cx)
+                cy = float(cy)
+                start_angle = float(start_angle)
+                end_angle = float(end_angle)
+                # Interpolate points along the arc
+                num_points = 24
+                theta1 = np.deg2rad(start_angle)
+                theta2 = np.deg2rad(end_angle)
+                if theta2 < theta1:
+                    theta2 += 2 * np.pi
+                thetas = np.linspace(theta1, theta2, num_points)
+                arc_points = [(cx + radius * np.cos(t), cy + radius * np.sin(t)) for t in thetas]
+                logger.debug(f"[_extract_stroke_vertices] Interpolated arc points: {arc_points}")
+                return arc_points
+            except Exception as e:
+                logger.warning(f"[_extract_stroke_vertices] Arc interpolation failed: {e}")
+        # 3. For polylines, use all available points
+        if hasattr(stroke, 'polyline_points') and stroke.polyline_points and len(stroke.polyline_points) > 2:
+            logger.debug(f"[_extract_stroke_vertices] Using stroke.polyline_points: {stroke.polyline_points}")
+            return stroke.polyline_points
+        # 4. Fallback: extract from shape_vertices using stroke boundaries (legacy)
+        if all_vertices and len(all_vertices) > stroke_index + 2:
+            logger.debug(f"[_extract_stroke_vertices] Using all_vertices slice: {all_vertices[stroke_index:stroke_index+2]}")
+            return all_vertices[stroke_index:stroke_index+2]
+        # 5. Last resort: use world coordinates if available
+        if hasattr(stroke, 'get_world_coordinates') and callable(stroke.get_world_coordinates):
+            verts = stroke.get_world_coordinates()
+            if verts and len(verts) > 2:
+                logger.debug(f"[_extract_stroke_vertices] Using get_world_coordinates: {verts}")
+                return verts
+        # 6. Fallback: try to synthesize from command string
+        raw_command = getattr(stroke, 'raw_command', None)
+        if raw_command:
+            verts = _vertices_from_command(raw_command, stroke_index)
+            if verts and len(verts) > 1:
+                logger.debug(f"[_extract_stroke_vertices] Synthesized from command: {verts}")
+                return verts
+        logger.warning(f"[_extract_stroke_vertices] Could not robustly extract vertices for stroke {stroke_index} (type={stype}). Returning empty list.")
+        return []
+    except Exception as e:
+        logger.warning(f"[_extract_stroke_vertices] Exception for stroke {stroke_index}: {e}")
+        return []
 
 def _vertices_from_command(command, stroke_index):
         import numpy as np
@@ -77,29 +141,74 @@ def _vertices_from_command(command, stroke_index):
         return []
 
 def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_val=None, shape_modifier_val=None, parameters=None) -> Dict[str, Any]:
-        """Calculate features specific to stroke type and shape modifier, using robust geometric/physics formulas."""
-        logger = logging.getLogger(__name__)
-        logger.debug(f"[_calculate_stroke_specific_features] INPUTS: stroke_index={stroke_index}, stroke_type_val={stroke_type_val}, shape_modifier_val={shape_modifier_val}, parameters={parameters}")
-        features = {'stroke_index': stroke_index}
-        stype = stroke_type_val or type(stroke).__name__.replace('Action', '').lower()
-        smod = shape_modifier_val or 'normal'
-        params = parameters or {}
-        verts = _extract_stroke_vertices(stroke, stroke_index, None)
-        logger.debug(f"[_calculate_stroke_specific_features] verts: {verts}")
-        # Angular variance
+    """Calculate features specific to stroke type and shape modifier, using robust geometric/physics formulas."""
+    logger = logging.getLogger(__name__)
+    logger.debug(f"[_calculate_stroke_specific_features] INPUTS: stroke_index={stroke_index}, stroke_type_val={stroke_type_val}, shape_modifier_val={shape_modifier_val}, parameters={parameters}")
+    features = {'stroke_index': stroke_index}
+    stype = stroke_type_val or type(stroke).__name__.replace('Action', '').lower()
+    smod = shape_modifier_val or 'normal'
+    params = parameters or {}
+    verts = _extract_stroke_vertices(stroke, stroke_index, None)
+    logger.debug(f"[_calculate_stroke_specific_features] verts: {verts}")
+    # If not enough points for arcs, try to interpolate
+    stype_lower = stype.lower() if stype else ''
+    if verts and len(verts) <= 2 and 'arc' in stype_lower:
+        logger.info(f"[_calculate_stroke_specific_features] Only {len(verts)} points for arc, attempting interpolation.")
+        # Try to interpolate arc points using parameters or command string
+        import numpy as np
+        params = parameters or getattr(stroke, 'parameters', {}) or {}
+        cx = params.get('center_x') or params.get('cx') or params.get('param4')
+        cy = params.get('center_y') or params.get('cy') or params.get('param5')
+        radius = params.get('radius') or params.get('param1')
+        start_angle = params.get('start_angle') or params.get('param2')
+        end_angle = params.get('end_angle') or params.get('param3')
+        # Fallback: try to parse from raw_command
+        if None in [cx, cy, radius, start_angle, end_angle]:
+            raw_command = getattr(stroke, 'raw_command', None)
+            if raw_command and isinstance(raw_command, str):
+                parts = raw_command.split('_')
+                if len(parts) >= 4:
+                    try:
+                        radius = float(parts[2])
+                        start_angle = float(parts[3])
+                        end_angle = float(parts[4]) if len(parts) > 4 else start_angle + 90
+                        cx, cy = 0.5, 0.5  # fallback center
+                    except Exception:
+                        pass
+        try:
+            radius = float(radius)
+            cx = float(cx)
+            cy = float(cy)
+            start_angle = float(start_angle)
+            end_angle = float(end_angle)
+            num_points = 8  # minimum for geometric calculation
+            theta1 = np.deg2rad(start_angle)
+            theta2 = np.deg2rad(end_angle)
+            if theta2 < theta1:
+                theta2 += 2 * np.pi
+            thetas = np.linspace(theta1, theta2, num_points)
+            verts = [(cx + radius * np.cos(t), cy + radius * np.sin(t)) for t in thetas]
+            logger.info(f"[_calculate_stroke_specific_features] Interpolated arc points for geometric features: {verts}")
+        except Exception as e:
+            logger.warning(f"[_calculate_stroke_specific_features] Arc interpolation failed: {e}")
+    # Only compute geometric features if there are enough points
+    if verts and len(verts) > 2:
         features['angular_variance'] = PhysicsInference.robust_angular_variance(verts)
-        # Curvature
         features['curvature_score'] = PhysicsInference.robust_curvature(verts)
-        # Moment of inertia
         features['moment_of_inertia'] = PhysicsInference.robust_moment_of_inertia(verts, stype, params)
-        # For line strokes, add line_length, line_angle, etc.
-        if stype == 'line':
-            features.update(_calculate_line_specific_features_from_params(params))
-        elif stype == 'arc':
-            features.update(_calculate_arc_specific_features_from_params(params))
-        features.update(_calculate_shape_modifier_features_from_val(smod))
-        logger.debug(f"[_calculate_stroke_specific_features] OUTPUT: {features}")
-        return features
+    else:
+        features['angular_variance'] = None
+        features['curvature_score'] = None
+        features['moment_of_inertia'] = None
+        logger.warning(f"[_calculate_stroke_specific_features] Insufficient vertices for geometric features (stroke_index={stroke_index}). verts: {verts}")
+    # For line strokes, add line_length, line_angle, etc.
+    if stype == 'line':
+        features.update(_calculate_line_specific_features_from_params(params))
+    elif stype == 'arc':
+        features.update(_calculate_arc_specific_features_from_params(params))
+    features.update(_calculate_shape_modifier_features_from_val(smod))
+    logger.debug(f"[_calculate_stroke_specific_features] OUTPUT: {features}")
+    return features
 
 def _calculate_line_specific_features_from_params(params: dict) -> Dict[str, Any]:
         length = params.get('param1', 0)
@@ -158,30 +267,49 @@ def _calculate_arc_specific_features_from_params(params: dict) -> Dict[str, Any]
             'arc_is_gentle': abs(span_angle) < 90
         }
 def _calculate_shape_modifier_features_from_val(modifier: str) -> Dict[str, Any]:
-        """Calculate features based on shape modifier string value (not from action object)"""
-        base_features = {
-            'shape_modifier': modifier,
-            'is_normal': modifier == 'normal',
-            'is_geometric': modifier in ['circle', 'square', 'triangle'],
-            'is_pattern': modifier == 'zigzag'
-        }
-        # Shape-specific features
-        if modifier == 'triangle':
-            base_features['geometric_complexity'] = 3
-            base_features['has_sharp_angles'] = True
-        elif modifier == 'square':
-            base_features['geometric_complexity'] = 4
-            base_features['has_right_angles'] = True
-        elif modifier == 'circle':
-            base_features['geometric_complexity'] = 10  # Use a large but finite value for circles
-            base_features['has_curved_edges'] = True
-        elif modifier == 'zigzag':
-            base_features['pattern_complexity'] = 'high'
-            base_features['has_repetitive_pattern'] = True
-        else:  # normal or unknown
-            base_features['geometric_complexity'] = 1
-            base_features['is_simple'] = True
-        return base_features
+    """Calculate features based on shape modifier string value (not from action object), using real geometry if available."""
+    from src.Derive_labels.shape_utils import calculate_geometry
+    base_features = {
+        'shape_modifier': modifier,
+        'is_normal': modifier == 'normal',
+        'is_geometric': modifier in ['circle', 'square', 'triangle'],
+        'is_pattern': modifier == 'zigzag'
+    }
+    # Compute geometric complexity from geometry if possible
+    import inspect
+    frame = inspect.currentframe().f_back
+    vertices = frame.f_locals.get('verts', None) or frame.f_locals.get('vertices', None)
+    geom = calculate_geometry(vertices) if vertices else None
+    if geom:
+        num_vertices = len(vertices) if vertices else 0
+        convexity = geom.get('convexity_ratio', 1.0)
+        compactness = None
+        area = geom.get('area', None)
+        perimeter = geom.get('perimeter', None)
+        if area and perimeter:
+            from src.Derive_labels.shape_utils import _calculate_compactness
+            compactness = _calculate_compactness(area, perimeter)
+        complexity = num_vertices * (1.0 / convexity if convexity > 0 else 1.0)
+        if compactness:
+            complexity *= (1.0 / compactness if compactness > 0 else 1.0)
+        base_features['geometric_complexity'] = round(complexity, 3)
+        base_features['num_vertices'] = num_vertices
+        base_features['convexity_ratio'] = convexity
+        if compactness:
+            base_features['compactness'] = compactness
+    # Add shape-specific tags
+    if modifier == 'triangle':
+        base_features['has_sharp_angles'] = True
+    elif modifier == 'square':
+        base_features['has_right_angles'] = True
+    elif modifier == 'circle':
+        base_features['has_curved_edges'] = True
+    elif modifier == 'zigzag':
+        base_features['pattern_complexity'] = 'high'
+        base_features['has_repetitive_pattern'] = True
+    else:  # normal or unknown
+        base_features['is_simple'] = True
+    return base_features
 
 def _calculate_stroke_type_differentiated_features(stroke_type_features: Dict, strokes: List) -> Dict[str, Any]:
         """Calculate features that differentiate between stroke types"""
@@ -240,35 +368,69 @@ def _calculate_stroke_type_differentiated_features(stroke_type_features: Dict, s
         return features
 
 def _extract_modifier_from_stroke(stroke) -> str:
-        """Extract the actual shape modifier from a stroke object, robustly, with debug logging."""
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.debug(f'Stroke type: {type(stroke)}, attributes: {dir(stroke)}')
-        logger.debug(f'Raw command: {getattr(stroke, "raw_command", None)}')
-        logger.debug(f'Shape modifier: {getattr(stroke, "shape_modifier", None)}')
-        # Priority: attribute > raw_command > function_name > fallback
-        if hasattr(stroke, 'shape_modifier'):
-            smod = getattr(stroke, 'shape_modifier')
-            if hasattr(smod, 'value'):
-                if smod.value:
-                    logger.debug(f"Extracted modifier from .shape_modifier.value: {smod.value}")
-                    return str(smod.value)
-            elif isinstance(smod, str) and smod:
-                logger.debug(f"Extracted modifier from .shape_modifier: {smod}")
-                return smod
-        raw_command = getattr(stroke, 'raw_command', None)
-        if raw_command and isinstance(raw_command, str):
-            parts = raw_command.split('_')
-            if len(parts) >= 2 and parts[1]:
-                logger.debug(f"Extracted modifier from raw_command: {parts[1]}")
-                return parts[1]
-        function_name = getattr(stroke, 'function_name', None)
-        if function_name and isinstance(function_name, str):
-            fn_parts = function_name.split('_')
-            if len(fn_parts) >= 2 and fn_parts[1]:
-                logger.debug(f"Extracted modifier from function_name: {fn_parts[1]}")
-                return fn_parts[1]
-        logger.debug("Falling back to 'normal' modifier")
-        return 'normal'
+    """Extract the actual shape modifier from a stroke object, using geometric and semantic analysis with debug logging."""
+    import logging
+    from src.Derive_labels.shape_utils import calculate_geometry, _calculate_compactness
+    logger = logging.getLogger(__name__)
+    logger.debug(f"[_extract_modifier_from_stroke] INPUT: type={type(stroke)}, attributes={dir(stroke)}")
+    # Try geometric analysis first
+    verts = None
+    if hasattr(stroke, 'vertices') and stroke.vertices and len(stroke.vertices) > 2:
+        verts = stroke.vertices
+    elif hasattr(stroke, 'polyline_points') and stroke.polyline_points and len(stroke.polyline_points) > 2:
+        verts = stroke.polyline_points
+    elif hasattr(stroke, 'get_world_coordinates') and callable(stroke.get_world_coordinates):
+        verts = stroke.get_world_coordinates()
+    # If we have enough vertices, analyze geometry
+    if verts and len(verts) > 2:
+        geom = calculate_geometry(verts)
+        num_vertices = len(verts)
+        convexity = geom.get('convexity_ratio', 1.0)
+        compactness = None
+        area = geom.get('area', None)
+        perimeter = geom.get('perimeter', None)
+        if area and perimeter:
+            compactness = _calculate_compactness(area, perimeter)
+        # Triangle: 3 vertices, high convexity, compactness ~0.6
+        if num_vertices == 3 and convexity > 0.95:
+            logger.debug("[_extract_modifier_from_stroke] Geometric modifier: triangle")
+            return 'triangle'
+        # Square: 4 vertices, right angles, high convexity, compactness ~0.785
+        if num_vertices == 4 and convexity > 0.95 and compactness and 0.7 < compactness < 0.85:
+            logger.debug("[_extract_modifier_from_stroke] Geometric modifier: square")
+            return 'square'
+        # Circle: many vertices, high compactness, high convexity
+        if num_vertices > 6 and compactness and compactness > 0.85 and convexity > 0.95:
+            logger.debug("[_extract_modifier_from_stroke] Geometric modifier: circle")
+            return 'circle'
+        # Zigzag: high edge variance, low compactness
+        edge_var = geom.get('edge_length_variance', 0.0)
+        if edge_var and edge_var > 0.1 and compactness and compactness < 0.5:
+            logger.debug("[_extract_modifier_from_stroke] Geometric modifier: zigzag")
+            return 'zigzag'
+    # Fallback: string-based extraction
+    if hasattr(stroke, 'shape_modifier'):
+        smod = getattr(stroke, 'shape_modifier')
+        if hasattr(smod, 'value'):
+            if smod.value:
+                logger.debug(f"[_extract_modifier_from_stroke] Extracted modifier from .shape_modifier.value: {smod.value}")
+                return str(smod.value)
+        elif isinstance(smod, str) and smod:
+            logger.debug(f"[_extract_modifier_from_stroke] Extracted modifier from .shape_modifier: {smod}")
+            return smod
+    raw_command = getattr(stroke, 'raw_command', None)
+    if raw_command and isinstance(raw_command, str):
+        parts = raw_command.split('_')
+        if len(parts) >= 2 and parts[1]:
+            logger.debug(f"[_extract_modifier_from_stroke] Extracted modifier from raw_command: {parts[1]}")
+            return parts[1]
+    function_name = getattr(stroke, 'function_name', None)
+    if function_name and isinstance(function_name, str):
+        fn_parts = function_name.split('_')
+        if len(fn_parts) >= 2 and fn_parts[1]:
+            logger.debug(f"[_extract_modifier_from_stroke] Extracted modifier from function_name: {fn_parts[1]}")
+            return fn_parts[1]
+    logger.debug("[_extract_modifier_from_stroke] Fallback to 'normal' modifier")
+    return 'normal'
 
 
