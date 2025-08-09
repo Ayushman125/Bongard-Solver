@@ -28,6 +28,8 @@ def safe_join(lst, sep=','):
         # Robust stringification for actions
         safe_items = [getattr(x, 'raw_command', str(x)) if not isinstance(x, str) else x for x in lst]
         logger.debug(f"[SAFE_JOIN DEBUG] safe_items: {safe_items}")
+        # Defensive: ensure all items are strings before joining
+        safe_items = [str(x) for x in safe_items]
         return sep.join(safe_items)
     return str(lst)
 
@@ -1053,9 +1055,10 @@ def main():
         def robust_action_list_to_str(lst):
             # Converts a list of actions (possibly nested) to a list of strings using raw_command
             if isinstance(lst, list):
+                # Defensive: ensure all items are strings
                 return [robust_action_list_to_str(x) for x in lst] if lst and isinstance(lst[0], list) else [getattr(x, 'raw_command', str(x)) if type(x).__name__ in ['LineAction', 'ArcAction'] else str(x) for x in lst]
             elif type(lst).__name__ in ['LineAction', 'ArcAction']:
-                return getattr(lst, 'raw_command', str(lst))
+                return str(getattr(lst, 'raw_command', str(lst)))
             else:
                 return str(lst)
 
@@ -1066,9 +1069,9 @@ def main():
                 if k in ['actions', 'action_program'] and isinstance(v, list):
                     # If v is a list of lists, flatten and join each sublist
                     if v and isinstance(v[0], list):
-                        safe_r[k] = [','.join(robust_action_list_to_str(sublist)) for sublist in v]
+                        safe_r[k] = [','.join([str(x) for x in robust_action_list_to_str(sublist)]) for sublist in v]
                     else:
-                        safe_r[k] = ','.join(robust_action_list_to_str(v))
+                        safe_r[k] = ','.join([str(x) for x in robust_action_list_to_str(v)])
                 elif isinstance(v, list):
                     safe_r[k] = ensure_all_strings(robust_action_list_to_str(v))
                 else:
@@ -1097,7 +1100,8 @@ def main():
                     if isinstance(v, list):
                         logger.debug(f"[SERIALIZE DEBUG][main][flagged_cases] Before ensure_all_strings: key={k}, value={v}")
                         logger.debug(f"[SERIALIZE DEBUG][main][flagged_cases] Types: {[type(x) for x in v]}")
-                        safe_case[k] = ensure_all_strings(robust_action_list_to_str(v))
+                        # Defensive: ensure all items are strings before joining
+                        safe_case[k] = ensure_all_strings([str(x) for x in robust_action_list_to_str(v)])
                         logger.debug(f"[SERIALIZE DEBUG][main][flagged_cases] After ensure_all_strings: key={k}, value={safe_case[k]}")
                         logger.debug(f"[SERIALIZE DEBUG][main][flagged_cases] Types after: {[type(x) for x in safe_case[k]]}")
                     else:
