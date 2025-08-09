@@ -43,24 +43,29 @@ class BongardFeatureExtractor:
         return stats
 
     def extract_image_features(self, image):
-        logger = logging.getLogger(__name__)
-        logger.info(f"[extract_image_features] INPUT: type={type(image)}, keys={list(image.keys()) if isinstance(image, dict) else 'N/A'}")
+        import logging
+        logging.info(f"[DIAG] extract_image_features input: {image}")
+        # Robust handling: check for degenerate input
+        if not isinstance(image, dict) or not image.get('vertices'):
+            logging.warning(f"[DIAG] Degenerate image passed to extract_image_features. Skipping feature extraction. Input: {image}")
+            return {}
+        logging.info(f"[extract_image_features] INPUT: type={type(image)}, keys={list(image.keys()) if isinstance(image, dict) else 'N/A'}")
         # Defensive input validation
         if not isinstance(image, dict):
-            logger.error(f"[BAD INPUT] image is not a dict: {type(image)}")
+            logging.error(f"[BAD INPUT] image is not a dict: {type(image)}")
             output = {}
-            logger.info(f"[extract_image_features] OUTPUT: {output}")
+            logging.info(f"[extract_image_features] OUTPUT: {output}")
             return output
         if 'vertices' not in image or not isinstance(image['vertices'], list) or not all(isinstance(v, (list, tuple)) and len(v) == 2 for v in image['vertices']):
-            logger.error(f"[BAD VERTICES] image['vertices'] malformed: {image.get('vertices')}")
+            logging.error(f"[BAD VERTICES] image['vertices'] malformed: {image.get('vertices')}")
             image['vertices'] = []
         if 'geometry' not in image or not isinstance(image['geometry'], dict):
-            logger.error(f"[BAD GEOMETRY] image['geometry'] malformed: {image.get('geometry')}")
+            logging.error(f"[BAD GEOMETRY] image['geometry'] malformed: {image.get('geometry')}")
             image['geometry'] = {}
         if 'attributes' not in image or not isinstance(image['attributes'], dict):
-            logger.error(f"[BAD ATTRIBUTES] image['attributes'] malformed: {image.get('attributes')}")
+            logging.error(f"[BAD ATTRIBUTES] image['attributes'] malformed: {image.get('attributes')}")
             image['attributes'] = {}
-        logger.info("[DEBUG PATCHED] Entered extract_image_features in context_features.py")
+        logging.info("[DEBUG PATCHED] Entered extract_image_features in context_features.py")
         try:
             # ...existing feature extraction logic...
             geometry = image.get('geometry', {})
@@ -101,10 +106,10 @@ class BongardFeatureExtractor:
                 'dominant_shape_functions': None,
                 'dominant_modifiers': None,
             }
-            logger.info(f"[extract_image_features] OUTPUT: {features}")
+            logging.info(f"[extract_image_features] OUTPUT: {features}")
             return features
         except Exception as e:
-            logger.warning(f"[extract_image_features] Exception: {e}")
+            logging.warning(f"[extract_image_features] Exception: {e}")
             output = {
                 'area': 0.0,
                 'perimeter': 0.0,
@@ -139,7 +144,7 @@ class BongardFeatureExtractor:
                 'dominant_shape_functions': None,
                 'dominant_modifiers': None,
             }
-            logger.info(f"[extract_image_features] OUTPUT (exception fallback): {output}")
+            logging.info(f"[extract_image_features] OUTPUT (exception fallback): {output}")
             return output
 
     def compute_discriminative_features(self, pos_features, neg_features):

@@ -259,81 +259,90 @@ class ComprehensiveBongardProcessor:
             except Exception as log_exc:
                 logger.warning(f"[PARSER] Could not log parsed shape {idx}: {log_exc}")
         # --- Patch: Assign aggregated features to each shape's attributes property ---
+        # Initialize geometry and posrot_labels before loop
+        geometry = {}
+        posrot_labels = {'centroid': [0.0, 0.0], 'orientation_degrees': 0.0}
         feature_extractor = BongardFeatureExtractor()
         for idx, shape in enumerate(one_stroke_shapes):
-            image_dict = {}
-            logger.info(f"[ATTR DEBUG] Shape {idx} raw object: {shape}")
-
-            if hasattr(shape, 'vertices'):
-                logger.info(f"[ATTR DEBUG] Shape {idx} vertices: {shape.vertices}")
-                if isinstance(shape.vertices, list):
+                # --- Correct assignment and population of image_dict ---
+                image_dict = {}
+                # Vertices
+                image_dict['vertices'] = []
+                if hasattr(shape, 'vertices') and isinstance(shape.vertices, list):
                     safe_vertices = [tuple(v) for v in shape.vertices if v is not None and isinstance(v, (list, tuple)) and len(v) == 2]
+                    image_dict['vertices'] = safe_vertices
                 else:
-                    safe_vertices = []
-                image_dict['vertices'] = safe_vertices
-            else:
-                logger.warning(f"[ATTR DEBUG] Shape {idx} has no vertices.")
-            logger.debug(f"[VERTEX DEBUG] type(image_dict['vertices'])={type(image_dict['vertices'])}")
-            if isinstance(image_dict['vertices'], list):
-                logger.debug(f"[VERTEX DEBUG] list elem types={[type(v) for v in image_dict['vertices']]}")
-                logger.debug(f"[VERTEX DEBUG] first 5 vertices={image_dict['vertices'][:5]}")
-            if hasattr(shape, 'basic_actions'):
-                safe_basic_actions = [getattr(a, 'raw_command', str(a)) if not isinstance(a, str) else a for a in shape.basic_actions]
-                safe_basic_actions = [str(x) for x in safe_basic_actions]
-                logger.info(f"[ATTR DEBUG] Shape {idx} basic_actions: {safe_basic_actions}")
-                image_dict['strokes'] = safe_basic_actions
-            else:
-                logger.warning(f"[ATTR DEBUG] Shape {idx} has no basic_actions.")
-
-            if not hasattr(shape, 'attributes') or shape.attributes is None:
-                shape.attributes = {}
-
-            if not image_dict.get('vertices') or not image_dict.get('strokes'):
-                logger.warning(f"[ATTR DEBUG] Shape {idx} is degenerate (missing vertices or strokes). Skipping feature extraction.")
-                shape.attributes = {}
-                geometry = {}
-                posrot_labels = {'centroid': [0.0, 0.0], 'orientation_degrees': 0.0}
-                shape.geometry = geometry
-                shape.posrot_labels = posrot_labels
-                continue
-
-            for i, action in enumerate(getattr(shape, 'basic_actions', [])):
-                if not hasattr(action, 'raw_command') or action.raw_command is None:
-                    if i < len(original_action_commands):
-                        action.raw_command = original_action_commands[i]
-                    else:
-                        if hasattr(action, 'line_type'):
-                            action.raw_command = f"line_{action.line_type}_{action.line_length}-{getattr(action, 'turn_angle', 0.5)}"
-                        elif hasattr(action, 'arc_type'):
-                            action.raw_command = f"arc_{action.arc_type}_{action.arc_radius}_{action.arc_angle}-{getattr(action, 'turn_angle', 0.5)}"
+                    logger.warning(f"[ATTR DEBUG] Shape {idx} has no vertices.")
+                # Strokes
+                image_dict['strokes'] = []
+                if hasattr(shape, 'basic_actions'):
+                    safe_basic_actions = []
+                    for i, a in enumerate(shape.basic_actions):
+                        if isinstance(a, str):
+                            safe_basic_actions.append(a)
                         else:
-                            action.raw_command = str(action)
-            image_dict['strokes'] = ensure_all_strings(image_dict.get('strokes', []))
-            logger.info(f"[ATTR DEBUG] Shape {idx} image_dict for feature extraction: {image_dict}")
-            try:
-                logger.info(f"[DEBUG PATCHED] feature_extractor type: {type(feature_extractor)}, module: {getattr(feature_extractor, '__module__', type(feature_extractor).__module__)}")
-                logger.info(f"[DEBUG] About to extract features for image_dict={image_dict}")
-                if not image_dict.get('vertices') or not isinstance(image_dict['vertices'], list) or not all(isinstance(v, (list, tuple)) and len(v) == 2 for v in image_dict['vertices']):
-                    logger.error(f"[BAD VERTICES] Problem with vertices in image_dict: {image_dict.get('vertices')}")
-                if 'attributes' not in image_dict or not isinstance(image_dict.get('attributes'), dict):
-                    image_dict['attributes'] = {}
-                if 'geometry' not in image_dict or not isinstance(image_dict.get('geometry'), dict):
-                    image_dict['geometry'] = {}
-                logger.info(f"[DEBUG EXTRACT] Calling extract_image_features() on image_dict={image_dict}")
-                result = feature_extractor.extract_image_features(image_dict)
-                logger.info(f"[EXTRACT RETURN] type={type(result)}, value={result}")
-                if result is None:
-                    logger.error(f"[EXTRACT ERROR] extract_image_features returned None for image_dict={image_dict}. Setting attributes to empty dict.")
-                    shape.attributes = {}
-                elif not isinstance(result, dict):
-                    logger.error(f"[EXTRACT ERROR] extract_image_features returned non-dict type {type(result)} for image_dict={image_dict}. Setting attributes to empty dict.")
-                    shape.attributes = {}
+                            raw_cmd = getattr(a, 'raw_command', None)
+                            if raw_cmd is None:
+                                # Try to synthesize raw_command if possible
+                                if hasattr(a, 'line_type'):
+                                    raw_cmd = f"line_{a.line_type}_{getattr(a, 'line_length', '')}-{getattr(a, 'turn_angle', 0.5)}"
+                                elif hasattr(a, 'arc_type'):
+                                    raw_cmd = f"arc_{a.arc_type}_{getattr(a, 'arc_radius', '')}_{getattr(a, 'arc_angle', '')}-{getattr(a, 'turn_angle', 0.5)}"
+                                elif i < len(original_action_commands):
+                                    raw_cmd = original_action_commands[i]
+                                else:
+                                    raw_cmd = str(a)
+                                try:
+                                    a.raw_command = raw_cmd
+                                except Exception:
+                                    pass
+                            safe_basic_actions.append(str(raw_cmd))
+                    logger.info(f"[ATTR DEBUG] Shape {idx} basic_actions: {safe_basic_actions}")
+                    image_dict['strokes'] = safe_basic_actions
                 else:
-                    shape.attributes = result
-                logger.info(f"[ATTR DEBUG] Shape {idx} extracted attributes: {shape.attributes}")
-            except Exception as e:
-                logger.warning(f"[ATTR ASSIGN] Failed to extract features for shape {idx}: {e}")
-                shape.attributes = {}
+                    logger.warning(f"[ATTR DEBUG] Shape {idx} has no basic_actions.")
+                # Attributes
+                image_dict['attributes'] = shape.attributes if hasattr(shape, 'attributes') and isinstance(shape.attributes, dict) else {}
+                # Geometry
+                image_dict['geometry'] = shape.geometry if hasattr(shape, 'geometry') and isinstance(shape.geometry, dict) else {}
+                # Defensive: always ensure attributes and geometry are dicts
+                if not hasattr(shape, 'attributes') or shape.attributes is None:
+                    shape.attributes = {}
+                if not hasattr(shape, 'geometry') or shape.geometry is None:
+                    shape.geometry = {}
+                # Bail out early if degenerate (no vertices or strokes)
+                if not image_dict['vertices'] or not image_dict['strokes']:
+                    logger.warning(f"[ATTR DEBUG] Shape {idx} is degenerate (missing vertices or strokes). Skipping feature extraction and record construction.")
+                    return None
+                # --- Now run diagnostics and feature extraction ---
+                logger.info(f"[DIAG] Shape {idx} image_dict for feature extraction: {image_dict}")
+                try:
+                    logger.info(f"[DIAG] feature_extractor type: {type(feature_extractor)}, module: {getattr(feature_extractor, '__module__', type(feature_extractor).__module__)}")
+                    logger.info(f"[DIAG] About to extract features for image_dict={image_dict}")
+                    if not image_dict.get('vertices') or not isinstance(image_dict['vertices'], list) or not all(isinstance(v, (list, tuple)) and len(v) == 2 for v in image_dict['vertices']):
+                        logger.error(f"[DIAG] Problem with vertices in image_dict: {image_dict.get('vertices')}")
+                    if 'attributes' not in image_dict or not isinstance(image_dict.get('attributes'), dict):
+                        image_dict['attributes'] = {}
+                    if 'geometry' not in image_dict or not isinstance(image_dict.get('geometry'), dict):
+                        image_dict['geometry'] = {}
+                    logger.info(f"[DIAG] Calling extract_image_features() on image_dict={image_dict}")
+                    result = feature_extractor.extract_image_features(image_dict)
+                    logger.info(f"[DIAG] extract_image_features returned type={type(result)}, value={result}")
+                    # If features are empty/default for valid shapes, log a warning
+                    if not result or all(v in (None, [], {}, '') for v in result.values()):
+                        logger.warning(f"[DIAG] Features are empty/default for Shape {idx}. Input: {image_dict}")
+                    if result is None:
+                        logger.error(f"[DIAG] extract_image_features returned None for image_dict={image_dict}. Setting attributes to empty dict.")
+                        shape.attributes = {}
+                    elif not isinstance(result, dict):
+                        logger.error(f"[DIAG] extract_image_features returned non-dict type {type(result)} for image_dict={image_dict}. Setting attributes to empty dict.")
+                        shape.attributes = {}
+                    else:
+                        shape.attributes = result
+                    logger.info(f"[DIAG] Shape {idx} extracted attributes: {shape.attributes}")
+                except Exception as e:
+                    logger.warning(f"[DIAG] Failed to extract features for shape {idx}: {e}")
+                    shape.attributes = {}
 
 
         # --- Validation: Check shape/stroke count match ---
@@ -362,7 +371,7 @@ class ComprehensiveBongardProcessor:
                     shape.geometry = {}
                 if not hasattr(shape, 'posrot_labels') or shape.posrot_labels is None:
                     shape.posrot_labels = {'centroid': [0.0, 0.0], 'orientation_degrees': 0.0}
-            geometry = geometry if isinstance(geometry, dict) else {}
+            geometry = geometry if isinstance(geometry, dict) else {'width': 0.0, 'height': 0.0, 'centroid': [0.0, 0.0]}
             posrot_labels = posrot_labels if isinstance(posrot_labels, dict) else {'centroid': [0.0, 0.0], 'orientation_degrees': 0.0}
             # Restore BongardImage construction before any reference
             bongard_image = BongardImage(one_stroke_shapes)
@@ -424,6 +433,14 @@ class ComprehensiveBongardProcessor:
             all_actions = ensure_all_strings(all_actions)
             image_features = self._calculate_image_features(norm_vertices_for_features, all_actions, geometry if isinstance(geometry, dict) else {})
             centroid = geometry.get('centroid')
+            width = geometry.get('width')
+            height = geometry.get('height')
+            if width is None:
+                logger.error("Missing geometry['width']")
+                width = 0.0
+            if height is None:
+                logger.error("Missing geometry['height']")
+                height = 0.0
             composition_features = self._calculate_composition_features(all_actions)  # all_actions is now a list of strings
             physics_features = self._calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
 
@@ -658,6 +675,51 @@ class ComprehensiveBongardProcessor:
             logger.debug(f"[PATCH][actions field] Joined: {actions_joined}")
 
             # Defensive checks and logs for all dict/list variables used in output record construction
+            # --- PATCH: Explicitly initialize all output record variables to safe defaults ---
+            safe_stroke_features = stroke_features if stroke_features is not None else []
+            safe_vertices_raw = vertices_raw if vertices_raw is not None else []
+            safe_vertices = norm_vertices_for_features if norm_vertices_for_features is not None else []
+            safe_action_program = shapes_commands if shapes_commands is not None else []
+            safe_relational_features = robust_relational_features if robust_relational_features is not None else {}
+            safe_context_relational_features = context_relationships if context_relationships is not None else {}
+            safe_sequential_features = ngram_features if ngram_features is not None else {}
+            differentiated_features = {'line_features': line_features, 'arc_features': arc_features} if 'line_features' in locals() and 'arc_features' in locals() else {}
+
+            # Log types and values for all output record variables
+            logger.info(f"[PATCH INIT] safe_stroke_features type: {type(safe_stroke_features)}, value: {safe_stroke_features}")
+            logger.info(f"[PATCH INIT] safe_vertices_raw type: {type(safe_vertices_raw)}, value: {safe_vertices_raw}")
+            logger.info(f"[PATCH INIT] safe_vertices type: {type(safe_vertices)}, value: {safe_vertices}")
+            logger.info(f"[PATCH INIT] safe_action_program type: {type(safe_action_program)}, value: {safe_action_program}")
+            logger.info(f"[PATCH INIT] safe_relational_features type: {type(safe_relational_features)}, value: {safe_relational_features}")
+            logger.info(f"[PATCH INIT] safe_context_relational_features type: {type(safe_context_relational_features)}, value: {safe_context_relational_features}")
+            logger.info(f"[PATCH INIT] safe_sequential_features type: {type(safe_sequential_features)}, value: {safe_sequential_features}")
+            logger.info(f"[PATCH INIT] differentiated_features type: {type(differentiated_features)}, value: {differentiated_features}")
+
+            # If any are None, set to safe default and log error
+            if safe_stroke_features is None:
+                logger.error("[PATCH ERROR] safe_stroke_features is None, setting to []")
+                safe_stroke_features = []
+            if safe_vertices_raw is None:
+                logger.error("[PATCH ERROR] safe_vertices_raw is None, setting to []")
+                safe_vertices_raw = []
+            if safe_vertices is None:
+                logger.error("[PATCH ERROR] safe_vertices is None, setting to []")
+                safe_vertices = []
+            if safe_action_program is None:
+                logger.error("[PATCH ERROR] safe_action_program is None, setting to []")
+                safe_action_program = []
+            if safe_relational_features is None:
+                logger.error("[PATCH ERROR] safe_relational_features is None, setting to {}")
+                safe_relational_features = {}
+            if safe_context_relational_features is None:
+                logger.error("[PATCH ERROR] safe_context_relational_features is None, setting to {}")
+                safe_context_relational_features = {}
+            if safe_sequential_features is None:
+                logger.error("[PATCH ERROR] safe_sequential_features is None, setting to {}")
+                safe_sequential_features = {}
+            if differentiated_features is None:
+                logger.error("[PATCH ERROR] differentiated_features is None, setting to {}")
+                differentiated_features = {}
             if not isinstance(posrot_labels, dict):
                 logger.error(f"[DEFENSIVE ERROR] posrot_labels is None or not dict before serialization! Value: {posrot_labels}")
                 posrot_labels = {'centroid': [0.0, 0.0], 'orientation_degrees': 0.0}
@@ -683,6 +745,14 @@ class ComprehensiveBongardProcessor:
                 if not hasattr(shape, 'attributes') or shape.attributes is None:
                     logger.error(f"[DEFENSIVE ERROR] shape.attributes is None before serialization! For shape: {shape}")
                     shape.attributes = {}
+            image_features = image_features if image_features is not None else []
+            physics_features = physics_features if physics_features is not None else []
+            composition_features = composition_features if composition_features is not None else []
+            graph_features = graph_features if graph_features is not None else []
+            logger.info(f"[PATCH INIT] image_features type: {type(image_features)}, value: {image_features}")
+            logger.info(f"[PATCH INIT] physics_features type: {type(physics_features)}, value: {physics_features}")
+            logger.info(f"[PATCH INIT] composition_features type: {type(composition_features)}, value: {composition_features}")
+            logger.info(f"[PATCH INIT] graph_features type: {type(graph_features)}, value: {graph_features}")
 
             complete_record = {
                 'image_id': image_id,
