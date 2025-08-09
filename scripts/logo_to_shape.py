@@ -1,6 +1,34 @@
 import logging
 import importlib.util
 import sys
+def fully_stringify(obj):
+    if isinstance(obj, dict):
+        return {fully_stringify(k): fully_stringify(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [fully_stringify(x) for x in obj]
+    elif hasattr(obj, 'raw_command'):
+        return str(obj.raw_command)
+    elif type(obj).__name__ in ['LineAction', 'ArcAction']:
+        return str(getattr(obj, 'raw_command', str(obj)))
+    else:
+        return str(obj)
+
+# Robust flatten and stringify for any nested actions list
+def robust_flatten_and_stringify(lst):
+    result = []
+    if isinstance(lst, list):
+        for x in lst:
+            if isinstance(x, list):
+                result.extend(robust_flatten_and_stringify(x))
+            elif hasattr(x, 'raw_command'):
+                result.append(str(x.raw_command))
+            elif type(x).__name__ in ['LineAction', 'ArcAction']:
+                result.append(str(getattr(x, 'raw_command', str(x))))
+            else:
+                result.append(str(x))
+    else:
+        result.append(str(lst))
+    return result
 #!/usr/bin/env python3
 """
 Logo to Shape Conversion Script - Complete End-to-End Pipeline
@@ -199,6 +227,22 @@ class ComprehensiveBongardProcessor:
         for idx, shape_cmds in enumerate(shapes_commands):
             logger.info(f"[PARSER] Parsing shape {idx} commands: {shape_cmds}")
             parsed_shape = parser.parse_action_commands(shape_cmds, problem_id)
+            # Normalize basic_actions to strings immediately after parsing
+            if hasattr(parsed_shape, 'basic_actions'):
+                norm_actions = []
+                for a in parsed_shape.basic_actions:
+                    if type(a).__name__ in ['LineAction', 'ArcAction']:
+                        norm_actions.append(str(getattr(a, 'raw_command', a)))
+                    else:
+                        norm_actions.append(str(a))
+                parsed_shape.basic_actions = norm_actions
+            # Defensive: always initialize attributes, geometry, posrot_labels
+            if not hasattr(parsed_shape, 'attributes') or parsed_shape.attributes is None:
+                parsed_shape.attributes = {}
+            if not hasattr(parsed_shape, 'geometry') or parsed_shape.geometry is None:
+                parsed_shape.geometry = {}
+            if not hasattr(parsed_shape, 'posrot_labels') or parsed_shape.posrot_labels is None:
+                parsed_shape.posrot_labels = {'centroid': [0.0, 0.0], 'orientation_degrees': 0.0}
             if isinstance(parsed_shape, list):
                 one_stroke_shapes.extend(parsed_shape)
                 original_action_commands.extend(shape_cmds)
@@ -219,28 +263,40 @@ class ComprehensiveBongardProcessor:
         for idx, shape in enumerate(one_stroke_shapes):
             image_dict = {}
             logger.info(f"[ATTR DEBUG] Shape {idx} raw object: {shape}")
+
             if hasattr(shape, 'vertices'):
                 logger.info(f"[ATTR DEBUG] Shape {idx} vertices: {shape.vertices}")
-                # Robust stringification for vertices
-                safe_vertices = [str(v) if not isinstance(v, str) else v for v in shape.vertices] if isinstance(shape.vertices, list) else shape.vertices
+                if isinstance(shape.vertices, list):
+                    safe_vertices = [tuple(v) for v in shape.vertices if v is not None and isinstance(v, (list, tuple)) and len(v) == 2]
+                else:
+                    safe_vertices = []
                 image_dict['vertices'] = safe_vertices
             else:
                 logger.warning(f"[ATTR DEBUG] Shape {idx} has no vertices.")
+            logger.debug(f"[VERTEX DEBUG] type(image_dict['vertices'])={type(image_dict['vertices'])}")
+            if isinstance(image_dict['vertices'], list):
+                logger.debug(f"[VERTEX DEBUG] list elem types={[type(v) for v in image_dict['vertices']]}")
+                logger.debug(f"[VERTEX DEBUG] first 5 vertices={image_dict['vertices'][:5]}")
             if hasattr(shape, 'basic_actions'):
-                # Always log the raw_command of each action
-                # Robust stringification before conversion
                 safe_basic_actions = [getattr(a, 'raw_command', str(a)) if not isinstance(a, str) else a for a in shape.basic_actions]
                 safe_basic_actions = [str(x) for x in safe_basic_actions]
                 logger.info(f"[ATTR DEBUG] Shape {idx} basic_actions: {safe_basic_actions}")
                 image_dict['strokes'] = safe_basic_actions
             else:
                 logger.warning(f"[ATTR DEBUG] Shape {idx} has no basic_actions.")
-            # Check for degenerate shapes
+
+            if not hasattr(shape, 'attributes') or shape.attributes is None:
+                shape.attributes = {}
+
             if not image_dict.get('vertices') or not image_dict.get('strokes'):
                 logger.warning(f"[ATTR DEBUG] Shape {idx} is degenerate (missing vertices or strokes). Skipping feature extraction.")
                 shape.attributes = {}
+                geometry = {}
+                posrot_labels = {'centroid': [0.0, 0.0], 'orientation_degrees': 0.0}
+                shape.geometry = geometry
+                shape.posrot_labels = posrot_labels
                 continue
-            # Defensive: ensure all basic_actions have raw_command
+
             for i, action in enumerate(getattr(shape, 'basic_actions', [])):
                 if not hasattr(action, 'raw_command') or action.raw_command is None:
                     if i < len(original_action_commands):
@@ -255,7 +311,25 @@ class ComprehensiveBongardProcessor:
             image_dict['strokes'] = ensure_all_strings(image_dict.get('strokes', []))
             logger.info(f"[ATTR DEBUG] Shape {idx} image_dict for feature extraction: {image_dict}")
             try:
-                shape.attributes = feature_extractor.extract_image_features(image_dict)
+                logger.info(f"[DEBUG PATCHED] feature_extractor type: {type(feature_extractor)}, module: {getattr(feature_extractor, '__module__', type(feature_extractor).__module__)}")
+                logger.info(f"[DEBUG] About to extract features for image_dict={image_dict}")
+                if not image_dict.get('vertices') or not isinstance(image_dict['vertices'], list) or not all(isinstance(v, (list, tuple)) and len(v) == 2 for v in image_dict['vertices']):
+                    logger.error(f"[BAD VERTICES] Problem with vertices in image_dict: {image_dict.get('vertices')}")
+                if 'attributes' not in image_dict or not isinstance(image_dict.get('attributes'), dict):
+                    image_dict['attributes'] = {}
+                if 'geometry' not in image_dict or not isinstance(image_dict.get('geometry'), dict):
+                    image_dict['geometry'] = {}
+                logger.info(f"[DEBUG EXTRACT] Calling extract_image_features() on image_dict={image_dict}")
+                result = feature_extractor.extract_image_features(image_dict)
+                logger.info(f"[EXTRACT RETURN] type={type(result)}, value={result}")
+                if result is None:
+                    logger.error(f"[EXTRACT ERROR] extract_image_features returned None for image_dict={image_dict}. Setting attributes to empty dict.")
+                    shape.attributes = {}
+                elif not isinstance(result, dict):
+                    logger.error(f"[EXTRACT ERROR] extract_image_features returned non-dict type {type(result)} for image_dict={image_dict}. Setting attributes to empty dict.")
+                    shape.attributes = {}
+                else:
+                    shape.attributes = result
                 logger.info(f"[ATTR DEBUG] Shape {idx} extracted attributes: {shape.attributes}")
             except Exception as e:
                 logger.warning(f"[ATTR ASSIGN] Failed to extract features for shape {idx}: {e}")
@@ -280,74 +354,18 @@ class ComprehensiveBongardProcessor:
             logger.info(f"[VALIDATION] image_id={image_id}, problem_id={problem_id}: Number of action commands matches number of parsed shapes ({expected_strokes})")
         # --- Only construct BongardImage and run downstream logic if shape count matches ---
         try:
-            # Determine if input is multi-object (list of lists) or single-object (flat list)
-            is_multi_object = isinstance(action_commands, list) and action_commands and all(isinstance(cmd, list) for cmd in action_commands)
-            actual_shapes = len(one_stroke_shapes)
-            if is_multi_object:
-                expected_shapes = len(shapes_commands)
-                # Accept if number of parsed shapes matches number of sublists
-                if actual_shapes != expected_shapes or actual_shapes == 0:
-                    logger.error(f"[DATA ISSUE] image_id={image_id}, problem_id={problem_id}: Number of sublists ({expected_shapes}) does not match number of parsed shapes ({actual_shapes}).\nAction commands: {shapes_commands}\nParsed shapes: {one_stroke_shapes}")
-                    self._flag_case('data_issue', problem_id, f"Number of sublists ({expected_shapes}) does not match number of parsed shapes ({actual_shapes})", ['data_issue'])
-                    return None
-            else:
-                # Single-object: accept if exactly one shape is parsed
-                if actual_shapes != 1:
-                    logger.error(f"[DATA ISSUE] image_id={image_id}, problem_id={problem_id}: Expected 1 parsed shape for single-object, got {actual_shapes}.\nAction commands: {shapes_commands}\nParsed shapes: {one_stroke_shapes}")
-                    self._flag_case('data_issue', problem_id, f"Expected 1 parsed shape for single-object, got {actual_shapes}", ['data_issue'])
-                    return None
-            # Now construct BongardImage and run attribute mapping
+            # Defensive: guarantee geometry, posrot_labels, and attributes are always dicts before output
+            for shape in one_stroke_shapes:
+                if not hasattr(shape, 'attributes') or shape.attributes is None:
+                    shape.attributes = {}
+                if not hasattr(shape, 'geometry') or shape.geometry is None:
+                    shape.geometry = {}
+                if not hasattr(shape, 'posrot_labels') or shape.posrot_labels is None:
+                    shape.posrot_labels = {'centroid': [0.0, 0.0], 'orientation_degrees': 0.0}
+            geometry = geometry if isinstance(geometry, dict) else {}
+            posrot_labels = posrot_labels if isinstance(posrot_labels, dict) else {'centroid': [0.0, 0.0], 'orientation_degrees': 0.0}
+            # Restore BongardImage construction before any reference
             bongard_image = BongardImage(one_stroke_shapes)
-            # Ensure all basic_actions have raw_command set before downstream processing
-            try:
-                spec = importlib.util.spec_from_file_location("bongard_module", "Bongard-LOGO/bongard/bongard.py")
-                bongard_module = importlib.util.module_from_spec(spec)
-                sys.modules["bongard_module"] = bongard_module
-                spec.loader.exec_module(bongard_module)
-                LineAction = bongard_module.LineAction
-                ArcAction = bongard_module.ArcAction
-                for shape in getattr(bongard_image, 'one_stroke_shapes', []):
-                    for i, action in enumerate(getattr(shape, 'basic_actions', [])):
-                        if not hasattr(action, 'raw_command') or action.raw_command is None:
-                            if i < len(original_action_commands):
-                                action.raw_command = original_action_commands[i]
-                            else:
-                                if hasattr(action, 'line_type'):
-                                    action.raw_command = f"line_{action.line_type}_{action.line_length}-{getattr(action, 'turn_angle', 0.5)}"
-                                elif hasattr(action, 'arc_type'):
-                                    action.raw_command = f"arc_{action.arc_type}_{action.arc_radius}_{action.arc_angle}-{getattr(action, 'turn_angle', 0.5)}"
-                                else:
-                                    action.raw_command = str(action)
-            except Exception as e:
-                logger.warning(f"Failed to set raw_command attributes: {e}")
-
-            logger.info(f"[ATTR MAP] Mapping attributes for multi-object image: {image_id}")
-            for idx, shape in enumerate(getattr(bongard_image, 'one_stroke_shapes', [])):
-                attrs = getattr(shape, 'attributes', None)
-                # Defensive: ensure attributes dict is json-safe
-                # Robust stringification for attributes dict
-                safe_attrs = {k: [str(x) if not isinstance(x, str) else x for x in v] if isinstance(v, list) else v for k, v in attrs.items()} if isinstance(attrs, dict) else attrs
-                logger.info(f"[ATTR MAP] Shape {idx}: attributes={safe_attrs}")
-                if attrs is None:
-                    logger.warning(f"[ATTR MAP] Shape {idx} has no attributes.")
-                elif isinstance(attrs, dict):
-                    for k, v in safe_attrs.items():
-                        logger.info(f"[ATTR MAP] Shape {idx} attribute: {k}={v}")
-                else:
-                    logger.info(f"[ATTR MAP] Shape {idx} attributes (non-dict): {safe_attrs}")
-            bongard_image = BongardImage(one_stroke_shapes)
-            # --- Attribute mapping for multi-object images ---
-            logger.info(f"[ATTR MAP] Mapping attributes for multi-object image: {image_id}")
-            for idx, shape in enumerate(getattr(bongard_image, 'one_stroke_shapes', [])):
-                attrs = getattr(shape, 'attributes', None)
-                logger.info(f"[ATTR MAP] Shape {idx}: attributes={attrs}")
-                if attrs is None:
-                    logger.warning(f"[ATTR MAP] Shape {idx} has no attributes.")
-                elif isinstance(attrs, dict):
-                    for k, v in attrs.items():
-                        logger.info(f"[ATTR MAP] Shape {idx} attribute: {k}={v}")
-                else:
-                    logger.info(f"[ATTR MAP] Shape {idx} attributes (non-dict): {attrs}")
 
             # --- Always include raw vertices from BongardImage ---
             vertices_raw = []
@@ -368,6 +386,8 @@ class ComprehensiveBongardProcessor:
             logger.info(f"[calculate_geometry_consistent] INPUT: {normalized_vertices}")
             try:
                 geometry = calculate_geometry_consistent(normalized_vertices)
+                if not isinstance(geometry, dict):
+                    geometry = {}
                 logger.info(f"[calculate_geometry_consistent] OUTPUT: {geometry}")
             except Exception as geo_exc:
                 logger.error(f"[FALLBACK LOGIC] image_id={image_id}, problem_id={problem_id}: Geometry calculation failed, fallback logic triggered. Error: {geo_exc}\nVertices: {normalized_vertices}")
@@ -378,6 +398,9 @@ class ComprehensiveBongardProcessor:
 
             # --- Derive position and rotation labels from normalized vertices ---
             posrot_labels = extract_position_and_rotation(norm_vertices_for_features)
+            # If degenerate, use safe defaults
+            if not posrot_labels or not isinstance(posrot_labels, dict):
+                posrot_labels = {'centroid': [0.0, 0.0], 'orientation_degrees': 0.0}
 
             # --- Contextual/relational feature extraction ---
             # Prepare strokes as dicts with 'vertices' for context extractor
@@ -399,10 +422,10 @@ class ComprehensiveBongardProcessor:
                 for a in ensure_all_strings(getattr(shape, 'basic_actions', [])):
                     all_actions.append(a)
             all_actions = ensure_all_strings(all_actions)
-            image_features = self._calculate_image_features(norm_vertices_for_features, all_actions, geometry)
+            image_features = self._calculate_image_features(norm_vertices_for_features, all_actions, geometry if isinstance(geometry, dict) else {})
             centroid = geometry.get('centroid')
             composition_features = self._calculate_composition_features(all_actions)  # all_actions is now a list of strings
-            physics_features = self._calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)  # all_actions is now a list of strings
+            physics_features = self._calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
 
             # --- Relational/Topological/Sequential Features ---
             # Convert actions to shapely geometries for robust relational features
@@ -541,20 +564,15 @@ class ComprehensiveBongardProcessor:
                         all_actions.append(action.raw_command)
                     else:
                         all_actions.append(str(action))
-                logger.debug(f"[OUTPUT PATCH][action_program] Sublist types: {[type(x) for x in all_actions]}")
-                logger.debug(f"[OUTPUT PATCH][action_program] Sublist before flatten: {all_actions}")
+                # Use robust flatten and stringify before joining
+                actions_flat_str = robust_flatten_and_stringify(all_actions)
                 try:
-                    safe = ensure_all_strings(all_actions)
-                    logger.debug(f"[OUTPUT PATCH][action_program] Sublist after ensure_all_strings: {safe}")
-                    joined = safe_join(all_actions)
+                    joined = ",".join(actions_flat_str)
                     logger.debug(f"[OUTPUT PATCH][action_program] Sublist joined: {joined}")
                 except Exception as e:
                     logger.error(f"FINAL JOIN EXCEPTION: {e}")
                     raise
-                # Failsafe: ensure all items are strings
-                safe_str = [str(x) if not isinstance(x, str) else x for x in safe]
-                logger.debug(f"[OUTPUT PATCH][action_program] Sublist after stringification: {safe_str}")
-                action_program.append(safe_str)
+                action_program.append(actions_flat_str)
                 logger.debug(f"[OUTPUT PATCH][action_program] Final action_program before serialization: {action_program}")
             # Defensive: ensure ngram features are stringified if joined/logged/serialized
             safe_ngram = ensure_all_strings(ngram_features) if isinstance(ngram_features, list) else ngram_features
@@ -626,39 +644,145 @@ class ComprehensiveBongardProcessor:
             logger.debug(f"[OUTPUT PATCH] Types in stroke_features: {[type(x) for x in stroke_features]}")
             logger.debug(f"[OUTPUT PATCH] Types in action_program: {[type(x) for x in action_program]}")
             # Diagnostic logging and robust stringification for actions
+            # FINAL GUARD: Ensure posrot_labels and geometry are always dicts with required keys
+            if not isinstance(posrot_labels, dict):
+                posrot_labels = {'centroid': [0.0, 0.0], 'orientation_degrees': 0.0}
+            else:
+                posrot_labels.setdefault('centroid', [0.0, 0.0])
+                posrot_labels.setdefault('orientation_degrees', 0.0)
+            if not isinstance(geometry, dict):
+                geometry = {}
+            logger.debug(f"[FINAL GUARD] posrot_labels={posrot_labels}, geometry={geometry}")
             logger.debug(f"[PATCH][actions field] Types: {[type(a) for a in all_actions]}, Values: {all_actions}")
-            actions_joined = safe_join(all_actions)
+            actions_joined = ",".join(robust_flatten_and_stringify(all_actions))
             logger.debug(f"[PATCH][actions field] Joined: {actions_joined}")
+
+            # Defensive checks and logs for all dict/list variables used in output record construction
+            if not isinstance(posrot_labels, dict):
+                logger.error(f"[DEFENSIVE ERROR] posrot_labels is None or not dict before serialization! Value: {posrot_labels}")
+                posrot_labels = {'centroid': [0.0, 0.0], 'orientation_degrees': 0.0}
+            else:
+                posrot_labels.setdefault('centroid', [0.0, 0.0])
+                posrot_labels.setdefault('orientation_degrees', 0.0)
+            if not isinstance(geometry, dict):
+                logger.error(f"[DEFENSIVE ERROR] geometry is None or not dict before serialization! Value: {geometry}")
+                geometry = {}
+            if stroke_features is None:
+                logger.error(f"[DEFENSIVE ERROR] stroke_features is None before serialization!")
+                stroke_features = []
+            if all_actions is None:
+                logger.error(f"[DEFENSIVE ERROR] all_actions is None before serialization!")
+                all_actions = []
+            if vertices_raw is None:
+                logger.error(f"[DEFENSIVE ERROR] vertices_raw is None before serialization!")
+                vertices_raw = []
+            if norm_vertices_for_features is None:
+                logger.error(f"[DEFENSIVE ERROR] norm_vertices_for_features is None before serialization!")
+                norm_vertices_for_features = []
+            for shape in getattr(bongard_image, 'one_stroke_shapes', []):
+                if not hasattr(shape, 'attributes') or shape.attributes is None:
+                    logger.error(f"[DEFENSIVE ERROR] shape.attributes is None before serialization! For shape: {shape}")
+                    shape.attributes = {}
+
             complete_record = {
                 'image_id': image_id,
                 'problem_id': problem_id,
                 'category': category,
                 'label': 'positive' if is_positive else 'negative',
                 'image_path': image_path,
-                'strokes': fully_stringify(safe_stroke_features),
+                'strokes': robust_flatten_and_stringify(safe_stroke_features),
                 'num_strokes': len(safe_stroke_features),
-                'raw_vertices': fully_stringify(safe_vertices_raw),
-                'vertices': fully_stringify(safe_vertices),
+                'raw_vertices': robust_flatten_and_stringify(safe_vertices_raw),
+                'vertices': robust_flatten_and_stringify(safe_vertices),
                 'num_vertices': len(safe_vertices) if safe_vertices else 0,
-                'position_label': fully_stringify(posrot_labels.get('centroid')),
-                'rotation_label_degrees': fully_stringify(posrot_labels.get('orientation_degrees')),
-                'image_features': fully_stringify(image_features),
-                'physics_features': fully_stringify(physics_features),
-                'composition_features': fully_stringify(composition_features),
-                'stroke_type_features': fully_stringify(differentiated_features),
+                'position_label': robust_flatten_and_stringify(posrot_labels.get('centroid')),
+                'rotation_label_degrees': robust_flatten_and_stringify(posrot_labels.get('orientation_degrees')),
+                'image_features': robust_flatten_and_stringify(image_features),
+                'physics_features': robust_flatten_and_stringify(physics_features),
+                'composition_features': robust_flatten_and_stringify(composition_features),
+                'stroke_type_features': robust_flatten_and_stringify(differentiated_features),
                 'image_canonical_summary': {},
                 'processing_metadata': {
                     'processing_timestamp': time.time(),
                     'feature_count': len(image_features) + len(physics_features) + len(composition_features)
                 },
                 'actions': actions_joined,
-                'action_program': fully_stringify(safe_action_program),
-                'geometry': fully_stringify(geometry),
-                'relational_features': fully_stringify(safe_relational_features),
-                'context_relational_features': fully_stringify(safe_context_relational_features),
-                'sequential_features': fully_stringify(safe_sequential_features),
-                'topological_features': fully_stringify(graph_features)
+                'action_program': [",".join(robust_flatten_and_stringify(sublist)) for sublist in safe_action_program],
+                'geometry': robust_flatten_and_stringify(geometry),
+                'relational_features': robust_flatten_and_stringify(safe_relational_features),
+                'context_relational_features': robust_flatten_and_stringify(safe_context_relational_features),
+                'sequential_features': robust_flatten_and_stringify(safe_sequential_features),
+                'topological_features': robust_flatten_and_stringify(graph_features)
             }
+                # Granular logging before every subscript operation
+            try:
+                logger.debug(f"[GRANULAR LOG] posrot_labels type: {type(posrot_labels)}, value: {posrot_labels}")
+                _ = posrot_labels['centroid']
+            except Exception as e:
+                logger.error(f"[GRANULAR ERROR] posrot_labels['centroid'] failed: {e}")
+            try:
+                _ = posrot_labels['orientation_degrees']
+            except Exception as e:
+                logger.error(f"[GRANULAR ERROR] posrot_labels['orientation_degrees'] failed: {e}")
+            try:
+                logger.debug(f"[GRANULAR LOG] geometry type: {type(geometry)}, value: {geometry}")
+                _ = geometry['centroid']
+            except Exception as e:
+                logger.error(f"[GRANULAR ERROR] geometry['centroid'] failed: {e}")
+            try:
+                _ = geometry['width']
+            except Exception as e:
+                logger.error(f"[GRANULAR ERROR] geometry['width'] failed: {e}")
+            try:
+                _ = geometry['height']
+            except Exception as e:
+                logger.error(f"[GRANULAR ERROR] geometry['height'] failed: {e}")
+            try:
+                logger.debug(f"[GRANULAR LOG] safe_stroke_features type: {type(safe_stroke_features)}, value: {safe_stroke_features}")
+                _ = safe_stroke_features[0]
+            except Exception as e:
+                logger.error(f"[GRANULAR ERROR] safe_stroke_features[0] failed: {e}")
+            try:
+                logger.debug(f"[GRANULAR LOG] safe_action_program type: {type(safe_action_program)}, value: {safe_action_program}")
+                _ = safe_action_program[0]
+            except Exception as e:
+                logger.error(f"[GRANULAR ERROR] safe_action_program[0] failed: {e}")
+            try:
+                logger.debug(f"[GRANULAR LOG] safe_vertices_raw type: {type(safe_vertices_raw)}, value: {safe_vertices_raw}")
+                _ = safe_vertices_raw[0]
+            except Exception as e:
+                logger.error(f"[GRANULAR ERROR] safe_vertices_raw[0] failed: {e}")
+            try:
+                logger.debug(f"[GRANULAR LOG] safe_vertices type: {type(safe_vertices)}, value: {safe_vertices}")
+                _ = safe_vertices[0]
+            except Exception as e:
+                logger.error(f"[GRANULAR ERROR] safe_vertices[0] failed: {e}")
+            try:
+                logger.debug(f"[GRANULAR LOG] image_features type: {type(image_features)}, value: {image_features}")
+                _ = image_features['bounding_box']
+            except Exception as e:
+                logger.error(f"[GRANULAR ERROR] image_features['bounding_box'] failed: {e}")
+            try:
+                logger.debug(f"[GRANULAR LOG] physics_features type: {type(physics_features)}, value: {physics_features}")
+                _ = physics_features['moment_of_inertia']
+            except Exception as e:
+                logger.error(f"[GRANULAR ERROR] physics_features['moment_of_inertia'] failed: {e}")
+            try:
+                logger.debug(f"[GRANULAR LOG] composition_features type: {type(composition_features)}, value: {composition_features}")
+                _ = composition_features['some_key'] if isinstance(composition_features, dict) and 'some_key' in composition_features else None
+            except Exception as e:
+                logger.error(f"[GRANULAR ERROR] composition_features['some_key'] failed: {e}")
+            try:
+                logger.debug(f"[GRANULAR LOG] differentiated_features type: {type(differentiated_features)}, value: {differentiated_features}")
+                _ = differentiated_features['line_features']
+            except Exception as e:
+                logger.error(f"[GRANULAR ERROR] differentiated_features['line_features'] failed: {e}")
+            try:
+                logger.debug(f"[GRANULAR LOG] graph_features type: {type(graph_features)}, value: {graph_features}")
+                _ = graph_features['type']
+            except Exception as e:
+                logger.error(f"[GRANULAR ERROR] graph_features['type'] failed: {e}")
+
             self.processing_stats['successful'] += 1
             return json_safe(complete_record)
         except Exception as e:
