@@ -190,8 +190,9 @@ def calculate_geometry(vertices):
     import numpy as np
     import logging
     logging.info(f"[calculate_geometry] INPUT vertices: {vertices}")
-    if not vertices or len(vertices) < 2:
-        logging.warning(f"[calculate_geometry] Not enough points for geometry: {vertices}")
+    # PATCH: Validate and correct input vertices
+    if not vertices or len(vertices) < 3:
+        logging.warning(f"[calculate_geometry] PATCH: Not enough vertices for geometry: {vertices}")
         return {
             'bbox': {'min_x': 0, 'max_x': 0, 'min_y': 0, 'max_y': 0},
             'centroid': [0.0, 0.0],
@@ -202,10 +203,19 @@ def calculate_geometry(vertices):
             'moment_of_inertia': 0.0,
             'convexity_ratio': 0.0
         }
-    # Always normalize vertices for geometry calculations
-    verts = normalize_vertices(list(vertices))
-    if len(verts) < 2:
-        logging.warning(f"[calculate_geometry] Normalization collapsed points: {verts}")
+    # Remove duplicate consecutive points
+    deduped = [vertices[0]]
+    for pt in vertices[1:]:
+        if pt != deduped[-1]:
+            deduped.append(pt)
+    verts = deduped
+    # Close polygon if not closed
+    if verts[0] != verts[-1]:
+        verts.append(verts[0])
+    logging.info(f"[calculate_geometry] PATCH: Validated/corrected vertices: {verts}")
+    verts = normalize_vertices(list(verts))
+    if len(verts) < 3:
+        logging.warning(f"[calculate_geometry] PATCH: Normalization collapsed points: {verts}")
         return {
             'bbox': {'min_x': 0, 'max_x': 0, 'min_y': 0, 'max_y': 0},
             'centroid': [0.0, 0.0],

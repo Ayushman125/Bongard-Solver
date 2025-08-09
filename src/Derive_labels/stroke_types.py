@@ -59,11 +59,29 @@ def extract_stroke_features_from_shapes(bongard_image, problem_id=None):
             logging.error(f"[extract_stroke_features_from_shapes] Shape {shape_idx} has no actions! Shape: {shape}")
             continue
         logging.info(f"[extract_stroke_features_from_shapes] Shape {shape_idx}: num_actions={len(actions)} | actions={actions}")
+        shape_vertices = getattr(shape, 'vertices', None)
+        # PATCH: Validate and correct shape vertices before feature extraction
+        from src.Derive_labels.shape_utils import ensure_vertex_list
+        shape_vertices = ensure_vertex_list(shape_vertices)
+        if shape_vertices and len(shape_vertices) >= 3:
+            # Remove duplicate consecutive points
+            deduped = [shape_vertices[0]]
+            for pt in shape_vertices[1:]:
+                if pt != deduped[-1]:
+                    deduped.append(pt)
+            shape_vertices = deduped
+            # Close polygon if not closed
+            if shape_vertices[0] != shape_vertices[-1]:
+                shape_vertices.append(shape_vertices[0])
+            logging.info(f"[extract_stroke_features_from_shapes] PATCH: Validated/corrected shape_vertices for shape {shape_idx}: {shape_vertices}")
+        else:
+            logging.warning(f"[extract_stroke_features_from_shapes] PATCH: Insufficient vertices for shape {shape_idx}: {shape_vertices}")
         for stroke_idx, stroke in enumerate(actions):
             logging.info(f"[extract_stroke_features_from_shapes] shape_idx={shape_idx} | stroke_idx={stroke_idx} | stroke={stroke}")
             try:
-                features = _calculate_stroke_specific_features(stroke, stroke_idx, bongard_image=bongard_image)
-                logging.info(f"[extract_stroke_features_from_shapes] Extracted features for shape {shape_idx}, stroke {stroke_idx}: {features}")
+                logging.info(f"[extract_stroke_features_from_shapes] PATCH: Input vertices to _calculate_stroke_specific_features: {shape_vertices}")
+                features = _calculate_stroke_specific_features(stroke, stroke_idx, bongard_image=bongard_image, parent_shape_vertices=shape_vertices)
+                logging.info(f"[extract_stroke_features_from_shapes] PATCH: Output features for shape {shape_idx}, stroke {stroke_idx}: {features}")
             except Exception as e:
                 logging.error(f"[extract_stroke_features_from_shapes] Error extracting features for shape {shape_idx}, stroke {stroke_idx}: {e}")
                 features = {'error': str(e)}
@@ -165,10 +183,15 @@ def _extract_stroke_type_from_command(stroke) -> str:
                 return fn_parts[0]
     return 'unknown'
 
-def _extract_stroke_vertices(stroke, stroke_index, all_vertices, bongard_image=None):
+def _extract_stroke_vertices(stroke, stroke_index, all_vertices, bongard_image=None, parent_shape_vertices=None):
     logger = logging.getLogger(__name__)
-    logger.debug(f"[_extract_stroke_vertices] INPUT: stroke_index={stroke_index}, stroke={stroke}, all_vertices={all_vertices}, bongard_image={bongard_image}")
+    logger.debug(f"[_extract_stroke_vertices] INPUT: stroke_index={stroke_index}, stroke={stroke}, all_vertices={all_vertices}, bongard_image={bongard_image}, parent_shape_vertices={parent_shape_vertices}")
     MIN_VERTICES = 3
+
+    # Use parent_shape_vertices if provided and valid
+    if parent_shape_vertices is not None and valid_verts(parent_shape_vertices):
+        logger.info(f"[_extract_stroke_vertices] Using parent_shape_vertices: {parent_shape_vertices}")
+        return parent_shape_vertices
 
     # Try to get vertices from bongard_image.one_stroke_shapes if available and in bounds
     verts = None
@@ -191,7 +214,7 @@ def _extract_stroke_vertices(stroke, stroke_index, all_vertices, bongard_image=N
             # Log raw commands and shapes for debugging
             if hasattr(bongard_image, 'raw_commands'):
                 logger.error(f"[_extract_stroke_vertices] Raw commands: {bongard_image.raw_commands}")
-            logger.error(f"[_extract_stroke_vertices] All shapes: {[getattr(s, 'vertices', None) for s in shapes]}")
+            logger.error(f"[_extract_stroke_vertices] All shapes: {[getattr(s, 'vertices', None) for s in shapes]}" )
             # Fallback: synthesize minimal shape (single vertex at origin)
             return [(0.0, 0.0)]
 
@@ -345,7 +368,7 @@ def _vertices_from_command(command, stroke_index):
     return []
 
 
-def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_val=None, shape_modifier_val=None, parameters=None, bongard_image=None) -> Dict[str, Any]:
+def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_val=None, shape_modifier_val=None, parameters=None, bongard_image=None, parent_shape_vertices=None) -> Dict[str, Any]:
     logger.info(f"[_calculate_stroke_specific_features] Called with stroke={stroke}, stroke_index={stroke_index}, stroke_type_val={stroke_type_val}, shape_modifier_val={shape_modifier_val}, parameters={parameters}")
     """Calculate features specific to stroke type and shape modifier, using robust geometric/physics formulas."""
     features = {'stroke_index': stroke_index}
@@ -353,7 +376,7 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
     stype = stroke_type_val or _extract_stroke_type_from_command(stroke)
     smod = shape_modifier_val or _extract_modifier_from_stroke(stroke) or 'normal'
     params = parameters or {}
-    verts = _extract_stroke_vertices(stroke, stroke_index, None, bongard_image=bongard_image)
+    verts = _extract_stroke_vertices(stroke, stroke_index, None, bongard_image=bongard_image, parent_shape_vertices=parent_shape_vertices)
     if not verts or (isinstance(verts, list) and len(verts) == 1 and verts[0] == (0.0, 0.0)):
         logger.error(f"[_calculate_stroke_specific_features] Fallback or missing vertices for stroke_index={stroke_index}, stroke={stroke}, type={stroke_type_val}, modifier={shape_modifier_val}")
     logger.info(f"[_calculate_stroke_specific_features] verts: {verts}")

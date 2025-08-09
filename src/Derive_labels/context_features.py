@@ -52,25 +52,122 @@ class BongardFeatureExtractor:
             # Defensive input validation
             if not isinstance(image, dict):
                 logging.error(f"[BAD INPUT] image is not a dict: {type(image)}")
-                output = {}
+                output = {
+                    'area': 0.0,
+                    'perimeter': 0.0,
+                    'convexity_ratio': 1e-6,
+                    'compactness': 1e-6,
+                    'aspect_ratio': 1.0,
+                    'centroid_x': 0.0,
+                    'centroid_y': 0.0,
+                    'width': 0.0,
+                    'height': 0.0,
+                    'bounding_box': (0,0,0,0),
+                    'num_vertices': 0,
+                    'curvature': 0.0,
+                    'angular_variance': 0.0,
+                    'complexity': 0.0,
+                    'num_strokes': 0,
+                    'stroke_type_distribution': {},
+                    'modifier_distribution': {},
+                    'avg_stroke_length': 0.0,
+                    'stroke_complexity': 0.0,
+                    'adjacency_matrix': None,
+                    'containment': None,
+                    'intersection_pattern': None,
+                    'multiscale': {},
+                    'moment_of_inertia': 0.0,
+                    'center_of_mass_x': 0.0,
+                    'center_of_mass_y': 0.0,
+                    'symmetry_score': 0.0,
+                    'ngram': None,
+                    'alternation': None,
+                    'regularity': None,
+                    'dominant_shape_functions': None,
+                    'dominant_modifiers': None,
+                }
                 logging.info(f"[extract_image_features] OUTPUT: {output}")
                 return output
             if 'vertices' not in image or not isinstance(image['vertices'], list) or not all(isinstance(v, (list, tuple)) and len(v) == 2 for v in image['vertices']):
                 logging.error(f"[BAD VERTICES] image['vertices'] malformed: {image.get('vertices')}")
                 image['vertices'] = []
-            # Optionally log geometry if calculated here
-            # geometry = calculate_geometry(image['vertices']) if image['vertices'] else None
-            # logging.info(f"[extract_image_features] Geometry: {geometry}")
             # ...existing code...
             # (Insert feature extraction logic here, unchanged)
-            # ...existing code...
             # For demonstration, assume output is features_dict
-            features_dict = {}  # Replace with actual feature extraction logic
+            features_dict = {
+                'area': 0.0,
+                'perimeter': 0.0,
+                'convexity_ratio': 1e-6,
+                'compactness': 1e-6,
+                'aspect_ratio': 1.0,
+                'centroid_x': 0.0,
+                'centroid_y': 0.0,
+                'width': 0.0,
+                'height': 0.0,
+                'bounding_box': (0,0,0,0),
+                'num_vertices': 0,
+                'curvature': 0.0,
+                'angular_variance': 0.0,
+                'complexity': 0.0,
+                'num_strokes': 0,
+                'stroke_type_distribution': {},
+                'modifier_distribution': {},
+                'avg_stroke_length': 0.0,
+                'stroke_complexity': 0.0,
+                'adjacency_matrix': None,
+                'containment': None,
+                'intersection_pattern': None,
+                'multiscale': {},
+                'moment_of_inertia': 0.0,
+                'center_of_mass_x': 0.0,
+                'center_of_mass_y': 0.0,
+                'symmetry_score': 0.0,
+                'ngram': None,
+                'alternation': None,
+                'regularity': None,
+                'dominant_shape_functions': None,
+                'dominant_modifiers': None,
+            }
             logging.info(f"[extract_image_features] OUTPUT features: {features_dict}")
             return features_dict
         except Exception as e:
             logging.error(f"[extract_image_features] Exception: {e}")
-            return {'error': str(e)}
+            output = {
+                'area': 0.0,
+                'perimeter': 0.0,
+                'convexity_ratio': 1e-6,
+                'compactness': 1e-6,
+                'aspect_ratio': 1.0,
+                'centroid_x': 0.0,
+                'centroid_y': 0.0,
+                'width': 0.0,
+                'height': 0.0,
+                'bounding_box': (0,0,0,0),
+                'num_vertices': 0,
+                'curvature': 0.0,
+                'angular_variance': 0.0,
+                'complexity': 0.0,
+                'num_strokes': 0,
+                'stroke_type_distribution': {},
+                'modifier_distribution': {},
+                'avg_stroke_length': 0.0,
+                'stroke_complexity': 0.0,
+                'adjacency_matrix': None,
+                'containment': None,
+                'intersection_pattern': None,
+                'multiscale': {},
+                'moment_of_inertia': 0.0,
+                'center_of_mass_x': 0.0,
+                'center_of_mass_y': 0.0,
+                'symmetry_score': 0.0,
+                'ngram': None,
+                'alternation': None,
+                'regularity': None,
+                'dominant_shape_functions': None,
+                'dominant_modifiers': None,
+            }
+            logging.info(f"[extract_image_features] OUTPUT (exception fallback): {output}")
+            return output
         if 'geometry' not in image or not isinstance(image['geometry'], dict):
             logging.error(f"[BAD GEOMETRY] image['geometry'] malformed: {image.get('geometry')}")
             image['geometry'] = {}

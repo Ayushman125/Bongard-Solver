@@ -839,7 +839,13 @@ class ComprehensiveBongardProcessor:
                     logger.error(f"[FALLBACK LOGIC] Error in convex hull: {e}. Geometry cannot be recovered for vertices: {vertices}")
                     poly = None
 
-            # --- Robust, normalized feature extraction ---
+            # --- Defensive conversion of geometry values to float ---
+            def safe_float(val, default=0.0):
+                try:
+                    return float(val)
+                except (TypeError, ValueError):
+                    return default
+
             num_strokes = len(strokes)
             max_strokes = 50
             perimeter_raw = _calculate_perimeter(vertices)
@@ -853,8 +859,8 @@ class ComprehensiveBongardProcessor:
                 except Exception:
                     pass
             # Normalized perimeter and area (relative to convex hull)
-            perimeter_norm = min(max(perimeter_raw / hull_perimeter, 0.0), 1.0) if hull_perimeter else 0.0
-            area_norm = min(max(area_raw / hull_area, 0.0), 1.0) if hull_area else 0.0
+            perimeter_norm = min(max(safe_float(perimeter_raw) / safe_float(hull_perimeter), 0.0), 1.0) if hull_perimeter else 0.0
+            area_norm = min(max(safe_float(area_raw) / safe_float(hull_area), 0.0), 1.0) if hull_area else 0.0
 
             # Use robust, analytic, normalized formulas for all features:
             curvature_score = PhysicsInference.robust_curvature(vertices)
@@ -871,17 +877,20 @@ class ComprehensiveBongardProcessor:
             from src.Derive_labels.stroke_types import _compute_bounding_box
             bbox = _compute_bounding_box(vertices)
             logger.info(f"[_calculate_image_features] Bounding box: {bbox}")
+            width = safe_float(geometry.get('width', 0.0))
+            height = safe_float(geometry.get('height', 0.0))
+            area_val = safe_float(geometry.get('area', 0.0))
             features = {
                 'bounding_box': bbox,
                 'centroid': geometry.get('centroid', [0.0, 0.0]),
-                'width': geometry.get('width', 0.0),
-                'height': geometry.get('height', 0.0),
+                'width': width,
+                'height': height,
                 'area_raw': area_raw,
                 'area_normalized': area_norm,
                 'perimeter_raw': perimeter_raw,
                 'perimeter_normalized': perimeter_norm,
-                'aspect_ratio': max(FLAGGING_THRESHOLDS['min_aspect_ratio'], min(safe_divide(geometry.get('width', 1.0), geometry.get('height', 1.0), 1.0), FLAGGING_THRESHOLDS['max_aspect_ratio'])),
-                'convexity_ratio': (max(0.0, min(1.0, safe_divide(poly.area, poly.convex_hull.area))) if poly and poly.area != 0 and poly.convex_hull.area != 0 else 0.0),
+                'aspect_ratio': max(FLAGGING_THRESHOLDS['min_aspect_ratio'], min(safe_float(width) / safe_float(height, 1.0), FLAGGING_THRESHOLDS['max_aspect_ratio'])) if height else 1.0,
+                'convexity_ratio': (max(0.0, min(1.0, safe_float(poly.area) / safe_float(poly.convex_hull.area))) if poly and poly.area != 0 and poly.convex_hull.area != 0 else 0.0),
                 'is_convex': PhysicsInference.is_convex(poly) if poly else False,
                 'compactness': _calculate_compactness(area_raw, perimeter_raw),
                 'eccentricity': _calculate_eccentricity(vertices),
