@@ -83,7 +83,6 @@ from enum import Enum
 nvlabs_path = Path(__file__).parent.parent.parent / "Bongard-LOGO"
 sys.path.insert(0, str(nvlabs_path))
 
-# Import the original NVLabs classes DIRECTLY - no redefinitions needed!
 try:
     from bongard import LineAction, ArcAction, OneStrokeShape, BongardImage
     from bongard.bongard import BasicAction  # Import BasicAction directly from bongard.py
@@ -106,6 +105,13 @@ try:
     LineAction.__repr__ = safe_action_str
     ArcAction.__repr__ = safe_action_str
     
+    # Add granular logging after shape construction
+    import logging
+    def log_shape_construction(action_commands, shapes, problem_id=None):
+        logging.info(f"[SHAPE CONSTRUCTION] problem_id={problem_id} | input_action_commands={action_commands}")
+        for idx, shape in enumerate(shapes):
+            actions = getattr(shape, 'actions', getattr(shape, 'strokes', []))
+            logging.info(f"[SHAPE CONSTRUCTION] Shape {idx}: actions={actions} | shape_obj={shape}")
 except ImportError as e:
     print(f"⚠️ NVLabs classes not available, using fallback: {e}")
     NVLABS_AVAILABLE = False
@@ -154,8 +160,14 @@ if NVLABS_AVAILABLE:
         """Extended NVLabs OneStrokeShape with vertices property for compatibility."""
         
         def __init__(self, basic_actions, start_coordinates=None, start_orientation=None, scaling_factors=None):
+            import logging
+            logging.info(f"[OneStrokeShape.__init__] basic_actions: {basic_actions}, start_coordinates: {start_coordinates}, start_orientation: {start_orientation}, scaling_factors: {scaling_factors}")
             super().__init__(basic_actions, start_coordinates, start_orientation, scaling_factors)
             self._vertices = None
+            # PATCH: Expose actions for downstream feature extraction
+            self.actions = basic_actions
+            # PATCH: Ensure start_coordinates is set and exposed
+            self.start_coordinates = start_coordinates
             
         @property
         def vertices(self):
@@ -172,6 +184,8 @@ if NVLABS_AVAILABLE:
         
         def _calculate_vertices(self):
             """Calculate vertices from actions using NVLabs coordinate system with turtle graphics simulation."""
+            import logging
+            logging.info(f"[OneStrokeShape._calculate_vertices] INPUT basic_actions: {self.basic_actions}")
             vertices = []
             current_x, current_y = 0.0, 0.0  # Start at center
             current_angle = 0.0  # Start facing right (0 degrees)
@@ -184,8 +198,6 @@ if NVLABS_AVAILABLE:
                     elif action.turn_direction == "R":
                         current_angle -= action.turn_angle
                     if isinstance(action, LineAction):
-                        # Move forward by line_length in current direction
-                        # --- FIX: Ensure line_length is properly scaled ---
                         distance = action.line_length
                         if hasattr(action, 'line_length_normalization_factor') and action.line_length_normalization_factor:
                             distance *= action.line_length_normalization_factor
@@ -195,7 +207,6 @@ if NVLABS_AVAILABLE:
                         vertices.append((new_x, new_y))
                         current_x, current_y = new_x, new_y
                     elif isinstance(action, ArcAction):
-                        # Handle arc drawing (approximate with line segments)
                         radius = action.arc_radius
                         if hasattr(action, 'arc_radius_normalizaton_factor') and action.arc_radius_normalizaton_factor:
                             radius *= action.arc_radius_normalizaton_factor
@@ -211,9 +222,10 @@ if NVLABS_AVAILABLE:
                             vertices.append((new_x, new_y))
                             current_x, current_y = new_x, new_y
                         current_angle += arc_angle
+                logging.info(f"[OneStrokeShape._calculate_vertices] OUTPUT vertices: {vertices}")
                 return vertices
             except Exception as e:
-                logger.error(f"Failed to calculate vertices: {e}")
+                logging.error(f"[OneStrokeShape._calculate_vertices] Exception: {e}")
                 return []
 else:
     # Fallback implementation when NVLabs classes are not available

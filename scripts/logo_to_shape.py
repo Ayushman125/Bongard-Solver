@@ -698,7 +698,8 @@ class ComprehensiveBongardProcessor:
                     'processing_timestamp': time.time(),
                     'feature_count': len(image_features) + len(physics_features) + len(composition_features)
                 },
-                'actions': actions_joined,
+                # PATCH: actions now matches per-shape grouping
+                'actions': [",".join(robust_flatten_and_stringify(sublist)) for sublist in safe_action_program],
                 'action_program': [",".join(robust_flatten_and_stringify(sublist)) for sublist in safe_action_program],
                 'geometry': robust_flatten_and_stringify(geometry),
                 'relational_features': robust_flatten_and_stringify(safe_relational_features),
@@ -818,10 +819,13 @@ class ComprehensiveBongardProcessor:
             from shapely.geometry import Polygon
             poly = None
             try:
+                logger.debug(f"[POLYGON CREATION] Attempting to create Polygon with vertices: {vertices}")
                 poly = Polygon(vertices)
+                logger.debug(f"[POLYGON CREATION] poly.is_valid={poly.is_valid}, poly.is_empty={poly.is_empty}, poly.area={poly.area}")
                 if not poly.is_valid or poly.area == 0:
                     logger.error(f"[FALLBACK LOGIC] Polygon invalid or zero area for vertices: {vertices}. Applying buffer(0) fallback.")
                     poly = poly.buffer(0)
+                    logger.debug(f"[POLYGON BUFFER] After buffer(0): poly.is_valid={poly.is_valid}, poly.is_empty={poly.is_empty}, poly.area={poly.area}")
             except Exception as e:
                 logger.error(f"[FALLBACK LOGIC] Error in Polygon(vertices): {e}. Attempting convex hull fallback for vertices: {vertices}")
                 poly = None
@@ -830,6 +834,7 @@ class ComprehensiveBongardProcessor:
                 try:
                     logger.error(f"[FALLBACK LOGIC] Polygon still invalid or empty after buffer(0). Falling back to convex hull for vertices: {vertices}")
                     poly = Polygon(vertices).convex_hull
+                    logger.debug(f"[CONVEX HULL] After convex_hull: poly.is_valid={poly.is_valid}, poly.is_empty={poly.is_empty}, poly.area={poly.area}")
                 except Exception as e:
                     logger.error(f"[FALLBACK LOGIC] Error in convex hull: {e}. Geometry cannot be recovered for vertices: {vertices}")
                     poly = None

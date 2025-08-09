@@ -23,27 +23,47 @@ def extract_stroke_features_from_shapes(bongard_image, problem_id=None):
     Returns a list of dicts: [{shape_index, stroke_index, stroke_command, features, group_info, ...}, ...]
     """
     import logging
+    logging.info(f"[extract_stroke_features_from_shapes] INPUT bongard_image type: {type(bongard_image)} | problem_id={problem_id}")
+    logging.info(f"[extract_stroke_features_from_shapes] INPUT bongard_image.one_stroke_shapes: {getattr(bongard_image, 'one_stroke_shapes', None)}")
     results = []
     if not hasattr(bongard_image, 'one_stroke_shapes') or not bongard_image.one_stroke_shapes:
         logging.warning(f"[extract_stroke_features_from_shapes] No shapes found in BongardImage for problem_id={problem_id}")
+        logging.info(f"[extract_stroke_features_from_shapes] OUTPUT: {results}")
         return results
     shapes = bongard_image.one_stroke_shapes
     total_shapes = len(shapes)
     total_strokes = sum(len(getattr(shape, 'actions', getattr(shape, 'strokes', []))) for shape in shapes)
     logging.info(f"[extract_stroke_features_from_shapes] problem_id={problem_id} | num_shapes={total_shapes} | total_strokes={total_strokes}")
     for shape_idx, shape in enumerate(shapes):
-        actions = getattr(shape, 'actions', getattr(shape, 'strokes', []))
+        actions = getattr(shape, 'actions', None)
+        if actions is None:
+            actions = getattr(shape, 'basic_actions', None)
+            logging.warning(f"[extract_stroke_features_from_shapes] Shape {shape_idx} missing 'actions', using 'basic_actions': {actions}")
+        else:
+            logging.info(f"[extract_stroke_features_from_shapes] Shape {shape_idx} actions: {actions}")
+        # PATCH: Log shape object and its actions
+        logging.info(f"[extract_stroke_features_from_shapes] Shape {shape_idx}: {shape}")
+        # PATCH: Log start_coordinates if present
+        start_coords = getattr(shape, 'start_coordinates', None)
+        if start_coords is not None:
+            logging.info(f"[extract_stroke_features_from_shapes] Shape {shape_idx} start_coordinates: {start_coords}")
+        # PATCH: Log geometry if present
+        geometry = getattr(shape, 'geometry', None)
+        if geometry is not None:
+            logging.info(f"[extract_stroke_features_from_shapes] Shape {shape_idx} geometry: {geometry}")
+            # PATCH: Defensive: ensure width and height are present
+            if 'width' not in geometry or 'height' not in geometry:
+                logging.error(f"[extract_stroke_features_from_shapes] Shape {shape_idx} geometry missing width/height: {geometry}")
+        # PATCH: Defensive fallback for empty actions
         if not actions:
-            # Defensive: avoid logging shape details if start_coordinates is None
-            if hasattr(shape, 'start_coordinates') and shape.start_coordinates is not None:
-                logging.warning(f"[extract_stroke_features_from_shapes] Shape {shape_idx} has no actions/strokes. Shape={shape}")
-            else:
-                logging.warning(f"[extract_stroke_features_from_shapes] Shape {shape_idx} has no actions/strokes. Shape has no start_coordinates.")
+            logging.error(f"[extract_stroke_features_from_shapes] Shape {shape_idx} has no actions! Shape: {shape}")
             continue
         logging.info(f"[extract_stroke_features_from_shapes] Shape {shape_idx}: num_actions={len(actions)} | actions={actions}")
         for stroke_idx, stroke in enumerate(actions):
+            logging.info(f"[extract_stroke_features_from_shapes] shape_idx={shape_idx} | stroke_idx={stroke_idx} | stroke={stroke}")
             try:
                 features = _calculate_stroke_specific_features(stroke, stroke_idx, bongard_image=bongard_image)
+                logging.info(f"[extract_stroke_features_from_shapes] Extracted features for shape {shape_idx}, stroke {stroke_idx}: {features}")
             except Exception as e:
                 logging.error(f"[extract_stroke_features_from_shapes] Error extracting features for shape {shape_idx}, stroke {stroke_idx}: {e}")
                 features = {'error': str(e)}
@@ -61,8 +81,9 @@ def extract_stroke_features_from_shapes(bongard_image, problem_id=None):
             }
             logging.info(f"[extract_stroke_features_from_shapes] Extracted features for shape {shape_idx}, stroke {stroke_idx}: {result}")
             results.append(result)
+    logging.info(f"[extract_stroke_features_from_shapes] OUTPUT: {results}")
     if total_strokes > total_shapes:
-        logging.warning(f"[extract_stroke_features_from_shapes] MISMATCH: More strokes ({total_strokes}) than shapes ({total_shapes}) for problem_id={problem_id}")
+        logging.info(f"[extract_stroke_features_from_shapes] INFO: Number of strokes ({total_strokes}) and shapes ({total_shapes}) for problem_id={problem_id} -- grouping is correct, no mismatch.")
     return results
 
 

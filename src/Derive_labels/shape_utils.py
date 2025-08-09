@@ -5,7 +5,10 @@ from src.physics_inference import PhysicsInference
 def standardize_coordinates(vertices, target_range=(0, 1)):
     """Ensure all vertices are in consistent coordinate system [target_range]."""
     import numpy as np
+    import logging
+    logging.info(f"[standardize_coordinates] INPUT vertices: {vertices}")
     if not vertices or len(vertices) < 2:
+        logging.warning(f"[standardize_coordinates] Not enough vertices to standardize: {vertices}")
         return vertices
     arr = np.array(vertices)
     min_x, min_y = np.min(arr, axis=0)
@@ -14,21 +17,39 @@ def standardize_coordinates(vertices, target_range=(0, 1)):
     height = max_y - min_y
     if width > 0 and height > 0:
         normalized = (arr - [min_x, min_y]) / [width, height]
+        logging.info(f"[standardize_coordinates] OUTPUT normalized vertices: {normalized.tolist()}")
         return normalized.tolist()
+    logging.warning(f"[standardize_coordinates] Degenerate width/height, returning arr: {arr.tolist()}")
     return arr.tolist()
 
 def calculate_geometry_consistent(vertices):
     """Calculate geometry with consistent coordinate normalization."""
     from shapely.geometry import Polygon
+    import logging
+    logging.info(f"[calculate_geometry_consistent] INPUT vertices: {vertices}")
     if not vertices or len(vertices) < 3:
-        return {'area': 0, 'perimeter': 0, 'centroid': [0, 0], 'bounds': [0, 0, 0, 0]}
-    poly = Polygon(vertices)
-    return {
-        'area': poly.area,
-        'perimeter': poly.length,
-        'centroid': list(poly.centroid.coords[0]),
-        'bounds': list(poly.bounds)
-    }
+        logging.warning(f"[calculate_geometry_consistent] Not enough vertices for geometry: {vertices}")
+        # PATCH: Always include width and height in output dict
+        return {'area': 0, 'perimeter': 0, 'centroid': [0, 0], 'bounds': [0, 0, 0, 0], 'width': 0.0, 'height': 0.0}
+    try:
+        poly = Polygon(vertices)
+        min_x, min_y, max_x, max_y = poly.bounds
+        width = max_x - min_x
+        height = max_y - min_y
+        geometry = {
+            'area': poly.area,
+            'perimeter': poly.length,
+            'centroid': list(poly.centroid.coords[0]),
+            'bounds': list(poly.bounds),
+            'width': width,
+            'height': height
+        }
+        logging.info(f"[calculate_geometry_consistent] OUTPUT geometry: {geometry}")
+        return geometry
+    except Exception as e:
+        logging.error(f"[calculate_geometry_consistent] Exception: {e}")
+        # PATCH: Always include width and height in output dict
+        return {'area': 0, 'perimeter': 0, 'centroid': [0, 0], 'bounds': [0, 0, 0, 0], 'width': 0.0, 'height': 0.0}
 
 def calculate_complexity(vertices: List[tuple]) -> float:
     """
@@ -139,30 +160,38 @@ def _calculate_edge_length_variance(vertices):
     return PhysicsInference.edge_length_variance(vertices)
 
 def normalize_vertices(vertices_raw):
-        """
-        Normalize coordinates to [0,1] in both axes, preserving aspect ratio and centering shape if needed.
-        Uses PhysicsInference.dedup_vertices and PhysicsInference.rounded_bbox.
-        """
-        import numpy as np
-        verts = ensure_vertex_list(vertices_raw)
-        verts = PhysicsInference.dedup_vertices(verts)
-        if len(verts) < 2:
-            return verts
-        minx, miny, maxx, maxy = PhysicsInference.rounded_bbox(verts)
-        width = maxx - minx
-        height = maxy - miny
-        if width < 1e-8 or height < 1e-8:
-            return verts
-        arr = np.array(verts)
-        arr = (arr - [minx, miny]) / [width, height]
-        arr[np.abs(arr) < 1e-10] = 0.0
-        return [tuple(pt) for pt in arr]
+    """
+    Normalize coordinates to [0,1] in both axes, preserving aspect ratio and centering shape if needed.
+    Uses PhysicsInference.dedup_vertices and PhysicsInference.rounded_bbox.
+    """
+    import numpy as np
+    import logging
+    logging.info(f"[normalize_vertices] INPUT vertices_raw: {vertices_raw}")
+    verts = ensure_vertex_list(vertices_raw)
+    verts = PhysicsInference.dedup_vertices(verts)
+    if len(verts) < 2:
+        logging.warning(f"[normalize_vertices] Not enough vertices to normalize: {verts}")
+        return verts
+    minx, miny, maxx, maxy = PhysicsInference.rounded_bbox(verts)
+    width = maxx - minx
+    height = maxy - miny
+    if width < 1e-8 or height < 1e-8:
+        logging.warning(f"[normalize_vertices] Degenerate width/height, returning verts: {verts}")
+        return verts
+    arr = np.array(verts)
+    arr = (arr - [minx, miny]) / [width, height]
+    arr[np.abs(arr) < 1e-10] = 0.0
+    normalized = [tuple(pt) for pt in arr]
+    logging.info(f"[normalize_vertices] OUTPUT normalized vertices: {normalized}")
+    return normalized
 
 def calculate_geometry(vertices):
     """Calculate geometry properties from normalized vertices, robustly constructing polygon."""
     import numpy as np
+    import logging
+    logging.info(f"[calculate_geometry] INPUT vertices: {vertices}")
     if not vertices or len(vertices) < 2:
-        # Degenerate: not enough points for geometry
+        logging.warning(f"[calculate_geometry] Not enough points for geometry: {vertices}")
         return {
             'bbox': {'min_x': 0, 'max_x': 0, 'min_y': 0, 'max_y': 0},
             'centroid': [0.0, 0.0],
@@ -176,7 +205,7 @@ def calculate_geometry(vertices):
     # Always normalize vertices for geometry calculations
     verts = normalize_vertices(list(vertices))
     if len(verts) < 2:
-        # Defensive: normalization may collapse points
+        logging.warning(f"[calculate_geometry] Normalization collapsed points: {verts}")
         return {
             'bbox': {'min_x': 0, 'max_x': 0, 'min_y': 0, 'max_y': 0},
             'centroid': [0.0, 0.0],
@@ -191,51 +220,66 @@ def calculate_geometry(vertices):
     bbox = {'min_x': min(xs), 'max_x': max(xs), 'min_y': min(ys), 'max_y': max(ys)}
     width = bbox['max_x'] - bbox['min_x']
     height = bbox['max_y'] - bbox['min_y']
-    # Use shoelace area for raw vertex lists
     area = PhysicsInference.shoelace_area(verts) if len(verts) >= 3 else 0.0
     try:
         from shapely.geometry import Polygon
+        perimeter = 0.0
+        poly = None
         if len(verts) >= 3:
             poly = Polygon(verts)
             if not poly.is_valid:
                 poly = poly.buffer(0)
             perimeter = poly.length
+            centroid = list(poly.centroid.coords[0])
+            area_val = poly.area
         elif len(verts) == 2:
-            poly = None
             perimeter = float(np.linalg.norm(np.array(verts[1]) - np.array(verts[0])))
+            centroid = PhysicsInference.centroid(verts)
+            area_val = area
         else:
-            poly = None
-            perimeter = 0.0
-    except Exception:
-        poly = None
-        perimeter = 0.0
-    centroid = PhysicsInference.centroid(verts) if len(verts) >= 2 else [0.0, 0.0]
-    inertia = PhysicsInference.moment_of_inertia(verts) if len(verts) >= 2 else 0.0
-    # Robust convexity: only defined for >=3 points, else 0.0
-    if len(verts) >= 3:
-        try:
-            convexity = PhysicsInference.convexity_ratio(verts)
-            if convexity != convexity:  # NaN check
+            centroid = PhysicsInference.centroid(verts) if len(verts) >= 1 else [0.0, 0.0]
+            area_val = area
+        inertia = PhysicsInference.moment_of_inertia(verts) if len(verts) >= 2 else 0.0
+        # Robust convexity: only defined for >=3 points, else 0.0
+        if len(verts) >= 3:
+            try:
+                convexity = PhysicsInference.convexity_ratio(verts)
+                if convexity != convexity:  # NaN check
+                    convexity = 0.0
+            except Exception:
                 convexity = 0.0
-        except Exception:
+        else:
             convexity = 0.0
-    else:
-        convexity = 0.0
-    # Ensure all outputs are JSON-safe
-    def _json_safe(x):
-        if isinstance(x, float) and (np.isnan(x) or np.isinf(x)):
-            return 0.0
-        return float(x) if isinstance(x, float) else x
-    return {
-        'bbox': {k: _json_safe(v) for k, v in bbox.items()},
-        'centroid': [_json_safe(c) for c in centroid],
-        'width': _json_safe(width),
-        'height': _json_safe(height),
-        'area': _json_safe(area),
-        'perimeter': _json_safe(perimeter),
-        'moment_of_inertia': _json_safe(inertia),
-        'convexity_ratio': _json_safe(convexity)
-    }
+        # Ensure all outputs are JSON-safe
+        def _json_safe(x):
+            if isinstance(x, float) and (np.isnan(x) or np.isinf(x)):
+                return 0.0
+            return float(x) if isinstance(x, float) else x
+        geometry = {
+            'bbox': {k: _json_safe(v) for k, v in bbox.items()},
+            'centroid': [_json_safe(c) for c in centroid],
+            'width': _json_safe(width),
+            'height': _json_safe(height),
+            'area': _json_safe(area_val),
+            'perimeter': _json_safe(perimeter),
+            'moment_of_inertia': _json_safe(inertia),
+            'convexity_ratio': _json_safe(convexity)
+        }
+        logging.info(f"[calculate_geometry] OUTPUT geometry: {geometry}")
+        return geometry
+    except Exception as e:
+        logging.error(f"[calculate_geometry] Exception: {e}")
+        geometry = {
+            'bbox': bbox,
+            'centroid': [0.0, 0.0],
+            'width': width,
+            'height': height,
+            'area': area,
+            'perimeter': 0.0,
+            'moment_of_inertia': 0.0,
+            'convexity_ratio': 0.0
+        }
+        return geometry
 
 def extract_position_and_rotation(vertices):
     """Given a list of (x, y) normalized vertices, return centroid and orientation angle (degrees)."""

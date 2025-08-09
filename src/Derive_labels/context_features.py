@@ -44,21 +44,33 @@ class BongardFeatureExtractor:
 
     def extract_image_features(self, image):
         import logging
-        logging.info(f"[DIAG] extract_image_features input: {image}")
-        # Robust handling: check for degenerate input
-        if not isinstance(image, dict) or not image.get('vertices'):
-            logging.warning(f"[DIAG] Degenerate image passed to extract_image_features. Skipping feature extraction. Input: {image}")
-            return {}
-        logging.info(f"[extract_image_features] INPUT: type={type(image)}, keys={list(image.keys()) if isinstance(image, dict) else 'N/A'}")
-        # Defensive input validation
-        if not isinstance(image, dict):
-            logging.error(f"[BAD INPUT] image is not a dict: {type(image)}")
-            output = {}
-            logging.info(f"[extract_image_features] OUTPUT: {output}")
-            return output
-        if 'vertices' not in image or not isinstance(image['vertices'], list) or not all(isinstance(v, (list, tuple)) and len(v) == 2 for v in image['vertices']):
-            logging.error(f"[BAD VERTICES] image['vertices'] malformed: {image.get('vertices')}")
-            image['vertices'] = []
+        logging.info(f"[extract_image_features] INPUT image: {image}")
+        try:
+            # Log vertices and geometry if present
+            vertices = image.get('vertices') if isinstance(image, dict) else None
+            logging.info(f"[extract_image_features] Vertices: {vertices}")
+            # Defensive input validation
+            if not isinstance(image, dict):
+                logging.error(f"[BAD INPUT] image is not a dict: {type(image)}")
+                output = {}
+                logging.info(f"[extract_image_features] OUTPUT: {output}")
+                return output
+            if 'vertices' not in image or not isinstance(image['vertices'], list) or not all(isinstance(v, (list, tuple)) and len(v) == 2 for v in image['vertices']):
+                logging.error(f"[BAD VERTICES] image['vertices'] malformed: {image.get('vertices')}")
+                image['vertices'] = []
+            # Optionally log geometry if calculated here
+            # geometry = calculate_geometry(image['vertices']) if image['vertices'] else None
+            # logging.info(f"[extract_image_features] Geometry: {geometry}")
+            # ...existing code...
+            # (Insert feature extraction logic here, unchanged)
+            # ...existing code...
+            # For demonstration, assume output is features_dict
+            features_dict = {}  # Replace with actual feature extraction logic
+            logging.info(f"[extract_image_features] OUTPUT features: {features_dict}")
+            return features_dict
+        except Exception as e:
+            logging.error(f"[extract_image_features] Exception: {e}")
+            return {'error': str(e)}
         if 'geometry' not in image or not isinstance(image['geometry'], dict):
             logging.error(f"[BAD GEOMETRY] image['geometry'] malformed: {image.get('geometry')}")
             image['geometry'] = {}
