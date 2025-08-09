@@ -32,116 +32,95 @@ def safe_feature(default=0.0):
             try:
                 return fn(*args, **kwargs)
             except Exception as e:
-                logging.warning(
-                    f"Feature {fn.__name__} failed ({e!r}), returning default={default}"
-                )
+                logging.error(f"safe_feature: Exception {e}")
                 return default
         return wrapped
     return decorator
 
-def safe_acos(x):
-    """
-    Clamp input to [-1, 1], then return arccos (in radians) for floats or numpy arrays.
-    Prevents math domain errors.
-    """
-    return np.arccos(np.clip(x, -1.0, 1.0))
+    def safe_feature(default=0.0):
+        """
+        Decorator: if the wrapped method throws any Exception,
+        log it once and return `default` instead.
+        """
+        def decorator(fn):
+            @functools.wraps(fn)
+            def wrapped(*args, **kwargs):
+                try:
+                    return fn(*args, **kwargs)
+                except Exception as e:
+                    logging.error(f"safe_feature: Exception {e}")
+                    return default
+            return wrapped
+        return decorator
+
 
 class PhysicsInference:
-
     @staticmethod
-    def polyline_angular_variance(vertices):
-        """Variance of turn angles for open polylines (≥3 points). Returns NaN if <2 angles."""
-        if not vertices or len(vertices) < 3:
-            return float('nan')
-        arr = np.array(vertices)
-        n = len(arr)
-        angles = []
-        for i in range(1, n-1):
-            v1 = arr[i] - arr[i-1]
-            v2 = arr[i+1] - arr[i]
-            norm1 = np.linalg.norm(v1)
-            norm2 = np.linalg.norm(v2)
-            if norm1 > 1e-6 and norm2 > 1e-6:
-                dot = np.clip(np.dot(v1, v2) / (norm1 * norm2), -1.0, 1.0)
-                angle = np.arccos(dot)
-                angles.append(angle)
-        if len(angles) < 2:
-            return float('nan')
-        return float(np.var(angles))
-
-    @staticmethod
-    def robust_curvature(vertices):
-        """
-        For polylines: sum of absolute turn angles divided by number of segments.
-        For arcs: use normalized arc angle if available.
-        Return 0.0 if input is degenerate (<3 points).
-        """
-        verts = PhysicsInference.safe_extract_vertices(vertices)
-        if not verts or len(verts) < 3:
-            logging.warning("[robust_curvature] Insufficient vertices (<3) for curvature calculation. Returning 0.0.")
-            return 0.0
-        n = len(verts)
-        total_angle = 0.0
-        for i in range(1, n-1):
-            v1 = np.array(verts[i]) - np.array(verts[i-1])
-            v2 = np.array(verts[i+1]) - np.array(verts[i])
-            norm1 = np.linalg.norm(v1)
-            norm2 = np.linalg.norm(v2)
-            if norm1 > 1e-6 and norm2 > 1e-6:
-                dot = np.clip(np.dot(v1, v2) / (norm1 * norm2), -1.0, 1.0)
-                angle = np.arccos(dot)
-                total_angle += abs(angle)
-        return float(total_angle / max(n-2, 1))
+    @safe_feature(default=0.0)
+    def robust_curvature(vertices_or_poly):
+            """
+            Robust geometric curvature: average absolute change in tangent angle per unit length along the shape.
+            Handles polygons, polylines, and noisy input. Returns 0.0 for degenerate cases.
+            """
+            logging.info(f"[robust_curvature] INPUT: {vertices_or_poly}")
+            verts = PhysicsInference.safe_extract_vertices(vertices_or_poly)
+            verts = PhysicsInference.dedup_vertices(verts)
+            if not verts or len(verts) < 3:
+                logging.warning("[robust_curvature] Not enough vertices.")
+                logging.info("[robust_curvature] OUTPUT: 0.0")
+                return 0.0
+            n = len(verts)
+            total_curvature = 0.0
+            total_length = 0.0
+            for i in range(n):
+                p0 = np.array(verts[i - 1])
+                p1 = np.array(verts[i])
+                p2 = np.array(verts[(i + 1) % n])
+                v1 = p1 - p0
+                v2 = p2 - p1
+                len1 = np.linalg.norm(v1)
+                len2 = np.linalg.norm(v2)
+                if len1 > 1e-6 and len2 > 1e-6:
+                    dot = np.clip(np.dot(v1, v2) / (len1 * len2), -1.0, 1.0)
+                    dtheta = np.arccos(dot)
+                    seg_length = (len1 + len2) / 2
+                    total_curvature += abs(dtheta) * seg_length
+                    total_length += seg_length
+            if total_length < 1e-8:
+                logging.info("[robust_curvature] OUTPUT: 0.0")
+                return 0.0
+            result = float(total_curvature / total_length)
+            logging.info(f"[robust_curvature] OUTPUT: {result}")
+            return result
 
     @staticmethod
     def robust_angular_variance(vertices):
-        """
-        Variance of successive segment angles. For <3 points, return 0.0.
-        """
-        verts = PhysicsInference.safe_extract_vertices(vertices)
-        if not verts or len(verts) < 3:
-            logging.warning("[robust_angular_variance] Insufficient vertices (<3) for angular variance calculation. Returning 0.0.")
-            return 0.0
-        n = len(verts)
-        angles = []
-        for i in range(1, n-1):
-            v1 = np.array(verts[i]) - np.array(verts[i-1])
-            v2 = np.array(verts[i+1]) - np.array(verts[i])
-            norm1 = np.linalg.norm(v1)
-            norm2 = np.linalg.norm(v2)
-            if norm1 > 1e-6 and norm2 > 1e-6:
-                dot = np.clip(np.dot(v1, v2) / (norm1 * norm2), -1.0, 1.0)
-                angle = np.arccos(dot)
-                angles.append(angle)
-        if len(angles) < 2:
-            logging.warning("[robust_angular_variance] Not enough angles for variance calculation. Returning 0.0.")
-            return 0.0
-        return float(np.var(angles))
-
-    @staticmethod
-    def robust_moment_of_inertia(vertices, stroke_type=None, params=None):
-        """
-        For lines: I = L^3/12. For arcs: use arc formula. For polygons: use centroid-based formula. Return 0.0 if not enough points.
-        """
-        verts = PhysicsInference.safe_extract_vertices(vertices)
-        if verts is None or len(verts) < 3:
-            logging.warning("[robust_moment_of_inertia] Insufficient vertices (<3) for moment of inertia calculation. Returning 0.0.")
-            return 0.0
-        if stroke_type == 'line' and params is not None:
-            length = params.get('length', None)
-            if length is not None:
-                return (length ** 3) / 12.0
-        elif stroke_type == 'arc' and params is not None:
-            radius = params.get('radius', None)
-            delta_theta = params.get('span_angle', None)
-            if radius is not None and delta_theta is not None:
-                arc_length = abs(radius * delta_theta)
-                return arc_length * (radius ** 2)
-        # Centroid-based moment of inertia for polygons
-        verts_np = np.array(verts)
-        centroid = np.mean(verts_np, axis=0)
-        r_squared = np.sum((verts_np - centroid) ** 2, axis=1)
-        return np.sum(r_squared) / len(verts_np)
+            """
+            Estimate the angular variance of a polygon given its vertices.
+            Handles degenerate cases and noisy polygons robustly.
+            """
+            logger = logging.getLogger("PhysicsInference")
+            try:
+                if len(vertices) < 3:
+                    logger.warning("Not enough vertices for angular variance. Returning 0.")
+                    return 0.0
+                vertices = np.array(vertices)
+                # Compute edge vectors
+                edges = np.diff(vertices, axis=0, append=vertices[:1])
+                # Normalize edge vectors
+                norms = np.linalg.norm(edges, axis=1, keepdims=True)
+                edges_normed = edges / np.where(norms == 0, 1, norms)
+                # Compute angles between consecutive edges
+                dot_products = np.sum(edges_normed * np.roll(edges_normed, -1, axis=0), axis=1)
+                dot_products = np.clip(dot_products, -1.0, 1.0)
+                angles = np.arccos(dot_products)
+                # Angular variance
+                variance = np.var(angles)
+                logger.info(f"Computed angular variance: {variance:.6f} for {len(vertices)} vertices.")
+                return variance
+            except Exception as e:
+                logger.error(f"Error in robust_angular_variance: {e}")
+                return 0.0
 
     @staticmethod
     def alternation_score(seq):
@@ -189,67 +168,6 @@ class PhysicsInference:
         except Exception as e:
             logging.warning(f"safe_finite: Exception {e}, returning default={default}")
             return default
-    @staticmethod
-    @staticmethod
-    def polyline_weighted_center_of_mass(vertices):
-        """
-        Segment-length-weighted average of midpoints for open polylines.
-        Returns (nan, nan) if degenerate, else robust center of mass.
-        """
-        if not vertices or len(vertices) < 2:
-            logging.warning("[polyline_weighted_center_of_mass] Insufficient vertices (<2). Returning (nan, nan).")
-            return (float('nan'), float('nan'))
-        arr = np.array(vertices)
-        n = len(arr)
-        total = np.zeros(2)
-        total_len = 0.0
-        for i in range(n-1):
-            p0 = arr[i]
-            p1 = arr[i+1]
-            seg_len = np.linalg.norm(p1 - p0)
-            mid = (p0 + p1) / 2
-            total += seg_len * mid
-            total_len += seg_len
-        if total_len < 1e-8:
-            logging.warning("[polyline_weighted_center_of_mass] Total segment length < 1e-8. Returning (nan, nan).")
-            return (float('nan'), float('nan'))
-        return tuple(total / total_len)
-
-    @staticmethod
-    @staticmethod
-    def convexity_ratio(vertices):
-        """
-        Area / area of convex hull. Returns 1.0 for convex shapes, <1 for concave.
-        Returns nan for degenerate cases.
-        """
-        verts = PhysicsInference.safe_extract_vertices(vertices)
-        verts = PhysicsInference.dedup_vertices(verts)
-        if len(verts) < 3:
-            logging.warning("[convexity_ratio] Insufficient vertices (<3). Returning nan.")
-            return float('nan')
-        poly = Polygon(verts)
-        if not poly.is_valid or poly.area == 0:
-            logging.warning("[convexity_ratio] Invalid or zero-area polygon. Returning nan.")
-            return float('nan')
-        hull = poly.convex_hull
-        if hull.area == 0:
-            logging.warning("[convexity_ratio] Convex hull area is zero. Returning nan.")
-            return float('nan')
-        return float(poly.area / hull.area)
-    @staticmethod
-    def shoelace_area(vertices):
-        """
-        Compute the area of a polygon using the shoelace formula.
-        Accepts a list of (x, y) tuples. Returns absolute area.
-        """
-        if not vertices or len(vertices) < 3:
-            return 0.0
-        arr = np.array(vertices)
-        if np.allclose(arr[0], arr[-1]):
-            arr = arr[:-1]
-        x = arr[:, 0]
-        y = arr[:, 1]
-        return 0.5 * abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
     @staticmethod
     def line_curvature_score(vertices):
         # For a straight line, curvature is zero
@@ -658,7 +576,7 @@ class PhysicsInference:
         if norm == 0.0:
             return 0.0
         # returns degrees
-        return math.degrees(safe_acos(dot / norm))
+        return math.degrees(np.arccos(np.clip(dot / norm, -1.0, 1.0)))
 
     @staticmethod
     def _ensure_polygon(poly_geom):
@@ -689,13 +607,9 @@ class PhysicsInference:
         if key in _POLY_CACHE:
             return _POLY_CACHE[key]
 
-        def _prevalidate_vertices(verts):
-            # Deduplicate and remove collinear points
-            verts = [tuple(v) for v in verts]
-            verts = PhysicsInference.dedup_vertices(verts)
-            return verts
-
-        cleaned = _prevalidate_vertices(vertices)
+        # Deduplicate and remove collinear points
+        cleaned = [tuple(v) for v in vertices]
+        cleaned = PhysicsInference.dedup_vertices(cleaned)
         n = len(cleaned)
         t0 = time.time()
         poly = None
@@ -1067,10 +981,3 @@ class PhysicsInference:
             'containment': PhysicsInference.stroke_contains_stroke(buffered_geoms),
             'overlap': PhysicsInference.stroke_overlap_area(buffered_geoms)
         }
-if __name__ == "__main__":
-    from shapely.geometry import LineString
-    g1 = LineString([(0, 0), (1, 1)])
-    g2 = LineString([(0, 1), (1, 0)])
-    print("g1 intersects g2:", g1.intersects(g2))  # Should be True
-    geoms = [g1, g2]
-    print("find_stroke_intersections:", PhysicsInference.find_stroke_intersections(geoms))  # Should be 1

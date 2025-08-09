@@ -820,24 +820,15 @@ class ComprehensiveBongardProcessor:
             poly = None
             try:
                 logger.debug(f"[POLYGON CREATION] Attempting to create Polygon with vertices: {vertices}")
-                poly = Polygon(vertices)
-                logger.debug(f"[POLYGON CREATION] poly.is_valid={poly.is_valid}, poly.is_empty={poly.is_empty}, poly.area={poly.area}")
-                if not poly.is_valid or poly.area == 0:
-                    logger.error(f"[FALLBACK LOGIC] Polygon invalid or zero area for vertices: {vertices}. Applying buffer(0) fallback.")
-                    poly = poly.buffer(0)
-                    logger.debug(f"[POLYGON BUFFER] After buffer(0): poly.is_valid={poly.is_valid}, poly.is_empty={poly.is_empty}, poly.area={poly.area}")
+                from src.physics_inference import PhysicsInference
+                poly = PhysicsInference.polygon_from_vertices(vertices)
+                if poly is not None:
+                    logger.debug(f"[POLYGON REPAIR] Final polygon: is_valid={poly.is_valid}, is_empty={poly.is_empty}, area={poly.area}")
+                else:
+                    logger.error(f"[POLYGON REPAIR] Could not repair polygon for vertices: {vertices}")
             except Exception as e:
-                logger.error(f"[FALLBACK LOGIC] Error in Polygon(vertices): {e}. Attempting convex hull fallback for vertices: {vertices}")
+                logger.error(f"[POLYGON REPAIR] Exception: {e}. Geometry cannot be recovered for vertices: {vertices}")
                 poly = None
-            if poly is None or not poly.is_valid or poly.is_empty:
-                # fallback: convex hull
-                try:
-                    logger.error(f"[FALLBACK LOGIC] Polygon still invalid or empty after buffer(0). Falling back to convex hull for vertices: {vertices}")
-                    poly = Polygon(vertices).convex_hull
-                    logger.debug(f"[CONVEX HULL] After convex_hull: poly.is_valid={poly.is_valid}, poly.is_empty={poly.is_empty}, poly.area={poly.area}")
-                except Exception as e:
-                    logger.error(f"[FALLBACK LOGIC] Error in convex hull: {e}. Geometry cannot be recovered for vertices: {vertices}")
-                    poly = None
 
             # --- Defensive conversion of geometry values to float ---
             def safe_float(val, default=0.0):
@@ -880,6 +871,9 @@ class ComprehensiveBongardProcessor:
             width = safe_float(geometry.get('width', 0.0))
             height = safe_float(geometry.get('height', 0.0))
             area_val = safe_float(geometry.get('area', 0.0))
+            polsby_popper = PhysicsInference.polsby_popper_compactness(vertices)
+            brinkhoff = PhysicsInference.brinkhoff_complexity(vertices)
+            logger.info(f"[_calculate_image_features] polsby_popper: {polsby_popper}, brinkhoff_complexity: {brinkhoff}")
             features = {
                 'bounding_box': bbox,
                 'centroid': geometry.get('centroid', [0.0, 0.0]),
@@ -893,6 +887,8 @@ class ComprehensiveBongardProcessor:
                 'convexity_ratio': (max(0.0, min(1.0, safe_float(poly.area) / safe_float(poly.convex_hull.area))) if poly and poly.area != 0 and poly.convex_hull.area != 0 else 0.0),
                 'is_convex': PhysicsInference.is_convex(poly) if poly else False,
                 'compactness': _calculate_compactness(area_raw, perimeter_raw),
+                'polsby_popper_compactness': polsby_popper,
+                'brinkhoff_complexity': brinkhoff,
                 'eccentricity': _calculate_eccentricity(vertices),
                 'symmetry_score': (PhysicsInference.symmetry_score(vertices) if perimeter_raw > 0 and area_raw > 0 else None),
                 'horizontal_symmetry': _check_horizontal_symmetry(vertices, poly),
@@ -961,10 +957,15 @@ class ComprehensiveBongardProcessor:
                 num_straight_segments = PhysicsInference.count_straight_segments(vertices)
                 num_arcs = PhysicsInference.count_arcs(vertices)
 
+            polsby_popper = PhysicsInference.polsby_popper_compactness(vertices)
+            brinkhoff = PhysicsInference.brinkhoff_complexity(vertices)
+            logger.info(f"[_calculate_physics_features] polsby_popper: {polsby_popper}, brinkhoff_complexity: {brinkhoff}")
             features = {
                 # Core physics properties
                 'moment_of_inertia': PhysicsInference.moment_of_inertia(vertices),
                 'center_of_mass': center_of_mass,
+                'polsby_popper_compactness': polsby_popper,
+                'brinkhoff_complexity': brinkhoff,
                 # Shape metrics
                 'num_straight_segments': num_straight_segments,
                 'num_arcs': num_arcs,

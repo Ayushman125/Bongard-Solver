@@ -53,9 +53,10 @@ def extract_multiscale_features(shape_vertices, scales=[0.1, 0.3, 0.5, 1.0, 2.0]
     """Extract features at multiple geometric scales using Gaussian smoothing."""
     logger.info(f"[extract_multiscale_features] INPUT vertices: {shape_vertices}")
     multiscale_features = {}
-    if not shape_vertices or len(shape_vertices) < 3:
+    # logging already handled by logger object
+    if not shape_vertices or not isinstance(shape_vertices, list) or len(shape_vertices) < 3:
         logger.warning("[extract_multiscale_features] Not enough vertices for multiscale analysis.")
-        return multiscale_features
+        return {'scale_1': 0.0, 'scale_2': 0.0, 'scale_3': 0.0}
     # Ensure all vertices are tuples of floats for downstream compatibility
     shape_vertices = [tuple(map(float, v)) if isinstance(v, (list, tuple)) and len(v) == 2 else v for v in shape_vertices]
     arr = np.array(shape_vertices)

@@ -44,171 +44,103 @@ class BongardFeatureExtractor:
 
     def extract_image_features(self, image):
         import logging
+        import math
+        from src.physics_inference import PhysicsInference
+        from src.Derive_labels.stroke_types import _compute_bounding_box
         logging.info(f"[extract_image_features] INPUT image: {image}")
         try:
-            # Log vertices and geometry if present
             vertices = image.get('vertices') if isinstance(image, dict) else None
-            logging.info(f"[extract_image_features] Vertices: {vertices}")
-            # Defensive input validation
-            if not isinstance(image, dict):
-                logging.error(f"[BAD INPUT] image is not a dict: {type(image)}")
-                output = {
-                    'area': 0.0,
-                    'perimeter': 0.0,
-                    'convexity_ratio': 1e-6,
-                    'compactness': 1e-6,
-                    'aspect_ratio': 1.0,
-                    'centroid_x': 0.0,
-                    'centroid_y': 0.0,
-                    'width': 0.0,
-                    'height': 0.0,
-                    'bounding_box': (0,0,0,0),
-                    'num_vertices': 0,
-                    'curvature': 0.0,
-                    'angular_variance': 0.0,
-                    'complexity': 0.0,
-                    'num_strokes': 0,
-                    'stroke_type_distribution': {},
-                    'modifier_distribution': {},
-                    'avg_stroke_length': 0.0,
-                    'stroke_complexity': 0.0,
-                    'adjacency_matrix': None,
-                    'containment': None,
-                    'intersection_pattern': None,
-                    'multiscale': {},
-                    'moment_of_inertia': 0.0,
-                    'center_of_mass_x': 0.0,
-                    'center_of_mass_y': 0.0,
-                    'symmetry_score': 0.0,
-                    'ngram': None,
-                    'alternation': None,
-                    'regularity': None,
-                    'dominant_shape_functions': None,
-                    'dominant_modifiers': None,
-                }
-                logging.info(f"[extract_image_features] OUTPUT: {output}")
-                return output
-            if 'vertices' not in image or not isinstance(image['vertices'], list) or not all(isinstance(v, (list, tuple)) and len(v) == 2 for v in image['vertices']):
-                logging.error(f"[BAD VERTICES] image['vertices'] malformed: {image.get('vertices')}")
-                image['vertices'] = []
-            # ...existing code...
-            # (Insert feature extraction logic here, unchanged)
-            # For demonstration, assume output is features_dict
-            features_dict = {
-                'area': 0.0,
-                'perimeter': 0.0,
-                'convexity_ratio': 1e-6,
-                'compactness': 1e-6,
-                'aspect_ratio': 1.0,
-                'centroid_x': 0.0,
-                'centroid_y': 0.0,
-                'width': 0.0,
-                'height': 0.0,
-                'bounding_box': (0,0,0,0),
-                'num_vertices': 0,
-                'curvature': 0.0,
-                'angular_variance': 0.0,
-                'complexity': 0.0,
-                'num_strokes': 0,
-                'stroke_type_distribution': {},
-                'modifier_distribution': {},
-                'avg_stroke_length': 0.0,
-                'stroke_complexity': 0.0,
-                'adjacency_matrix': None,
-                'containment': None,
-                'intersection_pattern': None,
-                'multiscale': {},
-                'moment_of_inertia': 0.0,
-                'center_of_mass_x': 0.0,
-                'center_of_mass_y': 0.0,
-                'symmetry_score': 0.0,
-                'ngram': None,
-                'alternation': None,
-                'regularity': None,
-                'dominant_shape_functions': None,
-                'dominant_modifiers': None,
-            }
-            logging.info(f"[extract_image_features] OUTPUT features: {features_dict}")
-            return features_dict
-        except Exception as e:
-            logging.error(f"[extract_image_features] Exception: {e}")
-            output = {
-                'area': 0.0,
-                'perimeter': 0.0,
-                'convexity_ratio': 1e-6,
-                'compactness': 1e-6,
-                'aspect_ratio': 1.0,
-                'centroid_x': 0.0,
-                'centroid_y': 0.0,
-                'width': 0.0,
-                'height': 0.0,
-                'bounding_box': (0,0,0,0),
-                'num_vertices': 0,
-                'curvature': 0.0,
-                'angular_variance': 0.0,
-                'complexity': 0.0,
-                'num_strokes': 0,
-                'stroke_type_distribution': {},
-                'modifier_distribution': {},
-                'avg_stroke_length': 0.0,
-                'stroke_complexity': 0.0,
-                'adjacency_matrix': None,
-                'containment': None,
-                'intersection_pattern': None,
-                'multiscale': {},
-                'moment_of_inertia': 0.0,
-                'center_of_mass_x': 0.0,
-                'center_of_mass_y': 0.0,
-                'symmetry_score': 0.0,
-                'ngram': None,
-                'alternation': None,
-                'regularity': None,
-                'dominant_shape_functions': None,
-                'dominant_modifiers': None,
-            }
-            logging.info(f"[extract_image_features] OUTPUT (exception fallback): {output}")
-            return output
-        if 'geometry' not in image or not isinstance(image['geometry'], dict):
-            logging.error(f"[BAD GEOMETRY] image['geometry'] malformed: {image.get('geometry')}")
-            image['geometry'] = {}
-        if 'attributes' not in image or not isinstance(image['attributes'], dict):
-            logging.error(f"[BAD ATTRIBUTES] image['attributes'] malformed: {image.get('attributes')}")
-            image['attributes'] = {}
-        logging.info("[DEBUG PATCHED] Entered extract_image_features in context_features.py")
-        try:
-            # ...existing feature extraction logic...
-            geometry = image.get('geometry', {})
-            vertices = image.get('vertices', [])
-            # ...rest of method unchanged...
-            # Compose feature dict with safe defaults (replace with actual logic as needed)
+            geometry = image.get('geometry', {}) if isinstance(image, dict) else {}
+            strokes = image.get('strokes') if isinstance(image, dict) else []
+            attributes = image.get('attributes', {}) if isinstance(image, dict) else {}
+            if not vertices or not isinstance(vertices, list) or not all(isinstance(v, (list, tuple)) and len(v) == 2 for v in vertices):
+                logging.error(f"[BAD VERTICES] image['vertices'] malformed: {image.get('vertices') if isinstance(image, dict) else None}")
+                vertices = []
+            # Polygon repair and normalization
+            from shapely.geometry import Polygon
+            poly = None
+            if vertices and len(vertices) >= 3:
+                try:
+                    poly = Polygon(vertices)
+                    if not poly.is_valid or poly.area == 0:
+                        logging.warning(f"[POLYGON REPAIR] Invalid or zero-area polygon, attempting buffer(0) and convex hull repair.")
+                        poly = poly.buffer(0)
+                        if not poly.is_valid or poly.area == 0:
+                            poly = Polygon(vertices).convex_hull
+                except Exception as e:
+                    logging.error(f"[POLYGON REPAIR] Exception: {e}")
+                    poly = None
+            # Feature calculations
+            area = PhysicsInference.area(poly) if poly else 0.0
+            perimeter = poly.length if poly else 0.0
+            convex_hull = poly.convex_hull if poly else None
+            convexity_ratio = (poly.area / convex_hull.area) if poly and convex_hull and convex_hull.area > 0 else 0.0
+            compactness = (4 * math.pi * area / (perimeter ** 2)) if perimeter > 0 else 0.0
+            bounding_box = _compute_bounding_box(vertices) if vertices else (0, 0, 0, 0)
+            centroid = list(poly.centroid.coords)[0] if poly else [0.0, 0.0]
+            width = geometry.get('width', bounding_box[2] - bounding_box[0])
+            height = geometry.get('height', bounding_box[3] - bounding_box[1])
+            aspect_ratio = (width / height) if height else 1.0
+            num_vertices = len(vertices)
+            curvature = PhysicsInference.robust_curvature(vertices)
+            angular_variance = PhysicsInference.robust_angular_variance(vertices)
+            # Brinkhoff complexity
+            amplitude = (perimeter - convex_hull.length) / perimeter if perimeter > 0 and convex_hull else 0.0
+            frequency = PhysicsInference.robust_curvature(vertices)
+            brinkhoff_complexity = 0.8 * amplitude * frequency + 0.2 * convexity_ratio
+            # Multiscale features
+            from src.Derive_labels.features import extract_multiscale_features
+            multiscale = extract_multiscale_features(vertices)
+            # Physics features
+            moment_of_inertia = PhysicsInference.moment_of_inertia(vertices)
+            center_of_mass = PhysicsInference.centroid(poly) if poly else [0.0, 0.0]
+            symmetry_score = PhysicsInference.symmetry_score(vertices)
+            # Stroke type distribution
+            stroke_type_distribution = {}
+            modifier_distribution = {}
+            avg_stroke_length = 0.0
+            stroke_complexity = brinkhoff_complexity
+            if strokes:
+                for stroke in strokes:
+                    if isinstance(stroke, str):
+                        parts = stroke.split('_')
+                        stroke_type = parts[0] if parts else 'unknown'
+                        modifier = parts[1] if len(parts) > 1 else 'normal'
+                        stroke_type_distribution[stroke_type] = stroke_type_distribution.get(stroke_type, 0) + 1
+                        modifier_distribution[modifier] = modifier_distribution.get(modifier, 0) + 1
+            # Validation
+            if brinkhoff_complexity == 339.935:
+                logging.warning("[VALIDATION] Fixed complexity value detected, check Brinkhoff formula.")
+            if area <= 0:
+                logging.warning("[VALIDATION] Invalid area calculation.")
             features = {
-                'area': 0.0,
-                'perimeter': 0.0,
-                'convexity_ratio': 1e-6,
-                'compactness': 1e-6,
-                'aspect_ratio': 1.0,
-                'centroid_x': 0.0,
-                'centroid_y': 0.0,
-                'width': 0.0,
-                'height': 0.0,
-                'bounding_box': (0,0,0,0),
-                'num_vertices': 0,
-                'curvature': 0.0,
-                'angular_variance': 0.0,
-                'complexity': 0.0,
-                'num_strokes': 0,
-                'stroke_type_distribution': {},
-                'modifier_distribution': {},
-                'avg_stroke_length': 0.0,
-                'stroke_complexity': 0.0,
+                'area': area,
+                'perimeter': perimeter,
+                'convexity_ratio': convexity_ratio,
+                'compactness': compactness,
+                'aspect_ratio': aspect_ratio,
+                'centroid_x': centroid[0],
+                'centroid_y': centroid[1],
+                'width': width,
+                'height': height,
+                'bounding_box': bounding_box,
+                'num_vertices': num_vertices,
+                'curvature': curvature,
+                'angular_variance': angular_variance,
+                'complexity': brinkhoff_complexity,
+                'num_strokes': len(strokes),
+                'stroke_type_distribution': stroke_type_distribution,
+                'modifier_distribution': modifier_distribution,
+                'avg_stroke_length': avg_stroke_length,
+                'stroke_complexity': brinkhoff_complexity,
                 'adjacency_matrix': None,
                 'containment': None,
                 'intersection_pattern': None,
-                'multiscale': {},
-                'moment_of_inertia': 0.0,
-                'center_of_mass_x': 0.0,
-                'center_of_mass_y': 0.0,
-                'symmetry_score': 0.0,
+                'multiscale': multiscale,
+                'moment_of_inertia': moment_of_inertia,
+                'center_of_mass_x': center_of_mass[0],
+                'center_of_mass_y': center_of_mass[1],
+                'symmetry_score': symmetry_score,
                 'ngram': None,
                 'alternation': None,
                 'regularity': None,
@@ -218,43 +150,8 @@ class BongardFeatureExtractor:
             logging.info(f"[extract_image_features] OUTPUT: {features}")
             return features
         except Exception as e:
-            logging.warning(f"[extract_image_features] Exception: {e}")
-            output = {
-                'area': 0.0,
-                'perimeter': 0.0,
-                'convexity_ratio': 1e-6,
-                'compactness': 1e-6,
-                'aspect_ratio': 1.0,
-                'centroid_x': 0.0,
-                'centroid_y': 0.0,
-                'width': 0.0,
-                'height': 0.0,
-                'bounding_box': (0,0,0,0),
-                'num_vertices': 0,
-                'curvature': 0.0,
-                'angular_variance': 0.0,
-                'complexity': 0.0,
-                'num_strokes': 0,
-                'stroke_type_distribution': {},
-                'modifier_distribution': {},
-                'avg_stroke_length': 0.0,
-                'stroke_complexity': 0.0,
-                'adjacency_matrix': None,
-                'containment': None,
-                'intersection_pattern': None,
-                'multiscale': {},
-                'moment_of_inertia': 0.0,
-                'center_of_mass_x': 0.0,
-                'center_of_mass_y': 0.0,
-                'symmetry_score': 0.0,
-                'ngram': None,
-                'alternation': None,
-                'regularity': None,
-                'dominant_shape_functions': None,
-                'dominant_modifiers': None,
-            }
-            logging.info(f"[extract_image_features] OUTPUT (exception fallback): {output}")
-            return output
+            logging.error(f"[extract_image_features] Exception: {e}")
+            return {}
 
     def compute_discriminative_features(self, pos_features, neg_features):
         # Computes difference of means for each feature, skipping None/NaN values
