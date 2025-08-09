@@ -55,10 +55,10 @@ def safe_join(items, separator=','):
     """
     Join any iterable into a string, converting all items to strings first.
     """
-    str_items = ensure_all_strings(items)
-    if isinstance(str_items, list):
-        return separator.join(str_items)
-    return str(str_items)
+        # Robust stringification for actions
+    safe_items = [getattr(x, 'raw_command', str(x)) if not isinstance(x, str) else x for x in items]
+    print(f"[SAFE_JOIN DEBUG] safe_items: {safe_items}")
+    return separator.join(safe_items)
 
 def debug_join(label, items):
     import logging

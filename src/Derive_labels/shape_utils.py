@@ -293,7 +293,7 @@ def json_safe(obj):
         return [json_safe(v) for v in obj]
     elif hasattr(obj, 'item'):  # numpy scalar
         return obj.item()
-    # If it's a custom object (e.g., LineAction, ArcAction), convert to string
+    # If it's a custom object (e.g., LineAction, ArcAction), convert to robust string
     elif hasattr(obj, '__str__') and not isinstance(obj, (str, bytes)):
         logger.debug(f"[json_safe] Converting custom object to string: {type(obj).__name__}")
         return str(obj)

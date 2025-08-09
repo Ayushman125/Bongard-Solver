@@ -25,7 +25,10 @@ def ensure_all_strings(lst):
 def safe_join(lst, sep=','):
     """Join a list into a string, robustly converting all items to strings first."""
     if isinstance(lst, list):
-        return sep.join([str(x) for x in ensure_all_strings(lst)])
+        # Robust stringification for actions
+        safe_items = [getattr(x, 'raw_command', str(x)) if not isinstance(x, str) else x for x in lst]
+        logger.debug(f"[SAFE_JOIN DEBUG] safe_items: {safe_items}")
+        return sep.join(safe_items)
     return str(lst)
 
 
@@ -611,6 +614,12 @@ class ComprehensiveBongardProcessor:
             })
             logger.debug(f"[OUTPUT PATCH] Types in stroke_features: {[type(x) for x in stroke_features]}")
             logger.debug(f"[OUTPUT PATCH] Types in action_program: {[type(x) for x in action_program]}")
+            # Diagnostic logging and robust stringification for actions
+            logger.debug(f"[PATCH][actions field] Types: {[type(a) for a in all_actions]}, Values: {all_actions}")
+            actions_strs = [getattr(a, 'raw_command', str(a)) if not isinstance(a, str) else a for a in all_actions]
+            logger.debug(f"[PATCH][actions field] After stringification: {actions_strs}")
+            actions_joined = ','.join(actions_strs)
+            logger.debug(f"[PATCH][actions field] Joined: {actions_joined}")
             complete_record = {
                 'image_id': image_id,
                 'problem_id': problem_id,
@@ -633,7 +642,7 @@ class ComprehensiveBongardProcessor:
                     'processing_timestamp': time.time(),
                     'feature_count': len(image_features) + len(physics_features) + len(composition_features)
                 },
-                'actions': ','.join(getattr(a, 'raw_command', str(a)) for a in all_actions),
+                'actions': actions_joined,
                 'action_program': safe_action_program,
                 'geometry': geometry,
                 'relational_features': safe_relational_features,

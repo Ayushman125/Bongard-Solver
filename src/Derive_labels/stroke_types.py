@@ -40,7 +40,7 @@ def extract_action_type_prefixes(problems_data):
                         if hasattr(stroke_type, 'value'):
                             prefix = stroke_type.value
                         elif stroke_type is not None:
-                            prefix = str(stroke_type)
+                            prefix = getattr(stroke_type, 'raw_command', str(stroke_type))
                         else:
                             prefix = shape.__class__.__name__
                         prefixes.add(prefix)
@@ -123,8 +123,8 @@ def _extract_stroke_vertices(stroke, stroke_index, all_vertices, bongard_image=N
     if hasattr(stype, 'value'):
         stype = stype.value
     if stype is None and hasattr(stroke, 'function_name'):
-        stype = str(stroke.function_name).split('_')[0]
-    if stype and 'arc' in str(stype).lower():
+        stype = getattr(stroke.function_name, 'raw_command', str(stroke.function_name)).split('_')[0]
+    if stype and 'arc' in getattr(stype, 'raw_command', str(stype)).lower():
         params = getattr(stroke, 'parameters', {}) or {}
         try:
             cx = float(params.get('center_x') or params.get('cx') or params.get('param4') or 0.5)
