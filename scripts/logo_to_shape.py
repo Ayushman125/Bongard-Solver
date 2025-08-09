@@ -23,12 +23,21 @@ def ensure_all_strings(lst):
     return str(lst)
 
 def safe_join(lst, sep=','):
-    """Join a list into a string, robustly converting all items to strings first."""
+    """Join a list into a string, robustly converting all items to strings first using fully_stringify."""
+    def fully_stringify(obj):
+        if isinstance(obj, dict):
+            return {fully_stringify(k): fully_stringify(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [fully_stringify(x) for x in obj]
+        elif hasattr(obj, 'raw_command'):
+            return str(obj.raw_command)
+        elif type(obj).__name__ in ['LineAction', 'ArcAction']:
+            return str(getattr(obj, 'raw_command', str(obj)))
+        else:
+            return str(obj)
     if isinstance(lst, list):
-        # Robust stringification for actions
-        safe_items = [getattr(x, 'raw_command', str(x)) if not isinstance(x, str) else x for x in lst]
+        safe_items = [fully_stringify(x) for x in lst]
         logger.debug(f"[SAFE_JOIN DEBUG] safe_items: {safe_items}")
-        # Defensive: ensure all items are strings before joining
         safe_items = [str(x) for x in safe_items]
         return sep.join(safe_items)
     return str(lst)
@@ -618,9 +627,7 @@ class ComprehensiveBongardProcessor:
             logger.debug(f"[OUTPUT PATCH] Types in action_program: {[type(x) for x in action_program]}")
             # Diagnostic logging and robust stringification for actions
             logger.debug(f"[PATCH][actions field] Types: {[type(a) for a in all_actions]}, Values: {all_actions}")
-            actions_strs = [getattr(a, 'raw_command', str(a)) if not isinstance(a, str) else a for a in all_actions]
-            logger.debug(f"[PATCH][actions field] After stringification: {actions_strs}")
-            actions_joined = ','.join(actions_strs)
+            actions_joined = safe_join(all_actions)
             logger.debug(f"[PATCH][actions field] Joined: {actions_joined}")
             complete_record = {
                 'image_id': image_id,
@@ -628,29 +635,29 @@ class ComprehensiveBongardProcessor:
                 'category': category,
                 'label': 'positive' if is_positive else 'negative',
                 'image_path': image_path,
-                'strokes': safe_stroke_features,
+                'strokes': fully_stringify(safe_stroke_features),
                 'num_strokes': len(safe_stroke_features),
-                'raw_vertices': safe_vertices_raw,
-                'vertices': safe_vertices,
+                'raw_vertices': fully_stringify(safe_vertices_raw),
+                'vertices': fully_stringify(safe_vertices),
                 'num_vertices': len(safe_vertices) if safe_vertices else 0,
-                'position_label': posrot_labels.get('centroid'),
-                'rotation_label_degrees': posrot_labels.get('orientation_degrees'),
-                'image_features': image_features,
-                'physics_features': physics_features,
-                'composition_features': composition_features,
-                'stroke_type_features': differentiated_features,
+                'position_label': fully_stringify(posrot_labels.get('centroid')),
+                'rotation_label_degrees': fully_stringify(posrot_labels.get('orientation_degrees')),
+                'image_features': fully_stringify(image_features),
+                'physics_features': fully_stringify(physics_features),
+                'composition_features': fully_stringify(composition_features),
+                'stroke_type_features': fully_stringify(differentiated_features),
                 'image_canonical_summary': {},
                 'processing_metadata': {
                     'processing_timestamp': time.time(),
                     'feature_count': len(image_features) + len(physics_features) + len(composition_features)
                 },
                 'actions': actions_joined,
-                'action_program': safe_action_program,
-                'geometry': geometry,
-                'relational_features': safe_relational_features,
-                'context_relational_features': safe_context_relational_features,
-                'sequential_features': safe_sequential_features,
-                'topological_features': graph_features
+                'action_program': fully_stringify(safe_action_program),
+                'geometry': fully_stringify(geometry),
+                'relational_features': fully_stringify(safe_relational_features),
+                'context_relational_features': fully_stringify(safe_context_relational_features),
+                'sequential_features': fully_stringify(safe_sequential_features),
+                'topological_features': fully_stringify(graph_features)
             }
             self.processing_stats['successful'] += 1
             return json_safe(complete_record)
@@ -897,6 +904,17 @@ class ComprehensiveBongardProcessor:
 
 
 def main():
+    def fully_stringify(obj):
+        if isinstance(obj, dict):
+            return {fully_stringify(k): fully_stringify(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [fully_stringify(x) for x in obj]
+        elif hasattr(obj, 'raw_command'):
+            return str(obj.raw_command)
+        elif type(obj).__name__ in ['LineAction', 'ArcAction']:
+            return str(getattr(obj, 'raw_command', str(obj)))
+        else:
+            return str(obj)
     parser = argparse.ArgumentParser(description='Generate comprehensive derived labels for Bongard-LOGO dataset')
     parser.add_argument('--input-dir', required=True, help='Input directory containing Bongard-LOGO data')
     parser.add_argument('--output', required=True, help='Output JSON file path')
@@ -1062,27 +1080,14 @@ def main():
             else:
                 return str(lst)
 
-        processed_results = []
-        for r in all_results:
-            safe_r = {}
-            for k, v in r.items():
-                if k in ['actions', 'action_program'] and isinstance(v, list):
-                    # If v is a list of lists, flatten and join each sublist
-                    if v and isinstance(v[0], list):
-                        safe_r[k] = [','.join([str(x) for x in robust_action_list_to_str(sublist)]) for sublist in v]
-                    else:
-                        safe_r[k] = ','.join([str(x) for x in robust_action_list_to_str(v)])
-                elif isinstance(v, list):
-                    safe_r[k] = ensure_all_strings(robust_action_list_to_str(v))
-                else:
-                    safe_r[k] = v
-            logger.debug(f"[SERIALIZE DEBUG][main] Before serialization: {safe_r}")
-            processed_results.append(safe_r)
 
-        logger.info(f"[SERIALIZE DEBUG][main] Final processed_results before writing: {processed_results}")
+
+        # Defensive patch: ensure all results, flagged cases, stats, and summaries are robustly stringified before serialization
+        safe_results = ensure_all_strings(all_results)
+        logger.info(f"[SERIALIZE DEBUG][main] Final processed_results before writing: {safe_results}")
         try:
             with open(args.output, 'w', encoding='utf-8') as f:
-                json.dump(processed_results, f, indent=2, ensure_ascii=False)
+                json.dump(safe_results, f, indent=2, ensure_ascii=False)
         except Exception as e:
             logger.error(f"[SERIALIZE DEBUG][main] Exception during output serialization: {e}")
             raise
@@ -1093,27 +1098,11 @@ def main():
         # Save flagged cases
         if processor.flagged_cases:
             flagged_path = os.path.join(output_dir, 'flagged_cases.json')
-            processed_flagged = []
-            for case in processor.flagged_cases:
-                safe_case = {}
-                for k, v in case.items():
-                    if isinstance(v, list):
-                        logger.debug(f"[SERIALIZE DEBUG][main][flagged_cases] Before ensure_all_strings: key={k}, value={v}")
-                        logger.debug(f"[SERIALIZE DEBUG][main][flagged_cases] Types: {[type(x) for x in v]}")
-                        # Defensive: ensure all items are strings before joining
-                        safe_case[k] = ensure_all_strings([str(x) for x in robust_action_list_to_str(v)])
-                        logger.debug(f"[SERIALIZE DEBUG][main][flagged_cases] After ensure_all_strings: key={k}, value={safe_case[k]}")
-                        logger.debug(f"[SERIALIZE DEBUG][main][flagged_cases] Types after: {[type(x) for x in safe_case[k]]}")
-                    else:
-                        safe_case[k] = v
-                logger.debug(f"[SERIALIZE DEBUG][main][flagged_cases] Before json_safe: {safe_case}")
-                processed_flagged_case = json_safe(safe_case)
-                logger.debug(f"[SERIALIZE DEBUG][main][flagged_cases] After json_safe: {processed_flagged_case}")
-                processed_flagged.append(processed_flagged_case)
-            logger.info(f"[SERIALIZE DEBUG][main][flagged_cases] Final processed_flagged before writing: {processed_flagged}")
+            safe_flagged = ensure_all_strings(processor.flagged_cases)
+            logger.info(f"[SERIALIZE DEBUG][main][flagged_cases] Final processed_flagged before writing: {safe_flagged}")
             try:
                 with open(flagged_path, 'w', encoding='utf-8') as f:
-                    json.dump(processed_flagged, f, indent=2, ensure_ascii=False)
+                    json.dump(safe_flagged, f, indent=2, ensure_ascii=False)
             except Exception as e:
                 logger.error(f"[SERIALIZE DEBUG][main][flagged_cases] Exception during flagged case serialization: {e}")
                 raise
@@ -1126,14 +1115,14 @@ def main():
         }
 
         stats_path = os.path.join(output_dir, 'processing_statistics.json')
-        safe_stats = json_safe(processor.processing_stats)
+        safe_stats = ensure_all_strings(processor.processing_stats)
         with open(stats_path, 'w', encoding='utf-8') as f:
             json.dump(safe_stats, f, indent=2, ensure_ascii=False)
         logger.info(f"Saved processing statistics to {stats_path}")
 
         # Save problem-level canonical summaries
         problem_summary_path = os.path.join(output_dir, 'problem_summaries.json')
-        safe_summaries = json_safe(problem_summaries)
+        safe_summaries = ensure_all_strings(problem_summaries)
         with open(problem_summary_path, 'w', encoding='utf-8') as f:
             json.dump(safe_summaries, f, indent=2, ensure_ascii=False)
         logger.info(f"Saved {len(problem_summaries)} problem-level canonical summaries to {problem_summary_path}")

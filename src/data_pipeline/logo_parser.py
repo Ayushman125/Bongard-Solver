@@ -56,16 +56,22 @@ def safe_join(items, separator=','):
     Join any iterable into a string, converting all items to strings first.
     """
         # Robust stringification for actions
-    safe_items = [getattr(x, 'raw_command', str(x)) if not isinstance(x, str) else x for x in items]
-    print(f"[SAFE_JOIN DEBUG] safe_items: {safe_items}")
+    # Robust stringification for actions: always use raw_command if present
+    safe_items = []
+    for x in items:
+        if isinstance(x, str):
+            safe_items.append(x)
+        elif hasattr(x, 'raw_command'):
+            safe_items.append(str(x.raw_command))
+        else:
+            safe_items.append(str(x))
     return separator.join(safe_items)
 
 def debug_join(label, items):
     import logging
-    safe_items = ensure_all_strings(items)
-    if safe_items and isinstance(safe_items, list) and not all(isinstance(x, str) for x in safe_items):
-        logging.error(f"[DEBUG JOIN] {label}: Non-string found in list: {[type(x) for x in safe_items]}")
-    logging.debug(f"[DEBUG JOIN] {label}: Joining items: {safe_items}")
+    # Defensive: always use safe_join, which robustly stringifies actions
+    safe_items = items
+    logging.debug(f"[DEBUG JOIN] {label}: Joining items: {[getattr(x, 'raw_command', str(x)) if not isinstance(x, str) else x for x in safe_items]}")
     return safe_join(safe_items)
 import json
 import math
