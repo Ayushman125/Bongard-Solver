@@ -377,6 +377,28 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
     smod = shape_modifier_val or _extract_modifier_from_stroke(stroke) or 'normal'
     params = parameters or {}
     verts = _extract_stroke_vertices(stroke, stroke_index, None, bongard_image=bongard_image, parent_shape_vertices=parent_shape_vertices)
+    # Defensive geometry extraction and type checks
+    geometry = getattr(stroke, 'geometry', None)
+    if geometry is None:
+        geometry = {}
+    width = geometry.get('width', None)
+    height = geometry.get('height', None)
+    def safe_float(val, default=0.0):
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            logger.warning(f"[_calculate_stroke_specific_features] Value '{val}' could not be converted to float. Using default {default}.")
+            return default
+    if width is None or height is None:
+        logger.warning(f"[_calculate_stroke_specific_features] Stroke {stroke_index} geometry missing width/height: {geometry}. Setting to 0.0.")
+        width = 0.0
+        height = 0.0
+    else:
+        width = safe_float(width, 0.0)
+        height = safe_float(height, 0.0)
+    geometry['width'] = width
+    geometry['height'] = height
+    features['geometry'] = geometry
     if not verts or (isinstance(verts, list) and len(verts) == 1 and verts[0] == (0.0, 0.0)):
         logger.error(f"[_calculate_stroke_specific_features] Fallback or missing vertices for stroke_index={stroke_index}, stroke={stroke}, type={stroke_type_val}, modifier={shape_modifier_val}")
     logger.info(f"[_calculate_stroke_specific_features] verts: {verts}")

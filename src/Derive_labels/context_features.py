@@ -48,53 +48,81 @@ class BongardFeatureExtractor:
         from src.physics_inference import PhysicsInference
         from src.Derive_labels.stroke_types import _compute_bounding_box
         logging.info(f"[extract_image_features] INPUT image: {image}")
+        logging.debug(f"[extract_image_features] RAW INPUT vertices: {image.get('vertices') if isinstance(image, dict) else None}")
+        logging.debug(f"[extract_image_features] RAW INPUT geometry: {image.get('geometry', {}) if isinstance(image, dict) else {}}")
         try:
             vertices = image.get('vertices') if isinstance(image, dict) else None
-            geometry = image.get('geometry', {}) if isinstance(image, dict) else {}
             strokes = image.get('strokes') if isinstance(image, dict) else []
             attributes = image.get('attributes', {}) if isinstance(image, dict) else {}
             if not vertices or not isinstance(vertices, list) or not all(isinstance(v, (list, tuple)) and len(v) == 2 for v in vertices):
                 logging.error(f"[BAD VERTICES] image['vertices'] malformed: {image.get('vertices') if isinstance(image, dict) else None}")
                 vertices = []
-            # Polygon repair and normalization
-            from shapely.geometry import Polygon
-            poly = None
-            if vertices and len(vertices) >= 3:
-                try:
-                    poly = Polygon(vertices)
-                    if not poly.is_valid or poly.area == 0:
-                        logging.warning(f"[POLYGON REPAIR] Invalid or zero-area polygon, attempting buffer(0) and convex hull repair.")
-                        poly = poly.buffer(0)
-                        if not poly.is_valid or poly.area == 0:
-                            poly = Polygon(vertices).convex_hull
-                except Exception as e:
-                    logging.error(f"[POLYGON REPAIR] Exception: {e}")
-                    poly = None
-            # Feature calculations
-            area = PhysicsInference.area(poly) if poly else 0.0
-            perimeter = poly.length if poly else 0.0
-            convex_hull = poly.convex_hull if poly else None
-            convexity_ratio = (poly.area / convex_hull.area) if poly and convex_hull and convex_hull.area > 0 else 0.0
-            compactness = (4 * math.pi * area / (perimeter ** 2)) if perimeter > 0 else 0.0
             bounding_box = _compute_bounding_box(vertices) if vertices else (0, 0, 0, 0)
-            centroid = list(poly.centroid.coords)[0] if poly else [0.0, 0.0]
-            width = geometry.get('width', bounding_box[2] - bounding_box[0])
-            height = geometry.get('height', bounding_box[3] - bounding_box[1])
+            logging.debug(f"[extract_image_features] Calculated bounding_box: {bounding_box}")
+            if bounding_box == (0, 0, 0, 0):
+                logging.warning("[extract_image_features] Bounding box set to default (0,0,0,0) due to empty or invalid vertices.")
+            # Always calculate geometry from vertices if present
+            from src.Derive_labels.shape_utils import calculate_geometry_consistent
+            geometry = calculate_geometry_consistent(vertices) if vertices else {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0]}
+            logging.debug(f"[extract_image_features] Geometry from vertices: {geometry}")
+            def safe_float(val, default=0.0):
+                try:
+                    return float(val)
+                except (TypeError, ValueError):
+                    logging.warning(f"[extract_image_features] Value '{val}' could not be converted to float. Using default {default}.")
+                    return default
+            area = safe_float(geometry.get('area', 0.0))
+            perimeter = safe_float(geometry.get('perimeter', 0.0))
+            centroid = geometry.get('centroid', [0.0, 0.0])
+            width = safe_float(geometry.get('width', bounding_box[2] - bounding_box[0]))
+            height = safe_float(geometry.get('height', bounding_box[3] - bounding_box[1]))
             aspect_ratio = (width / height) if height else 1.0
             num_vertices = len(vertices)
-            curvature = PhysicsInference.robust_curvature(vertices)
-            angular_variance = PhysicsInference.robust_angular_variance(vertices)
-            # Brinkhoff complexity
-            amplitude = (perimeter - convex_hull.length) / perimeter if perimeter > 0 and convex_hull else 0.0
-            frequency = PhysicsInference.robust_curvature(vertices)
-            brinkhoff_complexity = 0.8 * amplitude * frequency + 0.2 * convexity_ratio
-            # Multiscale features
+            from shapely.geometry import Polygon
+            poly = Polygon(vertices) if vertices and len(vertices) >= 3 else None
+            convex_hull = poly.convex_hull if poly else None
+            convex_hull_area = safe_float(convex_hull.area) if convex_hull else 0.0
+            poly_area = safe_float(poly.area) if poly else 0.0
+            convexity = (convex_hull_area - poly_area) / convex_hull_area if poly and convex_hull and convex_hull_area > 0 else 0.0
+            compactness = (4 * math.pi * area / (perimeter ** 2)) if perimeter > 0 else 0.0
+            logging.debug(f"[extract_image_features] Calculated width: {width}, height: {height}")
+            if bounding_box == (0, 0, 0, 0):
+                logging.warning(f"[extract_image_features] Width/height set to 0.0 due to degenerate bounding box.")
+            logging.debug(f"[extract_image_features] Curvature input vertices: {vertices}")
+            curvature = safe_float(PhysicsInference.robust_curvature(vertices))
+            logging.debug(f"[extract_image_features] Curvature output value: {curvature}")
+            if curvature == 0.0:
+                logging.warning("[extract_image_features] Curvature is zero. Likely due to insufficient or collinear vertices.")
+            angular_variance = safe_float(PhysicsInference.robust_angular_variance(vertices))
+            if angular_variance == 0.0:
+                logging.warning("[extract_image_features] Angular variance is zero. Likely due to insufficient or collinear vertices.")
+            amplitude = (perimeter - safe_float(convex_hull.length) if convex_hull else 0.0) / perimeter if perimeter > 0 and convex_hull else 0.0
+            frequency = angular_variance
+            brinkhoff_complexity = 0.8 * amplitude * frequency + 0.2 * convexity
             from src.Derive_labels.features import extract_multiscale_features
             multiscale = extract_multiscale_features(vertices)
             # Physics features
-            moment_of_inertia = PhysicsInference.moment_of_inertia(vertices)
-            center_of_mass = PhysicsInference.centroid(poly) if poly else [0.0, 0.0]
-            symmetry_score = PhysicsInference.symmetry_score(vertices)
+            try:
+                moment_of_inertia = PhysicsInference.moment_of_inertia(vertices)
+                if moment_of_inertia == 0.0:
+                    logging.warning("[extract_image_features] moment_of_inertia is zero. Likely due to insufficient vertices or degenerate shape.")
+            except Exception as e:
+                logging.warning(f"[extract_image_features] moment_of_inertia failed: {e}")
+                moment_of_inertia = 0.0
+            try:
+                center_of_mass = PhysicsInference.centroid(poly) if poly else [0.0, 0.0]
+                if center_of_mass == [0.0, 0.0]:
+                    logging.warning("[extract_image_features] center_of_mass is default [0.0, 0.0]. Likely due to invalid polygon.")
+            except Exception as e:
+                logging.warning(f"[extract_image_features] center_of_mass failed: {e}")
+                center_of_mass = [0.0, 0.0]
+            try:
+                symmetry_score = PhysicsInference.symmetry_score(vertices)
+                if symmetry_score == 0.0:
+                    logging.warning("[extract_image_features] symmetry_score is zero. Likely due to insufficient vertices or degenerate shape.")
+            except Exception as e:
+                logging.warning(f"[extract_image_features] symmetry_score failed: {e}")
+                symmetry_score = 0.0
             # Stroke type distribution
             stroke_type_distribution = {}
             modifier_distribution = {}
@@ -116,14 +144,14 @@ class BongardFeatureExtractor:
             features = {
                 'area': area,
                 'perimeter': perimeter,
-                'convexity_ratio': convexity_ratio,
+                'convexity_ratio': convexity,
                 'compactness': compactness,
                 'aspect_ratio': aspect_ratio,
                 'centroid_x': centroid[0],
                 'centroid_y': centroid[1],
                 'width': width,
                 'height': height,
-                'bounding_box': bounding_box,
+                'bounding_box': bounding_box,  # Always present
                 'num_vertices': num_vertices,
                 'curvature': curvature,
                 'angular_variance': angular_variance,
@@ -137,17 +165,24 @@ class BongardFeatureExtractor:
                 'containment': None,
                 'intersection_pattern': None,
                 'multiscale': multiscale,
-                'moment_of_inertia': moment_of_inertia,
-                'center_of_mass_x': center_of_mass[0],
-                'center_of_mass_y': center_of_mass[1],
-                'symmetry_score': symmetry_score,
+                'moment_of_inertia': moment_of_inertia if moment_of_inertia is not None else 0.0,
+                'center_of_mass_x': center_of_mass[0] if center_of_mass and len(center_of_mass) > 0 else 0.0,
+                'center_of_mass_y': center_of_mass[1] if center_of_mass and len(center_of_mass) > 1 else 0.0,
+                'symmetry_score': symmetry_score if symmetry_score is not None else 0.0,
                 'ngram': None,
                 'alternation': None,
                 'regularity': None,
                 'dominant_shape_functions': None,
                 'dominant_modifiers': None,
             }
+            for k in ['moment_of_inertia', 'center_of_mass_x', 'center_of_mass_y', 'symmetry_score']:
+                if k not in features:
+                    logging.warning(f"[extract_image_features] Missing physics key '{k}', setting default value.")
+                    features[k] = 0.0
             logging.info(f"[extract_image_features] OUTPUT: {features}")
+            logging.debug(f"[extract_image_features] FINAL OUTPUT bounding_box: {features.get('bounding_box')}")
+            logging.debug(f"[extract_image_features] FINAL OUTPUT width: {features.get('width')}, height: {features.get('height')}")
+            logging.debug(f"[extract_image_features] FINAL OUTPUT curvature: {features.get('curvature')}")
             return features
         except Exception as e:
             logging.error(f"[extract_image_features] Exception: {e}")
