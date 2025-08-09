@@ -9,6 +9,7 @@ import math
 import logging
 from typing import Dict, List, Any, Optional
 import numpy as np
+    # Import at top of function to avoid indentation error
 from src.physics_inference import PhysicsInference
 from bongard.bongard import BongardImage
 from src.Derive_labels.shape_utils import safe_divide, _calculate_dominant_direction, _calculate_variance
@@ -185,80 +186,69 @@ def _extract_stroke_type_from_command(stroke) -> str:
 
 def _extract_stroke_vertices(stroke, stroke_index, all_vertices, bongard_image=None, parent_shape_vertices=None):
     logger = logging.getLogger(__name__)
-    logger.debug(f"[_extract_stroke_vertices] INPUT: stroke_index={stroke_index}, stroke={stroke}, all_vertices={all_vertices}, bongard_image={bongard_image}, parent_shape_vertices={parent_shape_vertices}")
+    logger.info(f"[_extract_stroke_vertices] INPUT: stroke_index={stroke_index}, stroke={stroke}, all_vertices={all_vertices}, bongard_image={bongard_image}, parent_shape_vertices={parent_shape_vertices}")
     MIN_VERTICES = 3
-
-    # Use parent_shape_vertices if provided and valid
+    from src.Derive_labels.shape_utils import calculate_geometry_consistent
+    from src.physics_inference import PhysicsInference
+    verts = None
+    # Log the received command
+    raw_command = getattr(stroke, 'raw_command', str(stroke))
+    logger.info(f"[_extract_stroke_vertices] Received command: {raw_command}")
+    # 1. Use parent_shape_vertices if valid
     if parent_shape_vertices is not None and valid_verts(parent_shape_vertices):
         logger.info(f"[_extract_stroke_vertices] Using parent_shape_vertices: {parent_shape_vertices}")
-        return parent_shape_vertices
-
-    # Try to get vertices from bongard_image.one_stroke_shapes if available and in bounds
-    verts = None
-    if bongard_image and hasattr(bongard_image, 'one_stroke_shapes'):
+        verts = parent_shape_vertices
+    # 2. Try bongard_image.one_stroke_shapes[stroke_index].vertices
+    elif bongard_image and hasattr(bongard_image, 'one_stroke_shapes'):
         shapes = bongard_image.one_stroke_shapes
-        total_shapes = len(shapes)
-        if isinstance(shapes, list) and stroke_index < total_shapes:
-            try:
-                shape = shapes[stroke_index]
-                verts = getattr(shape, 'vertices', None)
-                if valid_verts(verts):
-                    logger.info(f"[_extract_stroke_vertices] Using bongard_image.one_stroke_shapes[{stroke_index}].vertices: {verts}")
-                    return verts
-                else:
-                    logger.warning(f"[_extract_stroke_vertices] Insufficient or invalid vertices in bongard_image for stroke {stroke_index}: {verts}")
-            except Exception as e:
-                logger.warning(f"[_extract_stroke_vertices] Failed to get vertices from bongard_image.one_stroke_shapes[{stroke_index}]: {e}")
-        else:
-            logger.error(f"[_extract_stroke_vertices] stroke_index {stroke_index} out of bounds for bongard_image.one_stroke_shapes (len={total_shapes}). RAW_COMMAND: {getattr(stroke, 'raw_command', None)}")
-            # Log raw commands and shapes for debugging
-            if hasattr(bongard_image, 'raw_commands'):
-                logger.error(f"[_extract_stroke_vertices] Raw commands: {bongard_image.raw_commands}")
-            logger.error(f"[_extract_stroke_vertices] All shapes: {[getattr(s, 'vertices', None) for s in shapes]}" )
-            # Fallback: synthesize minimal shape (single vertex at origin)
-            return [(0.0, 0.0)]
-
-    # Try stroke.vertices
-    if hasattr(stroke, 'vertices') and valid_verts(stroke.vertices):
+        if isinstance(shapes, list) and stroke_index < len(shapes):
+            shape = shapes[stroke_index]
+            shape_verts = getattr(shape, 'vertices', None)
+            if valid_verts(shape_verts):
+                logger.info(f"[_extract_stroke_vertices] Using bongard_image.one_stroke_shapes[{stroke_index}].vertices: {shape_verts}")
+                verts = shape_verts
+    # 3. Try stroke.vertices
+    if verts is None and hasattr(stroke, 'vertices') and valid_verts(stroke.vertices):
         logger.info(f"[_extract_stroke_vertices] Using stroke.vertices for stroke {stroke_index}: {stroke.vertices}")
-        return stroke.vertices
-
-    # Try stroke.polyline_points
-    if hasattr(stroke, 'polyline_points') and valid_verts(stroke.polyline_points):
+        verts = stroke.vertices
+    # 4. Try stroke.polyline_points
+    if verts is None and hasattr(stroke, 'polyline_points') and valid_verts(stroke.polyline_points):
         logger.info(f"[_extract_stroke_vertices] Using stroke.polyline_points for stroke {stroke_index}: {stroke.polyline_points}")
-        return stroke.polyline_points
-
-    # Try get_world_coordinates
-    if hasattr(stroke, 'get_world_coordinates') and callable(stroke.get_world_coordinates):
+        verts = stroke.polyline_points
+    # 5. Try get_world_coordinates
+    if verts is None and hasattr(stroke, 'get_world_coordinates') and callable(stroke.get_world_coordinates):
         try:
-            verts = stroke.get_world_coordinates()
-            if valid_verts(verts):
-                logger.info(f"[_extract_stroke_vertices] Using stroke.get_world_coordinates() for stroke {stroke_index}: {verts}")
-                return verts
+            wc_verts = stroke.get_world_coordinates()
+            if valid_verts(wc_verts):
+                logger.info(f"[_extract_stroke_vertices] Using stroke.get_world_coordinates() for stroke {stroke_index}: {wc_verts}")
+                verts = wc_verts
         except Exception as e:
             logger.warning(f"[_extract_stroke_vertices] get_world_coordinates failed for stroke {stroke_index}: {e}")
-
-    # Fallback: synthesize vertices from raw command
-    raw_command = getattr(stroke, 'raw_command', None)
-    if raw_command:
-        verts = _vertices_from_command(raw_command, stroke_index)
-        if valid_verts(verts):
-            logger.warning(f"[_extract_stroke_vertices] Fallback: synthesized vertices from command for stroke {stroke_index}: {verts}")
-            return verts
-
-    # Interpolate if we have 2 vertices
-    if hasattr(stroke, 'vertices') and stroke.vertices and len(stroke.vertices) == 2:
+    # 6. Fallback: synthesize vertices from raw command for line/arc
+    if verts is None and raw_command:
+        stroke_type = _extract_stroke_type_from_command(stroke)
+        if stroke_type in ['line', 'arc']:
+            synth_verts = _vertices_from_command(raw_command, stroke_index)
+            if valid_verts(synth_verts):
+                logger.warning(f"[_extract_stroke_vertices] Synthesized vertices from command for stroke {stroke_index}: {synth_verts}")
+                verts = synth_verts
+    # 7. Interpolate if we have 2 vertices
+    if verts is None and hasattr(stroke, 'vertices') and stroke.vertices and len(stroke.vertices) == 2:
         interp_verts = interpolate_vertices(stroke.vertices, MIN_VERTICES)
         logger.warning(f"[_extract_stroke_vertices] Interpolated vertices to minimum count for stroke {stroke_index}: {interp_verts}")
-        return interp_verts
-
-    # Try all_vertices fallback
-    if all_vertices and stroke_index < len(all_vertices) and valid_verts(all_vertices[stroke_index]):
+        verts = interp_verts
+    # 8. Try all_vertices fallback
+    if verts is None and all_vertices and stroke_index < len(all_vertices) and valid_verts(all_vertices[stroke_index]):
         logger.info(f"[_extract_stroke_vertices] Using all_vertices fallback for stroke {stroke_index}: {all_vertices[stroke_index]}")
-        return all_vertices[stroke_index]
-
-    logger.warning(f"[_extract_stroke_vertices] Failed to extract vertices for stroke {stroke_index}. Returning empty list.")
-    return []
+        verts = all_vertices[stroke_index]
+    # 9. If still None, return empty list
+    if verts is None:
+        logger.warning(f"[_extract_stroke_vertices] Failed to extract vertices for stroke {stroke_index}. Returning empty list.")
+        verts = []
+    # PATCH: Always calculate geometry for extracted vertices
+    geometry = calculate_geometry_consistent(verts) if valid_verts(verts) else {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0]}
+    logger.info(f"[_extract_stroke_vertices] OUTPUT: stroke_index={stroke_index}, verts={verts}, geometry={geometry}")
+    return verts
 
 def _vertices_from_command(command, stroke_index):
     logger.info(f"[_vertices_from_command] INPUT: command={command}, stroke_index={stroke_index}")
@@ -372,37 +362,48 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
     logger.info(f"[_calculate_stroke_specific_features] Called with stroke={stroke}, stroke_index={stroke_index}, stroke_type_val={stroke_type_val}, shape_modifier_val={shape_modifier_val}, parameters={parameters}")
     """Calculate features specific to stroke type and shape modifier, using robust geometric/physics formulas."""
     features = {'stroke_index': stroke_index}
-    # Robustly extract stroke type and modifier
     stype = stroke_type_val or _extract_stroke_type_from_command(stroke)
     smod = shape_modifier_val or _extract_modifier_from_stroke(stroke) or 'normal'
     params = parameters or {}
     verts = _extract_stroke_vertices(stroke, stroke_index, None, bongard_image=bongard_image, parent_shape_vertices=parent_shape_vertices)
-    # Defensive geometry extraction and type checks
-    geometry = getattr(stroke, 'geometry', None)
-    if geometry is None:
-        geometry = {}
-    width = geometry.get('width', None)
-    height = geometry.get('height', None)
+    from src.Derive_labels.shape_utils import calculate_geometry_consistent
+    geometry = calculate_geometry_consistent(verts) if verts and len(verts) >= 3 else {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0]}
+    logger.info(f"[_calculate_stroke_specific_features] PATCH: Geometry for stroke_index={stroke_index}: {geometry}")
     def safe_float(val, default=0.0):
         try:
             return float(val)
         except (TypeError, ValueError):
             logger.warning(f"[_calculate_stroke_specific_features] Value '{val}' could not be converted to float. Using default {default}.")
             return default
-    if width is None or height is None:
-        logger.warning(f"[_calculate_stroke_specific_features] Stroke {stroke_index} geometry missing width/height: {geometry}. Setting to 0.0.")
-        width = 0.0
-        height = 0.0
-    else:
-        width = safe_float(width, 0.0)
-        height = safe_float(height, 0.0)
+    width = safe_float(geometry.get('width', 0.0))
+    height = safe_float(geometry.get('height', 0.0))
     geometry['width'] = width
     geometry['height'] = height
     features['geometry'] = geometry
     if not verts or (isinstance(verts, list) and len(verts) == 1 and verts[0] == (0.0, 0.0)):
-        logger.error(f"[_calculate_stroke_specific_features] Fallback or missing vertices for stroke_index={stroke_index}, stroke={stroke}, type={stroke_type_val}, modifier={shape_modifier_val}")
+        logger.error(f"[_calculate_stroke_specific_features] Fallback or missing vertices for stroke_index={stroke_index}, stroke={stroke}, type={stype}, modifier={smod}")
     logger.info(f"[_calculate_stroke_specific_features] verts: {verts}")
     stype_lower = stype.lower() if stype else ''
+    # --- PATCH: Physics features ---
+    features['robust_curvature'] = PhysicsInference.robust_curvature(verts)
+    features['robust_angular_variance'] = PhysicsInference.robust_angular_variance(verts)
+    # For lines/arcs, add curvature score
+    if 'line' in stype_lower:
+        features['line_curvature_score'] = PhysicsInference.line_curvature_score(verts)
+    elif 'arc' in stype_lower:
+        radius = params.get('radius', geometry.get('width', 1.0))
+        span_angle = params.get('span_angle', 90)
+        delta_theta = math.radians(span_angle)
+        features['arc_curvature_score'] = PhysicsInference.arc_curvature_score(radius, delta_theta)
+    # Visual complexity (example formula, can be refined)
+    features['visual_complexity'] = PhysicsInference.visual_complexity(
+        num_strokes=1,
+        max_strokes=1,
+        perimeter=geometry.get('perimeter', 1.0),
+        hull_perimeter=geometry.get('perimeter', 1.0),
+        curvature_score=features.get('robust_curvature', 0.0)
+    )
+    logger.info(f"[_calculate_stroke_specific_features] PATCH: Physics features for stroke_index={stroke_index}: {{'robust_curvature': {features['robust_curvature']}, 'robust_angular_variance': {features['robust_angular_variance']}, 'visual_complexity': {features['visual_complexity']}, 'line_curvature_score': {features.get('line_curvature_score')}, 'arc_curvature_score': {features.get('arc_curvature_score')}}}")
     # Calculate basic geometric features from vertices
     if verts and len(verts) > 1:
         total_length = 0

@@ -274,85 +274,107 @@ class ComprehensiveBongardProcessor:
         posrot_labels = {'centroid': [0.0, 0.0], 'orientation_degrees': 0.0}
         feature_extractor = BongardFeatureExtractor()
         for idx, shape in enumerate(one_stroke_shapes):
-                # --- Correct assignment and population of image_dict ---
-                image_dict = {}
-                # Vertices
-                image_dict['vertices'] = []
-                if hasattr(shape, 'vertices') and isinstance(shape.vertices, list):
-                    safe_vertices = [tuple(v) for v in shape.vertices if v is not None and isinstance(v, (list, tuple)) and len(v) == 2]
-                    image_dict['vertices'] = safe_vertices
+            # --- Correct assignment and population of image_dict ---
+            image_dict = {}
+            # Vertices
+            image_dict['vertices'] = []
+            if hasattr(shape, 'vertices') and isinstance(shape.vertices, list):
+                safe_vertices = [tuple(v) for v in shape.vertices if v is not None and isinstance(v, (list, tuple)) and len(v) == 2]
+                image_dict['vertices'] = safe_vertices
+            else:
+                logger.warning(f"[ATTR DEBUG] Shape {idx} has no vertices.")
+            # Strokes as dicts with vertices
+            image_dict['strokes'] = []
+            if hasattr(shape, 'basic_actions'):
+                for i, a in enumerate(shape.basic_actions):
+                    command_str = str(a)
+                    stroke_vertices = self._calculate_vertices_from_action(a, i, bongard_image=shape)
+                    from src.Derive_labels.shape_utils import calculate_geometry_consistent
+                    stroke_geometry = calculate_geometry_consistent(stroke_vertices) if stroke_vertices and len(stroke_vertices) >= 3 else {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0]}
+                    logger.info(f"[PATCH][STROKE] idx={idx}, action={command_str}, vertices={stroke_vertices}, geometry={stroke_geometry}")
+                    image_dict['strokes'].append({'command': command_str, 'vertices': stroke_vertices, 'geometry': stroke_geometry})
+                logger.info(f"[ATTR DEBUG] Shape {idx} strokes (dicts): {image_dict['strokes']}")
+            else:
+                logger.warning(f"[ATTR DEBUG] Shape {idx} has no basic_actions.")
+            # Attributes
+            image_dict['attributes'] = shape.attributes if hasattr(shape, 'attributes') and isinstance(shape.attributes, dict) else {}
+            # --- PATCH: Always enforce and log shape-level geometry ---
+            try:
+                from src.Derive_labels.shape_utils import calculate_geometry_consistent
+                shape_vertices = image_dict['vertices']
+                if shape_vertices and len(shape_vertices) >= 3:
+                    shape_geometry = calculate_geometry_consistent(shape_vertices)
+                    if not isinstance(shape_geometry, dict):
+                        shape_geometry = {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0]}
+                    logger.info(f"[PATCH][SHAPE GEOMETRY] idx={idx}, vertices={shape_vertices}, geometry={shape_geometry}")
+                    # --- PATCH: Add physics features to shape_geometry ---
+                    shape_geometry['robust_curvature'] = PhysicsInference.robust_curvature(shape_vertices)
+                    shape_geometry['robust_angular_variance'] = PhysicsInference.robust_angular_variance(shape_vertices)
+                    shape_geometry['visual_complexity'] = PhysicsInference.visual_complexity(
+                        num_strokes=len(image_dict['strokes']),
+                        max_strokes=len(image_dict['strokes']),
+                        perimeter=shape_geometry.get('perimeter', 1.0),
+                        hull_perimeter=shape_geometry.get('perimeter', 1.0),
+                        curvature_score=shape_geometry.get('robust_curvature', 0.0)
+                    )
+                    # For lines/arcs, add curvature scores if relevant
+                    shape_geometry['line_curvature_score'] = PhysicsInference.line_curvature_score(shape_vertices)
+                    # For arcs, estimate radius and span if possible
+                    shape_geometry['arc_curvature_score'] = None
+                    if 'arc' in str(shape_geometry):
+                        radius = shape_geometry.get('width', 1.0)
+                        span_angle = 90
+                        delta_theta = math.radians(span_angle)
+                        shape_geometry['arc_curvature_score'] = PhysicsInference.arc_curvature_score(radius, delta_theta)
+                    logger.info(f"[PATCH][SHAPE PHYSICS] idx={idx}, physics features: {{'robust_curvature': {shape_geometry['robust_curvature']}, 'robust_angular_variance': {shape_geometry['robust_angular_variance']}, 'visual_complexity': {shape_geometry['visual_complexity']}, 'line_curvature_score': {shape_geometry['line_curvature_score']}, 'arc_curvature_score': {shape_geometry['arc_curvature_score']}}}")
                 else:
-                    logger.warning(f"[ATTR DEBUG] Shape {idx} has no vertices.")
-                # Strokes
-                image_dict['strokes'] = []
-                if hasattr(shape, 'basic_actions'):
-                    safe_basic_actions = []
-                    for i, a in enumerate(shape.basic_actions):
-                        if isinstance(a, str):
-                            safe_basic_actions.append(a)
-                        else:
-                            raw_cmd = getattr(a, 'raw_command', None)
-                            if raw_cmd is None:
-                                # Try to synthesize raw_command if possible
-                                if hasattr(a, 'line_type'):
-                                    raw_cmd = f"line_{a.line_type}_{getattr(a, 'line_length', '')}-{getattr(a, 'turn_angle', 0.5)}"
-                                elif hasattr(a, 'arc_type'):
-                                    raw_cmd = f"arc_{a.arc_type}_{getattr(a, 'arc_radius', '')}_{getattr(a, 'arc_angle', '')}-{getattr(a, 'turn_angle', 0.5)}"
-                                elif i < len(original_action_commands):
-                                    raw_cmd = original_action_commands[i]
-                                else:
-                                    raw_cmd = str(a)
-                                try:
-                                    a.raw_command = raw_cmd
-                                except Exception:
-                                    pass
-                            safe_basic_actions.append(str(raw_cmd))
-                    logger.info(f"[ATTR DEBUG] Shape {idx} basic_actions: {safe_basic_actions}")
-                    image_dict['strokes'] = safe_basic_actions
+                    shape_geometry = {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0]}
+                    logger.warning(f"[PATCH][SHAPE GEOMETRY] idx={idx} has insufficient vertices for geometry. Using default geometry: {shape_geometry}")
+                image_dict['geometry'] = shape_geometry
+                shape.geometry = shape_geometry
+            except Exception as geo_exc:
+                logger.error(f"[PATCH][SHAPE GEOMETRY] idx={idx} failed to calculate geometry: {geo_exc}")
+                shape_geometry = {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0]}
+                image_dict['geometry'] = shape_geometry
+                shape.geometry = shape_geometry
+            # Defensive: always ensure attributes and geometry are dicts
+            if not hasattr(shape, 'attributes') or shape.attributes is None:
+                shape.attributes = {}
+            if not hasattr(shape, 'geometry') or shape.geometry is None:
+                shape.geometry = shape_geometry
+            # Bail out early if degenerate (no vertices or strokes)
+            if not image_dict['vertices'] or not image_dict['strokes']:
+                logger.warning(f"[ATTR DEBUG] Shape {idx} is degenerate (missing vertices or strokes). Skipping feature extraction and record construction.")
+                return None
+            # --- Now run diagnostics and feature extraction ---
+            logger.info(f"[DIAG] Shape {idx} image_dict for feature extraction: {image_dict}")
+            try:
+                logger.info(f"[DIAG] feature_extractor type: {type(feature_extractor)}, module: {getattr(feature_extractor, '__module__', type(feature_extractor).__module__)}")
+                logger.info(f"[DIAG] About to extract features for image_dict={image_dict}")
+                if not image_dict.get('vertices') or not isinstance(image_dict['vertices'], list) or not all(isinstance(v, (list, tuple)) and len(v) == 2 for v in image_dict['vertices']):
+                    logger.error(f"[DIAG] Problem with vertices in image_dict: {image_dict.get('vertices')}")
+                if 'attributes' not in image_dict or not isinstance(image_dict.get('attributes'), dict):
+                    image_dict['attributes'] = {}
+                if 'geometry' not in image_dict or not isinstance(image_dict.get('geometry'), dict):
+                    image_dict['geometry'] = shape_geometry
+                logger.info(f"[DIAG] Calling extract_image_features() on image_dict={image_dict}")
+                result = feature_extractor.extract_image_features(image_dict)
+                logger.info(f"[DIAG] extract_image_features returned type={type(result)}, value={result}")
+                # If features are empty/default for valid shapes, log a warning
+                if not result or all(v in (None, [], {}, '') for v in result.values()):
+                    logger.warning(f"[DIAG] Features are empty/default for Shape {idx}. Input: {image_dict}")
+                if result is None:
+                    logger.error(f"[DIAG] extract_image_features returned None for image_dict={image_dict}. Setting attributes to empty dict.")
+                    shape.attributes = {}
+                elif not isinstance(result, dict):
+                    logger.error(f"[DIAG] extract_image_features returned non-dict type {type(result)} for image_dict={image_dict}. Setting attributes to empty dict.")
+                    shape.attributes = {}
                 else:
-                    logger.warning(f"[ATTR DEBUG] Shape {idx} has no basic_actions.")
-                # Attributes
-                image_dict['attributes'] = shape.attributes if hasattr(shape, 'attributes') and isinstance(shape.attributes, dict) else {}
-                # Geometry
-                image_dict['geometry'] = shape.geometry if hasattr(shape, 'geometry') and isinstance(shape.geometry, dict) else {}
-                # Defensive: always ensure attributes and geometry are dicts
-                if not hasattr(shape, 'attributes') or shape.attributes is None:
-                    shape.attributes = {}
-                if not hasattr(shape, 'geometry') or shape.geometry is None:
-                    shape.geometry = {}
-                # Bail out early if degenerate (no vertices or strokes)
-                if not image_dict['vertices'] or not image_dict['strokes']:
-                    logger.warning(f"[ATTR DEBUG] Shape {idx} is degenerate (missing vertices or strokes). Skipping feature extraction and record construction.")
-                    return None
-                # --- Now run diagnostics and feature extraction ---
-                logger.info(f"[DIAG] Shape {idx} image_dict for feature extraction: {image_dict}")
-                try:
-                    logger.info(f"[DIAG] feature_extractor type: {type(feature_extractor)}, module: {getattr(feature_extractor, '__module__', type(feature_extractor).__module__)}")
-                    logger.info(f"[DIAG] About to extract features for image_dict={image_dict}")
-                    if not image_dict.get('vertices') or not isinstance(image_dict['vertices'], list) or not all(isinstance(v, (list, tuple)) and len(v) == 2 for v in image_dict['vertices']):
-                        logger.error(f"[DIAG] Problem with vertices in image_dict: {image_dict.get('vertices')}")
-                    if 'attributes' not in image_dict or not isinstance(image_dict.get('attributes'), dict):
-                        image_dict['attributes'] = {}
-                    if 'geometry' not in image_dict or not isinstance(image_dict.get('geometry'), dict):
-                        image_dict['geometry'] = {}
-                    logger.info(f"[DIAG] Calling extract_image_features() on image_dict={image_dict}")
-                    result = feature_extractor.extract_image_features(image_dict)
-                    logger.info(f"[DIAG] extract_image_features returned type={type(result)}, value={result}")
-                    # If features are empty/default for valid shapes, log a warning
-                    if not result or all(v in (None, [], {}, '') for v in result.values()):
-                        logger.warning(f"[DIAG] Features are empty/default for Shape {idx}. Input: {image_dict}")
-                    if result is None:
-                        logger.error(f"[DIAG] extract_image_features returned None for image_dict={image_dict}. Setting attributes to empty dict.")
-                        shape.attributes = {}
-                    elif not isinstance(result, dict):
-                        logger.error(f"[DIAG] extract_image_features returned non-dict type {type(result)} for image_dict={image_dict}. Setting attributes to empty dict.")
-                        shape.attributes = {}
-                    else:
-                        shape.attributes = result
-                    logger.info(f"[DIAG] Shape {idx} extracted attributes: {shape.attributes}")
-                except Exception as e:
-                    logger.warning(f"[DIAG] Failed to extract features for shape {idx}: {e}")
-                    shape.attributes = {}
+                    shape.attributes = result
+                logger.info(f"[DIAG] Shape {idx} extracted attributes: {shape.attributes}")
+            except Exception as e:
+                logger.warning(f"[DIAG] Failed to extract features for shape {idx}: {e}")
+                shape.attributes = {}
 
 
         # --- Validation: Check shape/stroke count match ---

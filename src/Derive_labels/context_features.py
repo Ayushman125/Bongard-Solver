@@ -47,6 +47,7 @@ class BongardFeatureExtractor:
         import math
         from src.physics_inference import PhysicsInference
         from src.Derive_labels.stroke_types import _compute_bounding_box
+        from src.Derive_labels.features import extract_multiscale_features
         logging.info(f"[extract_image_features] INPUT image: {image}")
         logging.debug(f"[extract_image_features] RAW INPUT vertices: {image.get('vertices') if isinstance(image, dict) else None}")
         logging.debug(f"[extract_image_features] RAW INPUT geometry: {image.get('geometry', {}) if isinstance(image, dict) else {}}")
@@ -55,10 +56,26 @@ class BongardFeatureExtractor:
             strokes = image.get('strokes') if isinstance(image, dict) else []
             attributes = image.get('attributes', {}) if isinstance(image, dict) else {}
             if not vertices or not isinstance(vertices, list) or not all(isinstance(v, (list, tuple)) and len(v) == 2 for v in vertices):
-                logging.error(f"[BAD VERTICES] image['vertices'] malformed: {image.get('vertices') if isinstance(image, dict) else None}")
+                logging.info(f"[extract_image_features] INPUT image: {image}")
                 vertices = []
             bounding_box = _compute_bounding_box(vertices) if vertices else (0, 0, 0, 0)
             logging.debug(f"[extract_image_features] Calculated bounding_box: {bounding_box}")
+
+            # Define safe_float and all geometry-related variables in the outer scope
+            def safe_float(val, default=0.0):
+                try:
+                    return float(val)
+                except (TypeError, ValueError):
+                    logging.warning(f"[extract_image_features] Value '{val}' could not be converted to float. Using default {default}.")
+                    return default
+
+            from src.Derive_labels.shape_utils import calculate_geometry_consistent
+            geometry = calculate_geometry_consistent(vertices) if vertices else {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0]}
+            area_val = safe_float(geometry.get('area', 0.0))
+            perimeter = safe_float(geometry.get('perimeter', 0.0))
+            centroid = geometry.get('centroid', [0.0, 0.0])
+            width = safe_float(geometry.get('width', bounding_box[2] - bounding_box[0]))
+            height = safe_float(geometry.get('height', bounding_box[3] - bounding_box[1]))
             if bounding_box == (0, 0, 0, 0):
                 logging.warning("[extract_image_features] Bounding box set to default (0,0,0,0) due to empty or invalid vertices.")
             # Always calculate geometry from vertices if present
@@ -71,7 +88,7 @@ class BongardFeatureExtractor:
                 except (TypeError, ValueError):
                     logging.warning(f"[extract_image_features] Value '{val}' could not be converted to float. Using default {default}.")
                     return default
-            area = safe_float(geometry.get('area', 0.0))
+                    geometry = calculate_geometry_consistent(vertices) if vertices else {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0]}
             perimeter = safe_float(geometry.get('perimeter', 0.0))
             centroid = geometry.get('centroid', [0.0, 0.0])
             width = safe_float(geometry.get('width', bounding_box[2] - bounding_box[0]))
@@ -84,7 +101,7 @@ class BongardFeatureExtractor:
             convex_hull_area = safe_float(convex_hull.area) if convex_hull else 0.0
             poly_area = safe_float(poly.area) if poly else 0.0
             convexity = (convex_hull_area - poly_area) / convex_hull_area if poly and convex_hull and convex_hull_area > 0 else 0.0
-            compactness = (4 * math.pi * area / (perimeter ** 2)) if perimeter > 0 else 0.0
+            compactness = (4 * math.pi * area_val / (perimeter ** 2)) if perimeter > 0 else 0.0
             logging.debug(f"[extract_image_features] Calculated width: {width}, height: {height}")
             if bounding_box == (0, 0, 0, 0):
                 logging.warning(f"[extract_image_features] Width/height set to 0.0 due to degenerate bounding box.")
@@ -99,7 +116,7 @@ class BongardFeatureExtractor:
             amplitude = (perimeter - safe_float(convex_hull.length) if convex_hull else 0.0) / perimeter if perimeter > 0 and convex_hull else 0.0
             frequency = angular_variance
             brinkhoff_complexity = 0.8 * amplitude * frequency + 0.2 * convexity
-            from src.Derive_labels.features import extract_multiscale_features
+            # (Removed duplicate logging line with unexpected indentation)
             multiscale = extract_multiscale_features(vertices)
             # Physics features
             try:
@@ -129,20 +146,41 @@ class BongardFeatureExtractor:
             avg_stroke_length = 0.0
             stroke_complexity = brinkhoff_complexity
             if strokes:
-                for stroke in strokes:
-                    if isinstance(stroke, str):
+                for idx, stroke in enumerate(strokes):
+                    # Defensive: handle both dict and str strokes
+                    if isinstance(stroke, dict):
+                        stroke_vertices = stroke.get('vertices', [])
+                        stroke_geom = calculate_geometry_consistent(stroke_vertices) if stroke_vertices else {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0]}
+                        stroke['geometry'] = stroke_geom
+                        logging.debug(f"[extract_image_features] Stroke {idx} geometry: {stroke_geom}")
+                        # Optionally, update stroke width/height fields if present
+                        stroke['width'] = stroke_geom.get('width', 0.0)
+                        stroke['height'] = stroke_geom.get('height', 0.0)
+                        # Try to extract type/modifier from command if present
+                        cmd = stroke.get('command', None)
+                        if cmd:
+                            parts = cmd.split('_')
+                            stroke_type = parts[0] if parts else 'unknown'
+                            modifier = parts[1] if len(parts) > 1 else 'normal'
+                            stroke_type_distribution[stroke_type] = stroke_type_distribution.get(stroke_type, 0) + 1
+                            modifier_distribution[modifier] = modifier_distribution.get(modifier, 0) + 1
+                    elif isinstance(stroke, str):
                         parts = stroke.split('_')
                         stroke_type = parts[0] if parts else 'unknown'
                         modifier = parts[1] if len(parts) > 1 else 'normal'
                         stroke_type_distribution[stroke_type] = stroke_type_distribution.get(stroke_type, 0) + 1
                         modifier_distribution[modifier] = modifier_distribution.get(modifier, 0) + 1
-            # Validation
-            if brinkhoff_complexity == 339.935:
-                logging.warning("[VALIDATION] Fixed complexity value detected, check Brinkhoff formula.")
-            if area <= 0:
+                logging.info(f"[extract_image_features] stroke_type_distribution INPUT: {strokes}")
+                logging.info(f"[extract_image_features] stroke_type_distribution OUTPUT: {stroke_type_distribution}")
+                logging.info(f"[extract_image_features] modifier_distribution OUTPUT: {modifier_distribution}")
                 logging.warning("[VALIDATION] Invalid area calculation.")
+            # Extract relational features and log input/output
+            from src.Derive_labels.features import extract_relational_features
+            relational = extract_relational_features(strokes) if strokes else {'adjacency': 0, 'intersections': 0, 'containment': 0, 'overlap': 0.0}
+            logging.info(f"[extract_image_features] relational INPUT: {strokes}")
+            logging.info(f"[extract_image_features] relational OUTPUT: {relational}")
             features = {
-                'area': area,
+                'area': area_val,
                 'perimeter': perimeter,
                 'convexity_ratio': convexity,
                 'compactness': compactness,
@@ -161,9 +199,9 @@ class BongardFeatureExtractor:
                 'modifier_distribution': modifier_distribution,
                 'avg_stroke_length': avg_stroke_length,
                 'stroke_complexity': brinkhoff_complexity,
-                'adjacency_matrix': None,
-                'containment': None,
-                'intersection_pattern': None,
+                'adjacency_matrix': relational.get('adjacency', 0),
+                'containment': relational.get('containment', 0),
+                'intersection_pattern': relational.get('intersections', 0),
                 'multiscale': multiscale,
                 'moment_of_inertia': moment_of_inertia if moment_of_inertia is not None else 0.0,
                 'center_of_mass_x': center_of_mass[0] if center_of_mass and len(center_of_mass) > 0 else 0.0,
