@@ -633,6 +633,7 @@ class ComprehensiveBongardProcessor:
                     'processing_timestamp': time.time(),
                     'feature_count': len(image_features) + len(physics_features) + len(composition_features)
                 },
+                'actions': ','.join(getattr(a, 'raw_command', str(a)) for a in all_actions),
                 'action_program': safe_action_program,
                 'geometry': geometry,
                 'relational_features': safe_relational_features,
