@@ -193,6 +193,16 @@ class ComprehensiveBongardProcessor:
     def process_single_image(self, action_commands: List[str], image_id: str, 
                            is_positive: bool, problem_id: str, category: str,
                            image_path: str) -> Optional[Dict[str, Any]]:
+        def ensure_float_tuples(vertices):
+            """Convert a list of vertices to tuples of floats, ignoring strings."""
+            result = []
+            for v in vertices:
+                if isinstance(v, (list, tuple)) and len(v) == 2:
+                    try:
+                        result.append((float(v[0]), float(v[1])))
+                    except Exception:
+                        continue
+            return result
         logger.info(f"[INPUT] Processing image_id={image_id}, problem_id={problem_id}, is_positive={is_positive}")
         logger.info(f"[INPUT] action_commands type: {type(action_commands)}, value: {action_commands}")
         # Improved shape splitting logic
@@ -379,16 +389,18 @@ class ComprehensiveBongardProcessor:
             # --- Always include raw vertices from BongardImage ---
             vertices_raw = []
             for shape in getattr(bongard_image, 'one_stroke_shapes', []):
-                if hasattr(shape, 'vertices'):
-                    # Defensive: ensure vertices are json-safe
-                    # Robust stringification for vertices
-                    safe_vertices = [str(v) if not isinstance(v, str) else v for v in shape.vertices] if isinstance(shape.vertices, list) else shape.vertices
+                if hasattr(shape, 'vertices') and isinstance(shape.vertices, list):
+                    # Defensive: ensure vertices are tuples of floats
+                    safe_vertices = ensure_float_tuples(shape.vertices)
                     vertices_raw.extend(safe_vertices)
+            logger.info(f"[DIAG] vertices_raw after fix: type={type(vertices_raw)}, sample={vertices_raw[:3]}")
 
             # --- Use standardize_coordinates for normalization ---
             from src.Derive_labels.shape_utils import standardize_coordinates, calculate_geometry_consistent
             logger.info(f"[standardize_coordinates] INPUT: {vertices_raw}")
             normalized_vertices = standardize_coordinates(vertices_raw)
+            # Ensure normalized_vertices are tuples of floats
+            normalized_vertices = ensure_float_tuples(normalized_vertices)
             logger.info(f"[standardize_coordinates] OUTPUT: {normalized_vertices}")
 
             # --- Use calculate_geometry_consistent for geometry ---
@@ -474,101 +486,11 @@ class ComprehensiveBongardProcessor:
                 graph_features = {'type': 'none', 'connectivity': 0}
                 logger.warning(f"[logo_to_shape] No adjacency matrix for graph topology detection.")
 
-            # --- Aggregate line and arc features for stroke_type_features ---
-            line_features = []
-            arc_features = []
-            stroke_features = []
-            shape_attr_map = FileIO.get_shape_attribute_map()
-            shape_def_map = FileIO.get_shape_def_map()
-            unique_shape_functions = set()
-            shape_function_counts = {}
-            unique_modifiers = set()
-            original_action_commands = [cmd for sublist in shapes_commands for cmd in sublist]
-
-            # --- NEW: Extract canonical problem name for TSV lookup (robust normalization) ---
-            canonical_name = problem_id
-            if '_' in canonical_name:
-                if canonical_name.startswith('bd_') or canonical_name.startswith('ff_') or canonical_name.startswith('hd_'):
-                    canonical_name = canonical_name.split('_', 1)[1]
-            import re
-            canonical_base = re.sub(r'(_\d+)?$', '', canonical_name)
-            canonical_key = canonical_base.lower().replace('-', '_').replace(' ', '_').rstrip('_')
-            canonical_shape_attributes = shape_attr_map.get(canonical_key, {})
-            canonical_shape_def = shape_def_map.get(canonical_key, {})
-
-            for i, shape in enumerate(getattr(bongard_image, 'one_stroke_shapes', [])):
-                # Defensive: ensure all actions are strings for logging/serialization
-                safe_actions = ensure_all_strings(getattr(shape, 'basic_actions', []))
-                for j, action in enumerate(safe_actions):
-                    # Defensive: if action is not a string, convert to string
-                    if not isinstance(action, str):
-                        action_str = str(action)
-                    else:
-                        action_str = action
-                    stroke_type_val = type(action).__name__.replace('Action', '').lower() if not isinstance(action, str) else 'unknown'
-                    raw_command = getattr(action, 'raw_command', None) if not isinstance(action, str) else action_str
-                    function_name = getattr(action, 'function_name', None) if not isinstance(action, str) else None
-                    if not raw_command and original_action_commands and j < len(original_action_commands):
-                        if isinstance(original_action_commands[j], str):
-                            raw_command = original_action_commands[j]
-                    shape_modifier_val = None
-                    parameters = {}
-                    if raw_command and isinstance(raw_command, str):
-                        parts = raw_command.split('_')
-                        if len(parts) >= 2:
-                            shape_modifier_val = parts[1]
-                        param_str = '_'.join(parts[2:]) if len(parts) > 2 else ''
-                        if param_str:
-                            main_params = param_str.split('-')
-                            for idx, p in enumerate(main_params):
-                                try:
-                                    parameters[f'param{idx+1}'] = float(p)
-                                except Exception:
-                                    parameters[f'param{idx+1}'] = p
-                    if not shape_modifier_val and function_name and isinstance(function_name, str):
-                        fn_parts = function_name.split('_')
-                        if len(fn_parts) >= 2:
-                            shape_modifier_val = fn_parts[1]
-                    if not function_name and raw_command and isinstance(raw_command, str):
-                        parts = raw_command.split('_')
-                        if len(parts) >= 2:
-                            function_name = f"{parts[0]}_{parts[1]}"
-                    if not shape_modifier_val and not isinstance(action, str) and hasattr(action, 'shape_modifier'):
-                        smod = getattr(action, 'shape_modifier')
-                        if hasattr(smod, 'value'):
-                            shape_modifier_val = smod.value
-                        elif isinstance(smod, str):
-                            shape_modifier_val = smod
-                    if not shape_modifier_val:
-                        shape_modifier_val = 'normal'
-                    is_valid = getattr(action, 'is_valid', True) if not isinstance(action, str) else True
-                    stroke_specific_features = _calculate_stroke_specific_features(
-                        action, j, stroke_type_val, shape_modifier_val, parameters, bongard_image=bongard_image)
-                    if stroke_type_val == 'line':
-                        line_features.append(stroke_specific_features)
-                    elif stroke_type_val == 'arc':
-                        arc_features.append(stroke_specific_features)
-                    stroke_data = {
-                        'stroke_id': f"{image_id}_stroke_{i}_{j}",
-                        'stroke_type': stroke_type_val,
-                        'shape_modifier': shape_modifier_val,
-                        'parameters': parameters,
-                        'raw_command': raw_command,
-                        'function_name': function_name,
-                        'is_valid': is_valid,
-                        'specific_features': stroke_specific_features,
-                    }
-                    if canonical_shape_attributes:
-                        stroke_data['canonical_shape_attributes'] = canonical_shape_attributes
-                    if canonical_shape_def:
-                        stroke_data['canonical_shape_def'] = canonical_shape_def
-                    stroke_features.append(stroke_data)
-                    if shape_modifier_val:
-                        unique_modifiers.add(shape_modifier_val)
-                    if function_name:
-                        unique_shape_functions.add(function_name)
-                        shape_function_counts[function_name] = shape_function_counts.get(function_name, 0) + 1
-
+            # --- PATCH: Use robust group-based stroke feature extraction ---
+            from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+            stroke_features = extract_stroke_features_from_shapes(bongard_image, problem_id=problem_id)
+            line_features = [sf['features'] for sf in stroke_features if 'line' in sf['stroke_command']]
+            arc_features = [sf['features'] for sf in stroke_features if 'arc' in sf['stroke_command']]
             differentiated_features = _calculate_stroke_type_differentiated_features(
                 {'line_features': line_features, 'arc_features': arc_features}, all_actions)
 

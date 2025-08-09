@@ -1,21 +1,29 @@
+import json
+import logging
+import numpy as np
+from scipy.ndimage import gaussian_filter1d
+from src.physics_inference import PhysicsInference
+from shapely.geometry import LineString
+from sklearn.cluster import AgglomerativeClustering
+from src.Derive_labels.relational_features import calculate_relationships
+from src.Derive_labels.shape_utils import ensure_flat_str_list
+from collections import Counter
+logger = logging.getLogger(__name__)
+
 def ensure_str_list(obj):
     """Recursively convert all items in a list (or nested lists/tuples) to strings."""
     if isinstance(obj, list):
         # Debug log for list conversion
-        import logging
-        logger = logging.getLogger(__name__)
         logger.debug(f"[ensure_str_list] Converting list: {obj}")
         result = [ensure_str_list(x) for x in obj]
         logger.debug(f"[ensure_str_list] Result: {result}")
         return result
     elif isinstance(obj, tuple):
-        logger = logging.getLogger(__name__)
         logger.debug(f"[ensure_str_list] Converting tuple: {obj}")
         result = tuple(ensure_str_list(x) for x in obj)
         logger.debug(f"[ensure_str_list] Result: {result}")
         return result
     elif not isinstance(obj, str):
-        logger = logging.getLogger(__name__)
         logger.debug(f"[ensure_str_list] Non-str object: {obj} (type: {type(obj)})")
         # Special handling for action objects
         if hasattr(obj, 'raw_command') and obj.raw_command is not None:
@@ -39,16 +47,17 @@ def ensure_str_list(obj):
         return val
     logger.debug(f"[ensure_str_list] Returning string: {obj}")
     return obj
-import numpy as np
-from scipy.ndimage import gaussian_filter1d
+
+
 def extract_multiscale_features(shape_vertices, scales=[0.1, 0.3, 0.5, 1.0, 2.0]):
     """Extract features at multiple geometric scales using Gaussian smoothing."""
-    logger = logging.getLogger(__name__)
     logger.info(f"[extract_multiscale_features] INPUT vertices: {shape_vertices}")
     multiscale_features = {}
     if not shape_vertices or len(shape_vertices) < 3:
         logger.warning("[extract_multiscale_features] Not enough vertices for multiscale analysis.")
         return multiscale_features
+    # Ensure all vertices are tuples of floats for downstream compatibility
+    shape_vertices = [tuple(map(float, v)) if isinstance(v, (list, tuple)) and len(v) == 2 else v for v in shape_vertices]
     arr = np.array(shape_vertices)
     for scale in scales:
         # Smooth x and y separately
@@ -64,7 +73,6 @@ def extract_multiscale_features(shape_vertices, scales=[0.1, 0.3, 0.5, 1.0, 2.0]
         inflections = np.sum(np.abs(np.diff(np.sign(angle_diffs))) > 0)
         complexity = inflections
         # Hierarchical/grouping: cluster vertices at this scale
-        from sklearn.cluster import AgglomerativeClustering
         n_clusters = min(max(2, int(len(smoothed_vertices) // (3 + scale * 5))), len(smoothed_vertices))
         try:
             clustering = AgglomerativeClustering(n_clusters=n_clusters, linkage='ward').fit(smoothed_vertices)
@@ -97,20 +105,19 @@ def extract_multiscale_features(shape_vertices, scales=[0.1, 0.3, 0.5, 1.0, 2.0]
         logger.info(f"[extract_multiscale_features] scale={scale}, features={multiscale_features[f'scale_{scale}']}")
     logger.info(f"[extract_multiscale_features] OUTPUT: {multiscale_features}")
     return multiscale_features
-import logging
-from src.physics_inference import PhysicsInference
+
+
 
 def _actions_to_geometries(shape, arc_points=24):
         """
         Convert all basic_actions in a shape to shapely geometries (LineString), using the true world-space vertices from shape.vertices.
         Each stroke is a segment between consecutive vertices. Fallback to synthetic only if vertices are missing.
         """
-        from shapely.geometry import LineString
-        import logging
-        logger = logging.getLogger(__name__)
         verts = getattr(shape, 'vertices', None)
         geoms = []
+        # Ensure all vertices are tuples for hashing and geometry
         if verts and isinstance(verts, (list, tuple)) and len(verts) >= 2:
+            verts = [tuple(map(float, v)) if isinstance(v, (list, tuple)) and len(v) == 2 else v for v in verts]
             for i in range(len(verts) - 1):
                 try:
                     seg = LineString([verts[i], verts[i+1]])
@@ -139,7 +146,6 @@ def _actions_to_geometries(shape, arc_points=24):
         logger.debug(f"Number of stroke geometries: {len(geoms)}")
         # Ensure output is serializable
         try:
-            import json
             json.dumps([str(g) for g in geoms])
             logger.debug(f"[actions_to_geometries] Output is JSON serializable.")
         except Exception as e:
@@ -155,12 +161,7 @@ def extract_relational_features(strokes, buffer_amt=0.001):
     Returns:
         dict with keys: 'adjacency', 'intersections', 'containment', 'overlap'
     """
-    import logging
-    logger = logging.getLogger(__name__)
     logger.info(f"[extract_relational_features] INPUT: {strokes}")
-    from src.Derive_labels.relational_features import calculate_relationships
-    from src.Derive_labels.shape_utils import ensure_flat_str_list
-    from src.Derive_labels.features import ensure_str_list
     # Ensure all strokes are robustly stringified for relationships
     logger.debug(f"[extract_relational_features] Raw strokes before stringification: {strokes}")
     strokes_str = [ensure_str_list(s) if not isinstance(s, dict) else s for s in strokes]
@@ -170,7 +171,6 @@ def extract_relational_features(strokes, buffer_amt=0.001):
     logger.info(f"[extract_relational_features] OUTPUT: {rel}")
     # Validate output is JSON serializable
     try:
-        import json
         json.dumps(rel)
         logger.debug(f"[extract_relational_features] Output is JSON serializable.")
     except Exception as e:
@@ -180,11 +180,7 @@ def extract_relational_features(strokes, buffer_amt=0.001):
     
 def _extract_ngram_features(sequence, n=2):
     """Extract n-gram counts from a sequence, with string keys for JSON compatibility."""
-    logger = logging.getLogger(__name__)
-    from src.Derive_labels.shape_utils import ensure_flat_str_list
-    from src.Derive_labels.features import ensure_str_list
     logger.debug(f"[_extract_ngram_features] INPUTS: sequence={sequence}, n={n}")
-    from collections import Counter
     # Ensure sequence is stringified
     sequence_str = ensure_str_list(sequence)
     logger.debug(f"[_extract_ngram_features] Sequence after stringification: {sequence_str}")
@@ -204,7 +200,6 @@ def _extract_ngram_features(sequence, n=2):
 
 def _detect_alternation(sequence):
         """Compute maximal alternation score using PhysicsInference.alternation_score."""
-        logger = logging.getLogger(__name__)
         from src.Derive_labels.features import ensure_str_list
         logger.debug(f"[_detect_alternation] INPUTS: sequence={sequence}")
         # Ensure sequence is stringified
@@ -214,7 +209,6 @@ def _detect_alternation(sequence):
         logger.debug(f"[_detect_alternation] OUTPUT: {score}")
         # Validate output is JSON serializable
         try:
-            import json
             json.dumps(score)
             logger.debug(f"[_detect_alternation] Output is JSON serializable.")
         except Exception as e:
@@ -228,9 +222,6 @@ def _extract_graph_features(strokes):
     Input: adjacency_matrix (2D list or np.ndarray), optionally strokes for reference.
     Output: dict with topology type(s), graph statistics, and logs all inputs/outputs.
     """
-    import numpy as np
-    import logging
-    logger = logging.getLogger(__name__)
     # Accept either strokes or adjacency/intersection matrix
     if isinstance(strokes, dict) and 'adjacency_matrix' in strokes:
         adj = np.array(strokes['adjacency_matrix'])

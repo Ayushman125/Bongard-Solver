@@ -293,11 +293,29 @@ class PhysicsInference:
     @staticmethod
     def dedup_vertices(verts, epsilon=1e-8):
         """
-        Remove duplicate closing vertex if present (within epsilon).
+        Remove all duplicate vertices (within epsilon) and collinear points.
         """
-        if len(verts) > 2 and np.linalg.norm(np.array(verts[0]) - np.array(verts[-1])) < epsilon:
-            return verts[:-1]
-        return verts
+        if not verts:
+            return []
+        deduped = []
+        for v in verts:
+            if not any(np.linalg.norm(np.array(v) - np.array(u)) < epsilon for u in deduped):
+                deduped.append(v)
+        # Remove collinear points
+        def is_collinear(p1, p2, p3, eps=1e-8):
+            a = np.array(p1)
+            b = np.array(p2)
+            c = np.array(p3)
+            area = np.abs(np.cross(b - a, c - a))
+            return area < eps
+        if len(deduped) > 2:
+            filtered = [deduped[0]]
+            for i in range(1, len(deduped) - 1):
+                if not is_collinear(deduped[i-1], deduped[i], deduped[i+1]):
+                    filtered.append(deduped[i])
+            filtered.append(deduped[-1])
+            deduped = filtered
+        return deduped
 
     @staticmethod
     def rounded_bbox(verts, epsilon=1e-10):
@@ -665,29 +683,57 @@ class PhysicsInference:
     @staticmethod
     def polygon_from_vertices(vertices):
         import logging
-        key = f"{len(vertices)}-{hash(tuple(vertices))}"
+        # Ensure all vertices are tuples (hashable)
+        tuple_vertices = [tuple(v) for v in vertices]
+        key = f"{len(tuple_vertices)}-{hash(tuple(tuple_vertices))}"
         if key in _POLY_CACHE:
             return _POLY_CACHE[key]
 
-        def _clean_vertices(verts): return verts  # placeholder
-        cleaned = _clean_vertices(vertices)
+        def _prevalidate_vertices(verts):
+            # Deduplicate and remove collinear points
+            verts = [tuple(v) for v in verts]
+            verts = PhysicsInference.dedup_vertices(verts)
+            return verts
+
+        cleaned = _prevalidate_vertices(vertices)
         n = len(cleaned)
         t0 = time.time()
         poly = None
         try:
             poly = Polygon(cleaned)
             logging.debug(f"polygon: raw build {n} verts in {time.time()-t0:.3f}s")
-            if not poly.is_valid or poly.area == 0:
-                logging.debug("polygon_from_vertices: invalid or zero-area polygon, trying buffer(0)")
-                poly = poly.buffer(0)
-            if (not poly.is_valid or poly.area == 0) and n >= 3:
-                logging.debug("polygon_from_vertices: still invalid, trying convex hull fallback")
-                poly = Polygon(cleaned).convex_hull
-            if not poly.is_valid or poly.area == 0:
-                logging.warning(f"polygon_from_vertices: Could not recover valid polygon, using unit square fallback.")
+            # Pre-validation checks
+            if n < 3:
+                logging.warning(f"polygon_from_vertices: Too few vertices ({n}) for polygon. Fallback to unit square.")
                 poly = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
+            elif not poly.is_valid or poly.area == 0:
+                # Check for self-intersection
+                if hasattr(poly, 'is_simple') and not poly.is_simple:
+                    logging.warning(f"polygon_from_vertices: Polygon is self-intersecting. Trying convex hull fallback. Vertices: {cleaned}")
+                    poly = Polygon(cleaned).convex_hull
+                # Check for collinearity
+                elif PhysicsInference.shoelace_area(cleaned) == 0.0:
+                    logging.warning(f"polygon_from_vertices: Polygon is collinear. Trying convex hull fallback. Vertices: {cleaned}")
+                    poly = Polygon(cleaned).convex_hull
+                # Try buffer(0) as standard fix
+                else:
+                    logging.debug("polygon_from_vertices: invalid or zero-area polygon, trying buffer(0)")
+                    poly = poly.buffer(0)
+                # If still invalid, try convex hull again
+                if (not poly.is_valid or poly.area == 0) and n >= 3:
+                    logging.debug("polygon_from_vertices: still invalid, trying convex hull fallback")
+                    poly = Polygon(cleaned).convex_hull
+                # If still invalid, fallback to bounding box
+                if not poly.is_valid or poly.area == 0:
+                    bbox = PhysicsInference.rounded_bbox(cleaned)
+                    logging.warning(f"polygon_from_vertices: Could not recover valid polygon, using bounding box fallback. Vertices: {cleaned}, bbox: {bbox}")
+                    poly = Polygon([(bbox[0], bbox[1]), (bbox[2], bbox[1]), (bbox[2], bbox[3]), (bbox[0], bbox[3])])
+                # Final fallback
+                if not poly.is_valid or poly.area == 0:
+                    logging.warning(f"polygon_from_vertices: Could not recover valid polygon, using unit square fallback. Vertices: {cleaned}")
+                    poly = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
         except Exception as e:
-            logging.warning(f"polygon_from_vertices: Exception {e}, using unit square fallback.")
+            logging.warning(f"polygon_from_vertices: Exception {e}, using unit square fallback. Vertices: {cleaned}")
             poly = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
         poly = PhysicsInference._ensure_polygon(poly)
         _POLY_CACHE[key] = poly

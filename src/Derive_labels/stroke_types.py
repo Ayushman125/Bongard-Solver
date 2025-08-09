@@ -16,6 +16,55 @@ from src.Derive_labels.shape_utils import safe_divide, _calculate_dominant_direc
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
+def extract_stroke_features_from_shapes(bongard_image, problem_id=None):
+    """
+    For each shape in bongard_image.one_stroke_shapes, iterate over its actions/strokes.
+    Extract features for each stroke within its shape context, logging group membership and mismatches.
+    Returns a list of dicts: [{shape_index, stroke_index, stroke_command, features, group_info, ...}, ...]
+    """
+    import logging
+    results = []
+    if not hasattr(bongard_image, 'one_stroke_shapes') or not bongard_image.one_stroke_shapes:
+        logging.warning(f"[extract_stroke_features_from_shapes] No shapes found in BongardImage for problem_id={problem_id}")
+        return results
+    shapes = bongard_image.one_stroke_shapes
+    total_shapes = len(shapes)
+    total_strokes = sum(len(getattr(shape, 'actions', getattr(shape, 'strokes', []))) for shape in shapes)
+    logging.info(f"[extract_stroke_features_from_shapes] problem_id={problem_id} | num_shapes={total_shapes} | total_strokes={total_strokes}")
+    for shape_idx, shape in enumerate(shapes):
+        actions = getattr(shape, 'actions', getattr(shape, 'strokes', []))
+        if not actions:
+            # Defensive: avoid logging shape details if start_coordinates is None
+            if hasattr(shape, 'start_coordinates') and shape.start_coordinates is not None:
+                logging.warning(f"[extract_stroke_features_from_shapes] Shape {shape_idx} has no actions/strokes. Shape={shape}")
+            else:
+                logging.warning(f"[extract_stroke_features_from_shapes] Shape {shape_idx} has no actions/strokes. Shape has no start_coordinates.")
+            continue
+        logging.info(f"[extract_stroke_features_from_shapes] Shape {shape_idx}: num_actions={len(actions)} | actions={actions}")
+        for stroke_idx, stroke in enumerate(actions):
+            try:
+                features = _calculate_stroke_specific_features(stroke, stroke_idx, bongard_image=bongard_image)
+            except Exception as e:
+                logging.error(f"[extract_stroke_features_from_shapes] Error extracting features for shape {shape_idx}, stroke {stroke_idx}: {e}")
+                features = {'error': str(e)}
+            result = {
+                'problem_id': problem_id,
+                'shape_index': shape_idx,
+                'stroke_index': stroke_idx,
+                'stroke_command': getattr(stroke, 'raw_command', str(stroke)),
+                'features': features,
+                'group_info': {
+                    'num_shapes': total_shapes,
+                    'num_actions_in_shape': len(actions),
+                    'shape_type': getattr(shape, '__class__', type(shape)).__name__,
+                }
+            }
+            logging.info(f"[extract_stroke_features_from_shapes] Extracted features for shape {shape_idx}, stroke {stroke_idx}: {result}")
+            results.append(result)
+    if total_strokes > total_shapes:
+        logging.warning(f"[extract_stroke_features_from_shapes] MISMATCH: More strokes ({total_strokes}) than shapes ({total_shapes}) for problem_id={problem_id}")
+    return results
+
 
 def extract_action_type_prefixes(problems_data):
     logger.info(f"[extract_action_type_prefixes] INPUT: problems_data keys={list(problems_data.keys())}")
@@ -73,20 +122,39 @@ def valid_verts(verts):
         return False
     return all(isinstance(v, (list, tuple)) and len(v) == 2 and all(np.isfinite(coord) for coord in v) for v in verts)
 
+
+def _extract_stroke_type_from_command(stroke) -> str:
+    """Robustly extract stroke type from command string or object."""
+    if isinstance(stroke, str):
+        parts = stroke.split('_')
+        if len(parts) >= 1:
+            if parts[0] in ['line', 'arc']:
+                return parts[0]
+    raw_command = getattr(stroke, 'raw_command', None)
+    if raw_command and isinstance(raw_command, str):
+        parts = raw_command.split('_')
+        if len(parts) >= 1:
+            if parts[0] in ['line', 'arc']:
+                return parts[0]
+    function_name = getattr(stroke, 'function_name', None)
+    if function_name and isinstance(function_name, str):
+        fn_parts = function_name.split('_')
+        if len(fn_parts) >= 1:
+            if fn_parts[0] in ['line', 'arc']:
+                return fn_parts[0]
+    return 'unknown'
+
 def _extract_stroke_vertices(stroke, stroke_index, all_vertices, bongard_image=None):
     logger = logging.getLogger(__name__)
     logger.debug(f"[_extract_stroke_vertices] INPUT: stroke_index={stroke_index}, stroke={stroke}, all_vertices={all_vertices}, bongard_image={bongard_image}")
     MIN_VERTICES = 3
 
-
-    # 1. Try bongard_image shape vertices
+    # Try to get vertices from bongard_image.one_stroke_shapes if available and in bounds
+    verts = None
     if bongard_image and hasattr(bongard_image, 'one_stroke_shapes'):
         shapes = bongard_image.one_stroke_shapes
-        if not isinstance(shapes, list):
-            logger.error(f"[_extract_stroke_vertices] bongard_image.one_stroke_shapes is not a list. Type: {type(shapes)}")
-        if stroke_index >= len(shapes):
-            logger.error(f"[_extract_stroke_vertices] stroke_index {stroke_index} out of bounds for bongard_image.one_stroke_shapes (len={len(shapes)}). This means parsing did not produce enough shapes for the commands. RAW_COMMAND: {getattr(stroke, 'raw_command', None)}")
-        else:
+        total_shapes = len(shapes)
+        if isinstance(shapes, list) and stroke_index < total_shapes:
             try:
                 shape = shapes[stroke_index]
                 verts = getattr(shape, 'vertices', None)
@@ -97,18 +165,26 @@ def _extract_stroke_vertices(stroke, stroke_index, all_vertices, bongard_image=N
                     logger.warning(f"[_extract_stroke_vertices] Insufficient or invalid vertices in bongard_image for stroke {stroke_index}: {verts}")
             except Exception as e:
                 logger.warning(f"[_extract_stroke_vertices] Failed to get vertices from bongard_image.one_stroke_shapes[{stroke_index}]: {e}")
+        else:
+            logger.error(f"[_extract_stroke_vertices] stroke_index {stroke_index} out of bounds for bongard_image.one_stroke_shapes (len={total_shapes}). RAW_COMMAND: {getattr(stroke, 'raw_command', None)}")
+            # Log raw commands and shapes for debugging
+            if hasattr(bongard_image, 'raw_commands'):
+                logger.error(f"[_extract_stroke_vertices] Raw commands: {bongard_image.raw_commands}")
+            logger.error(f"[_extract_stroke_vertices] All shapes: {[getattr(s, 'vertices', None) for s in shapes]}")
+            # Fallback: synthesize minimal shape (single vertex at origin)
+            return [(0.0, 0.0)]
 
-    # 2. Try stroke.vertices
+    # Try stroke.vertices
     if hasattr(stroke, 'vertices') and valid_verts(stroke.vertices):
         logger.info(f"[_extract_stroke_vertices] Using stroke.vertices for stroke {stroke_index}: {stroke.vertices}")
         return stroke.vertices
 
-    # 3. Try stroke.polyline_points
+    # Try stroke.polyline_points
     if hasattr(stroke, 'polyline_points') and valid_verts(stroke.polyline_points):
         logger.info(f"[_extract_stroke_vertices] Using stroke.polyline_points for stroke {stroke_index}: {stroke.polyline_points}")
         return stroke.polyline_points
 
-    # 4. Try get_world_coordinates
+    # Try get_world_coordinates
     if hasattr(stroke, 'get_world_coordinates') and callable(stroke.get_world_coordinates):
         try:
             verts = stroke.get_world_coordinates()
@@ -118,38 +194,7 @@ def _extract_stroke_vertices(stroke, stroke_index, all_vertices, bongard_image=N
         except Exception as e:
             logger.warning(f"[_extract_stroke_vertices] get_world_coordinates failed for stroke {stroke_index}: {e}")
 
-    # 5. Arc interpolation for arcs (ensure parameter validity)
-    stype = getattr(stroke, 'stroke_type', None)
-    if hasattr(stype, 'value'):
-        stype = stype.value
-    if stype is None and hasattr(stroke, 'function_name'):
-        stype = getattr(stroke.function_name, 'raw_command', str(stroke.function_name)).split('_')[0]
-    if stype and 'arc' in getattr(stype, 'raw_command', str(stype)).lower():
-        params = getattr(stroke, 'parameters', {}) or {}
-        try:
-            cx = float(params.get('center_x') or params.get('cx') or params.get('param4') or 0.5)
-            cy = float(params.get('center_y') or params.get('cy') or params.get('param5') or 0.5)
-            radius = float(params.get('radius') or params.get('param1') or 0.5)
-            start_angle = float(params.get('start_angle') or params.get('param2') or 0)
-            end_angle = float(params.get('end_angle') or params.get('param3') or 90)
-            if all(np.isfinite(x) for x in [cx, cy, radius, start_angle, end_angle]):
-                num_points = 24
-                theta1, theta2 = np.deg2rad([start_angle, end_angle])
-                if theta2 < theta1:
-                    theta2 += 2 * np.pi
-                thetas = np.linspace(theta1, theta2, num_points)
-                arc_points = [(cx + radius * np.cos(t), cy + radius * np.sin(t)) for t in thetas]
-                logger.info(f"[_extract_stroke_vertices] Interpolated arc points for stroke {stroke_index}: {arc_points}")
-                return arc_points
-        except Exception as e:
-            logger.warning(f"[_extract_stroke_vertices] Arc interpolation failed for stroke {stroke_index}: {e}")
-
-    # 6. all_vertices fallback
-    if all_vertices and stroke_index < len(all_vertices) and valid_verts(all_vertices[stroke_index]):
-        logger.info(f"[_extract_stroke_vertices] Using all_vertices fallback for stroke {stroke_index}: {all_vertices[stroke_index]}")
-        return all_vertices[stroke_index]
-
-    # 7. Fallback: synthesize vertices from raw command
+    # Fallback: synthesize vertices from raw command
     raw_command = getattr(stroke, 'raw_command', None)
     if raw_command:
         verts = _vertices_from_command(raw_command, stroke_index)
@@ -157,11 +202,16 @@ def _extract_stroke_vertices(stroke, stroke_index, all_vertices, bongard_image=N
             logger.warning(f"[_extract_stroke_vertices] Fallback: synthesized vertices from command for stroke {stroke_index}: {verts}")
             return verts
 
-    # 8. Interpolate if we have 2 vertices
+    # Interpolate if we have 2 vertices
     if hasattr(stroke, 'vertices') and stroke.vertices and len(stroke.vertices) == 2:
         interp_verts = interpolate_vertices(stroke.vertices, MIN_VERTICES)
         logger.warning(f"[_extract_stroke_vertices] Interpolated vertices to minimum count for stroke {stroke_index}: {interp_verts}")
         return interp_verts
+
+    # Try all_vertices fallback
+    if all_vertices and stroke_index < len(all_vertices) and valid_verts(all_vertices[stroke_index]):
+        logger.info(f"[_extract_stroke_vertices] Using all_vertices fallback for stroke {stroke_index}: {all_vertices[stroke_index]}")
+        return all_vertices[stroke_index]
 
     logger.warning(f"[_extract_stroke_vertices] Failed to extract vertices for stroke {stroke_index}. Returning empty list.")
     return []
@@ -273,16 +323,18 @@ def _vertices_from_command(command, stroke_index):
     logger.info(f"[_vertices_from_command] Fallback: returning []")
     return []
 
+
 def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_val=None, shape_modifier_val=None, parameters=None, bongard_image=None) -> Dict[str, Any]:
     logger.info(f"[_calculate_stroke_specific_features] Called with stroke={stroke}, stroke_index={stroke_index}, stroke_type_val={stroke_type_val}, shape_modifier_val={shape_modifier_val}, parameters={parameters}")
     """Calculate features specific to stroke type and shape modifier, using robust geometric/physics formulas."""
-    # Use module-level logger only (fix UnboundLocalError)
-    logger.info(f"[_calculate_stroke_specific_features] INPUTS: stroke_index={stroke_index}, stroke_type_val={stroke_type_val}, shape_modifier_val={shape_modifier_val}, parameters={parameters}")
     features = {'stroke_index': stroke_index}
-    stype = stroke_type_val or type(stroke).__name__.replace('Action', '').lower()
-    smod = shape_modifier_val or 'normal'
+    # Robustly extract stroke type and modifier
+    stype = stroke_type_val or _extract_stroke_type_from_command(stroke)
+    smod = shape_modifier_val or _extract_modifier_from_stroke(stroke) or 'normal'
     params = parameters or {}
     verts = _extract_stroke_vertices(stroke, stroke_index, None, bongard_image=bongard_image)
+    if not verts or (isinstance(verts, list) and len(verts) == 1 and verts[0] == (0.0, 0.0)):
+        logger.error(f"[_calculate_stroke_specific_features] Fallback or missing vertices for stroke_index={stroke_index}, stroke={stroke}, type={stroke_type_val}, modifier={shape_modifier_val}")
     logger.info(f"[_calculate_stroke_specific_features] verts: {verts}")
     stype_lower = stype.lower() if stype else ''
     # Calculate basic geometric features from vertices
@@ -308,7 +360,7 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
                 'line_is_vertical': 70 < abs(angle) < 110,
                 'line_direction': _categorize_direction(angle)
             })
-        elif 'arc' in stype_lower or shape_modifier_val == 'circle':
+        elif 'arc' in stype_lower or smod == 'circle':
             radius = params.get('radius', 0.5)
             span_angle = params.get('span_angle', 90)
             arc_length = abs(span_angle) * radius * safe_divide(math.pi, 180) if radius > 0 else total_length
@@ -529,13 +581,25 @@ def _calculate_stroke_type_differentiated_features(stroke_type_features: Dict, s
     return features
 
 def _extract_modifier_from_stroke(stroke) -> str:
+
     logger = logging.getLogger(__name__)
-    logger.info(f"[_extract_modifier_from_stroke] INPUT: type={type(stroke)}, attributes={dir(stroke)}")
-    """Extract the actual shape modifier from a stroke object, using geometric and semantic analysis with debug logging."""
+    logger.info(f"[_extract_modifier_from_stroke] INPUT: type={type(stroke)}, attributes={dir(stroke) if not isinstance(stroke, str) else 'str'}")
+    """
+    Extract the actual shape modifier from a stroke object or string, using geometric and semantic analysis with debug logging.
+    """
     from src.Derive_labels.shape_utils import calculate_geometry, _calculate_compactness
-    logger = logging.getLogger(__name__)
-    logger.debug(f"[_extract_modifier_from_stroke] INPUT: type={type(stroke)}, attributes={dir(stroke)}")
-    # Try geometric analysis first
+    # If stroke is a string, parse modifier directly
+    if isinstance(stroke, str):
+        # Expect format like 'line_circle_1.000-0.500'
+        parts = stroke.split('_')
+        if len(parts) >= 2 and parts[1]:
+            logger.debug(f"[_extract_modifier_from_stroke] Extracted modifier from string: {parts[1]}")
+            logger.info(f"[_extract_modifier_from_stroke] OUTPUT: {parts[1]} (string)")
+            return parts[1]
+        else:
+            logger.warning(f"[_extract_modifier_from_stroke] Could not extract modifier from string: {stroke}")
+            return None
+    # Try geometric analysis for object strokes
     verts = None
     if hasattr(stroke, 'vertices') and stroke.vertices and len(stroke.vertices) > 2:
         verts = stroke.vertices
@@ -543,7 +607,6 @@ def _extract_modifier_from_stroke(stroke) -> str:
         verts = stroke.polyline_points
     elif hasattr(stroke, 'get_world_coordinates') and callable(stroke.get_world_coordinates):
         verts = stroke.get_world_coordinates()
-    # If we have enough vertices, analyze geometry
     if verts and len(verts) > 2:
         geom = calculate_geometry(verts)
         num_vertices = len(verts)
@@ -553,35 +616,30 @@ def _extract_modifier_from_stroke(stroke) -> str:
         perimeter = geom.get('perimeter', None)
         if area and perimeter:
             compactness = _calculate_compactness(area, perimeter)
-        # Triangle: 3 vertices, high convexity, compactness ~0.6
         if num_vertices == 3 and convexity > 0.95:
             logger.debug("[_extract_modifier_from_stroke] Geometric modifier: triangle")
             logger.info("[_extract_modifier_from_stroke] OUTPUT: triangle (geometry)")
             return 'triangle'
-        # Square: 4 vertices, right angles, high convexity, compactness ~0.785
         if num_vertices == 4 and convexity > 0.95 and compactness and 0.7 < compactness < 0.85:
             logger.debug("[_extract_modifier_from_stroke] Geometric modifier: square")
             logger.info("[_extract_modifier_from_stroke] OUTPUT: square (geometry)")
             return 'square'
-        # Circle: many vertices, high compactness, high convexity
         if num_vertices > 6 and compactness and compactness > 0.85 and convexity > 0.95:
             logger.debug("[_extract_modifier_from_stroke] Geometric modifier: circle")
             logger.info("[_extract_modifier_from_stroke] OUTPUT: circle (geometry)")
             return 'circle'
-        # Zigzag: high edge variance, low compactness
         edge_var = geom.get('edge_length_variance', 0.0)
         if edge_var and edge_var > 0.1 and compactness and compactness < 0.5:
             logger.debug("[_extract_modifier_from_stroke] Geometric modifier: zigzag")
             logger.info("[_extract_modifier_from_stroke] OUTPUT: zigzag (geometry)")
             return 'zigzag'
-    # Fallback: string-based extraction
+    # Fallback: attribute-based extraction
     if hasattr(stroke, 'shape_modifier'):
         smod = getattr(stroke, 'shape_modifier')
-        if hasattr(smod, 'value'):
-            if smod.value:
-                logger.debug(f"[_extract_modifier_from_stroke] Extracted modifier from .shape_modifier.value: {smod.value}")
-                logger.info(f"[_extract_modifier_from_stroke] OUTPUT: {smod.value} (shape_modifier.value)")
-                return str(smod.value)
+        if hasattr(smod, 'value') and smod.value:
+            logger.debug(f"[_extract_modifier_from_stroke] Extracted modifier from .shape_modifier.value: {smod.value}")
+            logger.info(f"[_extract_modifier_from_stroke] OUTPUT: {smod.value} (shape_modifier.value)")
+            return str(smod.value)
         elif isinstance(smod, str) and smod:
             logger.debug(f"[_extract_modifier_from_stroke] Extracted modifier from .shape_modifier: {smod}")
             logger.info(f"[_extract_modifier_from_stroke] OUTPUT: {smod} (shape_modifier)")
@@ -600,8 +658,7 @@ def _extract_modifier_from_stroke(stroke) -> str:
             logger.debug(f"[_extract_modifier_from_stroke] Extracted modifier from function_name: {fn_parts[1]}")
             logger.info(f"[_extract_modifier_from_stroke] OUTPUT: {fn_parts[1]} (function_name)")
             return fn_parts[1]
-    logger.debug("[_extract_modifier_from_stroke] Fallback to 'normal' modifier")
-    logger.info("[_extract_modifier_from_stroke] OUTPUT: normal (fallback)")
-    return 'normal'
+    logger.warning("[_extract_modifier_from_stroke] Could not extract modifier from stroke object. Returning None.")
+    return None
 
 
