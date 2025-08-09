@@ -94,6 +94,24 @@ class PhysicsInference:
             return result
 
     @staticmethod
+    def shoelace_area(vertices):
+        """
+        Compute the area of a polygon using the shoelace formula.
+        Args:
+            vertices (list or np.ndarray): List of (x, y) tuples or Nx2 array.
+        Returns:
+            float: Area of the polygon (always positive).
+        """
+        import numpy as np
+        if len(vertices) < 3:
+            return 0.0
+        arr = np.array(vertices)
+        x = arr[:, 0]
+        y = arr[:, 1]
+        area = 0.5 * np.abs(np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1)))
+        return area
+
+    @staticmethod
     def robust_angular_variance(vertices):
             """
             Estimate the angular variance of a polygon given its vertices.
