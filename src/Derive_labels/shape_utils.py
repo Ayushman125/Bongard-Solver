@@ -391,20 +391,33 @@ def _calculate_perimeter(vertices: List[tuple]) -> float:
     vertices = ensure_vertex_list(vertices)
     if len(vertices) < 2:
         return 0.0
-    perimeter = 0.0
+    import logging
+    import numpy as np
+    from shapely.geometry import Polygon
+    logging.info(f"[_calculate_perimeter] INPUT vertices: {vertices}")
     for i in range(len(vertices)):
         p1 = vertices[i]
         p2 = vertices[(i + 1) % len(vertices)]
         perimeter += ((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2)**0.5
+    logging.info(f"[_calculate_perimeter] OUTPUT perimeter: {perimeter}")
     return json_safe(perimeter)
 
 def _calculate_convexity_ratio(poly) -> float:
     """Calculate ratio of polygon area to convex hull area."""
+    import logging
+    from shapely.geometry import Polygon
     try:
-        if poly.area == 0:
+        if not poly.is_valid:
+            poly = poly.buffer(0)
+        convex_hull = poly.convex_hull
+        if convex_hull.area == 0:
+            logging.warning(f"[_calculate_convexity_ratio] Convex hull area is zero.")
             return 0.0
-        return safe_divide(poly.area, poly.convex_hull.area)
-    except:
+        ratio = min(1.0, poly.area / convex_hull.area)
+        logging.info(f"[_calculate_convexity_ratio] OUTPUT ratio: {ratio}")
+        return ratio
+    except Exception as e:
+        logging.error(f"[_calculate_convexity_ratio] Exception: {e}")
         return 0.0
 
 # (Removed duplicate _calculate_compactness)
