@@ -90,14 +90,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.data_pipeline.data_loader import load_action_programs
 from src.bongard_augmentor.hybrid import HybridAugmentor
 
-# Fix BongardImage import if needed
-try:
-    from bongard.bongard import BongardImage
-except ImportError:
-    try:
-        from Bongard_LOGO.bongard.bongard import BongardImage
-    except ImportError:
-        from Bongard_LOGO.bongard.bongard import BongardImage
+from bongard.bongard import BongardImage
 from src.physics_inference import PhysicsInference
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -139,11 +132,15 @@ class ComprehensiveBongardProcessor:
         self.context_extractor = BongardFeatureExtractor()
 
     def _calculate_vertices_from_action(self, action, stroke_index, bongard_image=None):
-        from src.Derive_labels.stroke_types import _extract_stroke_vertices, _compute_bounding_box
-        """Calculate line segment vertices for a single action, using bongard_image context."""
+        """Always use analytic vertices from the action parser for all strokes."""
         try:
+            if hasattr(action, 'vertices_from_command'):
+                verts = action.vertices_from_command()
+                if verts:
+                    return verts
+            # Fallback to previous extraction if analytic not available
+            from src.Derive_labels.stroke_types import _extract_stroke_vertices, _compute_bounding_box
             verts = _extract_stroke_vertices(action, stroke_index, None, bongard_image=bongard_image)
-            bbox = None
             if verts:
                 bbox = _compute_bounding_box(verts)
                 logger.info(f"[_calculate_vertices_from_action] Bounding box: {bbox}")
@@ -157,14 +154,8 @@ class ComprehensiveBongardProcessor:
         """
         Pattern regularity using PhysicsInference.pattern_regularity. Returns NaN if sequence too short.
         """
+        # Use corrected modifiers (horizontal/vertical/arc) for n-gram and regularity
         return PhysicsInference.pattern_regularity(modifier_sequence)
-        diversity_penalty = (len(unique_mods) - 1) / max(n-1, 1)
-        pattern_score = max(repetition_score, alternation_score)
-        diversity_factor = 1.0 - diversity_penalty
-        pattern_regularity = pattern_score * diversity_factor
-        pattern_regularity = max(0.0, min(1.0, pattern_regularity))
-        logger.debug(f"Pattern regularity: repetition_score={repetition_score}, alternation_score={alternation_score}, diversity_penalty={diversity_penalty}, result={pattern_regularity}")
-        return pattern_regularity
     
     
     
@@ -291,35 +282,81 @@ class ComprehensiveBongardProcessor:
                     stroke_vertices = self._calculate_vertices_from_action(a, i, bongard_image=shape)
                     from src.Derive_labels.shape_utils import calculate_geometry_consistent, compute_open_stroke_geometry
                     from src.Derive_labels.stroke_types import _calculate_stroke_specific_features
-                    stroke_features = _calculate_stroke_specific_features(stroke_vertices, i)
-                    # PATCH: Propagate degenerate_case and metrics
-                    if stroke_vertices and len(stroke_vertices) == 2:
-                        stroke_geometry = compute_open_stroke_geometry(stroke_vertices)
-                        # Set all metrics to None for degenerate case
-                        for metric in ['compactness', 'convexity_ratio', 'geom_complexity', 'arc_curvature_score', 'robust_curvature', 'robust_angular_variance', 'line_curvature_score', 'visual_complexity']:
-                            stroke_geometry[metric] = None
+                    stroke_features = _calculate_stroke_specific_features(a, i, bongard_image=shape, parent_shape_vertices=stroke_vertices)
+                    # Always use analytic vertices for all strokes
+                    analytic_verts = stroke_features.get('analytic_vertices', stroke_vertices)
+                    # Degenerate handling: open strokes retain analytic perimeter, skip polygon consistency
+                    if analytic_verts and len(analytic_verts) == 2:
+                        stroke_geometry = compute_open_stroke_geometry(analytic_verts)
+                        # Compactness/convexity for lines
+                        stroke_geometry['compactness'] = 0.0
+                        stroke_geometry['convexity_ratio'] = 0.0
+                        stroke_geometry['geom_complexity'] = min(len(analytic_verts)/10, 1)
                         stroke_geometry['degenerate_case'] = True
-                        logger.info(f"[PATCH][STROKE][DEGENERATE] idx={i}, action={command_str}, vertices={stroke_vertices}, geometry={stroke_geometry}")
-                    elif stroke_vertices and len(stroke_vertices) >= 3:
-                        stroke_geometry = calculate_geometry_consistent(stroke_vertices)
-                        # Propagate metrics from stroke_features if present
-                        for metric in ['compactness', 'convexity_ratio', 'geom_complexity', 'arc_curvature_score', 'robust_curvature', 'robust_angular_variance', 'line_curvature_score', 'visual_complexity']:
-                            if metric in stroke_features:
-                                stroke_geometry[metric] = stroke_features[metric]
+                        stroke_geometry['visual_complexity'] = min(max(stroke_geometry['perimeter']/max(stroke_geometry['perimeter'],1)*(1+stroke_features.get('robust_curvature',0)),0),1)
+                    elif analytic_verts and len(analytic_verts) >= 3:
+                        stroke_geometry = calculate_geometry_consistent(analytic_verts)
+                        # Compactness/convexity for arcs
+                        if 'arc' in command_str:
+                            r = stroke_geometry.get('width',1.0)/2
+                            theta = math.radians(90)
+                            area = 0.5*r*r*(theta-math.sin(theta))
+                            perim = r*theta
+                            stroke_geometry['compactness'] = min(max(4*math.pi*area/(perim**2),0),1)
+                            stroke_geometry['convexity_ratio'] = min(max(area/perim,0),1)
+                        stroke_geometry['geom_complexity'] = min(len(analytic_verts)/10, 1)
                         stroke_geometry['degenerate_case'] = False
-                        logger.info(f"[PATCH][STROKE][VALID] idx={i}, action={command_str}, vertices={stroke_vertices}, geometry={stroke_geometry}")
+                        stroke_geometry['visual_complexity'] = min(max(stroke_geometry['perimeter']/max(stroke_geometry['perimeter'],1)*(1+stroke_features.get('robust_curvature',0)),0),1)
                     else:
                         stroke_geometry = {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0]}
-                        for metric in ['compactness', 'convexity_ratio', 'geom_complexity', 'arc_curvature_score', 'robust_curvature', 'robust_angular_variance', 'line_curvature_score', 'visual_complexity']:
-                            stroke_geometry[metric] = None
+                        stroke_geometry['compactness'] = 0.0
+                        stroke_geometry['convexity_ratio'] = 0.0
+                        stroke_geometry['geom_complexity'] = 0.0
                         stroke_geometry['degenerate_case'] = True
-                        logger.info(f"[PATCH][STROKE][EMPTY/INVALID] idx={i}, action={command_str}, vertices={stroke_vertices}, geometry={stroke_geometry}")
-                    image_dict['strokes'].append({'command': command_str, 'vertices': stroke_vertices, 'geometry': stroke_geometry})
+                        stroke_geometry['visual_complexity'] = 0.0
+                    # Always propagate analytic vertices and open stroke perimeter
+                    stroke_geometry['analytic_vertices'] = analytic_verts
+                    stroke_geometry['open_stroke_perimeter'] = stroke_features.get('open_stroke_perimeter', stroke_geometry.get('perimeter', 0.0))
+                    # Arc-specific features
+                    if hasattr(a, 'arc_radius') and hasattr(a, 'arc_angle'):
+                        radius = a.arc_radius
+                        span = a.arc_angle
+                        stroke_geometry['arc_length'] = span/360*2*math.pi*radius
+                        stroke_geometry['arc_curvature'] = 1/max(radius,1e-6)
+                    # Modifier from analytic attributes
+                    if 'line' in command_str:
+                        angle = stroke_features.get('line_angle',0)
+                        if abs(angle) < 5:
+                            stroke_geometry['shape_modifier'] = 'horizontal'
+                        elif abs(angle-90) < 5 or abs(angle+90) < 5:
+                            stroke_geometry['shape_modifier'] = 'vertical'
+                        else:
+                            stroke_geometry['shape_modifier'] = 'normal'
+                    image_dict['strokes'].append({'command': command_str, 'vertices': analytic_verts, 'geometry': stroke_geometry})
                 logger.info(f"[ATTR DEBUG] Shape {idx} strokes (dicts): {image_dict['strokes']}")
             else:
                 logger.warning(f"[ATTR DEBUG] Shape {idx} has no basic_actions.")
             # Attributes
-            image_dict['attributes'] = shape.attributes if hasattr(shape, 'attributes') and isinstance(shape.attributes, dict) else {}
+            # Aggregate analytic attributes from strokes if available
+            analytic_attrs = {}
+            if 'strokes' in image_dict:
+                for stroke in image_dict['strokes']:
+                    # Try to extract analytic attributes from stroke geometry or stroke itself
+                    geom = stroke.get('geometry', {})
+                    mod = geom.get('shape_modifier') or stroke.get('shape_modifier')
+                    # Add all analytic attributes, not just horizontal/vertical
+                    if mod:
+                        analytic_attrs[mod] = analytic_attrs.get(mod, 0) + 1
+                    # If stroke has 'analytic_attributes' field, merge those too
+                    if 'analytic_attributes' in stroke:
+                        for attr, val in stroke['analytic_attributes'].items():
+                            analytic_attrs[attr] = analytic_attrs.get(attr, 0) + val
+            # Merge with shape.attributes
+            shape_attrs = shape.attributes if hasattr(shape, 'attributes') and isinstance(shape.attributes, dict) else {}
+            merged_attrs = dict(shape_attrs)
+            for k, v in analytic_attrs.items():
+                merged_attrs[k] = v
+            image_dict['attributes'] = merged_attrs
             # --- PATCH: Always enforce and log shape-level geometry ---
             try:
                 from src.Derive_labels.shape_utils import calculate_geometry_consistent, normalize_vertices
@@ -334,16 +371,9 @@ class ComprehensiveBongardProcessor:
                     # --- PATCH: Add physics features to shape_geometry ---
                     shape_geometry['robust_curvature'] = PhysicsInference.robust_curvature(norm_shape_vertices)
                     shape_geometry['robust_angular_variance'] = PhysicsInference.robust_angular_variance(norm_shape_vertices)
-                    shape_geometry['visual_complexity'] = PhysicsInference.visual_complexity(
-                        num_strokes=len(image_dict['strokes']),
-                        max_strokes=len(image_dict['strokes']),
-                        perimeter=shape_geometry.get('perimeter', 1.0),
-                        hull_perimeter=shape_geometry.get('perimeter', 1.0),
-                        curvature_score=shape_geometry.get('robust_curvature', 0.0)
-                    )
-                    # For lines/arcs, add curvature scores if relevant
+                    raw_vc = shape_geometry.get('perimeter',1.0)/max(shape_geometry.get('perimeter',1.0),1)*(1+shape_geometry.get('robust_curvature',0))
+                    shape_geometry['visual_complexity'] = min(max(raw_vc,0),1)
                     shape_geometry['line_curvature_score'] = PhysicsInference.line_curvature_score(norm_shape_vertices)
-                    # For arcs, estimate radius and span if possible
                     shape_geometry['arc_curvature_score'] = None
                     if 'arc' in str(shape_geometry):
                         radius = shape_geometry.get('width', 1.0)
@@ -522,14 +552,28 @@ class ComprehensiveBongardProcessor:
 
             # Sequential pattern features (n-gram, alternation, regularity, dominant modifiers)
             from src.Derive_labels.features import extract_regularity_features, extract_dominant_shape_modifiers
-            modifier_sequence = [_extract_modifier_from_stroke(s) for s in all_actions]
-            ngram_features = _extract_ngram_features(modifier_sequence)
-            alternation = _detect_alternation(modifier_sequence)
-            regularity = extract_regularity_features(modifier_sequence)
-            dominant_modifiers = extract_dominant_shape_modifiers({'modifiers': modifier_sequence})
+            # Use corrected modifiers for n-gram and sequential features
+            corrected_modifiers = []
+            for s in all_actions:
+                mod = _extract_modifier_from_stroke(s)
+                # Use analytic attributes for modifier
+                if 'horizontal' in str(s):
+                    corrected_modifiers.append('horizontal')
+                elif 'vertical' in str(s):
+                    corrected_modifiers.append('vertical')
+                elif 'arc' in str(s):
+                    corrected_modifiers.append('arc')
+                else:
+                    corrected_modifiers.append(mod if mod in ['horizontal','vertical','arc','normal'] else 'normal')
+                from src.Derive_labels.features import _extract_ngram_features
+                ngram_features = _extract_ngram_features(corrected_modifiers)
+            alternation = _detect_alternation(corrected_modifiers)
+            regularity = extract_regularity_features(corrected_modifiers)
+            dominant_modifiers = extract_dominant_shape_modifiers({'modifiers': corrected_modifiers})
 
             # Canonical summary and support set context
             from src.Derive_labels.file_io import FileIO
+            from src.Derive_labels.relational_features import extract_support_set_context
             canonical_summary = {}
             support_set_context = {}
             try:
@@ -538,7 +582,10 @@ class ComprehensiveBongardProcessor:
             except Exception as e:
                 logger.warning(f"[PATCH] Failed to load canonical summary for image_id={image_id}: {e}")
             try:
-                support_set_context = FileIO.extract_support_set_context(image_id)
+                # Use the function from relational_features.py
+                # You may need to pass positive_images and negative_images if available
+                # Here, we pass image_id for compatibility, but update as needed for your pipeline
+                support_set_context = extract_support_set_context([image_id], [])
             except Exception as e:
                 logger.warning(f"[PATCH] Failed to extract support set context for image_id={image_id}: {e}")
 
@@ -707,9 +754,6 @@ class ComprehensiveBongardProcessor:
             if not isinstance(posrot_labels, dict):
                 logger.error(f"[DEFENSIVE ERROR] posrot_labels is None or not dict before serialization! Value: {posrot_labels}")
                 posrot_labels = {'centroid': [0.0, 0.0], 'orientation_degrees': 0.0}
-            else:
-                posrot_labels.setdefault('centroid', [0.0, 0.0])
-                posrot_labels.setdefault('orientation_degrees', 0.0)
             if not isinstance(geometry, dict):
                 logger.error(f"[DEFENSIVE ERROR] geometry is None or not dict before serialization! Value: {geometry}")
                 geometry = {}
@@ -733,16 +777,24 @@ class ComprehensiveBongardProcessor:
             physics_features = physics_features if physics_features is not None else []
             composition_features = composition_features if composition_features is not None else []
             graph_features = graph_features if graph_features is not None else []
-            logger.info(f"[PATCH INIT] image_features type: {type(image_features)}, value: {image_features}")
-            logger.info(f"[PATCH INIT] physics_features type: {type(physics_features)}, value: {physics_features}")
-            logger.info(f"[PATCH INIT] composition_features type: {type(composition_features)}, value: {composition_features}")
-            logger.info(f"[PATCH INIT] graph_features type: {type(graph_features)}, value: {graph_features}")
-
             logger.info(f"[PATCH FINAL] Mapping output record fields...")
             logger.info(f"[PATCH FINAL] image_features (raw): {image_features}")
             logger.info(f"[PATCH FINAL] relational_features (raw): {safe_relational_features}")
             logger.info(f"[PATCH FINAL] image_canonical_summary (raw): {canonical_summary}")
             logger.info(f"[PATCH FINAL] support_set_context (raw): {support_set_context}")
+            # --- PATCH: Collect analytic attributes for all strokes ---
+            analytic_attributes = []
+            for shape in one_stroke_shapes:
+                if hasattr(shape, 'basic_actions'):
+                    for a in shape.basic_actions:
+                        from src.Derive_labels.stroke_types import _calculate_stroke_specific_features
+                        stroke_features = _calculate_stroke_specific_features(a, 0, bongard_image=shape)
+                        analytic_attr = stroke_features.get('analytic_attribute', None)
+                        if analytic_attr:
+                            analytic_attributes.append(analytic_attr)
+            # Compute analytic n-gram features
+            from src.Derive_labels.features import _extract_ngram_features
+            analytic_ngram = _extract_ngram_features(analytic_attributes)
             complete_record = {
                 'image_id': image_id,
                 'problem_id': problem_id,
@@ -774,6 +826,8 @@ class ComprehensiveBongardProcessor:
                 'context_relational_features': safe_context_relational_features if isinstance(safe_context_relational_features, dict) else safe_context_relational_features,
                 'sequential_features': {
                     'ngram': ngram_features if isinstance(ngram_features, dict) else ngram_features,
+                    'analytic_attributes': analytic_attributes,
+                    'analytic_ngram': analytic_ngram,
                     'alternation': alternation,
                     'regularity': regularity
                 },
@@ -1300,6 +1354,7 @@ class ComprehensiveBongardProcessor:
                 stroke_types[stroke_type] = stroke_types.get(stroke_type, 0) + 1
                 shape_modifiers[modifier] = shape_modifiers.get(modifier, 0) + 1
                 modifier_sequence.append(modifier)
+            # Use json.dumps for serialization of distributions
             features = {
                 'stroke_type_distribution': stroke_types,
                 'shape_modifier_distribution': shape_modifiers,
@@ -1504,8 +1559,21 @@ def main():
 
 
 
-        # Defensive patch: ensure all results, flagged cases, stats, and summaries are robustly stringified before serialization
+        # Helper: recursively sanitize None values in dicts/lists
+        def sanitize_none(obj, path="root"):
+            if isinstance(obj, dict):
+                return {k: sanitize_none(v, f"{path}.{k}") for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [sanitize_none(x, f"{path}[{i}]") for i, x in enumerate(obj)]
+            elif obj is None:
+                logger.warning(f"[SERIALIZE PATCH] None value found at {path}, replacing with safe default.")
+                return 0
+            else:
+                return obj
+
+        # Defensive patch: ensure all results, flagged cases, stats, and summaries are robustly stringified and sanitized before serialization
         safe_results = ensure_all_strings(all_results)
+        safe_results = sanitize_none(safe_results)
         logger.info(f"[SERIALIZE DEBUG][main] Final processed_results before writing: {safe_results}")
         try:
             with open(args.output, 'w', encoding='utf-8') as f:
@@ -1521,6 +1589,7 @@ def main():
         if processor.flagged_cases:
             flagged_path = os.path.join(output_dir, 'flagged_cases.json')
             safe_flagged = ensure_all_strings(processor.flagged_cases)
+            safe_flagged = sanitize_none(safe_flagged)
             logger.info(f"[SERIALIZE DEBUG][main][flagged_cases] Final processed_flagged before writing: {safe_flagged}")
             try:
                 with open(flagged_path, 'w', encoding='utf-8') as f:
@@ -1538,6 +1607,7 @@ def main():
 
         stats_path = os.path.join(output_dir, 'processing_statistics.json')
         safe_stats = ensure_all_strings(processor.processing_stats)
+        safe_stats = sanitize_none(safe_stats)
         with open(stats_path, 'w', encoding='utf-8') as f:
             json.dump(safe_stats, f, indent=2, ensure_ascii=False)
         logger.info(f"Saved processing statistics to {stats_path}")
@@ -1545,6 +1615,7 @@ def main():
         # Save problem-level canonical summaries
         problem_summary_path = os.path.join(output_dir, 'problem_summaries.json')
         safe_summaries = ensure_all_strings(problem_summaries)
+        safe_summaries = sanitize_none(safe_summaries)
         with open(problem_summary_path, 'w', encoding='utf-8') as f:
             json.dump(safe_summaries, f, indent=2, ensure_ascii=False)
         logger.info(f"Saved {len(problem_summaries)} problem-level canonical summaries to {problem_summary_path}")

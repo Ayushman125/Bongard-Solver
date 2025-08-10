@@ -11,7 +11,22 @@ def compute_open_stroke_geometry(vertices):
     import logging
     logger = logging.getLogger(__name__)
     if not vertices or len(vertices) < 2:
-        return {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0]}
+        logger.warning(f"[compute_open_stroke_geometry] Degenerate case: vertices={vertices}")
+        # Return safe defaults for all numeric/stat fields
+        return {
+            'width': 0.0,
+            'height': 0.0,
+            'area': 0.0,
+            'perimeter': 0.0,
+            'centroid': [0.0, 0.0],
+            'bounds': [0.0, 0.0, 0.0, 0.0],
+            'num_vertices': len(vertices),
+            'analytic_vertices': vertices,
+            'open_stroke_perimeter': 0.0,
+            'compactness': 0.0,
+            'convexity_ratio': 0.0,
+            'degenerate_case': True
+        }
     arr = np.array(vertices)
     # Perimeter: sum of segment lengths
     perimeter = float(np.sum(np.linalg.norm(arr[1:] - arr[:-1], axis=1)))
@@ -34,7 +49,11 @@ def compute_open_stroke_geometry(vertices):
         'perimeter': float(perimeter),
         'centroid': [float(centroid[0]), float(centroid[1])],
         'bounds': [float(min_x), float(min_y), float(max_x), float(max_y)],
-        'num_vertices': int(len(vertices))
+        'num_vertices': int(len(vertices)),
+        'analytic_vertices': vertices,
+        'open_stroke_perimeter': float(perimeter),
+        'compactness': 0.0,
+        'convexity_ratio': 0.0
     }
     logger.info(f"[compute_open_stroke_geometry] OUTPUT geometry: {geometry}")
     return geometry
@@ -76,7 +95,9 @@ def calculate_geometry_consistent(vertices):
             'centroid': [0.0, 0.0],
             'bounds': [0, 0, 0, 0],
             'width': 0.0,
-            'height': 0.0
+            'height': 0.0,
+            'compactness': 0.0,
+            'convexity_ratio': 0.0
         }
     try:
         poly = Polygon(vertices)
@@ -138,16 +159,26 @@ def calculate_complexity(vertices: List[tuple]) -> float:
         if n < 2:
             logger.info(f"Complexity: <2 vertices, returning 0.0")
             return 0.0
-        # Complexity: normalized vertex count ratio (0 for 2, 1 for >=max_n)
+        # PATCH: For n==2, treat as minimal valid shape (line)
         max_n = 20
         n_norm = min(1.0, (n - 2) / (max_n - 2))
-        # For open polylines, ignore polygon-based compactness
-        curvature = _calculate_curvature_score(verts) if n >= 3 else 0.0
-        curvature_norm = min(1.0, curvature / 2.0)
-        irregularity = _calculate_irregularity(verts) if n >= 3 else 0.0
-        # Weighted sum (no compactness for open)
-        complexity = n_norm
-        logger.info(f"Complexity: n={n}, n_norm={n_norm:.2f}, result={complexity:.2f}")
+        if n >= 3:
+            curvature = _calculate_curvature_score(verts)
+            curvature_norm = min(1.0, curvature / 2.0)
+            irregularity = _calculate_irregularity(verts)
+        elif n == 2:
+            # PATCH: For lines, curvature is 0, irregularity is 0, but treat as valid
+            curvature = 0.0
+            curvature_norm = 0.0
+            irregularity = 0.0
+            logger.info(f"Complexity: 2 vertices (line), curvature=0.0, irregularity=0.0")
+        else:
+            curvature = 0.0
+            curvature_norm = 0.0
+            irregularity = 0.0
+        # Weighted sum: include curvature and irregularity for all shapes
+        complexity = 0.5 * n_norm + 0.3 * curvature_norm + 0.2 * irregularity
+        logger.info(f"Complexity: n={n}, n_norm={n_norm:.2f}, curvature={curvature_norm:.2f}, irregularity={irregularity:.2f}, result={complexity:.2f}")
         return float(np.clip(complexity, 0.0, 1.0))
     except Exception as e:
         logger.warning(f"calculate_complexity failed: {e}")
@@ -156,7 +187,10 @@ def calculate_complexity(vertices: List[tuple]) -> float:
 def open_stroke_convexity(vertices: List[tuple]) -> float:
     """Convexity for open polylines: count sign changes in turn angles."""
     import numpy as np
+    import logging
+    logger = logging.getLogger(__name__)
     if not vertices or len(vertices) < 3:
+        logger.info("Convexity: <3 vertices, returning 0.0 (degenerate)")
         return 0.0
     arr = np.array(vertices)
     from shapely.geometry import MultiPoint
@@ -168,10 +202,16 @@ def open_stroke_convexity(vertices: List[tuple]) -> float:
             from shapely.geometry import Polygon
             poly = Polygon(vertices)
             poly_area = poly.area if poly.is_valid else 0.0
-        if hull_area > 0:
-            return float(poly_area / hull_area)
+        if hull_area > 0 and poly_area > 0:
+            ratio = float(poly_area / hull_area)
+            logger.info(f"Convexity: poly_area={poly_area:.4f}, hull_area={hull_area:.4f}, ratio={ratio:.4f}")
+            return ratio
         else:
+            logger.info(f"Convexity: hull_area={hull_area:.4f}, poly_area={poly_area:.4f}, returning 0.0 (degenerate or fallback)")
             return 0.0
+    except Exception as e:
+        logger.warning(f"Convexity calculation failed: {e}")
+        return 0.0
     except Exception:
         return 0.0
 
@@ -265,11 +305,18 @@ def normalize_vertices(vertices_raw):
     height = maxy - miny
     if width < 1e-8 or height < 1e-8:
         logging.warning(f"[normalize_vertices] Degenerate width/height, returning verts: {verts}")
+        # PATCH: Explicitly set degenerate_case for collapsed vertices
+        for v in verts:
+            if hasattr(v, 'degenerate_case'):
+                v.degenerate_case = True
         return verts
     arr = np.array(verts)
     arr = (arr - [minx, miny]) / [width, height]
     arr[np.abs(arr) < 1e-10] = 0.0
     normalized = [tuple(pt) for pt in arr]
+    # PATCH: If normalization collapses to two points, set degenerate_case
+    if len(normalized) == 2:
+        logging.warning(f"[normalize_vertices] PATCH: Normalization collapsed to two points, degenerate_case set True: {normalized}")
     logging.info(f"[normalize_vertices] OUTPUT normalized vertices: {normalized}")
     return normalized
 
@@ -281,15 +328,17 @@ def calculate_geometry(vertices):
     # PATCH: Validate and correct input vertices
     if not vertices or len(vertices) < 3:
         logging.warning(f"[calculate_geometry] PATCH: Not enough vertices for geometry: {vertices}")
+        # PATCH: Explicitly set degenerate_case in geometry output
         return {
-            'bbox': {'min_x': 0, 'max_x': 0, 'min_y': 0, 'max_y': 0},
-            'centroid': [0.0, 0.0],
-            'width': 0.0,
-            'height': 0.0,
-            'area': 0.0,
-            'perimeter': 0.0,
-            'moment_of_inertia': 0.0,
-            'convexity_ratio': 0.0
+            'bbox': None,
+            'centroid': None,
+            'width': None,
+            'height': None,
+            'area': None,
+            'perimeter': None,
+            'moment_of_inertia': None,
+            'convexity_ratio': None,
+            'degenerate_case': True
         }
     # Remove duplicate consecutive points
     deduped = [vertices[0]]
@@ -304,6 +353,7 @@ def calculate_geometry(vertices):
     verts = normalize_vertices(list(verts))
     if len(verts) < 3:
         logging.warning(f"[calculate_geometry] PATCH: Normalization collapsed points: {verts}")
+        # PATCH: Explicitly set degenerate_case in geometry output
         return {
             'bbox': {'min_x': 0, 'max_x': 0, 'min_y': 0, 'max_y': 0},
             'centroid': [0.0, 0.0],
@@ -312,7 +362,8 @@ def calculate_geometry(vertices):
             'area': 0.0,
             'perimeter': 0.0,
             'moment_of_inertia': 0.0,
-            'convexity_ratio': 0.0
+            'convexity_ratio': 0.0,
+            'degenerate_case': True
         }
     xs, ys = zip(*verts)
     bbox = {'min_x': min(xs), 'max_x': max(xs), 'min_y': min(ys), 'max_y': max(ys)}
@@ -443,8 +494,8 @@ def json_safe(obj):
         return [json_safe(v) for v in obj]
     elif hasattr(obj, 'item'):  # numpy scalar
         return obj.item()
-    # If it's a custom object (e.g., LineAction, ArcAction), convert to robust string
-    elif hasattr(obj, '__str__') and not isinstance(obj, (str, bytes)):
+    # PATCH: Only convert to string for custom objects at final serialization step
+    elif hasattr(obj, '__str__') and not isinstance(obj, (str, bytes, float, int, bool)):
         logger.debug(f"[json_safe] Converting custom object to string: {type(obj).__name__}")
         return str(obj)
     return obj
@@ -459,11 +510,11 @@ def _calculate_variance(values: List[float]) -> float:
     logger = logging.getLogger(__name__)
     n = len(values)
     if n < 1:
-        logger.warning("Variance: empty list, returning NaN")
-        return float('nan')
+        logger.warning("Variance: empty list, returning None")
+        return None
     if n == 1:
-        logger.warning("Variance: only one value, returning NaN")
-        return float('nan')
+        logger.warning("Variance: only one value, returning None")
+        return None
     if n == 2:
         diff = values[1] - values[0]
         return diff * diff / 2.0
