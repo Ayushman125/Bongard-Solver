@@ -27,16 +27,21 @@ def calculate_relationships(strokes, buffer_amt=0.001):
     """
     logger = logging.getLogger(__name__)
     logger.info(f"[calculate_relationships] INPUT: strokes={strokes}, buffer_amt={buffer_amt}")
+
     geoms = []
-    for s in strokes:
+    for idx, s in enumerate(strokes):
         verts = s.get('vertices', None) if isinstance(s, dict) else getattr(s, 'vertices', None)
+        logger.debug(f"[calculate_relationships] Stroke {idx}: {s}")
+        logger.debug(f"[calculate_relationships] Vertices for stroke {idx}: {verts}")
         if verts and isinstance(verts, (list, tuple)) and len(verts) >= 2:
             try:
-                geoms.append(LineString(verts))
+                geom = LineString(verts)
+                geoms.append(geom)
+                logger.debug(f"[calculate_relationships] Created LineString for stroke {idx}: {geom}")
             except Exception as e:
-                logger.debug(f"calculate_relationships: failed to create LineString: {e}")
+                logger.debug(f"calculate_relationships: failed to create LineString for stroke {idx}: {e}")
         else:
-            logger.debug(f"calculate_relationships: degenerate or missing vertices for stroke: {s}")
+            logger.debug(f"calculate_relationships: degenerate or missing vertices for stroke {idx}: {s}")
     if not geoms:
         logger.warning("calculate_relationships: No valid geometries found.")
         logger.info(f"[calculate_relationships] OUTPUT: {{'adjacency': 0, 'intersections': 0, 'containment': 0, 'overlap': 0.0}}")
@@ -44,6 +49,7 @@ def calculate_relationships(strokes, buffer_amt=0.001):
 
     # Buffer each geometry to robustly handle degenerate lines
     buffered = [g.buffer(buffer_amt) for g in geoms if g.is_valid]
+    logger.debug(f"[calculate_relationships] Buffered geometries: {[str(b) for b in buffered]}")
     adj = 0
     inter = 0
     cont = 0
@@ -56,37 +62,40 @@ def calculate_relationships(strokes, buffer_amt=0.001):
         poly1 = buffered[i]
         for j in range(i+1, n):
             poly2 = buffered[j]
-            # Check for identical geometry (centroid and bounds)
             c1 = poly1.centroid
             c2 = poly2.centroid
             b1 = poly1.bounds
             b2 = poly2.bounds
             if c1.equals(c2) and b1 == b2:
                 identical_pairs.append((i, j))
+                logger.debug(f"[calculate_relationships] Identical geometry for pair ({i}, {j})")
             if poly1.touches(poly2):
                 adj += 1
+                logger.debug(f"[calculate_relationships] Adjacency detected between {i} and {j}")
             if poly1.intersects(poly2):
                 inter += 1
-            # Containment check
+                logger.debug(f"[calculate_relationships] Intersection detected between {i} and {j}")
             contains1 = poly1.contains(poly2)
             contains2 = poly2.contains(poly1)
             if contains1 or contains2:
                 cont += 1
-                # Ambiguous containment: if areas are very close
+                logger.debug(f"[calculate_relationships] Containment detected between {i} and {j}: contains1={contains1}, contains2={contains2}")
                 area1 = poly1.area
                 area2 = poly2.area
                 if abs(area1 - area2) < 1e-6:
                     ambiguous_containment.append((i, j))
+                    logger.debug(f"[calculate_relationships] Ambiguous containment for pair ({i}, {j})")
             area = poly1.intersection(poly2).area
             min_area = min(poly1.area, poly2.area)
             if 0 < area < min_area:
                 ov += area
-            # High overlap flag
+                logger.debug(f"[calculate_relationships] Overlap area between {i} and {j}: {area}")
             if min_area > 0 and area / min_area > 0.95:
                 high_overlap_pairs.append((i, j))
+                logger.debug(f"[calculate_relationships] High overlap (>95%) for pair ({i}, {j})")
 
+    logger.info(f"[calculate_relationships] Intermediate results: adjacency={adj}, intersections={inter}, containment={cont}, overlap={ov}")
     result = {'adjacency': adj, 'intersections': inter, 'containment': cont, 'overlap': ov}
-    # Professional logging for Bongard-solving context
     logger.info(f"[calculate_relationships] OUTPUT: {result}")
     if identical_pairs:
         logger.warning(f"[calculate_relationships] Identical geometry detected for stroke pairs: {identical_pairs}")

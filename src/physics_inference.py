@@ -56,6 +56,16 @@ def safe_feature(default=0.0):
 
 class PhysicsInference:
     @staticmethod
+    def polsby_popper_compactness(area, perimeter):
+        """
+        Computes the Polsby-Popper compactness score for a polygon.
+        Formula: 4 * pi * area / (perimeter ** 2)
+        """
+        import math
+        if perimeter == 0:
+            return 0.0
+        return 4 * math.pi * area / (perimeter ** 2)
+    @staticmethod
     @safe_feature(default=0.0)
     def robust_curvature(vertices_or_poly):
             """

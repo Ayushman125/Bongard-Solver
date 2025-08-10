@@ -163,20 +163,27 @@ def extract_relational_features(strokes, buffer_amt=0.001):
         dict with keys: 'adjacency', 'intersections', 'containment', 'overlap'
     """
     logger.info(f"[extract_relational_features] INPUT: {strokes}")
-    # Ensure all strokes are robustly stringified for relationships
-    logger.debug(f"[extract_relational_features] Raw strokes before stringification: {strokes}")
-    strokes_str = [ensure_str_list(s) if not isinstance(s, dict) else s for s in strokes]
-    logger.debug(f"[extract_relational_features] Strokes after stringification: {strokes_str}")
-    strokes_flat = [ensure_flat_str_list(s) if not isinstance(s, dict) else s for s in strokes_str]
-    rel = calculate_relationships(strokes_flat, buffer_amt)
-    logger.info(f"[extract_relational_features] OUTPUT: {rel}")
-    # Validate output is JSON serializable
     try:
-        json.dumps(rel)
-        logger.debug(f"[extract_relational_features] Output is JSON serializable.")
-    except Exception as e:
-        logger.error(f"[extract_relational_features] Output not JSON serializable: {e}")
-    return rel
+        # Ensure all strokes are robustly stringified for relationships
+        logger.debug(f"[extract_relational_features] Raw strokes before stringification: {strokes}")
+        strokes_str = [ensure_str_list(s) if not isinstance(s, dict) else s for s in strokes]
+        logger.debug(f"[extract_relational_features] Strokes after stringification: {strokes_str}")
+        strokes_flat = [ensure_flat_str_list(s) if not isinstance(s, dict) else s for s in strokes_str]
+        logger.debug(f"[extract_relational_features] Strokes after flattening: {strokes_flat}")
+        rel = calculate_relationships(strokes_flat, buffer_amt)
+        logger.info(f"[extract_relational_features] OUTPUT: {rel}")
+        # Validate output is JSON serializable
+        try:
+            json.dumps(rel)
+            logger.debug(f"[extract_relational_features] Output is JSON serializable.")
+        except Exception as e:
+            logger.error(f"[extract_relational_features] Output not JSON serializable: {e}")
+        if not rel or all(v in (None, [], {}, '') for v in rel.values()):
+            logger.warning(f"[extract_relational_features] Relationships output is empty or default. Input: {strokes_flat}")
+        return rel
+    except Exception as exc:
+        logger.error(f"[extract_relational_features] Exception occurred: {exc}")
+        return {}
 
     
 
@@ -284,7 +291,7 @@ def _extract_graph_features(strokes):
     Input: adjacency_matrix (2D list or np.ndarray), optionally strokes for reference.
     Output: dict with topology type(s), graph statistics, and logs all inputs/outputs.
     """
-    # Accept either strokes or adjacency/intersection matrix
+    logger.info(f"[_extract_graph_features] RAW INPUT: {repr(strokes)}")
     if isinstance(strokes, dict) and 'adjacency_matrix' in strokes:
         adj = np.array(strokes['adjacency_matrix'])
         n = adj.shape[0]

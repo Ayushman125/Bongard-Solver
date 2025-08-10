@@ -482,11 +482,18 @@ class ComprehensiveBongardProcessor:
             # Convert actions to shapely geometries for robust relational features
             from src.Derive_labels.features import _actions_to_geometries
             stroke_geometries = _actions_to_geometries(ensure_all_strings(all_actions))  # Pass list of strings
-            logger.debug(f"Number of stroke geometries: {len(stroke_geometries)}")
+            logger.info(f"[RELATIONAL PATCH] stroke_geometries type: {type(stroke_geometries)}, length: {len(stroke_geometries)}")
             for idx, g in enumerate(stroke_geometries):
-                logger.debug(f"Geometry {idx}: type={g.geom_type}, is_valid={g.is_valid}")
+                logger.info(f"[RELATIONAL PATCH] Geometry {idx}: type={getattr(g, 'geom_type', None)}, is_valid={getattr(g, 'is_valid', None)}")
             from src.Derive_labels.features import extract_relational_features as extract_relational_features_geom
-            robust_relational_features = extract_relational_features_geom(stroke_geometries) if stroke_geometries else {}
+            robust_relational_features = extract_relational_features_geom(stroke_geometries) if stroke_geometries else None
+            # Defensive: always include expected keys
+            expected_rel_keys = ['adjacency', 'intersections', 'containment', 'overlap']
+            if not robust_relational_features or not isinstance(robust_relational_features, dict):
+                robust_relational_features = {k: 0 for k in expected_rel_keys}
+            else:
+                for k in expected_rel_keys:
+                    robust_relational_features.setdefault(k, 0)
             intersections = context_relationships.get('intersections')
             adjacency = context_relationships.get('adjacency')
             containment = context_relationships.get('containment')
@@ -865,11 +872,41 @@ class ComprehensiveBongardProcessor:
     def _calculate_image_features(self, vertices: List[tuple], strokes: List, geometry: Dict[str, Any]) -> Dict[str, Any]:
         """Calculate comprehensive image-level features with robust polygon recovery and improved metrics. Now includes standardized complexity. Outputs both raw and normalized values for area and perimeter."""
         logger = logging.getLogger(__name__)
-        logger.debug(f"[_calculate_image_features] INPUTS: vertices count={len(vertices) if vertices else 0}, strokes count={len(strokes) if strokes else 0}, geometry keys={list(geometry.keys()) if geometry else []}")
+        logger.info(f"[_calculate_image_features] INPUTS: vertices={vertices}, strokes={strokes}, geometry={geometry}")
         vertices = ensure_vertex_list(vertices)
+        # --- PATCH: Default values for image features (brinkhoff_complexity removed) ---
+        default_features = {
+            'bounding_box': {'x': 0, 'y': 0, 'width': 0, 'height': 0},
+            'centroid': [0.0, 0.0],
+            'width': 0.0,
+            'height': 0.0,
+            'area_raw': 0.0,
+            'area_normalized': 0.0,
+            'perimeter_raw': 0.0,
+            'perimeter_normalized': 0.0,
+            'aspect_ratio': 1.0,
+            'convexity_ratio': 0.0,
+            'is_convex': False,
+            'compactness': 0.0,
+            'polsby_popper_compactness': 0.0,
+            'eccentricity': 0.0,
+            'symmetry_score': 0.0,
+            'horizontal_symmetry': 0.0,
+            'vertical_symmetry': 0.0,
+            'rotational_symmetry': 0.0,
+            'has_quadrangle': False,
+            'geometric_complexity': 0.0,
+            'visual_complexity': 0.0,
+            'curvature_score': 0.0,
+            'angular_variance': 0.0,
+            'moment_of_inertia': 0.0,
+            'irregularity_score': 0.0,
+            'standardized_complexity': 0.0
+        }
         if not vertices:
-            logger.debug("[_calculate_image_features] No vertices, returning empty dict")
-            return {}
+            logger.warning("[_calculate_image_features] No vertices provided, returning default features.")
+            logger.info(f"[_calculate_image_features] FALLBACK: Returning default features due to missing vertices. INPUTS: vertices={vertices}, strokes={strokes}, geometry={geometry}")
+            return json_safe(default_features)
         try:
             from shapely.geometry import Polygon
             poly = None
@@ -903,27 +940,50 @@ class ComprehensiveBongardProcessor:
                 try:
                     hull_perimeter = safe_float(poly.convex_hull.length)
                     hull_area = safe_float(poly.convex_hull.area)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"[_calculate_image_features] Error getting convex hull: {e}")
             # Normalized perimeter and area (relative to convex hull)
             perimeter_norm = min(max(safe_float(perimeter_raw) / safe_float(hull_perimeter), 0.0), 1.0) if hull_perimeter else 0.0
             area_norm = min(max(safe_float(area_raw) / safe_float(hull_area), 0.0), 1.0) if hull_area else 0.0
 
             # Use robust, analytic, normalized formulas for all features:
-            curvature_score = safe_float(PhysicsInference.robust_curvature(vertices))
-            angular_variance = safe_float(PhysicsInference.robust_angular_variance(vertices))
-            moment_of_inertia = safe_float(PhysicsInference.moment_of_inertia(vertices))
-            visual_complexity = safe_float(PhysicsInference.visual_complexity(num_strokes, max_strokes, perimeter_raw, hull_perimeter, curvature_score))
+            try:
+                curvature_score = safe_float(PhysicsInference.robust_curvature(vertices))
+            except Exception as e:
+                logger.warning(f"[_calculate_image_features] Error in robust_curvature: {e}")
+                curvature_score = 0.0
+            try:
+                angular_variance = safe_float(PhysicsInference.robust_angular_variance(vertices))
+            except Exception as e:
+                logger.warning(f"[_calculate_image_features] Error in robust_angular_variance: {e}")
+                angular_variance = 0.0
+            try:
+                moment_of_inertia = safe_float(PhysicsInference.moment_of_inertia(vertices))
+            except Exception as e:
+                logger.warning(f"[_calculate_image_features] Error in moment_of_inertia: {e}")
+                moment_of_inertia = 0.0
+            try:
+                visual_complexity = safe_float(PhysicsInference.visual_complexity(num_strokes, max_strokes, perimeter_raw, hull_perimeter, curvature_score))
+            except Exception as e:
+                logger.warning(f"[_calculate_image_features] Error in visual_complexity: {e}")
+                visual_complexity = 0.0
             visual_complexity_norm = min(max(visual_complexity, 0.0), 1.0) if visual_complexity is not None else 0.0
 
             # --- Standardized complexity metric ---
-            logger.info(f"[complexity] Calling calculate_complexity with vertices: {vertices}")
-            complexity = safe_float(calculate_complexity(vertices))
-            logger.info(f"[complexity] Output for vertices count {len(vertices)}: {complexity}")
+            try:
+                logger.info(f"[complexity] Calling calculate_complexity with vertices: {vertices}")
+                complexity = safe_float(calculate_complexity(vertices))
+                logger.info(f"[complexity] Output for vertices count {len(vertices)}: {complexity}")
+            except Exception as e:
+                logger.warning(f"[_calculate_image_features] Error in calculate_complexity: {e}")
+                complexity = 0.0
 
             from src.Derive_labels.stroke_types import _compute_bounding_box
-            bbox = _compute_bounding_box(vertices)
-            logger.info(f"[_calculate_image_features] Bounding box: {bbox}")
+            try:
+                bbox = _compute_bounding_box(vertices)
+            except Exception as e:
+                logger.warning(f"[_calculate_image_features] Error in bounding box: {e}")
+                bbox = {'x': 0, 'y': 0, 'width': 0, 'height': 0}
             width = safe_float(geometry.get('width', 0.0))
             height = safe_float(geometry.get('height', 0.0))
             area_val = safe_float(geometry.get('area', 0.0))
@@ -934,9 +994,70 @@ class ComprehensiveBongardProcessor:
                 height = 0.0
                 geometry['width'] = width
                 geometry['height'] = height
-            polsby_popper = safe_float(PhysicsInference.polsby_popper_compactness(vertices))
-            brinkhoff = safe_float(PhysicsInference.brinkhoff_complexity(vertices))
-            logger.info(f"[_calculate_image_features] polsby_popper: {polsby_popper}, brinkhoff_complexity: {brinkhoff}")
+            try:
+                polsby_popper = safe_float(PhysicsInference.polsby_popper_compactness(vertices))
+            except Exception as e:
+                logger.warning(f"[_calculate_image_features] Error in polsby_popper_compactness: {e}")
+                polsby_popper = 0.0
+            logger.info(f"[_calculate_image_features] polsby_popper: {polsby_popper}")
+            try:
+                eccentricity = safe_float(_calculate_eccentricity(vertices))
+            except Exception as e:
+                logger.warning(f"[_calculate_image_features] Error in eccentricity: {e}")
+                eccentricity = 0.0
+            try:
+                symmetry_score = safe_float(PhysicsInference.symmetry_score(vertices)) if perimeter_raw > 0 and area_raw > 0 else 0.0
+            except Exception as e:
+                logger.warning(f"[_calculate_image_features] Error in symmetry_score: {e}")
+                symmetry_score = 0.0
+            try:
+                horizontal_symmetry = safe_float(_check_horizontal_symmetry(vertices, poly))
+            except Exception as e:
+                logger.warning(f"[_calculate_image_features] Error in horizontal_symmetry: {e}")
+                horizontal_symmetry = 0.0
+            try:
+                vertical_symmetry = safe_float(_check_vertical_symmetry(vertices, poly))
+            except Exception as e:
+                logger.warning(f"[_calculate_image_features] Error in vertical_symmetry: {e}")
+                vertical_symmetry = 0.0
+            try:
+                rotational_symmetry = safe_float(_check_rotational_symmetry(vertices))
+            except Exception as e:
+                logger.warning(f"[_calculate_image_features] Error in rotational_symmetry: {e}")
+                rotational_symmetry = 0.0
+            try:
+                has_quadrangle = True if poly and hasattr(poly, 'exterior') and hasattr(poly.exterior, 'coords') and len(poly.exterior.coords)-1 == 4 else PhysicsInference.has_quadrangle(vertices)
+            except Exception as e:
+                logger.warning(f"[_calculate_image_features] Error in has_quadrangle: {e}")
+                has_quadrangle = False
+            try:
+                geometric_complexity = safe_float(PhysicsInference.geometric_complexity(vertices))
+            except Exception as e:
+                logger.warning(f"[_calculate_image_features] Error in geometric_complexity: {e}")
+                geometric_complexity = 0.0
+            try:
+                irregularity_score = safe_float(_calculate_irregularity(vertices))
+            except Exception as e:
+                logger.warning(f"[_calculate_image_features] Error in irregularity_score: {e}")
+                irregularity_score = 0.0
+
+            aspect_ratio = max(FLAGGING_THRESHOLDS['min_aspect_ratio'], min(safe_float(width) / safe_float(height, 1.0), FLAGGING_THRESHOLDS['max_aspect_ratio'])) if height else 1.0
+            try:
+                convexity_ratio = (max(0.0, min(1.0, safe_float(poly.area) / safe_float(poly.convex_hull.area))) if poly and safe_float(poly.area) != 0 and safe_float(poly.convex_hull.area) != 0 else 0.0)
+            except Exception as e:
+                logger.warning(f"[_calculate_image_features] Error in convexity_ratio: {e}")
+                convexity_ratio = 0.0
+            try:
+                is_convex = PhysicsInference.is_convex(poly) if poly else False
+            except Exception as e:
+                logger.warning(f"[_calculate_image_features] Error in is_convex: {e}")
+                is_convex = False
+            try:
+                compactness = _calculate_compactness(area_raw, perimeter_raw)
+            except Exception as e:
+                logger.warning(f"[_calculate_image_features] Error in compactness: {e}")
+                compactness = 0.0
+
             features = {
                 'bounding_box': bbox,
                 'centroid': geometry.get('centroid', [0.0, 0.0]),
@@ -946,39 +1067,41 @@ class ComprehensiveBongardProcessor:
                 'area_normalized': area_norm,
                 'perimeter_raw': perimeter_raw,
                 'perimeter_normalized': perimeter_norm,
-                'aspect_ratio': max(FLAGGING_THRESHOLDS['min_aspect_ratio'], min(safe_float(width) / safe_float(height, 1.0), FLAGGING_THRESHOLDS['max_aspect_ratio'])) if height else 1.0,
-                'convexity_ratio': (max(0.0, min(1.0, safe_float(poly.area) / safe_float(poly.convex_hull.area))) if poly and safe_float(poly.area) != 0 and safe_float(poly.convex_hull.area) != 0 else 0.0),
-                'is_convex': PhysicsInference.is_convex(poly) if poly else False,
-                'compactness': _calculate_compactness(area_raw, perimeter_raw),
+                'aspect_ratio': aspect_ratio,
+                'convexity_ratio': convexity_ratio,
+                'is_convex': is_convex,
+                'compactness': compactness,
                 'polsby_popper_compactness': polsby_popper,
-                'brinkhoff_complexity': brinkhoff,
-                'eccentricity': safe_float(_calculate_eccentricity(vertices)),
-                'symmetry_score': (safe_float(PhysicsInference.symmetry_score(vertices)) if perimeter_raw > 0 and area_raw > 0 else None),
-                'horizontal_symmetry': safe_float(_check_horizontal_symmetry(vertices, poly)),
-                'vertical_symmetry': safe_float(_check_vertical_symmetry(vertices, poly)),
-                'rotational_symmetry': safe_float(_check_rotational_symmetry(vertices)),
-                'has_quadrangle': (True if poly and hasattr(poly, 'exterior') and hasattr(poly.exterior, 'coords') and len(poly.exterior.coords)-1 == 4 else PhysicsInference.has_quadrangle(vertices)),
-                'geometric_complexity': safe_float(PhysicsInference.geometric_complexity(vertices)),
+                'eccentricity': eccentricity,
+                'symmetry_score': symmetry_score,
+                'horizontal_symmetry': horizontal_symmetry,
+                'vertical_symmetry': vertical_symmetry,
+                'rotational_symmetry': rotational_symmetry,
+                'has_quadrangle': has_quadrangle,
+                'geometric_complexity': geometric_complexity,
                 'visual_complexity': visual_complexity_norm,  # normalized [0,1]
                 'curvature_score': curvature_score,  # analytic, normalized
                 'angular_variance': angular_variance,  # analytic, normalized
                 'moment_of_inertia': moment_of_inertia,  # analytic, normalized
-                'irregularity_score': safe_float(_calculate_irregularity(vertices)),
+                'irregularity_score': irregularity_score,
                 'standardized_complexity': complexity
             }
-            logger.debug(f"[_calculate_image_features] OUTPUT: {features}")
+            logger.info(f"[_calculate_image_features] OUTPUT: {features}")
             return json_safe(features)
         except Exception as e:
-            logger.warning(f"[_calculate_image_features] Error: {e}")
-            return {}
+            logger.error(f"[_calculate_image_features] Exception: {e}", exc_info=True)
+            logger.warning("[_calculate_image_features] Returning default features due to error.")
+            return json_safe(default_features)
     
     def _calculate_physics_features(self, vertices: List[tuple], centroid=None, strokes=None) -> Dict[str, Any]:
         """Calculate physics-based features using PhysicsInference. Accepts centroid override and strokes for correct counting. Uses correct center_of_mass and stroke counts."""
-        # Implementation goes here
         logger = logging.getLogger(__name__)
-        logger.debug(f"[_calculate_physics_features] INPUTS: vertices count={len(vertices) if vertices else 0}, centroid={centroid}, strokes count={len(strokes) if strokes else 0 if strokes is not None else 'None'}")
+        # --- PATCH: Robust input validation and logging ---
+        logger.info(f"[_calculate_physics_features] INPUT vertices: {vertices}")
+        logger.info(f"[_calculate_physics_features] INPUT centroid: {centroid}")
+        logger.info(f"[_calculate_physics_features] INPUT strokes: {strokes}")
         expected_keys = [
-            'moment_of_inertia', 'center_of_mass', 'polsby_popper_compactness', 'brinkhoff_complexity',
+            'moment_of_inertia', 'center_of_mass', 'polsby_popper_compactness',
             'num_straight_segments', 'num_arcs', 'has_quadrangle', 'has_obtuse_angle',
             'curvature_score', 'angular_variance', 'edge_length_variance'
         ]
@@ -986,7 +1109,6 @@ class ComprehensiveBongardProcessor:
             'moment_of_inertia': 0.0,
             'center_of_mass': [0.0, 0.0],
             'polsby_popper_compactness': 0.0,
-            'brinkhoff_complexity': 0.0,
             'num_straight_segments': 0,
             'num_arcs': 0,
             'has_quadrangle': False,
@@ -995,20 +1117,30 @@ class ComprehensiveBongardProcessor:
             'angular_variance': 0.0,
             'edge_length_variance': 0.0
         }
-        if not vertices:
-            logger.debug("[_calculate_physics_features] No vertices, returning all defaults")
+        # Validate vertices
+        if not vertices or not isinstance(vertices, (list, tuple)) or len(vertices) < 3:
+            logger.warning(f"[_calculate_physics_features] Invalid or insufficient vertices: {vertices}")
             return defaults.copy()
+        # Validate each vertex
+        for v in vertices:
+            if not (isinstance(v, (list, tuple)) and len(v) == 2 and all(isinstance(coord, (int, float)) for coord in v)):
+                logger.warning(f"[_calculate_physics_features] Malformed vertex: {v}")
+                return defaults.copy()
         try:
             poly = None
             try:
                 poly = PhysicsInference.polygon_from_vertices(vertices)
             except Exception as e:
-                logger.debug(f"[_calculate_physics_features] Error in polygon_from_vertices: {e}")
+                logger.error(f"[_calculate_physics_features] Error in polygon_from_vertices: {e}")
             # Use centroid from geometry if provided, else fallback to centroid of vertices
             if centroid is not None:
                 center_of_mass = centroid
             elif poly is not None:
-                center_of_mass = PhysicsInference.centroid(poly)
+                try:
+                    center_of_mass = PhysicsInference.centroid(poly)
+                except Exception as e:
+                    logger.error(f"[_calculate_physics_features] Error in centroid calculation: {e}")
+                    center_of_mass = [0.0, 0.0]
             else:
                 xs = [v[0] for v in vertices]
                 ys = [v[1] for v in vertices]
@@ -1032,37 +1164,89 @@ class ComprehensiveBongardProcessor:
                         elif isinstance(s, ArcAction):
                             num_arcs += 1
                 except Exception as e:
-                    logger.debug(f"[_calculate_physics_features] Error in stroke counting: {e}")
+                    logger.error(f"[_calculate_physics_features] Error in stroke counting: {e}")
             else:
                 # fallback to geometry-based
-                num_straight_segments = PhysicsInference.count_straight_segments(vertices)
-                num_arcs = PhysicsInference.count_arcs(vertices)
+                try:
+                    num_straight_segments = PhysicsInference.count_straight_segments(vertices)
+                except Exception as e:
+                    logger.error(f"[_calculate_physics_features] Error in count_straight_segments: {e}")
+                    num_straight_segments = 0
+                try:
+                    num_arcs = PhysicsInference.count_arcs(vertices)
+                except Exception as e:
+                    logger.error(f"[_calculate_physics_features] Error in count_arcs: {e}")
+                    num_arcs = 0
 
-            polsby_popper = PhysicsInference.polsby_popper_compactness(vertices)
-            brinkhoff = PhysicsInference.brinkhoff_complexity(vertices)
-            logger.info(f"[_calculate_physics_features] polsby_popper: {polsby_popper}, brinkhoff_complexity: {brinkhoff}")
-            features = {
-                'moment_of_inertia': PhysicsInference.moment_of_inertia(vertices),
-                'center_of_mass': center_of_mass,
-                'polsby_popper_compactness': polsby_popper,
-                'brinkhoff_complexity': brinkhoff,
-                'num_straight_segments': num_straight_segments,
-                'num_arcs': num_arcs,
-                'has_quadrangle': PhysicsInference.has_quadrangle(vertices),
-                'has_obtuse_angle': PhysicsInference.has_obtuse(vertices),
-                'curvature_score': _calculate_curvature_score(vertices),
-                'angular_variance': _calculate_angular_variance(vertices),
-                'edge_length_variance': _calculate_edge_length_variance(vertices)
-            }
+            # Calculate area and perimeter for polsby_popper_compactness
+            try:
+                area = None
+                perimeter = None
+                # Try to get area and perimeter from geometry calculation if available
+                if poly is not None:
+                    area = poly.area
+                    perimeter = poly.length
+                else:
+                    # Fallback: estimate from vertices
+                    try:
+                        from shapely.geometry import Polygon
+                        poly_tmp = Polygon(vertices)
+                        area = poly_tmp.area
+                        perimeter = poly_tmp.length
+                    except Exception as e:
+                        logger.error(f"[_calculate_physics_features] Error estimating area/perimeter: {e}")
+                        area = 0.0
+                        perimeter = 0.0
+                polsby_popper = PhysicsInference.polsby_popper_compactness(area, perimeter)
+            except Exception as e:
+                logger.error(f"[_calculate_physics_features] Error in polsby_popper_compactness: {e}")
+                polsby_popper = 0.0
+            # brinkhoff_complexity removed from physics features
+            logger.info(f"[_calculate_physics_features] polsby_popper: {polsby_popper}")
+            features = {}
+            try:
+                features['moment_of_inertia'] = PhysicsInference.moment_of_inertia(vertices)
+            except Exception as e:
+                logger.error(f"[_calculate_physics_features] Error in moment_of_inertia: {e}")
+                features['moment_of_inertia'] = 0.0
+            features['center_of_mass'] = center_of_mass
+            features['polsby_popper_compactness'] = polsby_popper
+            features['num_straight_segments'] = num_straight_segments
+            features['num_arcs'] = num_arcs
+            try:
+                features['has_quadrangle'] = PhysicsInference.has_quadrangle(vertices)
+            except Exception as e:
+                logger.error(f"[_calculate_physics_features] Error in has_quadrangle: {e}")
+                features['has_quadrangle'] = False
+            try:
+                features['has_obtuse_angle'] = PhysicsInference.has_obtuse(vertices)
+            except Exception as e:
+                logger.error(f"[_calculate_physics_features] Error in has_obtuse: {e}")
+                features['has_obtuse_angle'] = False
+            try:
+                features['curvature_score'] = _calculate_curvature_score(vertices)
+            except Exception as e:
+                logger.error(f"[_calculate_physics_features] Error in curvature_score: {e}")
+                features['curvature_score'] = 0.0
+            try:
+                features['angular_variance'] = _calculate_angular_variance(vertices)
+            except Exception as e:
+                logger.error(f"[_calculate_physics_features] Error in angular_variance: {e}")
+                features['angular_variance'] = 0.0
+            try:
+                features['edge_length_variance'] = _calculate_edge_length_variance(vertices)
+            except Exception as e:
+                logger.error(f"[_calculate_physics_features] Error in edge_length_variance: {e}")
+                features['edge_length_variance'] = 0.0
             # Defensive: ensure all expected keys are present
             for k in expected_keys:
                 if k not in features:
                     logger.warning(f"[_calculate_physics_features] Missing key '{k}', setting default value.")
                     features[k] = defaults[k]
-            logger.debug(f"[_calculate_physics_features] OUTPUT: {features}")
+            logger.info(f"[_calculate_physics_features] OUTPUT: {features}")
             return features
         except Exception as e:
-            logger.warning(f"[_calculate_physics_features] Error: {e}, returning all defaults.")
+            logger.error(f"[_calculate_physics_features] Error: {e}, returning all defaults.")
             return defaults.copy()
 
     
