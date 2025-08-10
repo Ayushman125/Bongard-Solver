@@ -33,7 +33,8 @@ def compute_open_stroke_geometry(vertices):
         'area': 0.0,
         'perimeter': float(perimeter),
         'centroid': [float(centroid[0]), float(centroid[1])],
-        'bounds': [float(min_x), float(min_y), float(max_x), float(max_y)]
+        'bounds': [float(min_x), float(min_y), float(max_x), float(max_y)],
+        'num_vertices': int(len(vertices))
     }
     logger.info(f"[compute_open_stroke_geometry] OUTPUT geometry: {geometry}")
     return geometry
@@ -137,15 +138,16 @@ def calculate_complexity(vertices: List[tuple]) -> float:
         if n < 2:
             logger.info(f"Complexity: <2 vertices, returning 0.0")
             return 0.0
-        # Complexity: normalized vertex count ratio (0 for 2, 1 for >=20)
-        n_norm = min(1.0, (n - 2) / 18.0)
+        # Complexity: normalized vertex count ratio (0 for 2, 1 for >=max_n)
+        max_n = 20
+        n_norm = min(1.0, (n - 2) / (max_n - 2))
         # For open polylines, ignore polygon-based compactness
         curvature = _calculate_curvature_score(verts) if n >= 3 else 0.0
         curvature_norm = min(1.0, curvature / 2.0)
         irregularity = _calculate_irregularity(verts) if n >= 3 else 0.0
         # Weighted sum (no compactness for open)
-        complexity = 0.5 * n_norm + 0.3 * curvature_norm + 0.2 * irregularity
-        logger.info(f"Complexity: n={n}, n_norm={n_norm:.2f}, curvature={curvature:.2f}, curvature_norm={curvature_norm:.2f}, irregularity={irregularity:.2f}, result={complexity:.2f}")
+        complexity = n_norm
+        logger.info(f"Complexity: n={n}, n_norm={n_norm:.2f}, result={complexity:.2f}")
         return float(np.clip(complexity, 0.0, 1.0))
     except Exception as e:
         logger.warning(f"calculate_complexity failed: {e}")
@@ -157,16 +159,21 @@ def open_stroke_convexity(vertices: List[tuple]) -> float:
     if not vertices or len(vertices) < 3:
         return 0.0
     arr = np.array(vertices)
-    # Compute turn angles
-    directions = arr[1:] - arr[:-1]
-    angles = np.arctan2(directions[:,1], directions[:,0])
-    turns = np.diff(angles)
-    # Normalize to [-pi, pi]
-    turns = (turns + np.pi) % (2 * np.pi) - np.pi
-    sign_changes = np.sum(np.abs(np.diff(np.sign(turns))) > 0)
-    # Convexity: fewer sign changes = more convex
-    convexity = 1.0 - min(1.0, sign_changes / (len(turns) - 1))
-    return float(convexity)
+    from shapely.geometry import MultiPoint
+    try:
+        hull = MultiPoint(arr).convex_hull
+        hull_area = hull.area if hasattr(hull, 'area') else 0.0
+        poly_area = 0.0
+        if len(vertices) >= 3:
+            from shapely.geometry import Polygon
+            poly = Polygon(vertices)
+            poly_area = poly.area if poly.is_valid else 0.0
+        if hull_area > 0:
+            return float(poly_area / hull_area)
+        else:
+            return 0.0
+    except Exception:
+        return 0.0
 
 
 def _calculate_compactness(area: float, perimeter: float) -> float:
@@ -371,6 +378,7 @@ def validate_features(features: dict) -> list:
         'compactness': lambda x: x is not None and 0 <= x <= 1,
         'robust_curvature': lambda x: x is None or x >= 0,
         'visual_complexity': lambda x: x is None or 0 <= x <= 1,
+        'geom_complexity': lambda x: x is None or 0 <= x <= 1,
     }
     issues = []
     for feature_name, validator in validations.items():

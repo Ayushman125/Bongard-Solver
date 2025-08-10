@@ -360,12 +360,20 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
     smod = shape_modifier_val or _extract_modifier_from_stroke(stroke) or 'normal'
     params = parameters or {}
     verts = _extract_stroke_vertices(stroke, stroke_index, None, bongard_image=bongard_image, parent_shape_vertices=parent_shape_vertices)
-    from src.Derive_labels.shape_utils import calculate_geometry_consistent, _calculate_compactness, validate_features
-    geometry = calculate_geometry_consistent(verts) if verts and len(verts) >= 3 else {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0]}
+    from src.Derive_labels.shape_utils import calculate_geometry_consistent, _calculate_compactness, validate_features, calculate_complexity, open_stroke_convexity
+    geometry = calculate_geometry_consistent(verts) if verts and len(verts) >= 3 else {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0], 'num_vertices': len(verts)}
     logger.info(f"[_calculate_stroke_specific_features] PATCH: Geometry for stroke_index={stroke_index}: {geometry}")
     # Calculate Polsby-Popper compactness
     compactness = _calculate_compactness(geometry.get('area', 0.0), geometry.get('perimeter', 0.0))
     features['compactness'] = compactness
+    # Geometric complexity: normalized vertex count
+    max_n = 20
+    n = geometry.get('num_vertices', len(verts))
+    geom_complexity = min(1.0, (n - 2) / (max_n - 2)) if n >= 2 else 0.0
+    features['geom_complexity'] = geom_complexity
+    # Convexity ratio: area / convex hull area
+    convexity = open_stroke_convexity(verts)
+    features['convexity_ratio'] = convexity
     # Validate features
     validation_issues = validate_features({**geometry, **features})
     if validation_issues:
