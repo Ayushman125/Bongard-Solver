@@ -418,6 +418,7 @@ def _calculate_perimeter(vertices: List[tuple]) -> float:
     import numpy as np
     from shapely.geometry import Polygon
     logging.info(f"[_calculate_perimeter] INPUT vertices: {vertices}")
+    perimeter = 0.0
     for i in range(len(vertices)):
         p1 = vertices[i]
         p2 = vertices[(i + 1) % len(vertices)]

@@ -17,6 +17,28 @@ from src.Derive_labels.shape_utils import safe_divide, _calculate_dominant_direc
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
+def compute_shape_segments(basic_actions, shape_vertices):
+    """Partition shape_vertices into contiguous segments for each stroke."""
+    # Estimate segment lengths by uniform partitioning (fallback if no metadata)
+    n = len(basic_actions)
+    m = len(shape_vertices)
+    if n < 1 or m < 2:
+        return [(0, m-1)] * n
+    # If closed polygon, ignore last vertex for partitioning
+    closed = (shape_vertices[0] == shape_vertices[-1])
+    m_eff = m-1 if closed else m
+    seg_len = m_eff // n
+    segments = []
+    idx = 0
+    for i in range(n):
+        start = idx
+        end = idx + seg_len
+        if i == n-1:
+            end = m_eff
+        segments.append((start, end))
+        idx = end
+    return segments
+
 def extract_stroke_features_from_shapes(bongard_image, problem_id=None):
     """
     For each shape in bongard_image.one_stroke_shapes, iterate over its actions/strokes.
@@ -42,46 +64,42 @@ def extract_stroke_features_from_shapes(bongard_image, problem_id=None):
             logging.warning(f"[extract_stroke_features_from_shapes] Shape {shape_idx} missing 'actions', using 'basic_actions': {actions}")
         else:
             logging.info(f"[extract_stroke_features_from_shapes] Shape {shape_idx} actions: {actions}")
-        # PATCH: Log shape object and its actions
         logging.info(f"[extract_stroke_features_from_shapes] Shape {shape_idx}: {shape}")
-        # PATCH: Log start_coordinates if present
         start_coords = getattr(shape, 'start_coordinates', None)
         if start_coords is not None:
             logging.info(f"[extract_stroke_features_from_shapes] Shape {shape_idx} start_coordinates: {start_coords}")
-        # PATCH: Log geometry if present
         geometry = getattr(shape, 'geometry', None)
         if geometry is not None:
             logging.info(f"[extract_stroke_features_from_shapes] Shape {shape_idx} geometry: {geometry}")
-            # PATCH: Defensive: ensure width and height are present
             if 'width' not in geometry or 'height' not in geometry:
                 logging.error(f"[extract_stroke_features_from_shapes] Shape {shape_idx} geometry missing width/height: {geometry}")
-        # PATCH: Defensive fallback for empty actions
         if not actions:
             logging.error(f"[extract_stroke_features_from_shapes] Shape {shape_idx} has no actions! Shape: {shape}")
             continue
         logging.info(f"[extract_stroke_features_from_shapes] Shape {shape_idx}: num_actions={len(actions)} | actions={actions}")
         shape_vertices = getattr(shape, 'vertices', None)
-        # PATCH: Validate and correct shape vertices before feature extraction
         from src.Derive_labels.shape_utils import ensure_vertex_list
         shape_vertices = ensure_vertex_list(shape_vertices)
         if shape_vertices and len(shape_vertices) >= 3:
-            # Remove duplicate consecutive points
             deduped = [shape_vertices[0]]
             for pt in shape_vertices[1:]:
                 if pt != deduped[-1]:
                     deduped.append(pt)
             shape_vertices = deduped
-            # Close polygon if not closed
             if shape_vertices[0] != shape_vertices[-1]:
                 shape_vertices.append(shape_vertices[0])
             logging.info(f"[extract_stroke_features_from_shapes] PATCH: Validated/corrected shape_vertices for shape {shape_idx}: {shape_vertices}")
         else:
             logging.warning(f"[extract_stroke_features_from_shapes] PATCH: Insufficient vertices for shape {shape_idx}: {shape_vertices}")
+        # --- PATCH: Compute stroke segments ---
+        segments = compute_shape_segments(actions, shape_vertices)
         for stroke_idx, stroke in enumerate(actions):
             logging.info(f"[extract_stroke_features_from_shapes] shape_idx={shape_idx} | stroke_idx={stroke_idx} | stroke={stroke}")
             try:
-                logging.info(f"[extract_stroke_features_from_shapes] PATCH: Input vertices to _calculate_stroke_specific_features: {shape_vertices}")
-                features = _calculate_stroke_specific_features(stroke, stroke_idx, bongard_image=bongard_image, parent_shape_vertices=shape_vertices)
+                seg_start, seg_end = segments[stroke_idx]
+                stroke_vertices = shape_vertices[seg_start:seg_end+1]
+                logging.info(f"[extract_stroke_features_from_shapes] PATCH: Input stroke_vertices to _calculate_stroke_specific_features: {stroke_vertices}")
+                features = _calculate_stroke_specific_features(stroke, stroke_idx, bongard_image=bongard_image, parent_shape_vertices=stroke_vertices)
                 logging.info(f"[extract_stroke_features_from_shapes] PATCH: Output features for shape {shape_idx}, stroke {stroke_idx}: {features}")
             except Exception as e:
                 logging.error(f"[extract_stroke_features_from_shapes] Error extracting features for shape {shape_idx}, stroke {stroke_idx}: {e}")
