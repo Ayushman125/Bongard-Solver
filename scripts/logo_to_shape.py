@@ -1012,7 +1012,12 @@ class ComprehensiveBongardProcessor:
                 geometry['width'] = width
                 geometry['height'] = height
             try:
-                polsby_popper = safe_float(PhysicsInference.polsby_popper_compactness(vertices))
+                # Compute area and perimeter from vertices using Shapely
+                from shapely.geometry import Polygon
+                poly_tmp = Polygon(vertices)
+                area = poly_tmp.area
+                perimeter = poly_tmp.length
+                polsby_popper = safe_float(PhysicsInference.polsby_popper_compactness(area, perimeter))
             except Exception as e:
                 logger.warning(f"[_calculate_image_features] Error in polsby_popper_compactness: {e}")
                 polsby_popper = 0.0

@@ -6,6 +6,7 @@ Only use fallback/synthesized vertices if bongard_image.one_stroke_shapes[stroke
 """
 
 import math
+from src.Derive_labels.shape_utils import calculate_geometry_consistent, _calculate_compactness, open_stroke_convexity, validate_features
 import logging
 from typing import Dict, List, Any, Optional
 import numpy as np
@@ -362,30 +363,83 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
     """Calculate features specific to stroke type and shape modifier, using robust geometric/physics formulas."""
     features = {'stroke_index': stroke_index}
     stype = stroke_type_val or _extract_stroke_type_from_command(stroke)
-    smod = shape_modifier_val or _extract_modifier_from_stroke(stroke) or 'normal'
+    smod = shape_modifier_val or _extract_modifier_from_stroke(stroke)
+    if not smod:
+        if 'line' in stype:
+            smod = 'normal'
+        elif 'arc' in stype:
+            smod = 'normal'
+        else:
+            smod = 'normal'
     params = parameters or {}
     verts = _extract_stroke_vertices(stroke, stroke_index, None, bongard_image=bongard_image, parent_shape_vertices=parent_shape_vertices)
-    from src.Derive_labels.shape_utils import calculate_geometry_consistent, _calculate_compactness, validate_features, calculate_complexity, open_stroke_convexity
-    geometry = calculate_geometry_consistent(verts) if verts and len(verts) >= 3 else {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0], 'num_vertices': len(verts)}
-    logger.info(f"[_calculate_stroke_specific_features] PATCH: Geometry for stroke_index={stroke_index}: {geometry}")
-    # Degenerate handling for lines (2 vertices)
-    if verts and len(verts) == 2:
-        features['compactness'] = None
-        features['convexity_ratio'] = None
-        features['geom_complexity'] = None
-        features['arc_curvature_score'] = None
-        geometry['area'] = 0.0
-        features['degenerate_case'] = True
-        logger.info(f"[_calculate_stroke_specific_features] Degenerate case detected for stroke_index={stroke_index} (2 vertices). All metrics set to None.")
-    else:
-        # Calculate Polsby-Popper compactness
+    # If analytic parameters available for arc, propagate them
+    if 'arc' in stype.lower() and hasattr(stroke, 'parameters') and stroke.parameters:
+        params = stroke.parameters
+    stype_lower = stype.lower() if stype else ''
+    def is_collinear(vs):
+        if not vs or len(vs) < 2:
+            return False
+        arr = np.array(vs)
+        if len(arr) < 3:
+            return True
+        v0 = arr[0]
+        v1 = arr[-1]
+        direction = v1 - v0
+        norm = np.linalg.norm(direction)
+        if norm < 1e-8:
+            return True
+        direction = direction / norm
+        for pt in arr[1:-1]:
+            vec = pt - v0
+            proj = np.dot(vec, direction)
+            perp = vec - proj * direction
+            if np.linalg.norm(perp) > 1e-6:
+                return False
+        return True
+
+    # --- Geometry calculation ---
+    geometry = None
+    if verts and is_collinear(verts):
+        arr = np.array(verts)
+        length = float(np.sum(np.linalg.norm(arr[1:] - arr[:-1], axis=1))) if len(arr) >= 2 else 0.0
+        min_x, min_y = np.min(arr[:,0]), np.min(arr[:,1])
+        max_x, max_y = np.max(arr[:,0]), np.max(arr[:,1])
+        width = abs(max_x - min_x)
+        height = abs(max_y - min_y)
+        geometry = {
+            'width': width,
+            'height': height,
+            'area': 0.0,
+            'perimeter': length,
+            'centroid': list(np.mean(arr, axis=0)),
+            'bounds': [min_x, min_y, max_x, max_y],
+            'num_vertices': len(verts)
+        }
+        features['compactness'] = 1e-6
+        features['convexity_ratio'] = 1e-6
+        features['geom_complexity'] = 0.0
+        features['arc_curvature_score'] = 0.0
+        features['degenerate_case'] = False
+        features['stroke_length'] = length
+        features['avg_stroke_length'] = length
+        # Visual complexity: normalized by parent shape perimeter
+        shape_perimeter = parent_shape_vertices and len(parent_shape_vertices) > 1 and sum(
+            math.sqrt((parent_shape_vertices[i+1][0] - parent_shape_vertices[i][0])**2 + (parent_shape_vertices[i+1][1] - parent_shape_vertices[i][1])**2)
+            for i in range(len(parent_shape_vertices)-1)
+        ) or 1.0
+        features['visual_complexity'] = (length * (1 + (features.get('robust_curvature') or 0))) / max(shape_perimeter, 1e-6)
+        features['robust_curvature'] = 0.0
+        features['robust_angular_variance'] = 0.0
+        features['line_curvature_score'] = 0.0
+    elif verts and len(verts) >= 3:
+        geometry = calculate_geometry_consistent(verts)
         try:
             compactness = _calculate_compactness(geometry.get('area', 0.0), geometry.get('perimeter', 0.0))
-            features['compactness'] = compactness
+            features['compactness'] = min(max(compactness, 1e-6), 1.0)
         except Exception as e:
             logger.warning(f"[_calculate_stroke_specific_features] Error calculating compactness: {e}")
-            features['compactness'] = None
-        # Geometric complexity: normalized vertex count
+            features['compactness'] = 1e-6
         try:
             max_n = 20
             n = geometry.get('num_vertices', len(verts))
@@ -393,16 +447,99 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
             features['geom_complexity'] = geom_complexity
         except Exception as e:
             logger.warning(f"[_calculate_stroke_specific_features] Error calculating geom_complexity: {e}")
-            features['geom_complexity'] = None
-        # Convexity ratio: area / convex hull area
+            features['geom_complexity'] = 0.0
         try:
             convexity = open_stroke_convexity(verts)
-            features['convexity_ratio'] = convexity
+            features['convexity_ratio'] = min(max(convexity, 1e-6), 1.0)
         except Exception as e:
             logger.warning(f"[_calculate_stroke_specific_features] Error calculating convexity_ratio: {e}")
-            features['convexity_ratio'] = None
+            features['convexity_ratio'] = 1e-6
         features['degenerate_case'] = False
-        logger.info(f"[_calculate_stroke_specific_features] Valid case for stroke_index={stroke_index} (>=3 vertices). Metrics calculated.")
+        # Physics features
+        safe_verts = verts if len(verts) >= 3 else [verts[0], verts[0], verts[0]]
+        try:
+            features['robust_curvature'] = PhysicsInference.robust_curvature(safe_verts)
+        except Exception as e:
+            logger.warning(f"Curvature calculation failed for stroke {stroke_index}: {e}")
+            features['robust_curvature'] = None
+        try:
+            features['robust_angular_variance'] = PhysicsInference.robust_angular_variance(safe_verts)
+        except Exception as e:
+            logger.warning(f"Angular variance calculation failed for stroke {stroke_index}: {e}")
+            features['robust_angular_variance'] = None
+        # Visual complexity
+        shape_perimeter = parent_shape_vertices and len(parent_shape_vertices) > 1 and sum(
+            math.sqrt((parent_shape_vertices[i+1][0] - parent_shape_vertices[i][0])**2 + (parent_shape_vertices[i+1][1] - parent_shape_vertices[i][1])**2)
+            for i in range(len(parent_shape_vertices)-1)
+        ) or 1.0
+        stroke_length = geometry.get('perimeter', 0.0)
+        features['stroke_length'] = stroke_length
+        features['avg_stroke_length'] = stroke_length
+        features['visual_complexity'] = (stroke_length * (1 + (features.get('robust_curvature') or 0))) / max(shape_perimeter, 1e-6)
+        if 'line' in stype_lower:
+            features['line_curvature_score'] = 0.0
+        elif 'arc' in stype_lower:
+            radius = params.get('radius', geometry.get('width', 1.0))
+            span_angle = params.get('span_angle', 90)
+            delta_theta = math.radians(span_angle)
+            features['arc_curvature_score'] = PhysicsInference.arc_curvature_score(radius, delta_theta)
+    elif 'arc' in stype_lower and params.get('radius', None) and params.get('span_angle', None):
+        # Analytic arc metrics for small arcs
+        radius = params['radius']
+        span_angle = params['span_angle']
+        delta_theta = math.radians(span_angle)
+        arc_length = abs(delta_theta * radius)
+        geometry = {
+            'width': radius,
+            'height': radius,
+            'area': 0.0,
+            'perimeter': arc_length,
+            'centroid': [0.0, 0.0],
+            'bounds': [0, 0, 0, 0],
+            'num_vertices': 2
+        }
+        features['robust_curvature'] = abs(delta_theta) / max(radius, 1e-6)
+        features['robust_angular_variance'] = 0.0
+        features['arc_curvature_score'] = abs(delta_theta) / max(radius, 1e-6)
+        features['stroke_length'] = arc_length
+        features['avg_stroke_length'] = arc_length
+        shape_perimeter = parent_shape_vertices and len(parent_shape_vertices) > 1 and sum(
+            math.sqrt((parent_shape_vertices[i+1][0] - parent_shape_vertices[i][0])**2 + (parent_shape_vertices[i+1][1] - parent_shape_vertices[i][1])**2)
+            for i in range(len(parent_shape_vertices)-1)
+        ) or 1.0
+        features['visual_complexity'] = (arc_length * (1 + features['robust_curvature'])) / max(shape_perimeter, 1e-6)
+        features['compactness'] = 1e-6
+        features['convexity_ratio'] = 1e-6
+        features['geom_complexity'] = 0.0
+        features['degenerate_case'] = False
+    elif verts and len(verts) == 1:
+        geometry = {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': list(verts[0]), 'bounds': [verts[0][0], verts[0][1], verts[0][0], verts[0][1]], 'num_vertices': 1}
+        features['compactness'] = 1e-6
+        features['convexity_ratio'] = 1e-6
+        features['geom_complexity'] = 0.0
+        features['arc_curvature_score'] = 0.0
+        features['degenerate_case'] = True
+        features['stroke_length'] = 0.0
+        features['avg_stroke_length'] = 0.0
+        features['visual_complexity'] = 0.0
+        features['robust_curvature'] = 0.0
+        features['robust_angular_variance'] = 0.0
+        features['line_curvature_score'] = 0.0
+    else:
+        # Fallback: truly degenerate
+        geometry = {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0], 'num_vertices': 0}
+        features['compactness'] = 1e-6
+        features['convexity_ratio'] = 1e-6
+        features['geom_complexity'] = 0.0
+        features['arc_curvature_score'] = 0.0
+        features['degenerate_case'] = True
+        features['stroke_length'] = 0.0
+        features['avg_stroke_length'] = 0.0
+        features['visual_complexity'] = 0.0
+        features['robust_curvature'] = 0.0
+        features['robust_angular_variance'] = 0.0
+        features['line_curvature_score'] = 0.0
+
     # Validate features
     validation_issues = validate_features({**geometry, **features})
     if validation_issues:
@@ -421,57 +558,6 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
     if not verts or (isinstance(verts, list) and len(verts) == 1 and verts[0] == (0.0, 0.0)):
         logger.error(f"[_calculate_stroke_specific_features] Fallback or missing vertices for stroke_index={stroke_index}, stroke={stroke}, type={stype}, modifier={smod}")
     logger.info(f"[_calculate_stroke_specific_features] verts: {verts}")
-    stype_lower = stype.lower() if stype else ''
-    # --- PATCH: Physics features ---
-    # Robust curvature & angular variance: skip for pure lines (2 points)
-    def min3_interpolated(vs):
-        import numpy as np
-        if len(vs) >= 3:
-            return vs
-        elif len(vs) == 2:
-            arr = np.array(vs)
-            mid = ((arr[0] + arr[1]) / 2).tolist()
-            return [vs[0], tuple(mid), vs[1]]
-        elif len(vs) == 1:
-            return [vs[0], vs[0], vs[0]]
-        else:
-            return []
-    if verts and len(verts) == 2 and 'line' in stype_lower:
-        features['robust_curvature'] = 0.0
-        features['robust_angular_variance'] = 0.0
-        logger.info(f"[_calculate_stroke_specific_features] Degenerate line: curvature and angular variance set to 0.0.")
-    elif verts and len(verts) >= 3:
-        safe_verts = min3_interpolated(verts)
-        try:
-            features['robust_curvature'] = PhysicsInference.robust_curvature(safe_verts)
-        except Exception as e:
-            logger.warning(f"Curvature calculation failed for stroke {stroke_index}: {e}")
-            features['robust_curvature'] = None
-        try:
-            features['robust_angular_variance'] = PhysicsInference.robust_angular_variance(safe_verts)
-        except Exception as e:
-            logger.warning(f"Angular variance calculation failed for stroke {stroke_index}: {e}")
-            features['robust_angular_variance'] = None
-        logger.info(f"[_calculate_stroke_specific_features] Valid curvature and angular variance calculated for stroke_index={stroke_index}.")
-    else:
-        features['robust_curvature'] = None
-        features['robust_angular_variance'] = None
-        logger.info(f"[_calculate_stroke_specific_features] Insufficient vertices for curvature/variance for stroke_index={stroke_index}.")
-    # For lines/arcs, add curvature score
-    if 'line' in stype_lower:
-        features['line_curvature_score'] = PhysicsInference.line_curvature_score(verts)
-    elif 'arc' in stype_lower:
-        radius = params.get('radius', geometry.get('width', 1.0))
-        span_angle = params.get('span_angle', 90)
-        delta_theta = math.radians(span_angle)
-        features['arc_curvature_score'] = PhysicsInference.arc_curvature_score(radius, delta_theta)
-    # Visual complexity: normalized by parent shape perimeter if available
-    shape_perimeter = parent_shape_vertices and len(parent_shape_vertices) > 1 and sum(
-        math.sqrt((parent_shape_vertices[i+1][0] - parent_shape_vertices[i][0])**2 + (parent_shape_vertices[i+1][1] - parent_shape_vertices[i][1])**2)
-        for i in range(len(parent_shape_vertices)-1)
-    ) or 1.0
-    features['visual_complexity'] = geometry.get('perimeter', 0.0) / max(shape_perimeter, 1e-6)
-    logger.info(f"[_calculate_stroke_specific_features] PATCH: Physics features for stroke_index={stroke_index}: {{'robust_curvature': {features['robust_curvature']}, 'robust_angular_variance': {features['robust_angular_variance']}, 'visual_complexity': {features['visual_complexity']}, 'line_curvature_score': {features.get('line_curvature_score')}, 'arc_curvature_score': {features.get('arc_curvature_score')}}}")
     # Calculate basic geometric features from vertices
     if verts and len(verts) > 1:
         total_length = 0
@@ -732,6 +818,9 @@ def _extract_modifier_from_stroke(stroke) -> str:
             logger.debug(f"[_extract_modifier_from_stroke] Extracted modifier from string: {parts[1]}")
             logger.info(f"[_extract_modifier_from_stroke] OUTPUT: {parts[1]} (string)")
             return parts[1]
+        # If line or arc, default to 'normal'
+        if len(parts) >= 1 and parts[0] in ['line', 'arc']:
+            return 'normal'
         else:
             logger.warning(f"[_extract_modifier_from_stroke] Could not extract modifier from string: {stroke}")
             return None
