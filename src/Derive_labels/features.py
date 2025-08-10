@@ -68,7 +68,9 @@ def extract_topological_features(shapes):
         logger.debug(f"[extract_topological_features] Shape {idx} vertices: {verts}")
         if len(verts) >= 3:
             try:
-                if np.allclose(np.array(verts[0]), np.array(verts[-1])):
+                dist = np.linalg.norm(np.array(verts[0]) - np.array(verts[-1]))
+                logger.debug(f"[extract_topological_features] Shape {idx} closure distance: {dist}")
+                if dist < 1e-2:
                     shape_types.append('closed')
                 else:
                     shape_types.append('open')

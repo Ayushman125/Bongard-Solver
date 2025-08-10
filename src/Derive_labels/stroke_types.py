@@ -194,57 +194,58 @@ def _extract_stroke_vertices(stroke, stroke_index, all_vertices, bongard_image=N
     # Log the received command
     raw_command = getattr(stroke, 'raw_command', str(stroke))
     logger.info(f"[_extract_stroke_vertices] Received command: {raw_command}")
-    # 1. Use parent_shape_vertices if valid
-    if parent_shape_vertices is not None and valid_verts(parent_shape_vertices):
-        logger.info(f"[_extract_stroke_vertices] Using parent_shape_vertices: {parent_shape_vertices}")
-        verts = parent_shape_vertices
-    # 2. Try bongard_image.one_stroke_shapes[stroke_index].vertices
-    elif bongard_image and hasattr(bongard_image, 'one_stroke_shapes'):
-        shapes = bongard_image.one_stroke_shapes
-        if isinstance(shapes, list) and stroke_index < len(shapes):
-            shape = shapes[stroke_index]
-            shape_verts = getattr(shape, 'vertices', None)
-            if valid_verts(shape_verts):
-                logger.info(f"[_extract_stroke_vertices] Using bongard_image.one_stroke_shapes[{stroke_index}].vertices: {shape_verts}")
-                verts = shape_verts
-    # 3. Try stroke.vertices
-    if verts is None and hasattr(stroke, 'vertices') and valid_verts(stroke.vertices):
-        logger.info(f"[_extract_stroke_vertices] Using stroke.vertices for stroke {stroke_index}: {stroke.vertices}")
-        verts = stroke.vertices
-    # 4. Try stroke.polyline_points
-    if verts is None and hasattr(stroke, 'polyline_points') and valid_verts(stroke.polyline_points):
-        logger.info(f"[_extract_stroke_vertices] Using stroke.polyline_points for stroke {stroke_index}: {stroke.polyline_points}")
-        verts = stroke.polyline_points
-    # 5. Try get_world_coordinates
-    if verts is None and hasattr(stroke, 'get_world_coordinates') and callable(stroke.get_world_coordinates):
-        try:
-            wc_verts = stroke.get_world_coordinates()
-            if valid_verts(wc_verts):
-                logger.info(f"[_extract_stroke_vertices] Using stroke.get_world_coordinates() for stroke {stroke_index}: {wc_verts}")
-                verts = wc_verts
-        except Exception as e:
-            logger.warning(f"[_extract_stroke_vertices] get_world_coordinates failed for stroke {stroke_index}: {e}")
-    # 6. Fallback: synthesize vertices from raw command for line/arc
-    if verts is None and raw_command:
-        stroke_type = _extract_stroke_type_from_command(stroke)
-        if stroke_type in ['line', 'arc']:
-            synth_verts = _vertices_from_command(raw_command, stroke_index)
-            if valid_verts(synth_verts):
-                logger.warning(f"[_extract_stroke_vertices] Synthesized vertices from command for stroke {stroke_index}: {synth_verts}")
-                verts = synth_verts
-    # 7. Interpolate if we have 2 vertices
-    if verts is None and hasattr(stroke, 'vertices') and stroke.vertices and len(stroke.vertices) == 2:
-        interp_verts = interpolate_vertices(stroke.vertices, MIN_VERTICES)
-        logger.warning(f"[_extract_stroke_vertices] Interpolated vertices to minimum count for stroke {stroke_index}: {interp_verts}")
-        verts = interp_verts
-    # 8. Try all_vertices fallback
-    if verts is None and all_vertices and stroke_index < len(all_vertices) and valid_verts(all_vertices[stroke_index]):
-        logger.info(f"[_extract_stroke_vertices] Using all_vertices fallback for stroke {stroke_index}: {all_vertices[stroke_index]}")
-        verts = all_vertices[stroke_index]
-    # 9. If still None, return empty list
-    if verts is None:
-        logger.warning(f"[_extract_stroke_vertices] Failed to extract vertices for stroke {stroke_index}. Returning empty list.")
-        verts = []
+    # 1. Use endpoints for lines, sample points for arcs
+    stroke_type = _extract_stroke_type_from_command(stroke)
+    if stroke_type == 'line' and parent_shape_vertices is not None and len(parent_shape_vertices) > stroke_index + 1:
+        verts = [parent_shape_vertices[stroke_index], parent_shape_vertices[stroke_index+1]]
+        logger.info(f"[_extract_stroke_vertices] Using endpoints for line stroke {stroke_index}: {verts}")
+    elif stroke_type == 'arc' and parent_shape_vertices is not None:
+        # Sample intermediate points for arc
+        verts = parent_shape_vertices[max(0, stroke_index):stroke_index+3] if len(parent_shape_vertices) >= stroke_index+3 else parent_shape_vertices
+        logger.info(f"[_extract_stroke_vertices] Using sampled points for arc stroke {stroke_index}: {verts}")
+    else:
+        # Fallback to previous logic
+        if parent_shape_vertices is not None and valid_verts(parent_shape_vertices):
+            logger.info(f"[_extract_stroke_vertices] Using parent_shape_vertices: {parent_shape_vertices}")
+            verts = parent_shape_vertices
+        elif bongard_image and hasattr(bongard_image, 'one_stroke_shapes'):
+            shapes = bongard_image.one_stroke_shapes
+            if isinstance(shapes, list) and stroke_index < len(shapes):
+                shape = shapes[stroke_index]
+                shape_verts = getattr(shape, 'vertices', None)
+                if valid_verts(shape_verts):
+                    logger.info(f"[_extract_stroke_vertices] Using bongard_image.one_stroke_shapes[{stroke_index}].vertices: {shape_verts}")
+                    verts = shape_verts
+        if verts is None and hasattr(stroke, 'vertices') and valid_verts(stroke.vertices):
+            logger.info(f"[_extract_stroke_vertices] Using stroke.vertices for stroke {stroke_index}: {stroke.vertices}")
+            verts = stroke.vertices
+        if verts is None and hasattr(stroke, 'polyline_points') and valid_verts(stroke.polyline_points):
+            logger.info(f"[_extract_stroke_vertices] Using stroke.polyline_points for stroke {stroke_index}: {stroke.polyline_points}")
+            verts = stroke.polyline_points
+        if verts is None and hasattr(stroke, 'get_world_coordinates') and callable(stroke.get_world_coordinates):
+            try:
+                wc_verts = stroke.get_world_coordinates()
+                if valid_verts(wc_verts):
+                    logger.info(f"[_extract_stroke_vertices] Using stroke.get_world_coordinates() for stroke {stroke_index}: {wc_verts}")
+                    verts = wc_verts
+            except Exception as e:
+                logger.warning(f"[_extract_stroke_vertices] get_world_coordinates failed for stroke {stroke_index}: {e}")
+        if verts is None and raw_command:
+            if stroke_type in ['line', 'arc']:
+                synth_verts = _vertices_from_command(raw_command, stroke_index)
+                if valid_verts(synth_verts):
+                    logger.warning(f"[_extract_stroke_vertices] Synthesized vertices from command for stroke {stroke_index}: {synth_verts}")
+                    verts = synth_verts
+        if verts is None and hasattr(stroke, 'vertices') and stroke.vertices and len(stroke.vertices) == 2:
+            interp_verts = interpolate_vertices(stroke.vertices, MIN_VERTICES)
+            logger.warning(f"[_extract_stroke_vertices] Interpolated vertices to minimum count for stroke {stroke_index}: {interp_verts}")
+            verts = interp_verts
+        if verts is None and all_vertices and stroke_index < len(all_vertices) and valid_verts(all_vertices[stroke_index]):
+            logger.info(f"[_extract_stroke_vertices] Using all_vertices fallback for stroke {stroke_index}: {all_vertices[stroke_index]}")
+            verts = all_vertices[stroke_index]
+        if verts is None:
+            logger.warning(f"[_extract_stroke_vertices] Failed to extract vertices for stroke {stroke_index}. Returning empty list.")
+            verts = []
     # PATCH: Always calculate geometry for extracted vertices
     geometry = calculate_geometry_consistent(verts) if valid_verts(verts) else {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0]}
     logger.info(f"[_extract_stroke_vertices] OUTPUT: stroke_index={stroke_index}, verts={verts}, geometry={geometry}")

@@ -54,6 +54,11 @@ class BongardFeatureExtractor:
         try:
             vertices = image.get('vertices') if isinstance(image, dict) else None
             strokes = image.get('strokes') if isinstance(image, dict) else []
+            # Compute and log per-image relational features
+            from src.Derive_labels.features import extract_relational_features
+            stroke_dicts = [s for s in strokes if isinstance(s, dict) and 'vertices' in s]
+            rel_features = extract_relational_features(stroke_dicts, buffer_amt=0.001) if stroke_dicts else {'adjacency':0,'intersections':0,'containment':0,'overlap':0.0}
+            logging.info(f"[extract_image_features] safe_relational_features: {rel_features}")
             attributes = image.get('attributes', {}) if isinstance(image, dict) else {}
             if not vertices or not isinstance(vertices, list) or not all(isinstance(v, (list, tuple)) and len(v) == 2 for v in vertices):
                 logging.info(f"[extract_image_features] INPUT image: {image}")
