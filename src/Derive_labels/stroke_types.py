@@ -188,11 +188,6 @@ def interpolate_vertices(verts, target_count=3):
     interp_verts.append(verts[-1])
     return interp_verts
 
-def valid_verts(verts):
-    MIN_VERTICES = 3
-    if not verts or len(verts) < MIN_VERTICES:
-        return False
-    return all(isinstance(v, (list, tuple)) and len(v) == 2 and all(np.isfinite(coord) for coord in v) for v in verts)
 
 
 def _extract_stroke_type_from_command(stroke) -> str:

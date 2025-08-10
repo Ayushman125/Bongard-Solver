@@ -1,3 +1,10 @@
+import numpy as np
+
+def valid_verts(verts):
+    MIN_VERTICES = 3
+    if not verts or len(verts) < MIN_VERTICES:
+        return False
+    return all(isinstance(v, (list, tuple)) and len(v) == 2 and all(np.isfinite(coord) for coord in v) for v in verts)
 def compute_open_stroke_geometry(vertices):
     """Compute geometry for open stroke (polyline): perimeter, centroid, bounds, area=0."""
     import numpy as np
