@@ -58,6 +58,7 @@ def extract_stroke_features_from_shapes(bongard_image, problem_id=None):
     total_shapes = len(shapes)
     total_strokes = sum(len(getattr(shape, 'actions', getattr(shape, 'strokes', []))) for shape in shapes)
     logging.info(f"[extract_stroke_features_from_shapes] problem_id={problem_id} | num_shapes={total_shapes} | total_strokes={total_strokes}")
+    logging.info(f"[extract_stroke_features_from_shapes] PATCH: shapes={shapes}")
     for shape_idx, shape in enumerate(shapes):
         actions = getattr(shape, 'actions', None)
         if actions is None:
@@ -434,11 +435,51 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
         features['line_curvature_score'] = 0.0
         # PATCH: Add clarifying comment
         # Degenerate strokes (collapsed to two points) are flagged and processed with minimal analytic features.
-        # PATCH: Ensure aggregation features are always populated
-        features['support_set_context'] = features.get('support_set_context', {'valid': False, 'reason': 'degenerate', 'stats': {}})
-        features['discriminative_features'] = features.get('discriminative_features', {'valid': False, 'reason': 'degenerate', 'stats': {}})
-        logger.info(f"[PATCH] support_set_context (degenerate): {features['support_set_context']}")
-        logger.info(f"[PATCH] discriminative_features (degenerate): {features['discriminative_features']}")
+        # --- PATCH: Fill stats dicts for support_set_context and discriminative_features with explicit diagnostics ---
+        from src.Derive_labels.context_features import BongardFeatureExtractor
+        extractor = BongardFeatureExtractor()
+        # Gather all stroke features in the current shape for context
+        shape_strokes = []
+        if bongard_image and hasattr(bongard_image, 'one_stroke_shapes'):
+            shape_obj = None
+            if hasattr(bongard_image, 'one_stroke_shapes') and stroke_index < len(bongard_image.one_stroke_shapes):
+                shape_obj = bongard_image.one_stroke_shapes[stroke_index]
+            if shape_obj and hasattr(shape_obj, 'basic_actions'):
+                for i, s in enumerate(shape_obj.basic_actions):
+                    v = _extract_stroke_vertices(s, i, None, bongard_image=bongard_image, parent_shape_vertices=parent_shape_vertices)
+                    f = _calculate_stroke_specific_features(s, i, bongard_image=bongard_image, parent_shape_vertices=v)
+                    # Only add non-degenerate strokes
+                    if not f.get('degenerate_case', False):
+                        shape_strokes.append(f)
+        logger.info(f"[PATCH] shape_strokes before stats: count={len(shape_strokes)}, contents={shape_strokes}")
+        # Explicitly log input to stats computation
+        if not shape_strokes:
+            logger.warning(f"[PATCH] No valid (non-degenerate) strokes for stats computation in shape_idx={stroke_index}")
+        # Compute support set context stats
+        if features.get('degenerate_case', False):
+            features['support_set_context'] = {'valid': False, 'reason': 'degenerate', 'stats': {}}
+            features['discriminative_features'] = {'valid': False, 'reason': 'degenerate', 'stats': {}}
+        else:
+            stats = extractor.compute_feature_statistics(shape_strokes) if shape_strokes else {}
+            if not stats:
+                logger.warning(f"[PATCH] Stats computation returned empty for shape_idx={stroke_index}. shape_strokes={shape_strokes}")
+                features['support_set_context'] = {'valid': False, 'reason': 'empty_or_degenerate_input', 'stats': {}}
+            else:
+                features['support_set_context'] = {'valid': True, 'stats': stats}
+            # For discriminative features, you need both positive and negative sets; here we use shape_strokes as pos, empty neg
+            discriminative = extractor.compute_discriminative_features(shape_strokes, []) if shape_strokes else {}
+            if not discriminative:
+                logger.warning(f"[PATCH] Discriminative stats computation returned empty for shape_idx={stroke_index}. shape_strokes={shape_strokes}")
+                features['discriminative_features'] = {'valid': False, 'reason': 'empty_or_degenerate_input', 'stats': {}}
+            else:
+                features['discriminative_features'] = {'valid': True, 'stats': discriminative}
+        logger.info(f"[PATCH] support_set_context: {features['support_set_context']}")
+        logger.info(f"[PATCH] discriminative_features: {features['discriminative_features']}")
+        # PATCH: Log context-aware statistics if present
+        if 'support_set_context' in features and 'stats' in features['support_set_context']:
+            logger.info(f"[stroke_features] support_set_context['stats']: {features['support_set_context']['stats']}")
+        if 'discriminative_features' in features and 'stats' in features['discriminative_features']:
+            logger.info(f"[stroke_features] discriminative_features['stats']: {features['discriminative_features']['stats']}")
     elif verts and len(verts) >= 3:
         geometry = calculate_geometry_consistent(verts)
         try:

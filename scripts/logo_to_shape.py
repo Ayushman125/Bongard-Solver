@@ -283,12 +283,9 @@ class ComprehensiveBongardProcessor:
                     from src.Derive_labels.shape_utils import calculate_geometry_consistent, compute_open_stroke_geometry
                     from src.Derive_labels.stroke_types import _calculate_stroke_specific_features
                     stroke_features = _calculate_stroke_specific_features(a, i, bongard_image=shape, parent_shape_vertices=stroke_vertices)
-                    # Always use analytic vertices for all strokes
                     analytic_verts = stroke_features.get('analytic_vertices', stroke_vertices)
-                    # Degenerate handling: open strokes retain analytic perimeter, skip polygon consistency
                     if analytic_verts and len(analytic_verts) == 2:
                         stroke_geometry = compute_open_stroke_geometry(analytic_verts)
-                        # Compactness/convexity for lines
                         stroke_geometry['compactness'] = 0.0
                         stroke_geometry['convexity_ratio'] = 0.0
                         stroke_geometry['geom_complexity'] = min(len(analytic_verts)/10, 1)
@@ -296,7 +293,6 @@ class ComprehensiveBongardProcessor:
                         stroke_geometry['visual_complexity'] = min(max(stroke_geometry['perimeter']/max(stroke_geometry['perimeter'],1)*(1+stroke_features.get('robust_curvature',0)),0),1)
                     elif analytic_verts and len(analytic_verts) >= 3:
                         stroke_geometry = calculate_geometry_consistent(analytic_verts)
-                        # Compactness/convexity for arcs
                         if 'arc' in command_str:
                             r = stroke_geometry.get('width',1.0)/2
                             theta = math.radians(90)
@@ -314,16 +310,13 @@ class ComprehensiveBongardProcessor:
                         stroke_geometry['geom_complexity'] = 0.0
                         stroke_geometry['degenerate_case'] = True
                         stroke_geometry['visual_complexity'] = 0.0
-                    # Always propagate analytic vertices and open stroke perimeter
                     stroke_geometry['analytic_vertices'] = analytic_verts
                     stroke_geometry['open_stroke_perimeter'] = stroke_features.get('open_stroke_perimeter', stroke_geometry.get('perimeter', 0.0))
-                    # Arc-specific features
                     if hasattr(a, 'arc_radius') and hasattr(a, 'arc_angle'):
                         radius = a.arc_radius
                         span = a.arc_angle
                         stroke_geometry['arc_length'] = span/360*2*math.pi*radius
                         stroke_geometry['arc_curvature'] = 1/max(radius,1e-6)
-                    # Modifier from analytic attributes
                     if 'line' in command_str:
                         angle = stroke_features.get('line_angle',0)
                         if abs(angle) < 5:
@@ -332,7 +325,16 @@ class ComprehensiveBongardProcessor:
                             stroke_geometry['shape_modifier'] = 'vertical'
                         else:
                             stroke_geometry['shape_modifier'] = 'normal'
-                    image_dict['strokes'].append({'command': command_str, 'vertices': analytic_verts, 'geometry': stroke_geometry})
+                    stroke_dict = {'command': command_str, 'vertices': analytic_verts, 'geometry': stroke_geometry}
+                    # PATCH: Propagate support_set_context and discriminative_features (including stats)
+                    stroke_dict['support_set_context'] = stroke_features.get('support_set_context', {})
+                    stroke_dict['discriminative_features'] = stroke_features.get('discriminative_features', {})
+                    # PATCH: Log when stats are attached to each stroke dict
+                    if 'support_set_context' in stroke_dict and 'stats' in stroke_dict['support_set_context']:
+                        logger.info(f"[logo_to_shape] Attached support_set_context['stats'] to stroke: {stroke_dict['support_set_context']['stats']}")
+                    if 'discriminative_features' in stroke_dict and 'stats' in stroke_dict['discriminative_features']:
+                        logger.info(f"[logo_to_shape] Attached discriminative_features['stats'] to stroke: {stroke_dict['discriminative_features']['stats']}")
+                    image_dict['strokes'].append(stroke_dict)
                 logger.info(f"[ATTR DEBUG] Shape {idx} strokes (dicts): {image_dict['strokes']}")
             else:
                 logger.warning(f"[ATTR DEBUG] Shape {idx} has no basic_actions.")
