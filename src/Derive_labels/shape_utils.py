@@ -28,11 +28,27 @@ def calculate_geometry_consistent(vertices):
     import logging
     logging.info(f"[calculate_geometry_consistent] INPUT vertices: {vertices}")
     if not vertices or len(vertices) < 3:
-        logging.warning(f"[calculate_geometry_consistent] Not enough vertices for geometry: {vertices}")
-        # PATCH: Always include width and height in output dict
-        return {'area': 0, 'perimeter': 0, 'centroid': [0, 0], 'bounds': [0, 0, 0, 0], 'width': 0.0, 'height': 0.0}
+        logging.warning(f"[calculate_geometry_consistent] Degenerate geometry: <3 vertices. Returning None for all geometric features.")
+        return {
+            'area': None,
+            'perimeter': None,
+            'centroid': None,
+            'bounds': None,
+            'width': None,
+            'height': None
+        }
     try:
         poly = Polygon(vertices)
+        if not poly.is_valid or poly.area == 0.0:
+            logging.warning(f"[calculate_geometry_consistent] Invalid or zero-area polygon. Returning None for all geometric features.")
+            return {
+                'area': None,
+                'perimeter': None,
+                'centroid': None,
+                'bounds': None,
+                'width': None,
+                'height': None
+            }
         min_x, min_y, max_x, max_y = poly.bounds
         width = max_x - min_x
         height = max_y - min_y
@@ -47,9 +63,15 @@ def calculate_geometry_consistent(vertices):
         logging.info(f"[calculate_geometry_consistent] OUTPUT geometry: {geometry}")
         return geometry
     except Exception as e:
-        logging.error(f"[calculate_geometry_consistent] Exception: {e}")
-        # PATCH: Always include width and height in output dict
-        return {'area': 0, 'perimeter': 0, 'centroid': [0, 0], 'bounds': [0, 0, 0, 0], 'width': 0.0, 'height': 0.0}
+        logging.error(f"[calculate_geometry_consistent] Exception: {e}. Returning None for all geometric features.")
+        return {
+            'area': None,
+            'perimeter': None,
+            'centroid': None,
+            'bounds': None,
+            'width': None,
+            'height': None
+        }
 
 def calculate_complexity(vertices: List[tuple]) -> float:
     """
@@ -98,11 +120,12 @@ def _calculate_compactness(area: float, perimeter: float) -> float:
     import math
     try:
         if area is None or perimeter is None or perimeter == 0 or area <= 0:
-            return float('nan')
+            logging.warning(f"[_calculate_compactness] Degenerate input: area={area}, perimeter={perimeter}. Returning None.")
+            return None
         return (4 * math.pi * area) / (perimeter ** 2)
     except Exception as e:
-        logging.getLogger(__name__).warning(f"Compactness error: {e}")
-        return float('nan')
+        logging.getLogger(__name__).warning(f"Compactness error: {e}. Returning None.")
+        return None
 
 def _calculate_angular_variance(vertices: list) -> float:
     # Use robust angular variance, fallback to 0 for <3 points
