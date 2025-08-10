@@ -360,9 +360,16 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
     smod = shape_modifier_val or _extract_modifier_from_stroke(stroke) or 'normal'
     params = parameters or {}
     verts = _extract_stroke_vertices(stroke, stroke_index, None, bongard_image=bongard_image, parent_shape_vertices=parent_shape_vertices)
-    from src.Derive_labels.shape_utils import calculate_geometry_consistent
+    from src.Derive_labels.shape_utils import calculate_geometry_consistent, _calculate_compactness, validate_features
     geometry = calculate_geometry_consistent(verts) if verts and len(verts) >= 3 else {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0]}
     logger.info(f"[_calculate_stroke_specific_features] PATCH: Geometry for stroke_index={stroke_index}: {geometry}")
+    # Calculate Polsby-Popper compactness
+    compactness = _calculate_compactness(geometry.get('area', 0.0), geometry.get('perimeter', 0.0))
+    features['compactness'] = compactness
+    # Validate features
+    validation_issues = validate_features({**geometry, **features})
+    if validation_issues:
+        logger.warning(f"Feature validation issues for stroke {stroke_index}: {validation_issues}")
     def safe_float(val, default=0.0):
         try:
             return float(val)
@@ -393,12 +400,20 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
         else:
             return []
     if verts and len(verts) <= 2 and 'line' in stype_lower:
-        features['robust_curvature'] = None
-        features['robust_angular_variance'] = None
+        features['robust_curvature'] = 0.0
+        features['robust_angular_variance'] = 0.0
     else:
         safe_verts = min3_interpolated(verts)
-        features['robust_curvature'] = PhysicsInference.robust_curvature(safe_verts)
-        features['robust_angular_variance'] = PhysicsInference.robust_angular_variance(safe_verts)
+        try:
+            features['robust_curvature'] = PhysicsInference.robust_curvature(safe_verts)
+        except Exception as e:
+            logger.warning(f"Curvature calculation failed for stroke {stroke_index}: {e}")
+            features['robust_curvature'] = 0.0
+        try:
+            features['robust_angular_variance'] = PhysicsInference.robust_angular_variance(safe_verts)
+        except Exception as e:
+            logger.warning(f"Angular variance calculation failed for stroke {stroke_index}: {e}")
+            features['robust_angular_variance'] = 0.0
     # For lines/arcs, add curvature score
     if 'line' in stype_lower:
         features['line_curvature_score'] = PhysicsInference.line_curvature_score(verts)

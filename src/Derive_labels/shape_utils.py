@@ -64,29 +64,35 @@ def standardize_coordinates(vertices, target_range=(0, 1)):
 def calculate_geometry_consistent(vertices):
     """Calculate geometry with consistent coordinate normalization."""
     from shapely.geometry import Polygon
+    from shapely.validation import make_valid
     import logging
     logging.info(f"[calculate_geometry_consistent] INPUT vertices: {vertices}")
     if not vertices or len(vertices) < 3:
-        logging.warning(f"[calculate_geometry_consistent] Degenerate geometry: <3 vertices. Returning None for all geometric features.")
+        logging.warning(f"[calculate_geometry_consistent] Degenerate geometry: <3 vertices. Returning default geometry.")
         return {
-            'area': None,
-            'perimeter': None,
-            'centroid': None,
-            'bounds': None,
-            'width': None,
-            'height': None
+            'area': 0.0,
+            'perimeter': 0.0,
+            'centroid': [0.0, 0.0],
+            'bounds': [0, 0, 0, 0],
+            'width': 0.0,
+            'height': 0.0
         }
     try:
         poly = Polygon(vertices)
+        if not poly.is_valid:
+            poly = make_valid(poly)
+        if poly.geom_type == 'MultiPolygon':
+            # Take largest polygon
+            poly = max(poly.geoms, key=lambda x: x.area)
         if not poly.is_valid or poly.area == 0.0:
-            logging.warning(f"[calculate_geometry_consistent] Invalid or zero-area polygon. Returning None for all geometric features.")
+            logging.warning(f"[calculate_geometry_consistent] Invalid or zero-area polygon. Returning default geometry.")
             return {
-                'area': None,
-                'perimeter': None,
-                'centroid': None,
-                'bounds': None,
-                'width': None,
-                'height': None
+                'area': 0.0,
+                'perimeter': 0.0,
+                'centroid': [0.0, 0.0],
+                'bounds': [0, 0, 0, 0],
+                'width': 0.0,
+                'height': 0.0
             }
         min_x, min_y, max_x, max_y = poly.bounds
         width = max_x - min_x
@@ -102,14 +108,14 @@ def calculate_geometry_consistent(vertices):
         logging.info(f"[calculate_geometry_consistent] OUTPUT geometry: {geometry}")
         return geometry
     except Exception as e:
-        logging.error(f"[calculate_geometry_consistent] Exception: {e}. Returning None for all geometric features.")
+        logging.error(f"[calculate_geometry_consistent] Exception: {e}. Returning default geometry.")
         return {
-            'area': None,
-            'perimeter': None,
-            'centroid': None,
-            'bounds': None,
-            'width': None,
-            'height': None
+            'area': 0.0,
+            'perimeter': 0.0,
+            'centroid': [0.0, 0.0],
+            'bounds': [0, 0, 0, 0],
+            'width': 0.0,
+            'height': 0.0
         }
 
 def calculate_complexity(vertices: List[tuple]) -> float:
@@ -170,13 +176,14 @@ def _calculate_compactness(area: float, perimeter: float) -> float:
     """
     import math
     try:
-        if area is None or perimeter is None or perimeter == 0 or area <= 0:
-            logging.warning(f"[_calculate_compactness] Degenerate input: area={area}, perimeter={perimeter}. Returning None.")
-            return None
-        return (4 * math.pi * area) / (perimeter ** 2)
+        if area is None or perimeter is None or perimeter <= 0 or area <= 0:
+            logging.warning(f"[_calculate_compactness] Degenerate input: area={area}, perimeter={perimeter}. Returning 0.0.")
+            return 0.0
+        pp = (4 * math.pi * area) / (perimeter ** 2)
+        return float(pp)
     except Exception as e:
-        logging.getLogger(__name__).warning(f"Compactness error: {e}. Returning None.")
-        return None
+        logging.getLogger(__name__).warning(f"Compactness error: {e}. Returning 0.0.")
+        return 0.0
 
 def _calculate_angular_variance(vertices: list) -> float:
     # Use robust angular variance, fallback to 0 for <3 points
@@ -304,25 +311,17 @@ def calculate_geometry(vertices):
     bbox = {'min_x': min(xs), 'max_x': max(xs), 'min_y': min(ys), 'max_y': max(ys)}
     width = bbox['max_x'] - bbox['min_x']
     height = bbox['max_y'] - bbox['min_y']
-    area = PhysicsInference.shoelace_area(verts) if len(verts) >= 3 else 0.0
     try:
         from shapely.geometry import Polygon
-        perimeter = 0.0
-        poly = None
-        if len(verts) >= 3:
-            poly = Polygon(verts)
-            if not poly.is_valid:
-                poly = poly.buffer(0)
-            perimeter = poly.length
-            centroid = list(poly.centroid.coords[0])
-            area_val = poly.area
-        elif len(verts) == 2:
-            perimeter = float(np.linalg.norm(np.array(verts[1]) - np.array(verts[0])))
-            centroid = PhysicsInference.centroid(verts)
-            area_val = area
-        else:
-            centroid = PhysicsInference.centroid(verts) if len(verts) >= 1 else [0.0, 0.0]
-            area_val = area
+        from shapely.validation import make_valid
+        poly = Polygon(verts)
+        if not poly.is_valid:
+            poly = make_valid(poly)
+        if poly.geom_type == 'MultiPolygon':
+            poly = max(poly.geoms, key=lambda x: x.area)
+        perimeter = poly.length
+        centroid = list(poly.centroid.coords[0])
+        area_val = poly.area
         inertia = PhysicsInference.moment_of_inertia(verts) if len(verts) >= 2 else 0.0
         # Robust convexity: only defined for >=3 points, else 0.0
         if len(verts) >= 3:
@@ -334,7 +333,6 @@ def calculate_geometry(vertices):
                 convexity = 0.0
         else:
             convexity = 0.0
-        # Ensure all outputs are JSON-safe
         def _json_safe(x):
             if isinstance(x, float) and (np.isnan(x) or np.isinf(x)):
                 return 0.0
@@ -358,12 +356,28 @@ def calculate_geometry(vertices):
             'centroid': [0.0, 0.0],
             'width': width,
             'height': height,
-            'area': area,
+            'area': 0.0,
             'perimeter': 0.0,
             'moment_of_inertia': 0.0,
             'convexity_ratio': 0.0
         }
         return geometry
+def validate_features(features: dict) -> list:
+    """Validate extracted features for range and placeholder issues."""
+    validations = {
+        'area': lambda x: x is not None and x >= 0,
+        'perimeter': lambda x: x is not None and x >= 0,
+        'convexity_ratio': lambda x: x is not None and 0 <= x <= 1,
+        'compactness': lambda x: x is not None and 0 <= x <= 1,
+        'robust_curvature': lambda x: x is None or x >= 0,
+        'visual_complexity': lambda x: x is None or 0 <= x <= 1,
+    }
+    issues = []
+    for feature_name, validator in validations.items():
+        if feature_name in features:
+            if not validator(features[feature_name]):
+                issues.append(f"{feature_name}: {features[feature_name]} out of range")
+    return issues
 
 def extract_position_and_rotation(vertices):
     """Given a list of (x, y) normalized vertices, return centroid and orientation angle (degrees)."""
