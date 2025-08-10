@@ -56,7 +56,7 @@ class BongardFeatureExtractor:
             strokes = image.get('strokes') if isinstance(image, dict) else []
             # Compute and log per-image relational features
             from src.Derive_labels.features import extract_relational_features
-            stroke_dicts = [s for s in strokes if isinstance(s, dict) and 'vertices' in s]
+            stroke_dicts = [s['features'] if 'features' in s else s for s in strokes if isinstance(s, dict) and ('features' in s and 'vertices' in s['features'])]
             rel_features = extract_relational_features(stroke_dicts, buffer_amt=0.001) if stroke_dicts else {'adjacency':0,'intersections':0,'containment':0,'overlap':0.0}
             logging.info(f"[extract_image_features] safe_relational_features: {rel_features}")
             attributes = image.get('attributes', {}) if isinstance(image, dict) else {}
@@ -161,8 +161,8 @@ class BongardFeatureExtractor:
                 logging.info(f"[extract_image_features] modifier_distribution OUTPUT: {modifier_distribution}")
 
             # Extract relational features and log input/output
-            relational = extract_relational_features(strokes) if strokes else {'adjacency': 0, 'intersections': 0, 'containment': 0, 'overlap': 0.0}
-            logging.info(f"[extract_image_features] relational INPUT: {strokes}")
+            relational = rel_features
+            logging.info(f"[extract_image_features] relational INPUT: {stroke_dicts}")
             logging.info(f"[extract_image_features] relational OUTPUT: {relational}")
 
             # Calculate ngram, alternation, regularity, dominant shape functions/modifiers

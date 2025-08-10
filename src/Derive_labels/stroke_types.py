@@ -197,12 +197,36 @@ def _extract_stroke_vertices(stroke, stroke_index, all_vertices, bongard_image=N
     # 1. Use endpoints for lines, sample points for arcs
     stroke_type = _extract_stroke_type_from_command(stroke)
     if stroke_type == 'line' and parent_shape_vertices is not None and len(parent_shape_vertices) > stroke_index + 1:
+        # Use true endpoints for line
         verts = [parent_shape_vertices[stroke_index], parent_shape_vertices[stroke_index+1]]
         logger.info(f"[_extract_stroke_vertices] Using endpoints for line stroke {stroke_index}: {verts}")
     elif stroke_type == 'arc' and parent_shape_vertices is not None:
-        # Sample intermediate points for arc
-        verts = parent_shape_vertices[max(0, stroke_index):stroke_index+3] if len(parent_shape_vertices) >= stroke_index+3 else parent_shape_vertices
-        logger.info(f"[_extract_stroke_vertices] Using sampled points for arc stroke {stroke_index}: {verts}")
+        # Sample arc points using center, radius, start/end angles if available
+        # Fallback: use three consecutive points if not enough info
+        try:
+            # Try to get arc parameters from stroke or parent shape
+            import math
+            center = (0.5, 0.5)
+            radius = 0.5
+            start_angle = 0.0
+            span_angle = 90.0
+            if hasattr(stroke, 'arc_radius'):
+                radius = getattr(stroke, 'arc_radius', 0.5)
+            if hasattr(stroke, 'arc_angle'):
+                span_angle = getattr(stroke, 'arc_angle', 90.0)
+            if hasattr(stroke, 'start_angle'):
+                start_angle = getattr(stroke, 'start_angle', 0.0)
+            num_points = max(20, int(abs(span_angle) // 5))
+            verts = []
+            for i in range(num_points + 1):
+                theta = math.radians(start_angle + (span_angle * i / num_points))
+                x = center[0] + radius * math.cos(theta)
+                y = center[1] + radius * math.sin(theta)
+                verts.append((x, y))
+            logger.info(f"[_extract_stroke_vertices] Sampled arc points for arc stroke {stroke_index}: {verts}")
+        except Exception as e:
+            verts = parent_shape_vertices[max(0, stroke_index):stroke_index+3] if len(parent_shape_vertices) >= stroke_index+3 else parent_shape_vertices
+            logger.warning(f"[_extract_stroke_vertices] Fallback arc sampling for stroke {stroke_index}: {verts} | Error: {e}")
     else:
         # Fallback to previous logic
         if parent_shape_vertices is not None and valid_verts(parent_shape_vertices):
@@ -386,8 +410,13 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
     logger.info(f"[_calculate_stroke_specific_features] verts: {verts}")
     stype_lower = stype.lower() if stype else ''
     # --- PATCH: Physics features ---
-    features['robust_curvature'] = PhysicsInference.robust_curvature(verts)
-    features['robust_angular_variance'] = PhysicsInference.robust_angular_variance(verts)
+    # Robust curvature & angular variance: skip for pure lines (2 points)
+    if verts and len(verts) <= 2 and 'line' in stype_lower:
+        features['robust_curvature'] = None
+        features['robust_angular_variance'] = None
+    else:
+        features['robust_curvature'] = PhysicsInference.robust_curvature(verts)
+        features['robust_angular_variance'] = PhysicsInference.robust_angular_variance(verts)
     # For lines/arcs, add curvature score
     if 'line' in stype_lower:
         features['line_curvature_score'] = PhysicsInference.line_curvature_score(verts)
@@ -396,14 +425,12 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
         span_angle = params.get('span_angle', 90)
         delta_theta = math.radians(span_angle)
         features['arc_curvature_score'] = PhysicsInference.arc_curvature_score(radius, delta_theta)
-    # Visual complexity (example formula, can be refined)
-    features['visual_complexity'] = PhysicsInference.visual_complexity(
-        num_strokes=1,
-        max_strokes=1,
-        perimeter=geometry.get('perimeter', 1.0),
-        hull_perimeter=geometry.get('perimeter', 1.0),
-        curvature_score=features.get('robust_curvature', 0.0)
-    )
+    # Visual complexity: normalized by parent shape perimeter if available
+    shape_perimeter = parent_shape_vertices and len(parent_shape_vertices) > 1 and sum(
+        math.sqrt((parent_shape_vertices[i+1][0] - parent_shape_vertices[i][0])**2 + (parent_shape_vertices[i+1][1] - parent_shape_vertices[i][1])**2)
+        for i in range(len(parent_shape_vertices)-1)
+    ) or 1.0
+    features['visual_complexity'] = geometry.get('perimeter', 0.0) / max(shape_perimeter, 1e-6)
     logger.info(f"[_calculate_stroke_specific_features] PATCH: Physics features for stroke_index={stroke_index}: {{'robust_curvature': {features['robust_curvature']}, 'robust_angular_variance': {features['robust_angular_variance']}, 'visual_complexity': {features['visual_complexity']}, 'line_curvature_score': {features.get('line_curvature_score')}, 'arc_curvature_score': {features.get('arc_curvature_score')}}}")
     # Calculate basic geometric features from vertices
     if verts and len(verts) > 1:
@@ -603,8 +630,9 @@ def _calculate_stroke_type_differentiated_features(stroke_type_features: Dict, s
     line_features = [f for f in raw_line_feats if isinstance(f, dict) and 'line_length' in f and 'line_direction' in f]
     arc_features  = [f for f in raw_arc_feats  if isinstance(f, dict) and 'arc_radius' in f]
 
-    num_lines = len(line_features)
-    num_arcs = len(arc_features)
+    # Count stroke types directly
+    num_lines = sum(_extract_stroke_type_from_command(s) == 'line' for s in strokes)
+    num_arcs = sum(_extract_stroke_type_from_command(s) == 'arc' for s in strokes)
     total_strokes = num_lines + num_arcs
     features = {
         'stroke_composition': {
