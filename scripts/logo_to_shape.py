@@ -290,13 +290,30 @@ class ComprehensiveBongardProcessor:
                     command_str = str(a)
                     stroke_vertices = self._calculate_vertices_from_action(a, i, bongard_image=shape)
                     from src.Derive_labels.shape_utils import calculate_geometry_consistent, compute_open_stroke_geometry
-                    if stroke_vertices and len(stroke_vertices) >= 3:
-                        stroke_geometry = calculate_geometry_consistent(stroke_vertices)
-                    elif stroke_vertices and len(stroke_vertices) >= 2:
+                    from src.Derive_labels.stroke_types import _calculate_stroke_specific_features
+                    stroke_features = _calculate_stroke_specific_features(stroke_vertices, i)
+                    # PATCH: Propagate degenerate_case and metrics
+                    if stroke_vertices and len(stroke_vertices) == 2:
                         stroke_geometry = compute_open_stroke_geometry(stroke_vertices)
+                        # Set all metrics to None for degenerate case
+                        for metric in ['compactness', 'convexity_ratio', 'geom_complexity', 'arc_curvature_score', 'robust_curvature', 'robust_angular_variance', 'line_curvature_score', 'visual_complexity']:
+                            stroke_geometry[metric] = None
+                        stroke_geometry['degenerate_case'] = True
+                        logger.info(f"[PATCH][STROKE][DEGENERATE] idx={i}, action={command_str}, vertices={stroke_vertices}, geometry={stroke_geometry}")
+                    elif stroke_vertices and len(stroke_vertices) >= 3:
+                        stroke_geometry = calculate_geometry_consistent(stroke_vertices)
+                        # Propagate metrics from stroke_features if present
+                        for metric in ['compactness', 'convexity_ratio', 'geom_complexity', 'arc_curvature_score', 'robust_curvature', 'robust_angular_variance', 'line_curvature_score', 'visual_complexity']:
+                            if metric in stroke_features:
+                                stroke_geometry[metric] = stroke_features[metric]
+                        stroke_geometry['degenerate_case'] = False
+                        logger.info(f"[PATCH][STROKE][VALID] idx={i}, action={command_str}, vertices={stroke_vertices}, geometry={stroke_geometry}")
                     else:
                         stroke_geometry = {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0]}
-                    logger.info(f"[PATCH][STROKE] idx={idx}, action={command_str}, vertices={stroke_vertices}, geometry={stroke_geometry}")
+                        for metric in ['compactness', 'convexity_ratio', 'geom_complexity', 'arc_curvature_score', 'robust_curvature', 'robust_angular_variance', 'line_curvature_score', 'visual_complexity']:
+                            stroke_geometry[metric] = None
+                        stroke_geometry['degenerate_case'] = True
+                        logger.info(f"[PATCH][STROKE][EMPTY/INVALID] idx={i}, action={command_str}, vertices={stroke_vertices}, geometry={stroke_geometry}")
                     image_dict['strokes'].append({'command': command_str, 'vertices': stroke_vertices, 'geometry': stroke_geometry})
                 logger.info(f"[ATTR DEBUG] Shape {idx} strokes (dicts): {image_dict['strokes']}")
             else:
@@ -1431,9 +1448,11 @@ def main():
                         problem_modifiers.add(mod)
 
             # --- Compute and add support-set context features ---
-            from src.Derive_labels.relational_features import extract_support_set_context as extract_relational_support_set_context
-            logger.info(f"[SUPPORT-SET CONTEXT] Calling extract_relational_support_set_context for problem {problem_id}")
-            support_set_context = extract_relational_support_set_context(pos_results, neg_results)
+            # Compute statistical support set context using context_features.py
+            from src.Derive_labels.context_features import BongardFeatureExtractor
+            logger.info(f"[SUPPORT-SET CONTEXT] Calling BongardFeatureExtractor.extract_support_set_context for problem {problem_id}")
+            bfe = BongardFeatureExtractor()
+            support_set_context = bfe.extract_support_set_context(pos_results, neg_results)
             logger.info(f"[SUPPORT-SET CONTEXT] OUTPUT for problem {problem_id}: {json.dumps(support_set_context, indent=2, ensure_ascii=False)}")
             # Add support_set_context to each image result
             for r in pos_results + neg_results:

@@ -236,7 +236,12 @@ def _extract_stroke_vertices(stroke, stroke_index, all_vertices, bongard_image=N
     # Fallback: use polyline_points
     if not verts and hasattr(stroke, 'polyline_points') and valid_verts(stroke.polyline_points):
         verts = stroke.polyline_points
-    # Final fallback: empty
+    # Final fallback: synthesize vertices from command string using turtle simulation
+    if not verts:
+        command = getattr(stroke, 'raw_command', stroke if isinstance(stroke, str) else None)
+        if command:
+            verts = _vertices_from_command(command, stroke_index)
+    # If still empty, fallback to []
     if not verts:
         verts = []
     # --- PATCH: Calculate open stroke geometry ---
@@ -363,17 +368,41 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
     from src.Derive_labels.shape_utils import calculate_geometry_consistent, _calculate_compactness, validate_features, calculate_complexity, open_stroke_convexity
     geometry = calculate_geometry_consistent(verts) if verts and len(verts) >= 3 else {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0], 'num_vertices': len(verts)}
     logger.info(f"[_calculate_stroke_specific_features] PATCH: Geometry for stroke_index={stroke_index}: {geometry}")
-    # Calculate Polsby-Popper compactness
-    compactness = _calculate_compactness(geometry.get('area', 0.0), geometry.get('perimeter', 0.0))
-    features['compactness'] = compactness
-    # Geometric complexity: normalized vertex count
-    max_n = 20
-    n = geometry.get('num_vertices', len(verts))
-    geom_complexity = min(1.0, (n - 2) / (max_n - 2)) if n >= 2 else 0.0
-    features['geom_complexity'] = geom_complexity
-    # Convexity ratio: area / convex hull area
-    convexity = open_stroke_convexity(verts)
-    features['convexity_ratio'] = convexity
+    # Degenerate handling for lines (2 vertices)
+    if verts and len(verts) == 2:
+        features['compactness'] = None
+        features['convexity_ratio'] = None
+        features['geom_complexity'] = None
+        features['arc_curvature_score'] = None
+        geometry['area'] = 0.0
+        features['degenerate_case'] = True
+        logger.info(f"[_calculate_stroke_specific_features] Degenerate case detected for stroke_index={stroke_index} (2 vertices). All metrics set to None.")
+    else:
+        # Calculate Polsby-Popper compactness
+        try:
+            compactness = _calculate_compactness(geometry.get('area', 0.0), geometry.get('perimeter', 0.0))
+            features['compactness'] = compactness
+        except Exception as e:
+            logger.warning(f"[_calculate_stroke_specific_features] Error calculating compactness: {e}")
+            features['compactness'] = None
+        # Geometric complexity: normalized vertex count
+        try:
+            max_n = 20
+            n = geometry.get('num_vertices', len(verts))
+            geom_complexity = min(1.0, (n - 2) / (max_n - 2)) if n >= 3 else 0.0
+            features['geom_complexity'] = geom_complexity
+        except Exception as e:
+            logger.warning(f"[_calculate_stroke_specific_features] Error calculating geom_complexity: {e}")
+            features['geom_complexity'] = None
+        # Convexity ratio: area / convex hull area
+        try:
+            convexity = open_stroke_convexity(verts)
+            features['convexity_ratio'] = convexity
+        except Exception as e:
+            logger.warning(f"[_calculate_stroke_specific_features] Error calculating convexity_ratio: {e}")
+            features['convexity_ratio'] = None
+        features['degenerate_case'] = False
+        logger.info(f"[_calculate_stroke_specific_features] Valid case for stroke_index={stroke_index} (>=3 vertices). Metrics calculated.")
     # Validate features
     validation_issues = validate_features({**geometry, **features})
     if validation_issues:
@@ -407,21 +436,27 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
             return [vs[0], vs[0], vs[0]]
         else:
             return []
-    if verts and len(verts) <= 2 and 'line' in stype_lower:
+    if verts and len(verts) == 2 and 'line' in stype_lower:
         features['robust_curvature'] = 0.0
         features['robust_angular_variance'] = 0.0
-    else:
+        logger.info(f"[_calculate_stroke_specific_features] Degenerate line: curvature and angular variance set to 0.0.")
+    elif verts and len(verts) >= 3:
         safe_verts = min3_interpolated(verts)
         try:
             features['robust_curvature'] = PhysicsInference.robust_curvature(safe_verts)
         except Exception as e:
             logger.warning(f"Curvature calculation failed for stroke {stroke_index}: {e}")
-            features['robust_curvature'] = 0.0
+            features['robust_curvature'] = None
         try:
             features['robust_angular_variance'] = PhysicsInference.robust_angular_variance(safe_verts)
         except Exception as e:
             logger.warning(f"Angular variance calculation failed for stroke {stroke_index}: {e}")
-            features['robust_angular_variance'] = 0.0
+            features['robust_angular_variance'] = None
+        logger.info(f"[_calculate_stroke_specific_features] Valid curvature and angular variance calculated for stroke_index={stroke_index}.")
+    else:
+        features['robust_curvature'] = None
+        features['robust_angular_variance'] = None
+        logger.info(f"[_calculate_stroke_specific_features] Insufficient vertices for curvature/variance for stroke_index={stroke_index}.")
     # For lines/arcs, add curvature score
     if 'line' in stype_lower:
         features['line_curvature_score'] = PhysicsInference.line_curvature_score(verts)
