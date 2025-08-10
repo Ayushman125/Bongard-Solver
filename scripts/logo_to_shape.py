@@ -479,25 +479,21 @@ class ComprehensiveBongardProcessor:
             physics_features = self._calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
 
             # --- Relational/Topological/Sequential Features ---
-            # Convert actions to shapely geometries for robust relational features
-            from src.Derive_labels.features import _actions_to_geometries
-            stroke_geometries = _actions_to_geometries(ensure_all_strings(all_actions))  # Pass list of strings
-            logger.info(f"[RELATIONAL PATCH] stroke_geometries type: {type(stroke_geometries)}, length: {len(stroke_geometries)}")
-            for idx, g in enumerate(stroke_geometries):
-                logger.info(f"[RELATIONAL PATCH] Geometry {idx}: type={getattr(g, 'geom_type', None)}, is_valid={getattr(g, 'is_valid', None)}")
-            from src.Derive_labels.features import extract_relational_features as extract_relational_features_geom
-            robust_relational_features = extract_relational_features_geom(stroke_geometries) if stroke_geometries else None
-            # Defensive: always include expected keys
+            # Calculate relationships between shapes (not strokes)
+            from src.Derive_labels.relational_features import calculate_shape_relationships
+            robust_relational_features = calculate_shape_relationships(
+                [{'vertices': shape.vertices} for shape in getattr(bongard_image, 'one_stroke_shapes', []) if hasattr(shape, 'vertices') and isinstance(shape.vertices, list) and len(shape.vertices) >= 3]
+            )
             expected_rel_keys = ['adjacency', 'intersections', 'containment', 'overlap']
             if not robust_relational_features or not isinstance(robust_relational_features, dict):
                 robust_relational_features = {k: 0 for k in expected_rel_keys}
             else:
                 for k in expected_rel_keys:
                     robust_relational_features.setdefault(k, 0)
-            intersections = context_relationships.get('intersections')
-            adjacency = context_relationships.get('adjacency')
-            containment = context_relationships.get('containment')
-            overlap = context_relationships.get('overlap')
+            intersections = robust_relational_features.get('intersections')
+            adjacency = robust_relational_features.get('adjacency')
+            containment = robust_relational_features.get('containment')
+            overlap = robust_relational_features.get('overlap')
 
             # Sequential pattern features (n-gram, alternation, regularity, dominant modifiers)
             from src.Derive_labels.features import extract_regularity_features, extract_dominant_shape_modifiers
@@ -521,15 +517,11 @@ class ComprehensiveBongardProcessor:
             except Exception as e:
                 logger.warning(f"[PATCH] Failed to extract support set context for image_id={image_id}: {e}")
 
-            # Topological features (chain/star/cycle detection, connectivity)
-            context_adj = context_relationships.get('adjacency_matrix')
-            if context_adj is not None:
-                graph_features = _extract_graph_features({'adjacency_matrix': context_adj})
-                logger.info(f"[logo_to_shape] Graph topology INPUT adjacency_matrix: {context_adj}")
-                logger.info(f"[logo_to_shape] Graph topology OUTPUT: {graph_features}")
-            else:
-                graph_features = {'type': 'none', 'connectivity': 0}
-                logger.warning(f"[logo_to_shape] No adjacency matrix for graph topology detection.")
+            # Topological features (connectivity/type detection)
+            from src.Derive_labels.features import extract_topological_features
+            graph_features = extract_topological_features(
+                [{'vertices': shape.vertices} for shape in getattr(bongard_image, 'one_stroke_shapes', []) if hasattr(shape, 'vertices') and isinstance(shape.vertices, list)]
+            )
 
             # --- PATCH: Use robust group-based stroke feature extraction ---
             from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features

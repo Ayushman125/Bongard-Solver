@@ -1,3 +1,51 @@
+from shapely.geometry import Polygon
+def calculate_shape_relationships(shapes, buffer_amt=0.001):
+    """
+    Calculate relationships between shapes (not strokes) in an image.
+    Each shape should have a 'vertices' key with a list of (x, y) tuples.
+    Returns dict with adjacency, intersections, containment, overlap.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"[calculate_shape_relationships] INPUT: shapes={shapes}, buffer_amt={buffer_amt}")
+    geoms = []
+    for idx, s in enumerate(shapes):
+        verts = s.get('vertices', None)
+        if verts and isinstance(verts, (list, tuple)) and len(verts) >= 3:
+            try:
+                geom = Polygon(verts)
+                if geom.is_valid:
+                    geoms.append(geom.buffer(buffer_amt))
+                    logger.debug(f"[calculate_shape_relationships] Created Polygon for shape {idx}: {geom}")
+            except Exception as e:
+                logger.debug(f"calculate_shape_relationships: failed to create Polygon for shape {idx}: {e}")
+    if not geoms:
+        logger.warning("calculate_shape_relationships: No valid geometries found.")
+        return {'adjacency': 0, 'intersections': 0, 'containment': 0, 'overlap': 0.0}
+    adj = 0
+    inter = 0
+    cont = 0
+    ov = 0.0
+    n = len(geoms)
+    for i in range(n):
+        poly1 = geoms[i]
+        for j in range(i+1, n):
+            poly2 = geoms[j]
+            if poly1.touches(poly2):
+                adj += 1
+            if poly1.intersects(poly2):
+                inter += 1
+            contains1 = poly1.contains(poly2)
+            contains2 = poly2.contains(poly1)
+            if contains1 or contains2:
+                cont += 1
+            area = poly1.intersection(poly2).area
+            min_area = min(poly1.area, poly2.area)
+            if 0 < area < min_area:
+                ov += area
+    result = {'adjacency': adj, 'intersections': inter, 'containment': cont, 'overlap': ov}
+    logger.info(f"[calculate_shape_relationships] OUTPUT: {result}")
+    return result
 def extract_support_set_context(positive_images, negative_images, buffer_amt=0.001):
     """
     Aggregate relational features across support set (positive and negative images).

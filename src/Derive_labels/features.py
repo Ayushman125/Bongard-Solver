@@ -48,6 +48,38 @@ def ensure_str_list(obj):
     logger.debug(f"[ensure_str_list] Returning string: {obj}")
     return obj
 
+def extract_topological_features(shapes):
+    """
+    Extract topological features (connectivity, type) from a list of shapes.
+    Each shape should have a 'vertices' key.
+    """
+    logger.info(f"[extract_topological_features] INPUT: {shapes}")
+    from collections import Counter
+    if not shapes:
+        logger.warning("[extract_topological_features] No shapes provided.")
+        result = {'type': 'none', 'connectivity': '0', 'shape_distribution': {}}
+        logger.info(f"[extract_topological_features] OUTPUT: {result}")
+        return result
+    shape_types = []
+    connectivity = 0
+    for shape in shapes:
+        verts = shape.get('vertices', [])
+        if len(verts) >= 3:
+            if verts[0] == verts[-1]:
+                shape_types.append('closed')
+            else:
+                shape_types.append('open')
+        else:
+            shape_types.append('degenerate')
+        connectivity += 1
+    topology_type = shape_types[0] if len(set(shape_types)) == 1 else 'mixed'
+    result = {
+        'type': topology_type,
+        'connectivity': str(connectivity),
+        'shape_distribution': dict(Counter(shape_types))
+    }
+    logger.info(f"[extract_topological_features] OUTPUT: {result}")
+    return result
 
 def extract_multiscale_features(shape_vertices, scales=[0.1, 0.3, 0.5, 1.0, 2.0]):
     """Extract features at multiple geometric scales using Gaussian smoothing."""
