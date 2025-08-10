@@ -428,7 +428,14 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
             math.sqrt((parent_shape_vertices[i+1][0] - parent_shape_vertices[i][0])**2 + (parent_shape_vertices[i+1][1] - parent_shape_vertices[i][1])**2)
             for i in range(len(parent_shape_vertices)-1)
         ) or 1.0
-        features['visual_complexity'] = (length * (1 + (features.get('robust_curvature') or 0))) / max(shape_perimeter, 1e-6)
+        base = length / max(shape_perimeter, 1e-6)
+        weight = 1 + (features.get('robust_curvature') or 0)
+        vc = base * weight
+        features['visual_complexity'] = min(vc, 1.0)
+        if geometry['area'] == 0:
+            features['degenerate_case'] = True
+            features['compactness'] = 1e-6
+            features['convexity_ratio'] = 1e-6
         features['robust_curvature'] = 0.0
         features['robust_angular_variance'] = 0.0
         features['line_curvature_score'] = 0.0
@@ -475,7 +482,14 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
         stroke_length = geometry.get('perimeter', 0.0)
         features['stroke_length'] = stroke_length
         features['avg_stroke_length'] = stroke_length
-        features['visual_complexity'] = (stroke_length * (1 + (features.get('robust_curvature') or 0))) / max(shape_perimeter, 1e-6)
+        base = stroke_length / max(shape_perimeter, 1e-6)
+        weight = 1 + (features.get('robust_curvature') or 0)
+        vc = base * weight
+        features['visual_complexity'] = min(vc, 1.0)
+        if geometry['area'] == 0:
+            features['degenerate_case'] = True
+            features['compactness'] = 1e-6
+            features['convexity_ratio'] = 1e-6
         if 'line' in stype_lower:
             features['line_curvature_score'] = 0.0
         elif 'arc' in stype_lower:
@@ -484,11 +498,10 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
             delta_theta = math.radians(span_angle)
             features['arc_curvature_score'] = PhysicsInference.arc_curvature_score(radius, delta_theta)
     elif 'arc' in stype_lower and params.get('radius', None) and params.get('span_angle', None):
-        # Analytic arc metrics for small arcs
+        # Always use analytic arc metrics for arcs with valid radius and span_angle
         radius = params['radius']
         span_angle = params['span_angle']
-        delta_theta = math.radians(span_angle)
-        arc_length = abs(delta_theta * radius)
+        arc_length = abs(span_angle) / 360 * 2 * math.pi * radius
         geometry = {
             'width': radius,
             'height': radius,
@@ -498,20 +511,27 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
             'bounds': [0, 0, 0, 0],
             'num_vertices': 2
         }
-        features['robust_curvature'] = abs(delta_theta) / max(radius, 1e-6)
+        features['robust_curvature'] = 1.0 / max(radius, 1e-6)
         features['robust_angular_variance'] = 0.0
-        features['arc_curvature_score'] = abs(delta_theta) / max(radius, 1e-6)
+        features['arc_curvature_score'] = 1.0 / max(radius, 1e-6)
         features['stroke_length'] = arc_length
         features['avg_stroke_length'] = arc_length
         shape_perimeter = parent_shape_vertices and len(parent_shape_vertices) > 1 and sum(
             math.sqrt((parent_shape_vertices[i+1][0] - parent_shape_vertices[i][0])**2 + (parent_shape_vertices[i+1][1] - parent_shape_vertices[i][1])**2)
             for i in range(len(parent_shape_vertices)-1)
         ) or 1.0
-        features['visual_complexity'] = (arc_length * (1 + features['robust_curvature'])) / max(shape_perimeter, 1e-6)
+        base = arc_length / max(shape_perimeter, 1e-6)
+        weight = 1 + (features.get('robust_curvature') or 0)
+        vc = base * weight
+        features['visual_complexity'] = min(vc, 1.0)
         features['compactness'] = 1e-6
-        features['convexity_ratio'] = 1e-6
+        try:
+            convexity = open_stroke_convexity(verts)
+            features['convexity_ratio'] = min(max(convexity, 1e-6), 1.0)
+        except Exception as e:
+            features['convexity_ratio'] = 1e-6
         features['geom_complexity'] = 0.0
-        features['degenerate_case'] = False
+        features['degenerate_case'] = geometry['area'] == 0
     elif verts and len(verts) == 1:
         geometry = {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': list(verts[0]), 'bounds': [verts[0][0], verts[0][1], verts[0][0], verts[0][1]], 'num_vertices': 1}
         features['compactness'] = 1e-6
@@ -697,6 +717,9 @@ def _calculate_shape_modifier_features_from_val(modifier: str) -> Dict[str, Any]
     frame = inspect.currentframe().f_back
     vertices = frame.f_locals.get('verts', None) or frame.f_locals.get('vertices', None)
     geom = calculate_geometry(vertices) if vertices else None
+    num_vertices = 0
+    convexity = 1e-6
+    compactness = 1e-6
     if geom:
         num_vertices = len(vertices) if vertices else 0
         convexity = geom.get('convexity_ratio', 1.0)
@@ -707,28 +730,21 @@ def _calculate_shape_modifier_features_from_val(modifier: str) -> Dict[str, Any]
             from src.Derive_labels.shape_utils import _calculate_compactness
             compactness = _calculate_compactness(area, perimeter)
         # Clamp/sanitize convexity and compactness
-        # Ensure convexity is a float and not None
         if convexity is None or not isinstance(convexity, (float, int)) or convexity != convexity:
             convexity = 1e-6
         else:
             convexity = max(convexity, 1e-6)
-        # Ensure compactness is a float and not None
         if compactness is None or not isinstance(compactness, (float, int)) or compactness != compactness:
             compactness = 1e-6
         else:
             compactness = max(compactness, 1e-6)
-        # Compute complexity
-        if convexity < 1e-6 or compactness < 1e-6:
-            complexity = num_vertices
-        else:
-            complexity = num_vertices * (1.0 / convexity)
-            if compactness > 0:
-                complexity *= (1.0 / compactness)
-        base_features['geometric_complexity'] = round(complexity, 3)
-        base_features['num_vertices'] = num_vertices
-        base_features['convexity_ratio'] = convexity
-        base_features['compactness'] = compactness
-        logger.info(f"[_calculate_shape_modifier_features_from_val] Calculated geometry-based features: {base_features}")
+    max_expected_vertices = 50
+    complexity = min(num_vertices / max_expected_vertices, 1.0)
+    base_features['geometric_complexity'] = complexity
+    base_features['num_vertices'] = num_vertices
+    base_features['convexity_ratio'] = convexity
+    base_features['compactness'] = compactness
+    logger.info(f"[_calculate_shape_modifier_features_from_val] Calculated geometry-based features: {base_features}")
     # Add shape-specific tags
     if modifier == 'triangle':
         base_features['has_sharp_angles'] = True
