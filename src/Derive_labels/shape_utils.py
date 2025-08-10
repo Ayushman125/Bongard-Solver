@@ -1,3 +1,35 @@
+def compute_open_stroke_geometry(vertices):
+    """Compute geometry for open stroke (polyline): perimeter, centroid, bounds, area=0."""
+    import numpy as np
+    import logging
+    logger = logging.getLogger(__name__)
+    if not vertices or len(vertices) < 2:
+        return {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0]}
+    arr = np.array(vertices)
+    # Perimeter: sum of segment lengths
+    perimeter = float(np.sum(np.linalg.norm(arr[1:] - arr[:-1], axis=1)))
+    # Centroid: length-weighted midpoint
+    seg_lengths = np.linalg.norm(arr[1:] - arr[:-1], axis=1)
+    midpoints = (arr[1:] + arr[:-1]) / 2
+    if np.sum(seg_lengths) > 0:
+        centroid = np.sum(midpoints * seg_lengths[:, None], axis=0) / np.sum(seg_lengths)
+    else:
+        centroid = arr.mean(axis=0)
+    # Bounds
+    min_x, min_y = arr.min(axis=0)
+    max_x, max_y = arr.max(axis=0)
+    width = max_x - min_x
+    height = max_y - min_y
+    geometry = {
+        'width': float(width),
+        'height': float(height),
+        'area': 0.0,
+        'perimeter': float(perimeter),
+        'centroid': [float(centroid[0]), float(centroid[1])],
+        'bounds': [float(min_x), float(min_y), float(max_x), float(max_y)]
+    }
+    logger.info(f"[compute_open_stroke_geometry] OUTPUT geometry: {geometry}")
+    return geometry
 import logging
 from typing import Dict, List, Any, Optional
 from src.physics_inference import PhysicsInference
@@ -89,27 +121,39 @@ def calculate_complexity(vertices: List[tuple]) -> float:
     try:
         verts = normalize_vertices(vertices)
         n = len(verts)
-        if n < 3:
-            logger.info(f"Complexity: <3 vertices, returning 0.0")
+        if n < 2:
+            logger.info(f"Complexity: <2 vertices, returning 0.0")
             return 0.0
-        # Number of vertices (normalized: 0 for triangle, 1 for >=20)
-        n_norm = min(1.0, (n - 3) / 17.0)
-        # Curvature score (normalized: 0 = line, 1 = highly curved)
-        curvature = _calculate_curvature_score(verts)
-        curvature_norm = min(1.0, curvature / 2.0)  # Empirical scaling
-        # Irregularity (already normalized 0-1)
-        irregularity = _calculate_irregularity(verts)
-        # Optionally, compactness (inverse: 0 = circle, 1 = non-compact)
-        geom = calculate_geometry(verts)
-        compactness = _calculate_compactness(geom.get('area', 0.0), geom.get('perimeter', 0.0))
-        compactness_inv = 1.0 - min(1.0, compactness) if compactness == compactness else 1.0  # NaN-safe
-        # Weighted sum (weights can be tuned)
-        complexity = 0.3 * n_norm + 0.3 * curvature_norm + 0.2 * irregularity + 0.2 * compactness_inv
-        logger.info(f"Complexity: n={n}, n_norm={n_norm:.2f}, curvature={curvature:.2f}, curvature_norm={curvature_norm:.2f}, irregularity={irregularity:.2f}, compactness_inv={compactness_inv:.2f}, result={complexity:.2f}")
+        # Complexity: normalized vertex count ratio (0 for 2, 1 for >=20)
+        n_norm = min(1.0, (n - 2) / 18.0)
+        # For open polylines, ignore polygon-based compactness
+        curvature = _calculate_curvature_score(verts) if n >= 3 else 0.0
+        curvature_norm = min(1.0, curvature / 2.0)
+        irregularity = _calculate_irregularity(verts) if n >= 3 else 0.0
+        # Weighted sum (no compactness for open)
+        complexity = 0.5 * n_norm + 0.3 * curvature_norm + 0.2 * irregularity
+        logger.info(f"Complexity: n={n}, n_norm={n_norm:.2f}, curvature={curvature:.2f}, curvature_norm={curvature_norm:.2f}, irregularity={irregularity:.2f}, result={complexity:.2f}")
         return float(np.clip(complexity, 0.0, 1.0))
     except Exception as e:
         logger.warning(f"calculate_complexity failed: {e}")
         return 0.0
+
+def open_stroke_convexity(vertices: List[tuple]) -> float:
+    """Convexity for open polylines: count sign changes in turn angles."""
+    import numpy as np
+    if not vertices or len(vertices) < 3:
+        return 0.0
+    arr = np.array(vertices)
+    # Compute turn angles
+    directions = arr[1:] - arr[:-1]
+    angles = np.arctan2(directions[:,1], directions[:,0])
+    turns = np.diff(angles)
+    # Normalize to [-pi, pi]
+    turns = (turns + np.pi) % (2 * np.pi) - np.pi
+    sign_changes = np.sum(np.abs(np.diff(np.sign(turns))) > 0)
+    # Convexity: fewer sign changes = more convex
+    convexity = 1.0 - min(1.0, sign_changes / (len(turns) - 1))
+    return float(convexity)
 
 
 def _calculate_compactness(area: float, perimeter: float) -> float:

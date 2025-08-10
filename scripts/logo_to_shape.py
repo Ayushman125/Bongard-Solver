@@ -289,8 +289,13 @@ class ComprehensiveBongardProcessor:
                 for i, a in enumerate(shape.basic_actions):
                     command_str = str(a)
                     stroke_vertices = self._calculate_vertices_from_action(a, i, bongard_image=shape)
-                    from src.Derive_labels.shape_utils import calculate_geometry_consistent
-                    stroke_geometry = calculate_geometry_consistent(stroke_vertices) if stroke_vertices and len(stroke_vertices) >= 3 else {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0]}
+                    from src.Derive_labels.shape_utils import calculate_geometry_consistent, compute_open_stroke_geometry
+                    if stroke_vertices and len(stroke_vertices) >= 3:
+                        stroke_geometry = calculate_geometry_consistent(stroke_vertices)
+                    elif stroke_vertices and len(stroke_vertices) >= 2:
+                        stroke_geometry = compute_open_stroke_geometry(stroke_vertices)
+                    else:
+                        stroke_geometry = {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0]}
                     logger.info(f"[PATCH][STROKE] idx={idx}, action={command_str}, vertices={stroke_vertices}, geometry={stroke_geometry}")
                     image_dict['strokes'].append({'command': command_str, 'vertices': stroke_vertices, 'geometry': stroke_geometry})
                 logger.info(f"[ATTR DEBUG] Shape {idx} strokes (dicts): {image_dict['strokes']}")
@@ -300,16 +305,18 @@ class ComprehensiveBongardProcessor:
             image_dict['attributes'] = shape.attributes if hasattr(shape, 'attributes') and isinstance(shape.attributes, dict) else {}
             # --- PATCH: Always enforce and log shape-level geometry ---
             try:
-                from src.Derive_labels.shape_utils import calculate_geometry_consistent
+                from src.Derive_labels.shape_utils import calculate_geometry_consistent, normalize_vertices
                 shape_vertices = image_dict['vertices']
-                if shape_vertices and len(shape_vertices) >= 3:
-                    shape_geometry = calculate_geometry_consistent(shape_vertices)
+                # Normalize per shape before geometry computation
+                norm_shape_vertices = normalize_vertices(shape_vertices) if shape_vertices and len(shape_vertices) >= 2 else shape_vertices
+                if norm_shape_vertices and len(norm_shape_vertices) >= 3:
+                    shape_geometry = calculate_geometry_consistent(norm_shape_vertices)
                     if not isinstance(shape_geometry, dict):
                         shape_geometry = {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0]}
-                    logger.info(f"[PATCH][SHAPE GEOMETRY] idx={idx}, vertices={shape_vertices}, geometry={shape_geometry}")
+                    logger.info(f"[PATCH][SHAPE GEOMETRY] idx={idx}, vertices={norm_shape_vertices}, geometry={shape_geometry}")
                     # --- PATCH: Add physics features to shape_geometry ---
-                    shape_geometry['robust_curvature'] = PhysicsInference.robust_curvature(shape_vertices)
-                    shape_geometry['robust_angular_variance'] = PhysicsInference.robust_angular_variance(shape_vertices)
+                    shape_geometry['robust_curvature'] = PhysicsInference.robust_curvature(norm_shape_vertices)
+                    shape_geometry['robust_angular_variance'] = PhysicsInference.robust_angular_variance(norm_shape_vertices)
                     shape_geometry['visual_complexity'] = PhysicsInference.visual_complexity(
                         num_strokes=len(image_dict['strokes']),
                         max_strokes=len(image_dict['strokes']),
@@ -318,7 +325,7 @@ class ComprehensiveBongardProcessor:
                         curvature_score=shape_geometry.get('robust_curvature', 0.0)
                     )
                     # For lines/arcs, add curvature scores if relevant
-                    shape_geometry['line_curvature_score'] = PhysicsInference.line_curvature_score(shape_vertices)
+                    shape_geometry['line_curvature_score'] = PhysicsInference.line_curvature_score(norm_shape_vertices)
                     # For arcs, estimate radius and span if possible
                     shape_geometry['arc_curvature_score'] = None
                     if 'arc' in str(shape_geometry):
