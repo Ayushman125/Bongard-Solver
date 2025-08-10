@@ -492,11 +492,27 @@ class ComprehensiveBongardProcessor:
             containment = context_relationships.get('containment')
             overlap = context_relationships.get('overlap')
 
-            # Sequential pattern features (n-gram, alternation, regularity)
+            # Sequential pattern features (n-gram, alternation, regularity, dominant modifiers)
+            from src.Derive_labels.features import extract_regularity_features, extract_dominant_shape_modifiers
             modifier_sequence = [_extract_modifier_from_stroke(s) for s in all_actions]
             ngram_features = _extract_ngram_features(modifier_sequence)
             alternation = _detect_alternation(modifier_sequence)
-            regularity = self._calculate_pattern_regularity_from_modifiers(modifier_sequence)
+            regularity = extract_regularity_features(modifier_sequence)
+            dominant_modifiers = extract_dominant_shape_modifiers({'modifiers': modifier_sequence})
+
+            # Canonical summary and support set context
+            from src.Derive_labels.file_io import FileIO
+            canonical_summary = {}
+            support_set_context = {}
+            try:
+                # Example: load canonical summary from TSV using FileIO
+                canonical_summary = FileIO.load_canonical_features(image_id)
+            except Exception as e:
+                logger.warning(f"[PATCH] Failed to load canonical summary for image_id={image_id}: {e}")
+            try:
+                support_set_context = FileIO.extract_support_set_context(image_id)
+            except Exception as e:
+                logger.warning(f"[PATCH] Failed to extract support set context for image_id={image_id}: {e}")
 
             # Topological features (chain/star/cycle detection, connectivity)
             context_adj = context_relationships.get('adjacency_matrix')
@@ -698,6 +714,11 @@ class ComprehensiveBongardProcessor:
             logger.info(f"[PATCH INIT] composition_features type: {type(composition_features)}, value: {composition_features}")
             logger.info(f"[PATCH INIT] graph_features type: {type(graph_features)}, value: {graph_features}")
 
+            logger.info(f"[PATCH FINAL] Mapping output record fields...")
+            logger.info(f"[PATCH FINAL] image_features (raw): {image_features}")
+            logger.info(f"[PATCH FINAL] relational_features (raw): {safe_relational_features}")
+            logger.info(f"[PATCH FINAL] image_canonical_summary (raw): {canonical_summary}")
+            logger.info(f"[PATCH FINAL] support_set_context (raw): {support_set_context}")
             complete_record = {
                 'image_id': image_id,
                 'problem_id': problem_id,
@@ -711,24 +732,30 @@ class ComprehensiveBongardProcessor:
                 'num_vertices': len(safe_vertices) if safe_vertices else 0,
                 'position_label': robust_flatten_and_stringify(posrot_labels.get('centroid')),
                 'rotation_label_degrees': robust_flatten_and_stringify(posrot_labels.get('orientation_degrees')),
-                'image_features': robust_flatten_and_stringify(image_features),
-                'physics_features': robust_flatten_and_stringify(physics_features),
-                'composition_features': robust_flatten_and_stringify(composition_features),
-                'stroke_type_features': robust_flatten_and_stringify(differentiated_features),
-                'image_canonical_summary': {},
+                'image_features': image_features if isinstance(image_features, dict) else image_features,
+                'physics_features': physics_features if isinstance(physics_features, dict) else physics_features,
+                'composition_features': composition_features if isinstance(composition_features, dict) else composition_features,
+                'stroke_type_features': differentiated_features if isinstance(differentiated_features, dict) else differentiated_features,
+                'image_canonical_summary': canonical_summary if isinstance(canonical_summary, dict) else canonical_summary,
+                'support_set_context': support_set_context if isinstance(support_set_context, dict) else support_set_context,
+                'dominant_shape_modifiers': dominant_modifiers,
                 'processing_metadata': {
                     'processing_timestamp': time.time(),
-                    'feature_count': len(image_features) + len(physics_features) + len(composition_features)
+                    'feature_count': len(image_features) + len(physics_features) + len(composition_features) if isinstance(image_features, dict) and isinstance(physics_features, dict) and isinstance(composition_features, dict) else 0
                 },
-                # PATCH: actions now matches per-shape grouping
                 'actions': [",".join(robust_flatten_and_stringify(sublist)) for sublist in safe_action_program],
                 'action_program': [",".join(robust_flatten_and_stringify(sublist)) for sublist in safe_action_program],
-                'geometry': robust_flatten_and_stringify(geometry),
-                'relational_features': robust_flatten_and_stringify(safe_relational_features),
-                'context_relational_features': robust_flatten_and_stringify(safe_context_relational_features),
-                'sequential_features': robust_flatten_and_stringify(safe_sequential_features),
-                'topological_features': robust_flatten_and_stringify(graph_features)
+                'geometry': geometry if isinstance(geometry, dict) else geometry,
+                'relational_features': safe_relational_features if isinstance(safe_relational_features, dict) else safe_relational_features,
+                'context_relational_features': safe_context_relational_features if isinstance(safe_context_relational_features, dict) else safe_context_relational_features,
+                'sequential_features': {
+                    'ngram': ngram_features if isinstance(ngram_features, dict) else ngram_features,
+                    'alternation': alternation,
+                    'regularity': regularity
+                },
+                'topological_features': graph_features if isinstance(graph_features, dict) else graph_features
             }
+            logger.info(f"[PATCH FINAL] Output record: {complete_record}")
                 # Granular logging before every subscript operation
             try:
                 logger.debug(f"[GRANULAR LOG] posrot_labels type: {type(posrot_labels)}, value: {posrot_labels}")
@@ -774,7 +801,13 @@ class ComprehensiveBongardProcessor:
                 logger.error(f"[GRANULAR ERROR] safe_vertices[0] failed: {e}")
             try:
                 logger.debug(f"[GRANULAR LOG] image_features type: {type(image_features)}, value: {image_features}")
-                _ = image_features['bounding_box']
+                if isinstance(image_features, dict):
+                    if 'bounding_box' not in image_features or image_features['bounding_box'] is None:
+                        logger.warning(f"[PATCH][image_features] 'bounding_box' missing or None for image_id={image_id}, problem_id={problem_id}. Setting to safe default.")
+                        image_features['bounding_box'] = {'x': 0, 'y': 0, 'width': 0, 'height': 0}
+                    _ = image_features['bounding_box']
+                else:
+                    logger.error(f"[PATCH][image_features] image_features is not a dict for image_id={image_id}, problem_id={problem_id}. Value: {image_features}")
             except Exception as e:
                 logger.error(f"[GRANULAR ERROR] image_features['bounding_box'] failed: {e}")
             try:

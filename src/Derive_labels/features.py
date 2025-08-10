@@ -179,10 +179,10 @@ def extract_relational_features(strokes, buffer_amt=0.001):
     return rel
 
     
+
 def _extract_ngram_features(sequence, n=2):
     """Extract n-gram counts from a sequence, with string keys for JSON compatibility."""
     logger.debug(f"[_extract_ngram_features] INPUTS: sequence={sequence}, n={n}")
-    # Ensure sequence is stringified
     sequence_str = ensure_str_list(sequence)
     logger.debug(f"[_extract_ngram_features] Sequence after stringification: {sequence_str}")
     ngrams = zip(*[sequence_str[i:] for i in range(n)])
@@ -190,13 +190,74 @@ def _extract_ngram_features(sequence, n=2):
     ngram_list = ensure_flat_str_list(ngram_list)
     result = dict(Counter(ngram_list))
     logger.debug(f"[_extract_ngram_features] OUTPUT: {result}")
-    # Validate output is JSON serializable
     try:
-        import json
         json.dumps(result)
         logger.debug(f"[_extract_ngram_features] Output is JSON serializable.")
     except Exception as e:
         logger.error(f"[_extract_ngram_features] Output not JSON serializable: {e}")
+    return result
+
+
+# --- Regularity Feature Extraction ---
+def extract_regularity_features(sequence):
+    """
+    Extract regularity features from a sequence of actions or shape descriptors.
+    Returns a dict with regularity score and supporting details.
+    """
+    logger.info(f"[extract_regularity_features] INPUT: {sequence}")
+    sequence_str = ensure_str_list(sequence)
+    # Example: regularity as ratio of most common element to total
+    counts = Counter(sequence_str)
+    most_common = counts.most_common(1)[0][1] if counts else 0
+    regularity_score = most_common / len(sequence_str) if sequence_str else 0.0
+    result = {
+        'regularity_score': regularity_score,
+        'most_common_element': counts.most_common(1)[0][0] if counts else None,
+        'distribution': dict(counts)
+    }
+    logger.info(f"[extract_regularity_features] OUTPUT: {result}")
+    try:
+        json.dumps(result)
+        logger.debug(f"[extract_regularity_features] Output is JSON serializable.")
+    except Exception as e:
+        logger.error(f"[extract_regularity_features] Output not JSON serializable: {e}")
+    return result
+
+# --- Dominant Shape Functions/Modifiers Extraction ---
+def extract_dominant_shape_modifiers(shape):
+    """
+    Extract dominant shape functions/modifiers from a shape object or descriptor list.
+    Returns a dict with dominant modifier and supporting details.
+    """
+    logger.info(f"[extract_dominant_shape_modifiers] INPUT: {shape}")
+    # Example: look for 'modifiers' attribute or key
+    modifiers = []
+    if hasattr(shape, 'modifiers'):
+        modifiers = getattr(shape, 'modifiers', [])
+    elif isinstance(shape, dict) and 'modifiers' in shape:
+        modifiers = shape['modifiers']
+    # Fallback: try to infer from basic_actions if present
+    elif hasattr(shape, 'basic_actions'):
+        actions = getattr(shape, 'basic_actions', [])
+        for act in actions:
+            if hasattr(act, 'modifier'):
+                modifiers.append(act.modifier)
+            elif isinstance(act, dict) and 'modifier' in act:
+                modifiers.append(act['modifier'])
+    # Count and find dominant
+    modifiers_str = ensure_str_list(modifiers)
+    counts = Counter(modifiers_str)
+    dominant_modifier = counts.most_common(1)[0][0] if counts else None
+    result = {
+        'dominant_modifier': dominant_modifier,
+        'modifier_distribution': dict(counts)
+    }
+    logger.info(f"[extract_dominant_shape_modifiers] OUTPUT: {result}")
+    try:
+        json.dumps(result)
+        logger.debug(f"[extract_dominant_shape_modifiers] Output is JSON serializable.")
+    except Exception as e:
+        logger.error(f"[extract_dominant_shape_modifiers] Output not JSON serializable: {e}")
     return result
 
 def _detect_alternation(sequence):

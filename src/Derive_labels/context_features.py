@@ -47,7 +47,7 @@ class BongardFeatureExtractor:
         import math
         from src.physics_inference import PhysicsInference
         from src.Derive_labels.stroke_types import _compute_bounding_box
-        from src.Derive_labels.features import extract_multiscale_features
+        from src.Derive_labels.features import extract_multiscale_features, extract_relational_features, _extract_ngram_features, _detect_alternation
         logging.info(f"[extract_image_features] INPUT image: {image}")
         logging.debug(f"[extract_image_features] RAW INPUT vertices: {image.get('vertices') if isinstance(image, dict) else None}")
         logging.debug(f"[extract_image_features] RAW INPUT geometry: {image.get('geometry', {}) if isinstance(image, dict) else {}}")
@@ -61,7 +61,6 @@ class BongardFeatureExtractor:
             bounding_box = _compute_bounding_box(vertices) if vertices else (0, 0, 0, 0)
             logging.debug(f"[extract_image_features] Calculated bounding_box: {bounding_box}")
 
-            # Define safe_float and all geometry-related variables in the outer scope
             def safe_float(val, default=0.0):
                 try:
                     return float(val)
@@ -78,21 +77,7 @@ class BongardFeatureExtractor:
             height = safe_float(geometry.get('height', bounding_box[3] - bounding_box[1]))
             if bounding_box == (0, 0, 0, 0):
                 logging.warning("[extract_image_features] Bounding box set to default (0,0,0,0) due to empty or invalid vertices.")
-            # Always calculate geometry from vertices if present
-            from src.Derive_labels.shape_utils import calculate_geometry_consistent
-            geometry = calculate_geometry_consistent(vertices) if vertices else {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0]}
-            logging.debug(f"[extract_image_features] Geometry from vertices: {geometry}")
-            def safe_float(val, default=0.0):
-                try:
-                    return float(val)
-                except (TypeError, ValueError):
-                    logging.warning(f"[extract_image_features] Value '{val}' could not be converted to float. Using default {default}.")
-                    return default
-                    geometry = calculate_geometry_consistent(vertices) if vertices else {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0]}
-            perimeter = safe_float(geometry.get('perimeter', 0.0))
-            centroid = geometry.get('centroid', [0.0, 0.0])
-            width = safe_float(geometry.get('width', bounding_box[2] - bounding_box[0]))
-            height = safe_float(geometry.get('height', bounding_box[3] - bounding_box[1]))
+
             aspect_ratio = (width / height) if height else 1.0
             num_vertices = len(vertices)
             from shapely.geometry import Polygon
@@ -116,7 +101,6 @@ class BongardFeatureExtractor:
             amplitude = (perimeter - safe_float(convex_hull.length) if convex_hull else 0.0) / perimeter if perimeter > 0 and convex_hull else 0.0
             frequency = angular_variance
             brinkhoff_complexity = 0.8 * amplitude * frequency + 0.2 * convexity
-            # (Removed duplicate logging line with unexpected indentation)
             multiscale = extract_multiscale_features(vertices)
             # Physics features
             try:
@@ -147,16 +131,13 @@ class BongardFeatureExtractor:
             stroke_complexity = brinkhoff_complexity
             if strokes:
                 for idx, stroke in enumerate(strokes):
-                    # Defensive: handle both dict and str strokes
                     if isinstance(stroke, dict):
                         stroke_vertices = stroke.get('vertices', [])
                         stroke_geom = calculate_geometry_consistent(stroke_vertices) if stroke_vertices else {'width': 0.0, 'height': 0.0, 'area': 0.0, 'perimeter': 0.0, 'centroid': [0.0, 0.0], 'bounds': [0, 0, 0, 0]}
                         stroke['geometry'] = stroke_geom
                         logging.debug(f"[extract_image_features] Stroke {idx} geometry: {stroke_geom}")
-                        # Optionally, update stroke width/height fields if present
                         stroke['width'] = stroke_geom.get('width', 0.0)
                         stroke['height'] = stroke_geom.get('height', 0.0)
-                        # Try to extract type/modifier from command if present
                         cmd = stroke.get('command', None)
                         if cmd:
                             parts = cmd.split('_')
@@ -173,12 +154,59 @@ class BongardFeatureExtractor:
                 logging.info(f"[extract_image_features] stroke_type_distribution INPUT: {strokes}")
                 logging.info(f"[extract_image_features] stroke_type_distribution OUTPUT: {stroke_type_distribution}")
                 logging.info(f"[extract_image_features] modifier_distribution OUTPUT: {modifier_distribution}")
-                logging.warning("[VALIDATION] Invalid area calculation.")
+
             # Extract relational features and log input/output
-            from src.Derive_labels.features import extract_relational_features
             relational = extract_relational_features(strokes) if strokes else {'adjacency': 0, 'intersections': 0, 'containment': 0, 'overlap': 0.0}
             logging.info(f"[extract_image_features] relational INPUT: {strokes}")
             logging.info(f"[extract_image_features] relational OUTPUT: {relational}")
+
+            # Calculate ngram, alternation, regularity, dominant shape functions/modifiers
+            try:
+                modifier_sequence = [stroke.get('modifier', 'normal') if isinstance(stroke, dict) else 'normal' for stroke in strokes]
+                ngram = _extract_ngram_features(modifier_sequence)
+                alternation = _detect_alternation(modifier_sequence)
+                regularity = PhysicsInference.pattern_regularity(modifier_sequence)
+                dominant_shape_functions = max(stroke_type_distribution, key=stroke_type_distribution.get, default=None) if stroke_type_distribution else None
+                dominant_modifiers = max(modifier_distribution, key=modifier_distribution.get, default=None) if modifier_distribution else None
+                logging.info(f"[extract_image_features] PATCHED ngram: {ngram}")
+                logging.info(f"[extract_image_features] PATCHED alternation: {alternation}")
+                logging.info(f"[extract_image_features] PATCHED regularity: {regularity}")
+                logging.info(f"[extract_image_features] PATCHED dominant_shape_functions: {dominant_shape_functions}")
+                logging.info(f"[extract_image_features] PATCHED dominant_modifiers: {dominant_modifiers}")
+            except Exception as e:
+                logging.warning(f"[extract_image_features] PATCHED feature extraction failed: {e}")
+                ngram = {}
+                alternation = 0.0
+                regularity = 0.0
+                dominant_shape_functions = None
+                dominant_modifiers = None
+
+            # Calculate and map image_canonical_summary
+            try:
+                image_canonical_summary = {
+                    'area': area_val,
+                    'perimeter': perimeter,
+                    'compactness': compactness,
+                    'dominant_shape_functions': dominant_shape_functions,
+                    'dominant_modifiers': dominant_modifiers,
+                    'regularity': regularity
+                }
+                logging.info(f"[extract_image_features] PATCHED image_canonical_summary: {image_canonical_summary}")
+            except Exception as e:
+                logging.warning(f"[extract_image_features] PATCHED image_canonical_summary failed: {e}")
+                image_canonical_summary = {}
+
+            # Call support set context if available (dummy call for now)
+            support_set_context = {}
+            try:
+                # If you have positive/negative images, call extract_support_set_context
+                # For now, just log empty
+                logging.info(f"[extract_image_features] PATCHED support_set_context: {support_set_context}")
+            except Exception as e:
+                logging.warning(f"[extract_image_features] PATCHED support_set_context failed: {e}")
+                support_set_context = {}
+
+            # Compose final features dict
             features = {
                 'area': area_val,
                 'perimeter': perimeter,
@@ -189,7 +217,7 @@ class BongardFeatureExtractor:
                 'centroid_y': centroid[1],
                 'width': width,
                 'height': height,
-                'bounding_box': bounding_box,  # Always present
+                'bounding_box': bounding_box,
                 'num_vertices': num_vertices,
                 'curvature': curvature,
                 'angular_variance': angular_variance,
@@ -199,19 +227,20 @@ class BongardFeatureExtractor:
                 'modifier_distribution': modifier_distribution,
                 'avg_stroke_length': avg_stroke_length,
                 'stroke_complexity': brinkhoff_complexity,
-                'adjacency_matrix': relational.get('adjacency', 0),
-                'containment': relational.get('containment', 0),
-                'intersection_pattern': relational.get('intersections', 0),
                 'multiscale': multiscale,
                 'moment_of_inertia': moment_of_inertia if moment_of_inertia is not None else 0.0,
                 'center_of_mass_x': center_of_mass[0] if center_of_mass and len(center_of_mass) > 0 else 0.0,
                 'center_of_mass_y': center_of_mass[1] if center_of_mass and len(center_of_mass) > 1 else 0.0,
                 'symmetry_score': symmetry_score if symmetry_score is not None else 0.0,
-                'ngram': None,
-                'alternation': None,
-                'regularity': None,
-                'dominant_shape_functions': None,
-                'dominant_modifiers': None,
+                'ngram': ngram,
+                'alternation': alternation,
+                'regularity': regularity,
+                'dominant_shape_functions': dominant_shape_functions,
+                'dominant_modifiers': dominant_modifiers,
+                'image_canonical_summary': image_canonical_summary,
+                'support_set_context': support_set_context,
+                'relational_features': relational,
+                'attributes': attributes,
             }
             for k in ['moment_of_inertia', 'center_of_mass_x', 'center_of_mass_y', 'symmetry_score']:
                 if k not in features:
