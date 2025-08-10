@@ -55,6 +55,7 @@ def extract_topological_features(shapes):
     """
     logger.info(f"[extract_topological_features] INPUT: {shapes}")
     from collections import Counter
+    import numpy as np
     if not shapes:
         logger.warning("[extract_topological_features] No shapes provided.")
         result = {'type': 'none', 'connectivity': '0', 'shape_distribution': {}}
@@ -62,13 +63,18 @@ def extract_topological_features(shapes):
         return result
     shape_types = []
     connectivity = 0
-    for shape in shapes:
+    for idx, shape in enumerate(shapes):
         verts = shape.get('vertices', [])
+        logger.debug(f"[extract_topological_features] Shape {idx} vertices: {verts}")
         if len(verts) >= 3:
-            if verts[0] == verts[-1]:
-                shape_types.append('closed')
-            else:
-                shape_types.append('open')
+            try:
+                if np.allclose(np.array(verts[0]), np.array(verts[-1])):
+                    shape_types.append('closed')
+                else:
+                    shape_types.append('open')
+            except Exception as e:
+                logger.warning(f"[extract_topological_features] Error comparing vertices for shape {idx}: {e}")
+                shape_types.append('unknown')
         else:
             shape_types.append('degenerate')
         connectivity += 1
@@ -195,23 +201,19 @@ def extract_relational_features(strokes, buffer_amt=0.001):
         dict with keys: 'adjacency', 'intersections', 'containment', 'overlap'
     """
     logger.info(f"[extract_relational_features] INPUT: {strokes}")
+    # Expecting a list of shapes, each with a 'vertices' key
     try:
-        # Ensure all strokes are robustly stringified for relationships
-        logger.debug(f"[extract_relational_features] Raw strokes before stringification: {strokes}")
-        strokes_str = [ensure_str_list(s) if not isinstance(s, dict) else s for s in strokes]
-        logger.debug(f"[extract_relational_features] Strokes after stringification: {strokes_str}")
-        strokes_flat = [ensure_flat_str_list(s) if not isinstance(s, dict) else s for s in strokes_str]
-        logger.debug(f"[extract_relational_features] Strokes after flattening: {strokes_flat}")
-        rel = calculate_relationships(strokes_flat, buffer_amt)
+        for idx, s in enumerate(strokes):
+            logger.debug(f"[extract_relational_features] Shape {idx} vertices: {s.get('vertices', None)}")
+        rel = calculate_relationships(strokes, buffer_amt)
         logger.info(f"[extract_relational_features] OUTPUT: {rel}")
-        # Validate output is JSON serializable
         try:
             json.dumps(rel)
             logger.debug(f"[extract_relational_features] Output is JSON serializable.")
         except Exception as e:
             logger.error(f"[extract_relational_features] Output not JSON serializable: {e}")
         if not rel or all(v in (None, [], {}, '') for v in rel.values()):
-            logger.warning(f"[extract_relational_features] Relationships output is empty or default. Input: {strokes_flat}")
+            logger.warning(f"[extract_relational_features] Relationships output is empty or default. Input: {strokes}")
         return rel
     except Exception as exc:
         logger.error(f"[extract_relational_features] Exception occurred: {exc}")

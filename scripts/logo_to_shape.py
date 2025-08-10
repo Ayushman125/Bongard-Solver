@@ -446,13 +446,14 @@ class ComprehensiveBongardProcessor:
                 posrot_labels = {'centroid': [0.0, 0.0], 'orientation_degrees': 0.0}
 
             # --- Contextual/relational feature extraction ---
-            # Prepare strokes as dicts with 'vertices' for context extractor
-            context_strokes = []
+            # Prepare shapes as dicts with 'vertices' for relational extractor
+            shape_list = []
             for shape in getattr(bongard_image, 'one_stroke_shapes', []):
                 v = getattr(shape, 'vertices', None)
-                context_strokes.append({'vertices': v if v is not None else []})
+                shape_list.append({'vertices': v if v is not None else []})
             from src.Derive_labels.features import extract_relational_features
-            context_relationships = extract_relational_features(context_strokes) if context_strokes else {}
+            logger.debug(f"[process_single_image] Passing shape_list to extract_relational_features: {shape_list}")
+            context_relationships = extract_relational_features(shape_list) if shape_list else {}
             logger.info(f"[process_single_image] context_relationships: {context_relationships}")
             # Multi-scale features (using normalized vertices)
             multiscale_features = extract_multiscale_features(norm_vertices_for_features) if norm_vertices_for_features else {}
@@ -519,9 +520,9 @@ class ComprehensiveBongardProcessor:
 
             # Topological features (connectivity/type detection)
             from src.Derive_labels.features import extract_topological_features
-            graph_features = extract_topological_features(
-                [{'vertices': shape.vertices} for shape in getattr(bongard_image, 'one_stroke_shapes', []) if hasattr(shape, 'vertices') and isinstance(shape.vertices, list)]
-            )
+            topo_shape_list = [{'vertices': shape.vertices} for shape in getattr(bongard_image, 'one_stroke_shapes', []) if hasattr(shape, 'vertices') and isinstance(shape.vertices, list)]
+            logger.debug(f"[process_single_image] Passing topo_shape_list to extract_topological_features: {topo_shape_list}")
+            graph_features = extract_topological_features(topo_shape_list)
 
             # --- PATCH: Use robust group-based stroke feature extraction ---
             from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features

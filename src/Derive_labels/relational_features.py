@@ -11,6 +11,7 @@ def calculate_shape_relationships(shapes, buffer_amt=0.001):
     geoms = []
     for idx, s in enumerate(shapes):
         verts = s.get('vertices', None)
+        logger.debug(f"[calculate_shape_relationships] Shape {idx} vertices: {verts}")
         if verts and isinstance(verts, (list, tuple)) and len(verts) >= 3:
             try:
                 geom = Polygon(verts)
@@ -18,7 +19,9 @@ def calculate_shape_relationships(shapes, buffer_amt=0.001):
                     geoms.append(geom.buffer(buffer_amt))
                     logger.debug(f"[calculate_shape_relationships] Created Polygon for shape {idx}: {geom}")
             except Exception as e:
-                logger.debug(f"calculate_shape_relationships: failed to create Polygon for shape {idx}: {e}")
+                logger.debug(f"[calculate_shape_relationships] failed to create Polygon for shape {idx}: {e}")
+        else:
+            logger.warning(f"[calculate_shape_relationships] Shape {idx} missing or invalid vertices: {verts}")
     if not geoms:
         logger.warning("calculate_shape_relationships: No valid geometries found.")
         return {'adjacency': 0, 'intersections': 0, 'containment': 0, 'overlap': 0.0}
