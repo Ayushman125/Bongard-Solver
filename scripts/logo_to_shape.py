@@ -357,15 +357,15 @@ class ComprehensiveBongardProcessor:
                     # PATCH: Log when stats are attached to each stroke dict
                     if 'support_set_context' in stroke_dict and 'stats' in stroke_dict['support_set_context']:
                         logger.info(f"[logo_to_shape] Attached support_set_context['stats'] to stroke: {stroke_dict['support_set_context']['stats']}")
+                    # Always tag every stroke dict with is_positive, label, and class_label
+                    stroke_dict['label'] = category if category else 'unknown'
+                    stroke_dict['class_label'] = problem_id if problem_id else 'unknown'
+                    stroke_dict['is_positive'] = is_positive
+                    logger.debug(f"[PATCH][is_positive] image_id={image_id}, stroke_idx={i}, assigned is_positive={is_positive}")
+                    if not is_positive:
+                        logger.info(f"[PATCH][NEGATIVE STROKE] image_id={image_id}, stroke_idx={i}, stroke_dict: {stroke_dict}")
                     if 'discriminative_features' in stroke_dict and 'stats' in stroke_dict['discriminative_features']:
                         logger.info(f"[logo_to_shape] Attached discriminative_features['stats'] to stroke: {stroke_dict['discriminative_features']['stats']}")
-                        # --- PATCH: Ensure contextual feature keys are present ---
-                        stroke_dict['label'] = category if category else 'unknown'
-                        stroke_dict['class_label'] = problem_id if problem_id else 'unknown'
-                        stroke_dict['is_positive'] = is_positive
-                        logger.debug(f"[PATCH][is_positive] image_id={image_id}, stroke_idx={i}, assigned is_positive={is_positive}")
-                        if not is_positive:
-                            logger.info(f"[PATCH][NEGATIVE STROKE] image_id={image_id}, stroke_idx={i}, stroke_dict: {stroke_dict}")
                     image_dict['strokes'].append(stroke_dict)
                 logger.info(f"[ATTR DEBUG] Shape {idx} strokes (dicts): {image_dict['strokes']}")
             else:
@@ -1689,6 +1689,7 @@ def main():
                     num_images_in_problem += 1
                     image_id = f"{problem_id}_pos_{i}"
                     image_path = f"images/{problem_id}/category_1/{i}.png"
+                    # Inject is_positive into each image dict before feature extraction
                     result = processor.process_single_image(
                         action_commands, image_id, True, problem_id, category, image_path
                     )
@@ -1709,6 +1710,7 @@ def main():
                     num_images_in_problem += 1
                     image_id = f"{problem_id}_neg_{i}"
                     image_path = f"images/{problem_id}/category_0/{i}.png"
+                    # Inject is_positive into each image dict before feature extraction
                     result = processor.process_single_image(
                         action_commands, image_id, False, problem_id, category, image_path
                     )
