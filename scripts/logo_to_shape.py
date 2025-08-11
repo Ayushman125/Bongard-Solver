@@ -824,8 +824,8 @@ class ComprehensiveBongardProcessor:
                 'actions': [",".join(robust_flatten_and_stringify(sublist)) for sublist in safe_action_program],
                 'action_program': [",".join(robust_flatten_and_stringify(sublist)) for sublist in safe_action_program],
                 'geometry': geometry if isinstance(geometry, dict) else geometry,
-                'relational_features': safe_relational_features if isinstance(safe_relational_features, dict) else safe_relational_features,
-                'context_relational_features': safe_context_relational_features if isinstance(safe_context_relational_features, dict) else safe_context_relational_features,
+                'relational_features': safe_relational_features if isinstance(safe_relational_features, dict) else {},
+                'context_relational_features': safe_context_relational_features if isinstance(safe_context_relational_features, dict) else {},
                 'sequential_features': {
                     'ngram': ngram_features if isinstance(ngram_features, dict) else ngram_features,
                     'analytic_attributes': analytic_attributes,
@@ -833,8 +833,13 @@ class ComprehensiveBongardProcessor:
                     'alternation': alternation,
                     'regularity': regularity
                 },
-                'topological_features': graph_features if isinstance(graph_features, dict) else graph_features
+                'topological_features': graph_features if isinstance(graph_features, dict) else {},
+                'multiscale': multiscale_features if isinstance(multiscale_features, dict) else {},
             }
+            # Ensure required fields are always present, even if empty
+            for key in ['multiscale', 'relational_features', 'topological_features']:
+                if key not in complete_record or complete_record[key] is None:
+                    complete_record[key] = {}
             logger.info(f"[PATCH FINAL] Output record: {complete_record}")
                 # Granular logging before every subscript operation
             try:

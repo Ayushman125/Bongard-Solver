@@ -110,7 +110,8 @@ def extract_stroke_features_from_shapes(bongard_image, problem_id=None):
                 seg_start, seg_end = segments[stroke_idx]
                 stroke_vertices = shape_vertices[seg_start:seg_end+1]
                 logging.info(f"[extract_stroke_features_from_shapes] PATCH: Input stroke_vertices to _calculate_stroke_specific_features: {stroke_vertices}")
-                features = _calculate_stroke_specific_features(stroke, stroke_idx, bongard_image=bongard_image, parent_shape_vertices=stroke_vertices)
+                # Pass shape_obj to _calculate_stroke_specific_features for correct aggregation
+                features = _calculate_stroke_specific_features(stroke, stroke_idx, bongard_image=bongard_image, parent_shape_vertices=stroke_vertices, shape_obj=shape)
                 # Sanitize all numeric features to avoid None
                 for key in ['area', 'compactness', 'convexity_ratio', 'stroke_length', 'avg_stroke_length', 'geom_complexity', 'arc_curvature_score', 'robust_curvature', 'robust_angular_variance', 'visual_complexity']:
                     if key in features:
@@ -226,7 +227,7 @@ def _extract_stroke_type_from_command(stroke) -> str:
 
 def _extract_stroke_vertices(stroke, stroke_index, all_vertices, bongard_image=None, parent_shape_vertices=None):
     logger = logging.getLogger(__name__)
-    logger.info(f"[_extract_stroke_vertices] INPUT: stroke_index={stroke_index}, stroke={stroke}, all_vertices={all_vertices}, bongard_image={bongard_image}, parent_shape_vertices={parent_shape_vertices}")
+    # logger.info(f"[_extract_stroke_vertices] INPUT: stroke_index={stroke_index}, stroke={stroke}, all_vertices={all_vertices}, bongard_image={bongard_image}, parent_shape_vertices={parent_shape_vertices}")  # PATCH: Suppressed verbose stroke vertices log
     # Use analytic vertices from BongardImage parser if available
     from src.Derive_labels.shape_utils import compute_open_stroke_geometry, valid_verts
     verts = []
@@ -247,7 +248,7 @@ def _extract_stroke_vertices(stroke, stroke_index, all_vertices, bongard_image=N
     if not verts:
         verts = []
     geometry = compute_open_stroke_geometry(verts)
-    logger.info(f"[_extract_stroke_vertices] OUTPUT: stroke_index={stroke_index}, verts={verts}, geometry={geometry}")
+    # logger.info(f"[_extract_stroke_vertices] OUTPUT: stroke_index={stroke_index}, verts={verts}, geometry={geometry}")
     return verts
 
 def _vertices_from_command(command, stroke_index):
@@ -358,8 +359,8 @@ def _vertices_from_command(command, stroke_index):
     return []
 
 
-def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_val=None, shape_modifier_val=None, parameters=None, bongard_image=None, parent_shape_vertices=None) -> Dict[str, Any]:
-    logger.info(f"[_calculate_stroke_specific_features] Called with stroke={stroke}, stroke_index={stroke_index}, stroke_type_val={stroke_type_val}, shape_modifier_val={shape_modifier_val}, parameters={parameters}")
+def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_val=None, shape_modifier_val=None, parameters=None, bongard_image=None, parent_shape_vertices=None, shape_obj=None) -> Dict[str, Any]:
+    # logger.info(f"[_calculate_stroke_specific_features] Called with stroke={stroke}, stroke_index={stroke_index}, stroke_type_val={stroke_type_val}, shape_modifier_val={shape_modifier_val}, parameters={parameters}")  # PATCH: Suppressed verbose log
     """Calculate features specific to stroke type and shape modifier, using robust geometric/physics formulas."""
     features = {'stroke_index': stroke_index}
     stype = stroke_type_val or _extract_stroke_type_from_command(stroke)
@@ -438,48 +439,52 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
         # --- PATCH: Fill stats dicts for support_set_context and discriminative_features with explicit diagnostics ---
         from src.Derive_labels.context_features import BongardFeatureExtractor
         extractor = BongardFeatureExtractor()
-        # Gather all stroke features in the current shape for context
+        # Gather all valid (non-degenerate) strokes in the current shape for context
         shape_strokes = []
-        if bongard_image and hasattr(bongard_image, 'one_stroke_shapes'):
-            shape_obj = None
-            if hasattr(bongard_image, 'one_stroke_shapes') and stroke_index < len(bongard_image.one_stroke_shapes):
-                shape_obj = bongard_image.one_stroke_shapes[stroke_index]
-            if shape_obj and hasattr(shape_obj, 'basic_actions'):
-                for i, s in enumerate(shape_obj.basic_actions):
+        # Use shape_obj argument if provided, else fallback to previous logic
+        if 'shape_obj' in locals() and shape_obj is not None:
+            actions_list = getattr(shape_obj, 'actions', None) or getattr(shape_obj, 'basic_actions', None)
+            if actions_list:
+                for i, s in enumerate(actions_list):
                     v = _extract_stroke_vertices(s, i, None, bongard_image=bongard_image, parent_shape_vertices=parent_shape_vertices)
-                    f = _calculate_stroke_specific_features(s, i, bongard_image=bongard_image, parent_shape_vertices=v)
-                    # Only add non-degenerate strokes
+                    f = _calculate_stroke_specific_features(s, i, bongard_image=bongard_image, parent_shape_vertices=v, shape_obj=None)
                     if not f.get('degenerate_case', False):
                         shape_strokes.append(f)
-        logger.info(f"[PATCH] shape_strokes before stats: count={len(shape_strokes)}, contents={shape_strokes}")
-        # Explicitly log input to stats computation
-        if not shape_strokes:
-            logger.warning(f"[PATCH] No valid (non-degenerate) strokes for stats computation in shape_idx={stroke_index}")
-        # Compute support set context stats
-        if features.get('degenerate_case', False):
-            features['support_set_context'] = {'valid': False, 'reason': 'degenerate', 'stats': {}}
-            features['discriminative_features'] = {'valid': False, 'reason': 'degenerate', 'stats': {}}
         else:
-            stats = extractor.compute_feature_statistics(shape_strokes) if shape_strokes else {}
-            if not stats:
-                logger.warning(f"[PATCH] Stats computation returned empty for shape_idx={stroke_index}. shape_strokes={shape_strokes}")
-                features['support_set_context'] = {'valid': False, 'reason': 'empty_or_degenerate_input', 'stats': {}}
-            else:
-                features['support_set_context'] = {'valid': True, 'stats': stats}
-            # For discriminative features, you need both positive and negative sets; here we use shape_strokes as pos, empty neg
-            discriminative = extractor.compute_discriminative_features(shape_strokes, []) if shape_strokes else {}
-            if not discriminative:
-                logger.warning(f"[PATCH] Discriminative stats computation returned empty for shape_idx={stroke_index}. shape_strokes={shape_strokes}")
-                features['discriminative_features'] = {'valid': False, 'reason': 'empty_or_degenerate_input', 'stats': {}}
-            else:
-                features['discriminative_features'] = {'valid': True, 'stats': discriminative}
+            if bongard_image and hasattr(bongard_image, 'one_stroke_shapes'):
+                shape_obj_fallback = None
+                if hasattr(bongard_image, 'one_stroke_shapes') and stroke_index < len(bongard_image.one_stroke_shapes):
+                    shape_obj_fallback = bongard_image.one_stroke_shapes[stroke_index]
+                if shape_obj_fallback and hasattr(shape_obj_fallback, 'basic_actions'):
+                    for i, s in enumerate(shape_obj_fallback.basic_actions):
+                        v = _extract_stroke_vertices(s, i, None, bongard_image=bongard_image, parent_shape_vertices=parent_shape_vertices)
+                        f = _calculate_stroke_specific_features(s, i, bongard_image=bongard_image, parent_shape_vertices=v, shape_obj=None)
+                        if not f.get('degenerate_case', False):
+                            shape_strokes.append(f)
+        logger.info(f"[PATCH] shape_strokes before stats: count={len(shape_strokes)}, contents={shape_strokes}")
+        # Prepare feature dicts for stats computation
+        # Aggregate stats over all non-degenerate strokes in the shape
+        nondeg_strokes = [f for f in shape_strokes if not f.get('degenerate_case', False)]
+        feature_dicts = [
+            {k: v for k, v in f.items() if isinstance(v, (int, float))}
+            for f in nondeg_strokes
+        ]
+        logger.info(f"[PATCH] Input to compute_feature_statistics (all non-degenerate strokes): {feature_dicts}")
+        if not feature_dicts:
+            logger.warning(f"[PATCH] No valid feature dicts for stats computation in shape_idx={stroke_index}")
+            stats = {}
+        else:
+            stats = extractor.compute_feature_statistics(feature_dicts)
+        # Attach stats to support_set_context and discriminative_features
+        features['support_set_context'] = {'valid': bool(feature_dicts), 'reason': None if feature_dicts else 'empty_or_degenerate_input', 'stats': stats}
+        features['discriminative_features'] = {'valid': False, 'reason': 'missing_negative_set', 'stats': stats}
         logger.info(f"[PATCH] support_set_context: {features['support_set_context']}")
         logger.info(f"[PATCH] discriminative_features: {features['discriminative_features']}")
         # PATCH: Log context-aware statistics if present
         if 'support_set_context' in features and 'stats' in features['support_set_context']:
             logger.info(f"[stroke_features] support_set_context['stats']: {features['support_set_context']['stats']}")
         if 'discriminative_features' in features and 'stats' in features['discriminative_features']:
-            logger.info(f"[stroke_features] discriminative_features['stats']: {features['discriminative_features']['stats']}")
+            logger.info(f"[stroke_features] discriminative_features['stats']: {features['discriminative_features']['stats']}" )
     elif verts and len(verts) >= 3:
         geometry = calculate_geometry_consistent(verts)
         try:
@@ -503,11 +508,11 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
             features['convexity_ratio'] = 0.0
         features['degenerate_case'] = False
         safe_verts = verts if len(verts) >= 3 else [verts[0], verts[0], verts[0]]
-        try:
-            features['robust_curvature'] = PhysicsInference.robust_curvature(safe_verts)
-        except Exception as e:
-            logger.warning(f"Curvature calculation failed for stroke {stroke_index}: {e}")
-            features['robust_curvature'] = 0.0
+    # try:
+    #     features['robust_curvature'] = PhysicsInference.robust_curvature(safe_verts)
+    # except Exception as e:
+    #     logger.warning(f"Curvature calculation failed for stroke {stroke_index}: {e}")
+    #     features['robust_curvature'] = 0.0
         try:
             features['robust_angular_variance'] = PhysicsInference.robust_angular_variance(safe_verts)
         except Exception as e:
@@ -618,7 +623,7 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
     features['geometry'] = geometry
     if not verts or (isinstance(verts, list) and len(verts) == 1 and verts[0] == (0.0, 0.0)):
         logger.error(f"[_calculate_stroke_specific_features] Fallback or missing vertices for stroke_index={stroke_index}, stroke={stroke}, type={stype}, modifier={smod}")
-    logger.info(f"[_calculate_stroke_specific_features] verts: {verts}")
+    # logger.info(f"[_calculate_stroke_specific_features] verts: {verts}")  # PATCH: Suppressed verbose log
     # Calculate basic geometric features from vertices
     if verts and len(verts) > 1:
         total_length = 0
@@ -689,6 +694,8 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
                 'arc_is_large': False
             })
     features.update(_calculate_shape_modifier_features_from_val(smod))
+    # Set analytic_attribute to shape_modifier for downstream analytics
+    features['analytic_attribute'] = features.get('shape_modifier', stype)
     return features
 
 def _categorize_direction(angle):
@@ -870,7 +877,7 @@ def _calculate_stroke_type_differentiated_features(stroke_type_features: Dict, s
 def _extract_modifier_from_stroke(stroke) -> str:
 
     logger = logging.getLogger(__name__)
-    logger.info(f"[_extract_modifier_from_stroke] INPUT: type={type(stroke)}, attributes={dir(stroke) if not isinstance(stroke, str) else 'str'}")
+    # logger.info(f"[_extract_modifier_from_stroke] INPUT: type={type(stroke)}, attributes={dir(stroke) if not isinstance(stroke, str) else 'str'}")  # PATCH: Suppressed verbose log
     """
     Extract the actual shape modifier from a stroke object or string, using geometric and semantic analysis with debug logging.
     """
@@ -880,8 +887,8 @@ def _extract_modifier_from_stroke(stroke) -> str:
         # Expect format like 'line_circle_1.000-0.500'
         parts = stroke.split('_')
         if len(parts) >= 2 and parts[1]:
-            logger.debug(f"[_extract_modifier_from_stroke] Extracted modifier from string: {parts[1]}")
-            logger.info(f"[_extract_modifier_from_stroke] OUTPUT: {parts[1]} (string)")
+            # logger.debug(f"[_extract_modifier_from_stroke] Extracted modifier from string: {parts[1]}")  # PATCH: Suppressed verbose log
+            # logger.info(f"[_extract_modifier_from_stroke] OUTPUT: {parts[1]} (string)")  # PATCH: Suppressed verbose log
             return parts[1]
         # If line or arc, default to 'normal'
         if len(parts) >= 1 and parts[0] in ['line', 'arc']:

@@ -57,7 +57,10 @@ class BongardFeatureExtractor:
             # Compute and log per-image relational features
             from src.Derive_labels.features import extract_relational_features
             stroke_dicts = [s['features'] if 'features' in s else s for s in strokes if isinstance(s, dict) and ('features' in s and 'vertices' in s['features'])]
+            multiscale = extract_multiscale_features(vertices)
+            logging.info(f"[extract_image_features] MULTISCALE_GEOMETRY: {multiscale}")
             rel_features = extract_relational_features(stroke_dicts, buffer_amt=0.001) if stroke_dicts else {'adjacency':0,'intersections':0,'containment':0,'overlap':0.0}
+            logging.info(f"[extract_image_features] SPATIAL_TOPOLOGICAL_FEATURES: {rel_features}")
             logging.info(f"[extract_image_features] safe_relational_features: {rel_features}")
             attributes = image.get('attributes', {}) if isinstance(image, dict) else {}
             if not vertices or not isinstance(vertices, list) or not all(isinstance(v, (list, tuple)) and len(v) == 2 for v in vertices):
@@ -279,8 +282,8 @@ class BongardFeatureExtractor:
         Compute robust relational features (adjacency, intersection, containment, overlap) using buffered polygons and Shapely.
         Integrates extract_relational_features from features.py.
         """
+        logging.info(f"[extract_spatial_relationships] INPUT: strokes={strokes}")
         from src.Derive_labels.features import extract_relational_features
-        logging.info(f"[extract_spatial_relationships] strokes: {len(strokes)}")
         rel = extract_relational_features(strokes)
         relationships = {
             'adjacency': rel.get('adjacency', 0),
@@ -288,12 +291,12 @@ class BongardFeatureExtractor:
             'containment': rel.get('containment', 0),
             'overlap': rel.get('overlap', 0.0)
         }
-        logging.info(f"[extract_spatial_relationships] relationships: {relationships}")
+        logging.info(f"[extract_spatial_relationships] OUTPUT: {relationships}")
         return relationships
 
 
     def compute_intersection_topology(self, strokes):
-        # Use bounding box overlap as proxy for intersection
+        logging.info(f"[compute_intersection_topology] INPUT: strokes={strokes}")
         n = len(strokes)
         intersect = [[0]*n for _ in range(n)]
         for i, s1 in enumerate(strokes):
@@ -303,13 +306,14 @@ class BongardFeatureExtractor:
                     box2 = self.bounding_box(s2.get('vertices', []))
                     if self.boxes_intersect(box1, box2):
                         intersect[i][j] = 1
+        logging.info(f"[compute_intersection_topology] OUTPUT: {intersect}")
         return intersect
 
     def boxes_intersect(self, box1, box2):
         return not (box1[2] < box2[0] or box1[0] > box2[2] or box1[3] < box2[1] or box1[1] > box2[3])
 
     def extract_multiscale_features(self, shape_vertices, scales=[0.1,0.3,0.5,1.0,2.0]):
-        # Placeholder: multi-scale geometric descriptors
+        logging.info(f"[extract_multiscale_features] INPUT: shape_vertices={shape_vertices}, scales={scales}")
         features = {}
         for scale in scales:
             # In practice, apply smoothing or resampling here
@@ -317,5 +321,5 @@ class BongardFeatureExtractor:
                 'num_vertices': len(shape_vertices),
                 # Add more scale-dependent features here
             }
-        logging.info(f"[extract_multiscale_features] features: {features}")
+        logging.info(f"[extract_multiscale_features] OUTPUT: {features}")
         return features

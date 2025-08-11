@@ -55,7 +55,7 @@ def compute_open_stroke_geometry(vertices):
         'compactness': 0.0,
         'convexity_ratio': 0.0
     }
-    logger.info(f"[compute_open_stroke_geometry] OUTPUT geometry: {geometry}")
+    # logger.info(f"[compute_open_stroke_geometry] OUTPUT geometry: {geometry}")  # PATCH: Suppressed verbose geometry log
     return geometry
 import logging
 from typing import Dict, List, Any, Optional
@@ -86,7 +86,7 @@ def calculate_geometry_consistent(vertices):
     from shapely.geometry import Polygon
     from shapely.validation import make_valid
     import logging
-    logging.info(f"[calculate_geometry_consistent] INPUT vertices: {vertices}")
+    # logging.info(f"[calculate_geometry_consistent] INPUT vertices: {vertices}")  # PATCH: Suppressed verbose log
     if not vertices or len(vertices) < 3:
         logging.warning(f"[calculate_geometry_consistent] Degenerate geometry: <3 vertices. Returning default geometry.")
         return {
@@ -127,7 +127,7 @@ def calculate_geometry_consistent(vertices):
             'width': width,
             'height': height
         }
-        logging.info(f"[calculate_geometry_consistent] OUTPUT geometry: {geometry}")
+    # logging.info(f"[calculate_geometry_consistent] OUTPUT geometry: {geometry}")  # PATCH: Suppressed verbose log
         return geometry
     except Exception as e:
         logging.error(f"[calculate_geometry_consistent] Exception: {e}. Returning default geometry.")
@@ -294,7 +294,7 @@ def normalize_vertices(vertices_raw):
     """
     import numpy as np
     import logging
-    logging.info(f"[normalize_vertices] INPUT vertices_raw: {vertices_raw}")
+    # logging.info(f"[normalize_vertices] INPUT vertices_raw: {vertices_raw}")  # PATCH: Suppressed verbose log
     verts = ensure_vertex_list(vertices_raw)
     verts = PhysicsInference.dedup_vertices(verts)
     if len(verts) < 2:
@@ -317,14 +317,14 @@ def normalize_vertices(vertices_raw):
     # PATCH: If normalization collapses to two points, set degenerate_case
     if len(normalized) == 2:
         logging.warning(f"[normalize_vertices] PATCH: Normalization collapsed to two points, degenerate_case set True: {normalized}")
-    logging.info(f"[normalize_vertices] OUTPUT normalized vertices: {normalized}")
+    # logging.info(f"[normalize_vertices] OUTPUT normalized vertices: {normalized}")  # PATCH: Suppressed verbose log
     return normalized
 
 def calculate_geometry(vertices):
     """Calculate geometry properties from normalized vertices, robustly constructing polygon."""
     import numpy as np
     import logging
-    logging.info(f"[calculate_geometry] INPUT vertices: {vertices}")
+    # logging.info(f"[calculate_geometry] INPUT vertices: {vertices}")  # PATCH: Suppressed verbose log
     # PATCH: Validate and correct input vertices
     if not vertices or len(vertices) < 3:
         logging.warning(f"[calculate_geometry] PATCH: Not enough vertices for geometry: {vertices}")
@@ -349,7 +349,7 @@ def calculate_geometry(vertices):
     # Close polygon if not closed
     if verts[0] != verts[-1]:
         verts.append(verts[0])
-    logging.info(f"[calculate_geometry] PATCH: Validated/corrected vertices: {verts}")
+    # logging.info(f"[calculate_geometry] PATCH: Validated/corrected vertices: {verts}")  # PATCH: Suppressed verbose log
     verts = normalize_vertices(list(verts))
     if len(verts) < 3:
         logging.warning(f"[calculate_geometry] PATCH: Normalization collapsed points: {verts}")
@@ -405,7 +405,7 @@ def calculate_geometry(vertices):
             'moment_of_inertia': _json_safe(inertia),
             'convexity_ratio': _json_safe(convexity)
         }
-        logging.info(f"[calculate_geometry] OUTPUT geometry: {geometry}")
+    # logging.info(f"[calculate_geometry] OUTPUT geometry: {geometry}")  # PATCH: Suppressed verbose log
         return geometry
     except Exception as e:
         logging.error(f"[calculate_geometry] Exception: {e}")

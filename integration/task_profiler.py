@@ -25,6 +25,22 @@ def profile(func):
         return result
     return wrapper
 
+# --- Add start_task and end_task for compatibility ---
+_TASK_START_TIMES = {}
+def start_task(name):
+    """Mark the start of a profiling task."""
+    _TASK_START_TIMES[name] = time.time()
+    print(f"[Profiler] Task '{name}' started.")
+
+def end_task(name):
+    """Mark the end of a profiling task and print elapsed time."""
+    start = _TASK_START_TIMES.pop(name, None)
+    if start is not None:
+        elapsed = time.time() - start
+        print(f"[Profiler] Task '{name}' ended. Elapsed: {elapsed:.4f}s")
+    else:
+        print(f"[Profiler] Task '{name}' end called without start.")
+
 # Legacy compatibility: TaskProfiler class
 class TaskProfiler:
     def log_latency(self, name, latency, metadata=None):

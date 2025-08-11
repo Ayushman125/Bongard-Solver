@@ -91,29 +91,27 @@ def extract_topological_features(shapes):
 
 def extract_multiscale_features(shape_vertices, scales=[0.1, 0.3, 0.5, 1.0, 2.0]):
     """Extract features at multiple geometric scales using Gaussian smoothing."""
-    logger.info(f"[extract_multiscale_features] INPUT vertices: {shape_vertices}")
+
+    logger.info(f"[MULTISCALE][INPUT] vertices: {shape_vertices}")
     multiscale_features = {}
-    # logging already handled by logger object
     if not shape_vertices or not isinstance(shape_vertices, list) or len(shape_vertices) < 3:
-        logger.warning("[extract_multiscale_features] Not enough vertices for multiscale analysis.")
+        logger.warning("[MULTISCALE][WARN] Not enough vertices for multiscale analysis.")
+        logger.info(f"[MULTISCALE][OUTPUT] (degenerate): {{'scale_1': 0.0, 'scale_2': 0.0, 'scale_3': 0.0}}")
         return {'scale_1': 0.0, 'scale_2': 0.0, 'scale_3': 0.0}
-    # Ensure all vertices are tuples of floats for downstream compatibility
     shape_vertices = [tuple(map(float, v)) if isinstance(v, (list, tuple)) and len(v) == 2 else v for v in shape_vertices]
     arr = np.array(shape_vertices)
     for scale in scales:
-        # Smooth x and y separately
+        logger.info(f"[MULTISCALE][PROCESS] scale={scale}, input_vertices={arr.tolist()}")
         smoothed_x = gaussian_filter1d(arr[:,0], sigma=scale, mode='wrap')
         smoothed_y = gaussian_filter1d(arr[:,1], sigma=scale, mode='wrap')
         smoothed_vertices = np.stack([smoothed_x, smoothed_y], axis=1)
         curvature = PhysicsInference.robust_curvature(smoothed_vertices)
         angular_variance = PhysicsInference.robust_angular_variance(smoothed_vertices)
-        # Complexity: number of inflection points (sign changes in curvature)
         diffs = np.diff(smoothed_vertices, axis=0)
         angles = np.arctan2(diffs[:,1], diffs[:,0])
         angle_diffs = np.diff(angles)
         inflections = np.sum(np.abs(np.diff(np.sign(angle_diffs))) > 0)
         complexity = inflections
-        # Hierarchical/grouping: cluster vertices at this scale
         n_clusters = min(max(2, int(len(smoothed_vertices) // (3 + scale * 5))), len(smoothed_vertices))
         try:
             clustering = AgglomerativeClustering(n_clusters=n_clusters, linkage='ward').fit(smoothed_vertices)
@@ -133,9 +131,9 @@ def extract_multiscale_features(shape_vertices, scales=[0.1, 0.3, 0.5, 1.0, 2.0]
                     'curvature': float(group_curvature),
                     'complexity': int(group_complexity)
                 }
-            logger.info(f"[extract_multiscale_features] scale={scale}, group_features={group_features}")
+            logger.info(f"[MULTISCALE][GROUPS] scale={scale}, group_features={group_features}")
         except Exception as e:
-            logger.warning(f"[extract_multiscale_features] Hierarchical clustering failed at scale {scale}: {e}")
+            logger.warning(f"[MULTISCALE][WARN] Hierarchical clustering failed at scale {scale}: {e}")
             group_features = {}
         multiscale_features[f'scale_{scale}'] = {
             'curvature': float(curvature),
@@ -143,8 +141,8 @@ def extract_multiscale_features(shape_vertices, scales=[0.1, 0.3, 0.5, 1.0, 2.0]
             'complexity': int(complexity),
             'groups': group_features
         }
-        logger.info(f"[extract_multiscale_features] scale={scale}, features={multiscale_features[f'scale_{scale}']}")
-    logger.info(f"[extract_multiscale_features] OUTPUT: {multiscale_features}")
+        logger.info(f"[MULTISCALE][FEATURES] scale={scale}, features={multiscale_features[f'scale_{scale}']}")
+    logger.info(f"[MULTISCALE][OUTPUT] {multiscale_features}")
     return multiscale_features
 
 
