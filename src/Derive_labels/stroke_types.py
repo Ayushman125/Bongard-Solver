@@ -181,7 +181,7 @@ def extract_stroke_features_from_shapes(bongard_image, problem_id=None):
         r['features']['discriminative_features'] = discriminative_features
         results.append(r)
 
-    logging.info(f"[extract_stroke_features_from_shapes] OUTPUT: {results}")
+    #logging.info(f"[extract_stroke_features_from_shapes] OUTPUT: {results}")
     if total_strokes > total_shapes:
         logging.info(f"[extract_stroke_features_from_shapes] INFO: Number of strokes ({total_strokes}) and shapes ({total_shapes}) for problem_id={problem_id} -- grouping is correct, no mismatch.")
     return results
@@ -508,7 +508,7 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
                     logger.error(f"[PATCH][DIAG] Error extracting features for action {i}: {e}")
             # Use collect_stroke_features for robust feature collection
             shape_strokes = extractor.collect_stroke_features(parsed_strokes, problem_id_val, is_positive_val)
-            logger.info(f"[PATCH] shape_strokes before stats: count={len(shape_strokes)}")
+            # logger.info(f"[PATCH] shape_strokes before stats: count={len(shape_strokes)}")
             # Compute stats with proper error handling
             if shape_strokes:
                 stats_result = extractor.compute_feature_statistics(shape_strokes, label=f"shape_{problem_id_val}")
@@ -526,13 +526,13 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
                 }
             features['support_set_context'] = support_set_context
             features['discriminative_features'] = {'valid': False, 'reason': 'missing_negative_set', 'stats': support_set_context['stats']}
-            logger.info(f"[PATCH] support_set_context: {features['support_set_context']}")
-            logger.info(f"[PATCH] discriminative_features: {features['discriminative_features']}")
+            # logger.info(f"[PATCH] support_set_context: {features['support_set_context']}")
+            # logger.info(f"[PATCH] discriminative_features: {features['discriminative_features']}")
             # PATCH: Log context-aware statistics if present
             if 'support_set_context' in features and 'stats' in features['support_set_context']:
-                logger.info(f"[stroke_features] support_set_context['stats']: {features['support_set_context']['stats']}")
+                pass
             if 'discriminative_features' in features and 'stats' in features['discriminative_features']:
-                logger.info(f"[stroke_features] discriminative_features['stats']: {features['discriminative_features']['stats']}" )
+                pass
     elif verts and len(verts) >= 3:
         geometry = calculate_geometry_consistent(verts)
         try:
@@ -669,6 +669,34 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
     geometry['width'] = width
     geometry['height'] = height
     features['geometry'] = geometry
+    # PATCH: Always compute and attach individual stroke stats
+    try:
+        from src.Derive_labels.context_features import BongardFeatureExtractor
+        extractor = BongardFeatureExtractor()
+        stroke_features_for_stats = [{
+            'stroke_index': stroke_index,
+            'command': str(stroke),
+            'area': float(geometry.get('area', 0.0)),
+            'perimeter': float(geometry.get('perimeter', 0.0)),
+            'width': float(geometry.get('width', 0.0)),
+            'height': float(geometry.get('height', 0.0)),
+            'visual_complexity': float(features.get('visual_complexity', 0.0)),
+            'geom_complexity': float(features.get('geom_complexity', 0.0))
+        }]
+        stats_result = extractor.compute_feature_statistics(stroke_features_for_stats, label=f"stroke_{stroke_index}")
+        features['support_set_context'] = {
+            'valid': stats_result.get('valid', False),
+            'reason': stats_result.get('reason', 'individual_stroke'),
+            'stats': stats_result.get('stats', {})
+        }
+        features['discriminative_features'] = {
+            'valid': stats_result.get('valid', False),
+            'reason': 'single_stroke',
+            'stats': stats_result.get('stats', {})
+        }
+    except Exception as e:
+        features['support_set_context'] = {'valid': False, 'reason': f'error: {e}', 'stats': {}}
+        features['discriminative_features'] = {'valid': False, 'reason': f'error: {e}', 'stats': {}}
     if not verts or (isinstance(verts, list) and len(verts) == 1 and verts[0] == (0.0, 0.0)):
         logger.error(f"[_calculate_stroke_specific_features] Fallback or missing vertices for stroke_index={stroke_index}, stroke={stroke}, type={stype}, modifier={smod}")
     # logger.info(f"[_calculate_stroke_specific_features] verts: {verts}")  # PATCH: Suppressed verbose log

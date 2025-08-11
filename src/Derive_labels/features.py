@@ -53,7 +53,7 @@ def extract_topological_features(shapes):
     Extract topological features (connectivity, type) from a list of shapes.
     Each shape should have a 'vertices' key.
     """
-    logger.info(f"[extract_topological_features] INPUT: {shapes}")
+    # logger.info(f"[extract_topological_features] INPUT: {shapes}")
     from collections import Counter
     import numpy as np
     if not shapes:
@@ -65,17 +65,17 @@ def extract_topological_features(shapes):
     connectivity = 0
     for idx, shape in enumerate(shapes):
         verts = shape.get('vertices', [])
-        logger.debug(f"[extract_topological_features] Shape {idx} vertices: {verts}")
+    # logger.debug(f"[extract_topological_features] Shape {idx} vertices: {verts}")
         if len(verts) >= 3:
             try:
                 dist = np.linalg.norm(np.array(verts[0]) - np.array(verts[-1]))
-                logger.debug(f"[extract_topological_features] Shape {idx} closure distance: {dist}")
+                # logger.debug(f"[extract_topological_features] Shape {idx} closure distance: {dist}")
                 if dist < 1e-2:
                     shape_types.append('closed')
                 else:
                     shape_types.append('open')
             except Exception as e:
-                logger.warning(f"[extract_topological_features] Error comparing vertices for shape {idx}: {e}")
+                # logger.warning(f"[extract_topological_features] Error comparing vertices for shape {idx}: {e}")
                 shape_types.append('unknown')
         else:
             shape_types.append('degenerate')
@@ -86,13 +86,13 @@ def extract_topological_features(shapes):
         'connectivity': str(connectivity),
         'shape_distribution': dict(Counter(shape_types))
     }
-    logger.info(f"[extract_topological_features] OUTPUT: {result}")
+    # logger.info(f"[extract_topological_features] OUTPUT: {result}")
     return result
 
 def extract_multiscale_features(shape_vertices, scales=[0.1, 0.3, 0.5, 1.0, 2.0]):
     """Extract features at multiple geometric scales using Gaussian smoothing."""
 
-    logger.info(f"[MULTISCALE][INPUT] vertices: {shape_vertices}")
+    # logger.info(f"[MULTISCALE][INPUT] vertices: {shape_vertices}")
     multiscale_features = {}
     if not shape_vertices or not isinstance(shape_vertices, list) or len(shape_vertices) < 3:
         logger.warning("[MULTISCALE][WARN] Not enough vertices for multiscale analysis.")
@@ -101,7 +101,7 @@ def extract_multiscale_features(shape_vertices, scales=[0.1, 0.3, 0.5, 1.0, 2.0]
     shape_vertices = [tuple(map(float, v)) if isinstance(v, (list, tuple)) and len(v) == 2 else v for v in shape_vertices]
     arr = np.array(shape_vertices)
     for scale in scales:
-        logger.info(f"[MULTISCALE][PROCESS] scale={scale}, input_vertices={arr.tolist()}")
+    # logger.info(f"[MULTISCALE][PROCESS] scale={scale}, input_vertices={arr.tolist()}")
         smoothed_x = gaussian_filter1d(arr[:,0], sigma=scale, mode='wrap')
         smoothed_y = gaussian_filter1d(arr[:,1], sigma=scale, mode='wrap')
         smoothed_vertices = np.stack([smoothed_x, smoothed_y], axis=1)

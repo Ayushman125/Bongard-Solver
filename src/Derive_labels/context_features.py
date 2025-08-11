@@ -113,9 +113,9 @@ class BongardFeatureExtractor:
         from src.physics_inference import PhysicsInference
         from src.Derive_labels.stroke_types import _compute_bounding_box
         from src.Derive_labels.features import extract_multiscale_features, extract_relational_features, _extract_ngram_features, _detect_alternation
-        logging.info(f"[extract_image_features] INPUT image: {image}")
-        logging.debug(f"[extract_image_features] RAW INPUT vertices: {image.get('vertices') if isinstance(image, dict) else None}")
-        logging.debug(f"[extract_image_features] RAW INPUT geometry: {image.get('geometry', {}) if isinstance(image, dict) else {}}")
+    # logging.info(f"[extract_image_features] INPUT image: {image}")
+    # logging.debug(f"[extract_image_features] RAW INPUT vertices: {image.get('vertices') if isinstance(image, dict) else None}")
+    # logging.debug(f"[extract_image_features] RAW INPUT geometry: {image.get('geometry', {}) if isinstance(image, dict) else {}}")
         try:
             vertices = image.get('vertices') if isinstance(image, dict) else None
             strokes = image.get('strokes') if isinstance(image, dict) else []
@@ -123,22 +123,22 @@ class BongardFeatureExtractor:
             from src.Derive_labels.features import extract_relational_features
             stroke_dicts = [s['features'] if 'features' in s else s for s in strokes if isinstance(s, dict) and ('features' in s and 'vertices' in s['features'])]
             multiscale = extract_multiscale_features(vertices)
-            logging.info(f"[extract_image_features] MULTISCALE_GEOMETRY: {multiscale}")
+            # logging.info(f"[extract_image_features] MULTISCALE_GEOMETRY: {multiscale}")
             rel_features = extract_relational_features(stroke_dicts, buffer_amt=0.001) if stroke_dicts else {'adjacency':0,'intersections':0,'containment':0,'overlap':0.0}
-            logging.info(f"[extract_image_features] SPATIAL_TOPOLOGICAL_FEATURES: {rel_features}")
-            logging.info(f"[extract_image_features] safe_relational_features: {rel_features}")
+            # logging.info(f"[extract_image_features] SPATIAL_TOPOLOGICAL_FEATURES: {rel_features}")
+            # logging.info(f"[extract_image_features] safe_relational_features: {rel_features}")
             attributes = image.get('attributes', {}) if isinstance(image, dict) else {}
             if not vertices or not isinstance(vertices, list) or not all(isinstance(v, (list, tuple)) and len(v) == 2 for v in vertices):
-                logging.info(f"[extract_image_features] INPUT image: {image}")
+                # logging.info(f"[extract_image_features] INPUT image: {image}")
                 vertices = []
             bounding_box = _compute_bounding_box(vertices) if vertices else (0, 0, 0, 0)
-            logging.debug(f"[extract_image_features] Calculated bounding_box: {bounding_box}")
+            # logging.debug(f"[extract_image_features] Calculated bounding_box: {bounding_box}")
 
             def safe_float(val, default=0.0):
                 try:
                     return float(val)
                 except (TypeError, ValueError):
-                    logging.warning(f"[extract_image_features] Value '{val}' could not be converted to float. Using default {default}.")
+                    # logging.warning(f"[extract_image_features] Value '{val}' could not be converted to float. Using default {default}.")
                     return default
 
             from src.Derive_labels.shape_utils import calculate_geometry_consistent
@@ -163,11 +163,11 @@ class BongardFeatureExtractor:
             logging.debug(f"[extract_image_features] Calculated width: {width}, height: {height}")
             if bounding_box == (0, 0, 0, 0):
                 logging.warning(f"[extract_image_features] Width/height set to 0.0 due to degenerate bounding box.")
-            logging.debug(f"[extract_image_features] Curvature input vertices: {vertices}")
+            # logging.debug(f"[extract_image_features] Curvature input vertices: {vertices}")
             curvature = safe_float(PhysicsInference.robust_curvature(vertices))
-            logging.debug(f"[extract_image_features] Curvature output value: {curvature}")
+            # logging.debug(f"[extract_image_features] Curvature output value: {curvature}")
             if curvature == 0.0:
-                logging.warning("[extract_image_features] Curvature is zero. Likely due to insufficient or collinear vertices.")
+                pass
             angular_variance = safe_float(PhysicsInference.robust_angular_variance(vertices))
             if angular_variance == 0.0:
                 logging.warning("[extract_image_features] Angular variance is zero. Likely due to insufficient or collinear vertices.")
