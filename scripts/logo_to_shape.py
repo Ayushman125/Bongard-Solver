@@ -567,12 +567,24 @@ class ComprehensiveBongardProcessor:
     # Contextual features are now extracted at the problem level in main(), not per-image.
             # --- Calculate image features using robust polygon ---
             image_features = self._calculate_image_features(norm_vertices_for_features, image_dict['strokes'], geometry if isinstance(geometry, dict) else {})
-            # Patch: Extract contextual features for output record
-            advanced_contextual = {k: image_features[k] for k in [
-                'contrast_score', 'mutual_information', 'label_consistency', 'shape_cooccurrence',
-                'category_consistency', 'class_prototype_distance', 'feature_importance_ranking',
-                'cross_set_symmetry_difference', 'concept_drift_score'
-            ] if k in image_features}
+            # --- Aggregate stroke features to form image-level feature vector ---
+            def aggregate_stroke_features(strokes):
+                import numpy as np
+                # Example: mean of area, perimeter, width, height, visual_complexity
+                areas = [s.get('geometry', {}).get('area', 0.0) for s in strokes if isinstance(s, dict)]
+                perimeters = [s.get('geometry', {}).get('perimeter', 0.0) for s in strokes if isinstance(s, dict)]
+                widths = [s.get('geometry', {}).get('width', 0.0) for s in strokes if isinstance(s, dict)]
+                heights = [s.get('geometry', {}).get('height', 0.0) for s in strokes if isinstance(s, dict)]
+                visual_complexities = [s.get('geometry', {}).get('visual_complexity', 0.0) for s in strokes if isinstance(s, dict)]
+                return {
+                    'area_mean': float(np.mean(areas)) if areas else 0.0,
+                    'perimeter_mean': float(np.mean(perimeters)) if perimeters else 0.0,
+                    'width_mean': float(np.mean(widths)) if widths else 0.0,
+                    'height_mean': float(np.mean(heights)) if heights else 0.0,
+                    'visual_complexity_mean': float(np.mean(visual_complexities)) if visual_complexities else 0.0,
+                }
+            image_level_features = aggregate_stroke_features(image_dict['strokes'])
+            # Attach image-level features to output record
             centroid = geometry.get('centroid')
             width = geometry.get('width')
             height = geometry.get('height')
@@ -633,13 +645,7 @@ class ComprehensiveBongardProcessor:
                 canonical_summary = FileIO.load_canonical_features(image_id)
             except Exception as e:
                 logger.warning(f"[PATCH] Failed to load canonical summary for image_id={image_id}: {e}")
-            try:
-                # Use the function from relational_features.py
-                # You may need to pass positive_images and negative_images if available
-                # Here, we pass image_id for compatibility, but update as needed for your pipeline
-                support_set_context = extract_support_set_context([image_id], [])
-            except Exception as e:
-                logger.warning(f"[PATCH] Failed to extract support set context for image_id={image_id}: {e}")
+            # Remove per-image support-set context extraction. Only compute support-set context at the problem level in main().
 
             # Topological features (connectivity/type detection)
             from src.Derive_labels.features import extract_topological_features
@@ -864,6 +870,7 @@ class ComprehensiveBongardProcessor:
                 'position_label': robust_flatten_and_stringify(posrot_labels.get('centroid')),
                 'rotation_label_degrees': robust_flatten_and_stringify(posrot_labels.get('orientation_degrees')),
                 'image_features': image_features if isinstance(image_features, dict) else image_features,
+                'image_level_features': image_level_features,
                 'physics_features': physics_features if isinstance(physics_features, dict) else physics_features,
                 'composition_features': composition_features if isinstance(composition_features, dict) else composition_features,
                 'stroke_type_features': differentiated_features if isinstance(differentiated_features, dict) else differentiated_features,
@@ -888,7 +895,6 @@ class ComprehensiveBongardProcessor:
                 },
                 'topological_features': graph_features if isinstance(graph_features, dict) else {},
                 'advanced_spatial_topological': advanced_spatial_topological if isinstance(advanced_spatial_topological, dict) else {},
-                'advanced_contextual_features': advanced_contextual,
                 'advanced_compositional_features': advanced_compositional,
                 'multiscale': multiscale_features if isinstance(multiscale_features, dict) else {},
             }
@@ -1058,10 +1064,11 @@ class ComprehensiveBongardProcessor:
         position_func = None
         groups = []
 
-        # Extract from strokes (dicts with geometry, label, type, etc.)
+        # Remove per-stroke positive/negative splitting and context metrics
+        # Only extract per-stroke features for stroke-level analytics, not for context metrics
         for stroke in strokes:
             if isinstance(stroke, dict):
-                # Feature vector: area, perimeter, width, height, visual_complexity, geom_complexity, symmetry_score
+                # Feature vector for stroke-level analytics only
                 fvec = [stroke.get('geometry', {}).get('area', 0.0),
                         stroke.get('geometry', {}).get('perimeter', 0.0),
                         stroke.get('geometry', {}).get('width', 0.0),
@@ -1077,13 +1084,6 @@ class ComprehensiveBongardProcessor:
                     shape_types.append(stroke['geometry']['shape_modifier'])
                 if 'class_label' in stroke:
                     class_labels.append(stroke['class_label'])
-                # Symmetry scores for pos/neg
-                if stroke.get('is_positive', None) is True:
-                    pos_symmetry.append(stroke.get('geometry', {}).get('symmetry_score', 0.0))
-                    pos_features.append(stroke.get('geometry', {}).get('area', 0.0))
-                elif stroke.get('is_positive', None) is False:
-                    neg_symmetry.append(stroke.get('geometry', {}).get('symmetry_score', 0.0))
-                    neg_features.append(stroke.get('geometry', {}).get('area', 0.0))
                 # Build graph from stroke relationships if available
                 if 'geometry' in stroke and 'vertices' in stroke['geometry']:
                     try:
@@ -1109,23 +1109,11 @@ class ComprehensiveBongardProcessor:
         if len(parts) > 1:
             tree = {i: [i+1] for i in range(len(parts)-1)}
             root = 0
-        # Symmetries: collect symmetry scores
-        if pos_symmetry or neg_symmetry:
-            symmetries = {'pos': pos_symmetry, 'neg': neg_symmetry}
         # Groups: cluster centroids if available
         if parts:
             groups = [parts]
 
-        logger.info(f"[PATCH][ADVANCED INPUTS] pos_features: {pos_features}")
-        logger.info(f"[PATCH][ADVANCED INPUTS] neg_features: {neg_features}")
-        logger.info(f"[PATCH][ADVANCED INPUTS] labels: {labels}")
-        logger.info(f"[PATCH][ADVANCED INPUTS] shape_types: {shape_types}")
-        logger.info(f"[PATCH][ADVANCED INPUTS] class_labels: {class_labels}")
-        logger.info(f"[PATCH][ADVANCED INPUTS] feature_matrix: {feature_matrix}")
-        logger.info(f"[PATCH][ADVANCED INPUTS] pos_symmetry: {pos_symmetry}")
-        logger.info(f"[PATCH][ADVANCED INPUTS] neg_symmetry: {neg_symmetry}")
-
-        # ...existing code...
+        # Remove all context metrics from per-image logic
         try:
             from shapely.geometry import Polygon
             poly = None
@@ -1739,17 +1727,24 @@ def main():
             assert len(pos_results) == 7 and len(neg_results) == 7, \
                 f"Expected 7 positives/7 negatives, got {len(pos_results)}/{len(neg_results)} for problem {problem_id}"
 
-            # --- Compute and add support-set context features ---
-            logger.info(f"[DEBUG][CONTEXTUAL] pos_results count: {len(pos_results)}")
-            logger.info(f"[DEBUG][CONTEXTUAL] neg_results count: {len(neg_results)}")
-            if pos_results:
-                logger.info(f"[DEBUG][CONTEXTUAL] Sample pos_results[0]: {json.dumps(pos_results[0], indent=2, ensure_ascii=False)}")
-            if neg_results:
-                logger.info(f"[DEBUG][CONTEXTUAL] Sample neg_results[0]: {json.dumps(neg_results[0], indent=2, ensure_ascii=False)}")
-            if not all(isinstance(r, dict) for r in pos_results):
-                logger.error(f"[ERROR][CONTEXTUAL] pos_results contains non-dict entries!")
-            if not all(isinstance(r, dict) for r in neg_results):
-                logger.error(f"[ERROR][CONTEXTUAL] neg_results contains non-dict entries!")
+            # --- Aggregate image-level features and compute cross-set metrics at the problem level ---
+            positive_image_features = [r.get('image_level_features', {}) for r in pos_results]
+            negative_image_features = [r.get('image_level_features', {}) for r in neg_results]
+            import numpy as np
+            def get_metric(feats, key):
+                vals = [f.get(key, 0.0) for f in feats if isinstance(f, dict)]
+                return float(np.mean(vals)) if vals else 0.0
+            cross_set_metrics = {
+                'area_contrast': abs(get_metric(positive_image_features, 'area_mean') - get_metric(negative_image_features, 'area_mean')),
+                'perimeter_contrast': abs(get_metric(positive_image_features, 'perimeter_mean') - get_metric(negative_image_features, 'perimeter_mean')),
+                'width_contrast': abs(get_metric(positive_image_features, 'width_mean') - get_metric(negative_image_features, 'width_mean')),
+                'height_contrast': abs(get_metric(positive_image_features, 'height_mean') - get_metric(negative_image_features, 'height_mean')),
+                'visual_complexity_contrast': abs(get_metric(positive_image_features, 'visual_complexity_mean') - get_metric(negative_image_features, 'visual_complexity_mean')),
+            }
+            # Attach cross-set metrics to each result for this problem
+            for result in pos_results + neg_results:
+                result['cross_set_metrics'] = cross_set_metrics
+            # All context metrics (contrast, mutual information, label consistency, etc.) are now computed only at the problem level using image-level features
             # Compute statistical support set context using context_features.py
             from src.Derive_labels.context_features import BongardFeatureExtractor
             logger.info(f"[SUPPORT-SET CONTEXT] Calling BongardFeatureExtractor.extract_support_set_context for problem {problem_id}")
