@@ -1748,6 +1748,52 @@ def main():
                             'reason': support_set_context.get('discriminative', {}).get('reason', 'missing_discriminative_set'),
                             'stats': {}
                         }
+                # --- Advanced contextual features aggregation and attachment ---
+                # Import contextual feature functions
+
+
+                # Example: aggregate a few key features (adjust keys as needed)
+            def safe_get(results, key, default=0.0):
+                return [r.get(key, default) for r in results]
+
+            # You may need to adjust these keys to match your result dicts
+            pos_contrast_feats = safe_get(pos_results, 'contrast_score')
+            neg_contrast_feats = safe_get(neg_results, 'contrast_score')
+            pos_mi_feats = safe_get(pos_results, 'mutual_information')
+            neg_mi_feats = safe_get(neg_results, 'mutual_information')
+            pos_labels = safe_get(pos_results, 'class_label', '')
+            neg_labels = safe_get(neg_results, 'class_label', '')
+            pos_shape_types = safe_get(pos_results, 'shape_type', '')
+            neg_shape_types = safe_get(neg_results, 'shape_type', '')
+            pos_symmetry = safe_get(pos_results, 'symmetry_score')
+            neg_symmetry = safe_get(neg_results, 'symmetry_score')
+
+            # Feature matrix for ranking (example: use 'feature_vector' key if present)
+            pos_feature_matrix = [r.get('feature_vector', []) for r in pos_results if 'feature_vector' in r]
+            neg_feature_matrix = [r.get('feature_vector', []) for r in neg_results if 'feature_vector' in r]
+            all_feature_matrix = pos_feature_matrix + neg_feature_matrix
+
+            # Compute advanced contextual features
+            contextual_features = {
+                'contrast_score': positive_negative_contrast_score(pos_contrast_feats, neg_contrast_feats),
+                'mutual_information': support_set_mutual_information(pos_contrast_feats + neg_contrast_feats),
+                'label_consistency': label_consistency_ratio(pos_labels + neg_labels),
+                'concept_drift_score': concept_drift_score(pos_contrast_feats + neg_contrast_feats),
+                'shape_cooccurrence': support_set_shape_cooccurrence(pos_shape_types + neg_shape_types).tolist(),
+                'category_consistency': category_consistency_score(pos_shape_types + neg_shape_types),
+                'class_prototype_distance': class_prototype_distance(
+                    np.array(all_feature_matrix) if all_feature_matrix else np.zeros((0,)),
+                    pos_labels + neg_labels
+                ),
+                'feature_importance_ranking': feature_importance_ranking(
+                    np.array(all_feature_matrix) if all_feature_matrix else np.zeros((0,))
+                ),
+                'cross_set_symmetry_difference': cross_set_symmetry_difference(pos_symmetry, neg_symmetry)
+            }
+
+            # Attach contextual features to each image result
+            for r in pos_results + neg_results:
+                r['contextual_features_problem_level'] = contextual_features
 
             # Save problem-level canonical summary
             problem_summary = {
