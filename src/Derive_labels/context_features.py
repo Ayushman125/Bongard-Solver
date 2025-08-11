@@ -2,6 +2,37 @@ import numpy as np
 import logging
 
 class BongardFeatureExtractor:
+    def collect_stroke_features(self, strokes_list, problem_id, is_positive):
+        """Collect and validate stroke features for stats computation."""
+        collected_features = []
+        for i, stroke in enumerate(strokes_list):
+            try:
+                if isinstance(stroke, dict):
+                    # Add required metadata
+                    stroke_features = {
+                        'stroke_index': i,
+                        'problem_id': problem_id,
+                        'is_positive': is_positive,
+                        'command': stroke.get('command', f'stroke_{i}')
+                    }
+                    # Add geometric features
+                    if 'geometry' in stroke:
+                        geom = stroke['geometry']
+                        stroke_features.update({
+                            'area': float(geom.get('area', 0.0)),
+                            'perimeter': float(geom.get('perimeter', 0.0)),
+                            'width': float(geom.get('width', 0.0)),
+                            'height': float(geom.get('height', 0.0)),
+                            'visual_complexity': float(geom.get('visual_complexity', 0.0)),
+                            'geom_complexity': float(geom.get('geom_complexity', 0.0))
+                        })
+                    # Only add if we have numeric features
+                    if any(isinstance(v, (int, float)) for v in stroke_features.values()):
+                        collected_features.append(stroke_features)
+            except Exception as e:
+                logging.warning(f"[collect_stroke_features] Failed to process stroke {i}: {e}")
+        logging.info(f"[collect_stroke_features] Collected {len(collected_features)} valid stroke features")
+        return collected_features
     def extract_support_set_context(self, positive_images, negative_images):
         """
         Compute full statistics (mean, var, min, max) for each feature in both positive and negative sets,
@@ -24,23 +55,57 @@ class BongardFeatureExtractor:
     def compute_feature_statistics(self, features_list, label=None):
         """
         Compute mean, variance, min, max for each feature in a list of feature dicts.
+        Returns a structured dict with validity and reason if input is empty or invalid.
         """
         logging.info(f"[compute_feature_statistics] INPUT: label={label}, num_features={len(features_list)}")
         if not features_list:
-            return {}
-        keys = set(features_list[0].keys())
+            logging.warning(f"[compute_feature_statistics] Empty features_list for label={label}")
+            return {
+                'valid': False,
+                'reason': 'empty_feature_list',
+                'count': 0,
+                'stats': {}
+            }
+        # Validate and filter features
+        valid_features = []
+        for f in features_list:
+            if isinstance(f, dict) and any(isinstance(v, (int, float, np.integer, np.floating)) 
+                                          for v in f.values() if v is not None):
+                valid_features.append(f)
+        if not valid_features:
+            logging.warning(f"[compute_feature_statistics] No valid numeric features for label={label}")
+            return {
+                'valid': False,
+                'reason': 'no_valid_numeric_features',
+                'count': len(features_list),
+                'stats': {}
+            }
+        # Compute stats from valid features
+        all_keys = set()
+        for f in valid_features:
+            all_keys.update(f.keys())
         stats = {}
-        for k in keys:
-            vals = np.array([f[k] for f in features_list if k in f and isinstance(f[k], (int, float, np.integer, np.floating))])
-            if vals.size:
+        for k in all_keys:
+            vals = []
+            for f in valid_features:
+                if k in f and f[k] is not None and isinstance(f[k], (int, float, np.integer, np.floating)):
+                    vals.append(f[k])
+            if vals:
+                vals_array = np.array(vals)
                 stats[k] = {
-                    'mean': float(np.mean(vals)),
-                    'var': float(np.var(vals)),
-                    'min': float(np.min(vals)),
-                    'max': float(np.max(vals))
+                    'mean': float(np.mean(vals_array)),
+                    'var': float(np.var(vals_array)),
+                    'min': float(np.min(vals_array)),
+                    'max': float(np.max(vals_array)),
+                    'count': len(vals)
                 }
-        logging.info(f"[compute_feature_statistics] OUTPUT for label={label}: {stats}")
-        return stats
+        result = {
+            'valid': True,
+            'count': len(valid_features),
+            'stats': stats
+        }
+        logging.info(f"[compute_feature_statistics] OUTPUT for label={label}: valid={result['valid']}, stat_keys={list(stats.keys())}")
+        return result
 
     def extract_image_features(self, image):
         import logging
@@ -204,15 +269,39 @@ class BongardFeatureExtractor:
                 logging.warning(f"[extract_image_features] PATCHED image_canonical_summary failed: {e}")
                 image_canonical_summary = {}
 
-            # Call support set context if available (dummy call for now)
-            support_set_context = {}
+            # PATCH: Compute and assign support_set_context and discriminative_features
             try:
-                # If you have positive/negative images, call extract_support_set_context
-                # For now, just log empty
+                # Collect stroke features for stats
+                problem_id = image.get('problem_id', None) if isinstance(image, dict) else None
+                is_positive = image.get('is_positive', None) if isinstance(image, dict) else None
+                stroke_features = self.collect_stroke_features(strokes, problem_id, is_positive)
+                logging.info(f"[extract_image_features] PATCHED collected stroke_features: {stroke_features}")
+                if stroke_features:
+                    stats_result = self.compute_feature_statistics(stroke_features, label=f"image_{problem_id}")
+                    support_set_context = {
+                        'valid': stats_result.get('valid', False),
+                        'reason': stats_result.get('reason', 'computed_from_strokes'),
+                        'stats': stats_result.get('stats', {})
+                    }
+                else:
+                    logging.warning("[extract_image_features] No valid stroke features collected for support_set_context")
+                    support_set_context = {
+                        'valid': False,
+                        'reason': 'no_stroke_features_collected',
+                        'stats': {}
+                    }
+                # For discriminative_features, set to same stats for now (single image)
+                discriminative_features = {
+                    'valid': support_set_context['valid'],
+                    'reason': 'single_image',
+                    'stats': support_set_context['stats']
+                }
                 logging.info(f"[extract_image_features] PATCHED support_set_context: {support_set_context}")
+                logging.info(f"[extract_image_features] PATCHED discriminative_features: {discriminative_features}")
             except Exception as e:
-                logging.warning(f"[extract_image_features] PATCHED support_set_context failed: {e}")
+                logging.warning(f"[extract_image_features] PATCHED support_set_context/discriminative_features failed: {e}")
                 support_set_context = {}
+                discriminative_features = {}
 
             # Compose final features dict
             features = {
@@ -247,6 +336,7 @@ class BongardFeatureExtractor:
                 'dominant_modifiers': dominant_modifiers,
                 'image_canonical_summary': image_canonical_summary,
                 'support_set_context': support_set_context,
+                'discriminative_features': discriminative_features,
                 'relational_features': relational,
                 'attributes': attributes,
             }

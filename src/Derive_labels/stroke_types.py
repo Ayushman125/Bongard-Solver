@@ -59,6 +59,12 @@ def extract_stroke_features_from_shapes(bongard_image, problem_id=None):
     total_strokes = sum(len(getattr(shape, 'actions', getattr(shape, 'strokes', []))) for shape in shapes)
     logging.info(f"[extract_stroke_features_from_shapes] problem_id={problem_id} | num_shapes={total_shapes} | total_strokes={total_strokes}")
     logging.info(f"[extract_stroke_features_from_shapes] PATCH: shapes={shapes}")
+
+    # --- Aggregate positive and negative strokes ---
+    positive_strokes = []
+    negative_strokes = []
+    stroke_results = []
+
     for shape_idx, shape in enumerate(shapes):
         actions = getattr(shape, 'actions', None)
         if actions is None:
@@ -93,7 +99,6 @@ def extract_stroke_features_from_shapes(bongard_image, problem_id=None):
             logging.info(f"[extract_stroke_features_from_shapes] PATCH: Validated/corrected shape_vertices for shape {shape_idx}: {shape_vertices}")
         else:
             logging.warning(f"[extract_stroke_features_from_shapes] PATCH: Insufficient vertices for shape {shape_idx}: {shape_vertices}")
-        # --- PATCH: Compute stroke segments and average stroke length ---
         segments = compute_shape_segments(actions, shape_vertices)
         stroke_lengths = []
         def sanitize_feature_value(val, default=0.0):
@@ -104,15 +109,14 @@ def extract_stroke_features_from_shapes(bongard_image, problem_id=None):
             except Exception:
                 return default
 
+        is_positive = getattr(shape, 'is_positive', None)
         for stroke_idx, stroke in enumerate(actions):
             logging.info(f"[extract_stroke_features_from_shapes] shape_idx={shape_idx} | stroke_idx={stroke_idx} | stroke={stroke}")
             try:
                 seg_start, seg_end = segments[stroke_idx]
                 stroke_vertices = shape_vertices[seg_start:seg_end+1]
                 logging.info(f"[extract_stroke_features_from_shapes] PATCH: Input stroke_vertices to _calculate_stroke_specific_features: {stroke_vertices}")
-                # Pass shape_obj to _calculate_stroke_specific_features for correct aggregation
                 features = _calculate_stroke_specific_features(stroke, stroke_idx, bongard_image=bongard_image, parent_shape_vertices=stroke_vertices, shape_obj=shape)
-                # Sanitize all numeric features to avoid None
                 for key in ['area', 'compactness', 'convexity_ratio', 'stroke_length', 'avg_stroke_length', 'geom_complexity', 'arc_curvature_score', 'robust_curvature', 'robust_angular_variance', 'visual_complexity']:
                     if key in features:
                         features[key] = sanitize_feature_value(features[key])
@@ -140,12 +144,43 @@ def extract_stroke_features_from_shapes(bongard_image, problem_id=None):
                     'shape_type': getattr(shape, '__class__', type(shape)).__name__,
                 }
             }
-            logging.info(f"[extract_stroke_features_from_shapes] Extracted features for shape {shape_idx}, stroke {stroke_idx}: {result}")
-            results.append(result)
-        # Compute average stroke length for this shape
+            stroke_results.append(result)
+            # Aggregate by positive/negative
+            if is_positive:
+                positive_strokes.append(features)
+            else:
+                negative_strokes.append(features)
         avg_stroke_length = float(np.mean([sanitize_feature_value(l) for l in stroke_lengths])) if stroke_lengths else 0.0
-        for r in results[-len(actions):]:
+        for r in stroke_results[-len(actions):]:
             r['features']['avg_stroke_length'] = avg_stroke_length
+
+    # --- Compute statistics for both sets ---
+    from src.Derive_labels.context_features import BongardFeatureExtractor
+    extractor = BongardFeatureExtractor()
+    pos_stats = extractor.compute_feature_statistics(positive_strokes, label=f"positive_{problem_id}") if positive_strokes else {'valid': False, 'reason': 'no_positive_strokes', 'stats': {}}
+    neg_stats = extractor.compute_feature_statistics(negative_strokes, label=f"negative_{problem_id}") if negative_strokes else {'valid': False, 'reason': 'no_negative_strokes', 'stats': {}}
+
+    # --- Compute discriminative features ---
+    discriminative_stats = {}
+    for key in pos_stats.get('stats', {}):
+        if key in neg_stats.get('stats', {}):
+            discriminative_stats[key] = {
+                'pos_mean': pos_stats['stats'][key].get('mean', 0.0),
+                'neg_mean': neg_stats['stats'][key].get('mean', 0.0),
+                'mean_diff': pos_stats['stats'][key].get('mean', 0.0) - neg_stats['stats'][key].get('mean', 0.0)
+            }
+    discriminative_features = {
+        'valid': True if positive_strokes and negative_strokes else False,
+        'reason': 'computed_from_pos_neg_sets' if positive_strokes and negative_strokes else 'missing_set',
+        'stats': discriminative_stats
+    }
+
+    # Attach support/discriminative context to each stroke result
+    for r in stroke_results:
+        r['features']['support_set_context'] = pos_stats
+        r['features']['discriminative_features'] = discriminative_features
+        results.append(r)
+
     logging.info(f"[extract_stroke_features_from_shapes] OUTPUT: {results}")
     if total_strokes > total_shapes:
         logging.info(f"[extract_stroke_features_from_shapes] INFO: Number of strokes ({total_strokes}) and shapes ({total_shapes}) for problem_id={problem_id} -- grouping is correct, no mismatch.")
@@ -439,52 +474,65 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
         # --- PATCH: Fill stats dicts for support_set_context and discriminative_features with explicit diagnostics ---
         from src.Derive_labels.context_features import BongardFeatureExtractor
         extractor = BongardFeatureExtractor()
-        # Gather all valid (non-degenerate) strokes in the current shape for context
-        shape_strokes = []
-        # Use shape_obj argument if provided, else fallback to previous logic
-        if 'shape_obj' in locals() and shape_obj is not None:
+        # Initialize actions_list to None to avoid UnboundLocalError
+        actions_list = None
+        if shape_obj is not None:
             actions_list = getattr(shape_obj, 'actions', None) or getattr(shape_obj, 'basic_actions', None)
-            if actions_list:
-                for i, s in enumerate(actions_list):
+        logger.debug(f"[PATCH][DIAG] actions_list type: {type(actions_list)}, value: {actions_list}")
+        problem_id_val = getattr(shape_obj, 'problem_id', None) if shape_obj is not None else None
+        is_positive_val = getattr(shape_obj, 'is_positive', None) if shape_obj is not None else None
+        parsed_strokes = []
+        if actions_list:
+            # If actions_list contains strings, try to parse them into action objects
+            if all(isinstance(a, str) for a in actions_list):
+                try:
+                    bongard_image_obj = BongardImage.import_from_action_string_list(actions_list)
+                    actions_list = getattr(bongard_image_obj, 'actions', actions_list)
+                    logger.debug(f"[PATCH][DIAG] Parsed actions_list into BongardImage actions: {actions_list}")
+                except Exception as e:
+                    logger.error(f"[PATCH][DIAG] Failed to parse actions_list strings: {e}")
+            for i, s in enumerate(actions_list):
+                try:
+                    logger.debug(f"[PATCH][DIAG] Processing action {i}: type={type(s)}, value={s}")
                     v = _extract_stroke_vertices(s, i, None, bongard_image=bongard_image, parent_shape_vertices=parent_shape_vertices)
                     f = _calculate_stroke_specific_features(s, i, bongard_image=bongard_image, parent_shape_vertices=v, shape_obj=None)
-                    if not f.get('degenerate_case', False):
-                        shape_strokes.append(f)
-        else:
-            if bongard_image and hasattr(bongard_image, 'one_stroke_shapes'):
-                shape_obj_fallback = None
-                if hasattr(bongard_image, 'one_stroke_shapes') and stroke_index < len(bongard_image.one_stroke_shapes):
-                    shape_obj_fallback = bongard_image.one_stroke_shapes[stroke_index]
-                if shape_obj_fallback and hasattr(shape_obj_fallback, 'basic_actions'):
-                    for i, s in enumerate(shape_obj_fallback.basic_actions):
-                        v = _extract_stroke_vertices(s, i, None, bongard_image=bongard_image, parent_shape_vertices=parent_shape_vertices)
-                        f = _calculate_stroke_specific_features(s, i, bongard_image=bongard_image, parent_shape_vertices=v, shape_obj=None)
-                        if not f.get('degenerate_case', False):
-                            shape_strokes.append(f)
-        logger.info(f"[PATCH] shape_strokes before stats: count={len(shape_strokes)}, contents={shape_strokes}")
-        # Prepare feature dicts for stats computation
-        # Aggregate stats over all non-degenerate strokes in the shape
-        nondeg_strokes = [f for f in shape_strokes if not f.get('degenerate_case', False)]
-        feature_dicts = [
-            {k: v for k, v in f.items() if isinstance(v, (int, float))}
-            for f in nondeg_strokes
-        ]
-        logger.info(f"[PATCH] Input to compute_feature_statistics (all non-degenerate strokes): {feature_dicts}")
-        if not feature_dicts:
-            logger.warning(f"[PATCH] No valid feature dicts for stats computation in shape_idx={stroke_index}")
-            stats = {}
-        else:
-            stats = extractor.compute_feature_statistics(feature_dicts)
-        # Attach stats to support_set_context and discriminative_features
-        features['support_set_context'] = {'valid': bool(feature_dicts), 'reason': None if feature_dicts else 'empty_or_degenerate_input', 'stats': stats}
-        features['discriminative_features'] = {'valid': False, 'reason': 'missing_negative_set', 'stats': stats}
-        logger.info(f"[PATCH] support_set_context: {features['support_set_context']}")
-        logger.info(f"[PATCH] discriminative_features: {features['discriminative_features']}")
-        # PATCH: Log context-aware statistics if present
-        if 'support_set_context' in features and 'stats' in features['support_set_context']:
-            logger.info(f"[stroke_features] support_set_context['stats']: {features['support_set_context']['stats']}")
-        if 'discriminative_features' in features and 'stats' in features['discriminative_features']:
-            logger.info(f"[stroke_features] discriminative_features['stats']: {features['discriminative_features']['stats']}" )
+                    # Only add dicts with geometry
+                    if isinstance(f, dict) and 'geometry' in f:
+                        stroke_dict = {
+                            'stroke_index': i,
+                            'command': getattr(s, 'raw_command', str(s)),
+                            'geometry': f['geometry']
+                        }
+                        parsed_strokes.append(stroke_dict)
+                except Exception as e:
+                    logger.error(f"[PATCH][DIAG] Error extracting features for action {i}: {e}")
+            # Use collect_stroke_features for robust feature collection
+            shape_strokes = extractor.collect_stroke_features(parsed_strokes, problem_id_val, is_positive_val)
+            logger.info(f"[PATCH] shape_strokes before stats: count={len(shape_strokes)}")
+            # Compute stats with proper error handling
+            if shape_strokes:
+                stats_result = extractor.compute_feature_statistics(shape_strokes, label=f"shape_{problem_id_val}")
+                support_set_context = {
+                    'valid': stats_result.get('valid', False),
+                    'reason': stats_result.get('reason', 'computed_from_strokes'),
+                    'stats': stats_result.get('stats', {})
+                }
+            else:
+                logger.warning("[PATCH] No valid stroke features collected; diagnostics: actions_list type: {} value: {}".format(type(actions_list), actions_list))
+                support_set_context = {
+                    'valid': False,
+                    'reason': 'no_stroke_features_collected',
+                    'stats': {}
+                }
+            features['support_set_context'] = support_set_context
+            features['discriminative_features'] = {'valid': False, 'reason': 'missing_negative_set', 'stats': support_set_context['stats']}
+            logger.info(f"[PATCH] support_set_context: {features['support_set_context']}")
+            logger.info(f"[PATCH] discriminative_features: {features['discriminative_features']}")
+            # PATCH: Log context-aware statistics if present
+            if 'support_set_context' in features and 'stats' in features['support_set_context']:
+                logger.info(f"[stroke_features] support_set_context['stats']: {features['support_set_context']['stats']}")
+            if 'discriminative_features' in features and 'stats' in features['discriminative_features']:
+                logger.info(f"[stroke_features] discriminative_features['stats']: {features['discriminative_features']['stats']}" )
     elif verts and len(verts) >= 3:
         geometry = calculate_geometry_consistent(verts)
         try:
