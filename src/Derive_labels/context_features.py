@@ -113,9 +113,9 @@ class BongardFeatureExtractor:
         from src.physics_inference import PhysicsInference
         from src.Derive_labels.stroke_types import _compute_bounding_box
         from src.Derive_labels.features import extract_multiscale_features, extract_relational_features, _extract_ngram_features, _detect_alternation
-    # logging.info(f"[extract_image_features] INPUT image: {image}")
-    # logging.debug(f"[extract_image_features] RAW INPUT vertices: {image.get('vertices') if isinstance(image, dict) else None}")
-    # logging.debug(f"[extract_image_features] RAW INPUT geometry: {image.get('geometry', {}) if isinstance(image, dict) else {}}")
+        # logging.info(f"[extract_image_features] INPUT image: {image}")
+        # logging.debug(f"[extract_image_features] RAW INPUT vertices: {image.get('vertices') if isinstance(image, dict) else None}")
+        # logging.debug(f"[extract_image_features] RAW INPUT geometry: {image.get('geometry', {}) if isinstance(image, dict) else {}}")
         try:
             vertices = image.get('vertices') if isinstance(image, dict) else None
             strokes = image.get('strokes') if isinstance(image, dict) else []
@@ -269,40 +269,6 @@ class BongardFeatureExtractor:
                 logging.warning(f"[extract_image_features] PATCHED image_canonical_summary failed: {e}")
                 image_canonical_summary = {}
 
-            # PATCH: Compute and assign support_set_context and discriminative_features
-            try:
-                # Collect stroke features for stats
-                problem_id = image.get('problem_id', None) if isinstance(image, dict) else None
-                is_positive = image.get('is_positive', None) if isinstance(image, dict) else None
-                stroke_features = self.collect_stroke_features(strokes, problem_id, is_positive)
-                logging.info(f"[extract_image_features] PATCHED collected stroke_features: {stroke_features}")
-                if stroke_features:
-                    stats_result = self.compute_feature_statistics(stroke_features, label=f"image_{problem_id}")
-                    support_set_context = {
-                        'valid': stats_result.get('valid', False),
-                        'reason': stats_result.get('reason', 'computed_from_strokes'),
-                        'stats': stats_result.get('stats', {})
-                    }
-                else:
-                    logging.warning("[extract_image_features] No valid stroke features collected for support_set_context")
-                    support_set_context = {
-                        'valid': False,
-                        'reason': 'no_stroke_features_collected',
-                        'stats': {}
-                    }
-                # For discriminative_features, set to same stats for now (single image)
-                discriminative_features = {
-                    'valid': support_set_context['valid'],
-                    'reason': 'single_image',
-                    'stats': support_set_context['stats']
-                }
-                logging.info(f"[extract_image_features] PATCHED support_set_context: {support_set_context}")
-                logging.info(f"[extract_image_features] PATCHED discriminative_features: {discriminative_features}")
-            except Exception as e:
-                logging.warning(f"[extract_image_features] PATCHED support_set_context/discriminative_features failed: {e}")
-                support_set_context = {}
-                discriminative_features = {}
-
             # Compose final features dict
             features = {
                 'area': area_val,
@@ -335,8 +301,7 @@ class BongardFeatureExtractor:
                 'dominant_shape_functions': dominant_shape_functions,
                 'dominant_modifiers': dominant_modifiers,
                 'image_canonical_summary': image_canonical_summary,
-                'support_set_context': support_set_context,
-                'discriminative_features': discriminative_features,
+                # Contextual features will be assigned at Bongard problem level
                 'relational_features': relational,
                 'attributes': attributes,
             }
@@ -352,6 +317,26 @@ class BongardFeatureExtractor:
         except Exception as e:
             logging.error(f"[extract_image_features] Exception: {e}")
             return {}
+
+    def compute_bongard_problem_context(self, all_image_features):
+        """
+        Compute contextual features across all 12 images in a Bongard problem.
+        Updates each image's context dictionaries.
+        """
+        pos_features = [f for f in all_image_features if f.get('is_positive')]
+        neg_features = [f for f in all_image_features if not f.get('is_positive')]
+        contextual_results = self.extract_support_set_context(pos_features, neg_features)
+        for image_features in all_image_features:
+            image_features['support_set_context'] = {
+                'valid': True,
+                'reason': 'bongard_problem_level',
+                'stats': contextual_results
+            }
+            image_features['discriminative_features'] = {
+                'valid': True,
+                'reason': 'cross_set_comparison',
+                'stats': contextual_results
+            }
 
     def compute_discriminative_features(self, pos_features, neg_features):
         # Computes difference of means for each feature, skipping None/NaN values

@@ -1,6 +1,7 @@
 import logging
 import importlib.util
 import sys
+sys.stdout.reconfigure(encoding='utf-8')
 def fully_stringify(obj):
     if isinstance(obj, dict):
         return {fully_stringify(k): fully_stringify(v) for k, v in obj.items()}
@@ -362,6 +363,9 @@ class ComprehensiveBongardProcessor:
                         stroke_dict['label'] = category if category else 'unknown'
                         stroke_dict['class_label'] = problem_id if problem_id else 'unknown'
                         stroke_dict['is_positive'] = is_positive
+                        logger.debug(f"[PATCH][is_positive] image_id={image_id}, stroke_idx={i}, assigned is_positive={is_positive}")
+                        if not is_positive:
+                            logger.info(f"[PATCH][NEGATIVE STROKE] image_id={image_id}, stroke_idx={i}, stroke_dict: {stroke_dict}")
                     image_dict['strokes'].append(stroke_dict)
                 logger.info(f"[ATTR DEBUG] Shape {idx} strokes (dicts): {image_dict['strokes']}")
             else:
@@ -1645,6 +1649,17 @@ def main():
     successful_images = 0
     problem_summaries = []
 
+    # Defensive validation and logging for problem_data structure
+    logger.info("[DEFENSIVE CHECK] Validating problem_data structure for all problems...")
+    malformed_problems = []
+    for pid, pdata in problems_data.items():
+        if not (isinstance(pdata, list) and len(pdata) == 2):
+            logger.warning(f"[DEFENSIVE CHECK] Problem {pid} has malformed data: type={type(pdata)}, value={pdata}")
+            malformed_problems.append(pid)
+    if malformed_problems:
+        logger.error(f"[DEFENSIVE CHECK] Found malformed problems: {malformed_problems}")
+    else:
+        logger.info("[DEFENSIVE CHECK] All problems have valid [positive_examples, negative_examples] structure.")
 
     for problem_id, problem_data in problems_data.items():
         try:
