@@ -670,10 +670,21 @@ class PhysicsInference:
                     bbox = PhysicsInference.rounded_bbox(cleaned)
                     logging.warning(f"polygon_from_vertices: Could not recover valid polygon, using bounding box fallback. Vertices: {cleaned}, bbox: {bbox}")
                     poly = Polygon([(bbox[0], bbox[1]), (bbox[2], bbox[1]), (bbox[2], bbox[3]), (bbox[0], bbox[3])])
-                # Final fallback
+                # Additional fallback: expanded bounding box polygon
                 if not poly.is_valid or poly.area == 0:
-                    logging.warning(f"polygon_from_vertices: Could not recover valid polygon, using unit square fallback. Vertices: {cleaned}")
-                    poly = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
+                    try:
+                        bbox = PhysicsInference.rounded_bbox(cleaned)
+                        margin = 0.01
+                        poly = Polygon([
+                            (bbox[0] - margin, bbox[1] - margin),
+                            (bbox[2] + margin, bbox[1] - margin),
+                            (bbox[2] + margin, bbox[3] + margin),
+                            (bbox[0] - margin, bbox[3] + margin)
+                        ])
+                        logging.info(f"polygon_from_vertices: Using expanded bounding box fallback")
+                    except Exception as bbox_e:
+                        logging.warning(f"polygon_from_vertices: Expanded bbox failed: {bbox_e}")
+                        poly = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
         except Exception as e:
             logging.warning(f"polygon_from_vertices: Exception {e}, using unit square fallback. Vertices: {cleaned}")
             poly = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])

@@ -351,12 +351,6 @@ class ComprehensiveBongardProcessor:
                         else:
                             stroke_geometry['shape_modifier'] = 'normal'
                     stroke_dict = {'command': command_str, 'vertices': analytic_verts, 'geometry': stroke_geometry}
-                    # PATCH: Propagate support_set_context and discriminative_features (including stats)
-                    stroke_dict['support_set_context'] = stroke_features.get('support_set_context', {})
-                    stroke_dict['discriminative_features'] = stroke_features.get('discriminative_features', {})
-                    # PATCH: Log when stats are attached to each stroke dict
-                    if 'support_set_context' in stroke_dict and 'stats' in stroke_dict['support_set_context']:
-                        logger.info(f"[logo_to_shape] Attached support_set_context['stats'] to stroke: {stroke_dict['support_set_context']['stats']}")
                     # Always tag every stroke dict with is_positive, label, and class_label
                     stroke_dict['label'] = category if category else 'unknown'
                     stroke_dict['class_label'] = problem_id if problem_id else 'unknown'
@@ -364,6 +358,9 @@ class ComprehensiveBongardProcessor:
                     logger.debug(f"[PATCH][is_positive] image_id={image_id}, stroke_idx={i}, assigned is_positive={is_positive}")
                     if not is_positive:
                         logger.info(f"[PATCH][NEGATIVE STROKE] image_id={image_id}, stroke_idx={i}, stroke_dict: {stroke_dict}")
+                    # Remove support_set_context from stroke_dict if present
+                    if 'support_set_context' in stroke_dict:
+                        del stroke_dict['support_set_context']
                     if 'discriminative_features' in stroke_dict and 'stats' in stroke_dict['discriminative_features']:
                         logger.info(f"[logo_to_shape] Attached discriminative_features['stats'] to stroke: {stroke_dict['discriminative_features']['stats']}")
                     image_dict['strokes'].append(stroke_dict)
@@ -1051,10 +1048,8 @@ class ComprehensiveBongardProcessor:
         # --- Real Data Extraction for Advanced Features ---
         # Build feature_matrix, labels, shape_types, class_labels, graphs, etc. from strokes and geometry
         import numpy as np
-        pos_features, neg_features = [], []
         labels, shape_types, class_labels = [], [], []
         feature_matrix = []
-        pos_symmetry, neg_symmetry = [], []
         graphs = []
         tree, root = {}, None
         symmetries = {}
@@ -1064,11 +1059,9 @@ class ComprehensiveBongardProcessor:
         position_func = None
         groups = []
 
-        # Remove per-stroke positive/negative splitting and context metrics
         # Only extract per-stroke features for stroke-level analytics, not for context metrics
         for stroke in strokes:
             if isinstance(stroke, dict):
-                # Feature vector for stroke-level analytics only
                 fvec = [stroke.get('geometry', {}).get('area', 0.0),
                         stroke.get('geometry', {}).get('perimeter', 0.0),
                         stroke.get('geometry', {}).get('width', 0.0),
@@ -1077,14 +1070,12 @@ class ComprehensiveBongardProcessor:
                         stroke.get('geometry', {}).get('geom_complexity', 0.0),
                         stroke.get('geometry', {}).get('symmetry_score', 0.0)]
                 feature_matrix.append(fvec)
-                # Label, type, class_label
                 if 'label' in stroke:
                     labels.append(stroke['label'])
                 if 'geometry' in stroke and 'shape_modifier' in stroke['geometry']:
                     shape_types.append(stroke['geometry']['shape_modifier'])
                 if 'class_label' in stroke:
                     class_labels.append(stroke['class_label'])
-                # Build graph from stroke relationships if available
                 if 'geometry' in stroke and 'vertices' in stroke['geometry']:
                     try:
                         from networkx import Graph
@@ -1095,7 +1086,6 @@ class ComprehensiveBongardProcessor:
                         graphs.append(g)
                     except Exception:
                         pass
-                # Add to substructures, edges, etc.
                 if 'geometry' in stroke and 'analytic_vertices' in stroke['geometry']:
                     substructures.append(stroke['geometry']['analytic_vertices'])
                     edges.extend([(stroke['geometry']['analytic_vertices'][i], stroke['geometry']['analytic_vertices'][i+1])
@@ -1105,15 +1095,11 @@ class ComprehensiveBongardProcessor:
 
         feature_matrix = np.array(feature_matrix) if feature_matrix else np.array([])
 
-        # Build tree/root from shape relationships if available
         if len(parts) > 1:
             tree = {i: [i+1] for i in range(len(parts)-1)}
             root = 0
-        # Groups: cluster centroids if available
         if parts:
             groups = [parts]
-
-        # Remove all context metrics from per-image logic
         try:
             from shapely.geometry import Polygon
             poly = None
@@ -1298,65 +1284,6 @@ class ComprehensiveBongardProcessor:
                 'irregularity_score': irregularity_score,
                 'standardized_complexity': complexity
             }
-            # --- Contextual & Support-Set Features Integration ---
-            # Now passing real, non-empty data to advanced feature functions
-            # Defensive contextual feature calculation and logging
-            if not pos_features or not neg_features:
-                logger.warning("[CONTEXTUAL] pos_features or neg_features are empty, contrast_score will be 0.0.")
-            features['contrast_score'] = positive_negative_contrast_score(pos_features, neg_features) if pos_features and neg_features else 0.0
-            logger.info(f"[CONTEXTUAL] contrast_score: {features['contrast_score']}")
-
-            if feature_matrix.size:
-                features['mutual_information'] = support_set_mutual_information(feature_matrix.flatten())
-            else:
-                logger.warning("[CONTEXTUAL] feature_matrix is empty, mutual_information will be 0.0.")
-                features['mutual_information'] = 0.0
-            logger.info(f"[CONTEXTUAL] mutual_information: {features['mutual_information']}")
-
-            if labels:
-                features['label_consistency'] = label_consistency_ratio(labels)
-            else:
-                logger.warning("[CONTEXTUAL] labels are empty, label_consistency will be 0.0.")
-                features['label_consistency'] = 0.0
-            logger.info(f"[CONTEXTUAL] label_consistency: {features['label_consistency']}")
-
-            if shape_types:
-                features['shape_cooccurrence'] = support_set_shape_cooccurrence(shape_types).tolist()
-                features['category_consistency'] = category_consistency_score(shape_types)
-            else:
-                logger.warning("[CONTEXTUAL] shape_types are empty, shape_cooccurrence and category_consistency will be default.")
-                features['shape_cooccurrence'] = []
-                features['category_consistency'] = 0.0
-            logger.info(f"[CONTEXTUAL] shape_cooccurrence: {features['shape_cooccurrence']}")
-            logger.info(f"[CONTEXTUAL] category_consistency: {features['category_consistency']}")
-
-            if feature_matrix.size and class_labels:
-                features['class_prototype_distance'] = class_prototype_distance(feature_matrix, class_labels)
-            else:
-                logger.warning("[CONTEXTUAL] feature_matrix or class_labels are empty, class_prototype_distance will be default.")
-                features['class_prototype_distance'] = {}
-            logger.info(f"[CONTEXTUAL] class_prototype_distance: {features['class_prototype_distance']}")
-
-            if feature_matrix.size:
-                features['feature_importance_ranking'] = feature_importance_ranking(feature_matrix)
-            else:
-                logger.warning("[CONTEXTUAL] feature_matrix is empty, feature_importance_ranking will be default.")
-                features['feature_importance_ranking'] = []
-            logger.info(f"[CONTEXTUAL] feature_importance_ranking: {features['feature_importance_ranking']}")
-
-            if pos_symmetry and neg_symmetry:
-                features['cross_set_symmetry_difference'] = cross_set_symmetry_difference(pos_symmetry, neg_symmetry)
-            else:
-                logger.warning("[CONTEXTUAL] pos_symmetry or neg_symmetry are empty, cross_set_symmetry_difference will be 0.0.")
-                features['cross_set_symmetry_difference'] = 0.0
-            logger.info(f"[CONTEXTUAL] cross_set_symmetry_difference: {features['cross_set_symmetry_difference']}")
-
-            if feature_matrix.size:
-                features['concept_drift_score'] = concept_drift_score(feature_matrix.flatten())
-            else:
-                logger.warning("[CONTEXTUAL] feature_matrix is empty, concept_drift_score will be 0.0.")
-                features['concept_drift_score'] = 0.0
-            logger.info(f"[CONTEXTUAL] concept_drift_score: {features['concept_drift_score']}")
             # --- Compositional & Hierarchical Features Integration ---
             features['clustering_heights'] = hierarchical_clustering_heights(feature_matrix).tolist() if feature_matrix.size else []
             features['tree_depth'] = composition_tree_depth(tree, root) if tree and root else 0
@@ -1651,187 +1578,153 @@ def main():
 
     for problem_id, problem_data in problems_data.items():
         try:
-            # Determine category from problem_id
-            if problem_id.startswith('bd_'):
-                category = 'bd'
-            elif problem_id.startswith('ff_'):
-                category = 'ff'
-            elif problem_id.startswith('hd_'):
-                category = 'hd'
-            else:
-                category = 'unknown'
+            # Defensive: check problem_data structure
+            if not (isinstance(problem_data, list) and len(problem_data) == 2):
+                logger.warning(f"Problem {problem_id} has unexpected data format, skipping.")
+                continue
 
-            # Always initialize these variables for every problem
+            positive_examples, negative_examples = problem_data
+            category = 'bd' if problem_id.startswith('bd_') else (
+                'ff' if problem_id.startswith('ff_') else (
+                'hd' if problem_id.startswith('hd_') else 'unknown'))
+
             pos_results, neg_results = [], []
+            num_images_in_problem = 0
             problem_unique_shape_functions = set()
             problem_shape_function_counts = {}
             problem_modifiers = set()
-            num_images_in_problem = 0
 
-            if isinstance(problem_data, list) and len(problem_data) == 2:
-                positive_examples, negative_examples = problem_data
-                # Process all images, collect both sets
-                logger.info(f"[DEBUG][logo_to_shape] Problem {problem_id}: Processing {len(positive_examples)} positive, {len(negative_examples)} negative images.")
-                for i, img in enumerate(positive_examples):
-                    logger.debug(f"[DEBUG][logo_to_shape] Problem {problem_id}: Positive image {i}: {img}")
-                for i, img in enumerate(negative_examples):
-                    logger.debug(f"[DEBUG][logo_to_shape] Problem {problem_id}: Negative image {i}: {img}")
-                for i, action_commands in enumerate(positive_examples):
-                    total_images += 1
-                    num_images_in_problem += 1
-                    image_id = f"{problem_id}_pos_{i}"
-                    image_path = f"images/{problem_id}/category_1/{i}.png"
-                    # Tag image as positive before feature extraction
-                    result = processor.process_single_image(
-                        action_commands, image_id, True, problem_id, category, image_path
-                    )
-                    if result:
-                        result['is_positive'] = True
-                        pos_results.append(result)
-                        all_results.append(result)
-                        successful_images += 1
-                        summary = result.get('image_canonical_summary', {})
-                        for fn in summary.get('unique_shape_functions', []):
-                            problem_unique_shape_functions.add(fn)
-                        for fn, count in summary.get('shape_function_counts', {}).items():
-                            problem_shape_function_counts[fn] = problem_shape_function_counts.get(fn, 0) + count
-                        for mod in summary.get('modifiers', []):
-                            problem_modifiers.add(mod)
-                for i, action_commands in enumerate(negative_examples):
-                    total_images += 1
-                    num_images_in_problem += 1
-                    image_id = f"{problem_id}_neg_{i}"
-                    image_path = f"images/{problem_id}/category_0/{i}.png"
-                    # Tag image as negative before feature extraction
-                    logger.debug(f"[DEBUG][logo_to_shape] Problem {problem_id}: Extracting features for negative image {i} (id={image_id})")
-                    result = processor.process_single_image(
-                        action_commands, image_id, False, problem_id, category, image_path
-                    )
-                    if result:
-                        result['is_positive'] = False
-                        neg_results.append(result)
-                        all_results.append(result)
-                        successful_images += 1
-                        summary = result.get('image_canonical_summary', {})
-                        for fn in summary.get('unique_shape_functions', []):
-                            problem_unique_shape_functions.add(fn)
-                        for fn, count in summary.get('shape_function_counts', {}).items():
-                            problem_shape_function_counts[fn] = problem_shape_function_counts.get(fn, 0) + count
-                        for mod in summary.get('modifiers', []):
-                            problem_modifiers.add(mod)
-            else:
-                logger.warning(f"Problem {problem_id} has unexpected data format, skipping.")
-                continue
+            # Process positive examples
+            for i, action_commands in enumerate(positive_examples):
+                total_images += 1
+                num_images_in_problem += 1
+                image_id = f"{problem_id}_pos_{i}"
+                image_path = f"images/{problem_id}/category_1/{i}.png"
+                result = processor.process_single_image(
+                    action_commands, image_id, True, problem_id, category, image_path
+                )
+                if result:
+                    result['is_positive'] = True
+                    pos_results.append(result)
+                    all_results.append(result)
+                    successful_images += 1
+                    summary = result.get('image_canonical_summary', {})
+                    for fn in summary.get('unique_shape_functions', []):
+                        problem_unique_shape_functions.add(fn)
+                    for fn, count in summary.get('shape_function_counts', {}).items():
+                        problem_shape_function_counts[fn] = problem_shape_function_counts.get(fn, 0) + count
+                    for mod in summary.get('modifiers', []):
+                        problem_modifiers.add(mod)
+
+            # Process negative examples
+            for i, action_commands in enumerate(negative_examples):
+                total_images += 1
+                num_images_in_problem += 1
+                image_id = f"{problem_id}_neg_{i}"
+                image_path = f"images/{problem_id}/category_0/{i}.png"
+                result = processor.process_single_image(
+                    action_commands, image_id, False, problem_id, category, image_path
+                )
+                if result:
+                    result['is_positive'] = False
+                    neg_results.append(result)
+                    all_results.append(result)
+                    successful_images += 1
+                    summary = result.get('image_canonical_summary', {})
+                    for fn in summary.get('unique_shape_functions', []):
+                        problem_unique_shape_functions.add(fn)
+                    for fn, count in summary.get('shape_function_counts', {}).items():
+                        problem_shape_function_counts[fn] = problem_shape_function_counts.get(fn, 0) + count
+                    for mod in summary.get('modifiers', []):
+                        problem_modifiers.add(mod)
 
             # --- Verification: Ensure 7-7 split ---
             assert len(pos_results) == 7 and len(neg_results) == 7, \
                 f"Expected 7 positives/7 negatives, got {len(pos_results)}/{len(neg_results)} for problem {problem_id}"
 
-            # --- Aggregate image-level features and compute cross-set metrics at the problem level ---
-            positive_image_features = [r.get('image_level_features', {}) for r in pos_results]
-            negative_image_features = [r.get('image_level_features', {}) for r in neg_results]
-            import numpy as np
-            def get_metric(feats, key):
-                vals = [f.get(key, 0.0) for f in feats if isinstance(f, dict)]
-                return float(np.mean(vals)) if vals else 0.0
-            cross_set_metrics = {
-                'area_contrast': abs(get_metric(positive_image_features, 'area_mean') - get_metric(negative_image_features, 'area_mean')),
-                'perimeter_contrast': abs(get_metric(positive_image_features, 'perimeter_mean') - get_metric(negative_image_features, 'perimeter_mean')),
-                'width_contrast': abs(get_metric(positive_image_features, 'width_mean') - get_metric(negative_image_features, 'width_mean')),
-                'height_contrast': abs(get_metric(positive_image_features, 'height_mean') - get_metric(negative_image_features, 'height_mean')),
-                'visual_complexity_contrast': abs(get_metric(positive_image_features, 'visual_complexity_mean') - get_metric(negative_image_features, 'visual_complexity_mean')),
-            }
-            # Attach cross-set metrics to each result for this problem
+            # --- Aggregate image-level feature vectors for each support set ---
+            positive_vectors = [list(r.get('image_level_features', {}).values()) for r in pos_results]
+            negative_vectors = [list(r.get('image_level_features', {}).values()) for r in neg_results]
+            # Compute all contextual metrics at the problem level
+            from src.Derive_labels.context_features import BongardFeatureExtractor
+            bfe = BongardFeatureExtractor()
+            problem_support_context = bfe.extract_support_set_context(positive_vectors, negative_vectors)
+            # Attach only the problem-level context to each image result
             for result in pos_results + neg_results:
-                result['cross_set_metrics'] = cross_set_metrics
-            # All context metrics (contrast, mutual information, label consistency, etc.) are now computed only at the problem level using image-level features
-            # Compute statistical support set context using context_features.py
-            from src.Derive_labels.context_features import BongardFeatureExtractor
-            logger.info(f"[SUPPORT-SET CONTEXT] Calling BongardFeatureExtractor.extract_support_set_context for problem {problem_id}")
-            bfe = BongardFeatureExtractor()
-            support_set_context = bfe.extract_support_set_context(pos_results, neg_results)
+                result['support_set_context_image'] = problem_support_context
+                result['discriminative_features_image'] = problem_support_context.get('discriminative', {})
 
-            # --- Compute and add support-set context features ---
-            # Defensive logging for contextual feature extraction
-            logger.info(f"[DEBUG][CONTEXTUAL] pos_results count: {len(pos_results)}")
-            logger.info(f"[DEBUG][CONTEXTUAL] neg_results count: {len(neg_results)}")
-            if pos_results:
-                logger.info(f"[DEBUG][CONTEXTUAL] Sample pos_results[0]: {json.dumps(pos_results[0], indent=2, ensure_ascii=False)}")
-            if neg_results:
-                logger.info(f"[DEBUG][CONTEXTUAL] Sample neg_results[0]: {json.dumps(neg_results[0], indent=2, ensure_ascii=False)}")
-            # Validate that results are image-level dicts
-            if not all(isinstance(r, dict) for r in pos_results):
-                logger.error(f"[ERROR][CONTEXTUAL] pos_results contains non-dict entries!")
-            if not all(isinstance(r, dict) for r in neg_results):
-                logger.error(f"[ERROR][CONTEXTUAL] neg_results contains non-dict entries!")
-            # Compute statistical support set context using context_features.py
-            from src.Derive_labels.context_features import BongardFeatureExtractor
-            logger.info(f"[SUPPORT-SET CONTEXT] Calling BongardFeatureExtractor.extract_support_set_context for problem {problem_id}")
-            bfe = BongardFeatureExtractor()
-            support_set_context = bfe.extract_support_set_context(pos_results, neg_results)
-            logger.info(f"[SUPPORT-SET CONTEXT] OUTPUT for problem {problem_id}: {json.dumps(support_set_context, indent=2, ensure_ascii=False)}")
-            # Add support_set_context and discriminative features to each image result
-            for r in pos_results + neg_results:
-                    # Always attach image-level support_set_context and discriminative_features
-                    r['support_set_context_image'] = support_set_context if isinstance(support_set_context, dict) else {}
-                    if 'discriminative' in support_set_context:
-                        r['discriminative_features_image'] = support_set_context['discriminative']
-                    # If support set is missing, attach a meaningful reason
-                    if not support_set_context or not support_set_context.get('positive_stats', {}).get('valid', False):
-                        r['support_set_context_image']['valid'] = False
-                        r['support_set_context_image']['reason'] = support_set_context.get('positive_stats', {}).get('reason', 'missing_support_set')
-                    if not support_set_context or not support_set_context.get('discriminative', {}).get('valid', False):
-                        r['discriminative_features_image'] = {
-                            'valid': False,
-                            'reason': support_set_context.get('discriminative', {}).get('reason', 'missing_discriminative_set'),
-                            'stats': {}
+            # Save problem-level canonical summary
+            # --- Aggregate multiscale and spatial topological features at problem level ---
+            import numpy as np
+            def aggregate_feature_dicts(dicts):
+                if not dicts:
+                    return {}
+                keys = set().union(*(d.keys() for d in dicts if isinstance(d, dict)))
+                agg = {}
+                for k in keys:
+                    vals = [d[k] for d in dicts if isinstance(d, dict) and k in d and isinstance(d[k], (int, float, np.integer, np.floating))]
+                    if vals:
+                        agg[k] = {
+                            'mean': float(np.mean(vals)),
+                            'var': float(np.var(vals)),
+                            'min': float(np.min(vals)),
+                            'max': float(np.max(vals))
                         }
-                # --- Advanced contextual features aggregation and attachment ---
-                # Import contextual feature functions
+                return agg
 
+            all_results_for_problem = pos_results + neg_results
+            multiscale_list = [r.get('multiscale_features', {}) for r in all_results_for_problem]
+            spatial_topo_list = [r.get('advanced_spatial_topological', {}) for r in all_results_for_problem]
+            problem_multiscale = aggregate_feature_dicts(multiscale_list)
+            problem_spatial_topological = aggregate_feature_dicts(spatial_topo_list)
 
-                # Example: aggregate a few key features (adjust keys as needed)
-            def safe_get(results, key, default=0.0):
-                return [r.get(key, default) for r in results]
+            # --- Compositional hierarchical features at problem level ---
+            compositional_features = {}
+            try:
+                shape_vertices_list = [r.get('geometry', {}).get('vertices', []) for r in all_results_for_problem if isinstance(r, dict) and 'geometry' in r]
+                compositional_features['hierarchical_clustering_heights'] = hierarchical_clustering_heights(shape_vertices_list)
+                compositional_features['composition_tree_depth'] = composition_tree_depth(shape_vertices_list)
+                compositional_features['composition_tree_branching_factor'] = composition_tree_branching_factor(shape_vertices_list)
+                compositional_features['subgraph_isomorphism_frequencies'] = subgraph_isomorphism_frequencies(shape_vertices_list)
+                compositional_features['recursive_shape_patterns'] = recursive_shape_patterns(shape_vertices_list)
+                compositional_features['multi_level_symmetry_chains'] = multi_level_symmetry_chains(shape_vertices_list)
+                compositional_features['layered_edge_complexity'] = layered_edge_complexity(shape_vertices_list)
+                compositional_features['overlapping_substructure_ratios'] = overlapping_substructure_ratios(shape_vertices_list)
+                compositional_features['composition_regularity_score'] = composition_regularity_score(shape_vertices_list)
+                compositional_features['nested_convex_hull_levels'] = nested_convex_hull_levels(shape_vertices_list)
+            except Exception as e:
+                logger.warning(f"[PROBLEM LEVEL] Failed to compute compositional hierarchical features: {e}")
+                compositional_features = {}
 
-            # You may need to adjust these keys to match your result dicts
-            pos_contrast_feats = safe_get(pos_results, 'contrast_score')
-            neg_contrast_feats = safe_get(neg_results, 'contrast_score')
-            pos_mi_feats = safe_get(pos_results, 'mutual_information')
-            neg_mi_feats = safe_get(neg_results, 'mutual_information')
-            pos_labels = safe_get(pos_results, 'class_label', '')
-            neg_labels = safe_get(neg_results, 'class_label', '')
-            pos_shape_types = safe_get(pos_results, 'shape_type', '')
-            neg_shape_types = safe_get(neg_results, 'shape_type', '')
-            pos_symmetry = safe_get(pos_results, 'symmetry_score')
-            neg_symmetry = safe_get(neg_results, 'symmetry_score')
-
-            # Feature matrix for ranking (example: use 'feature_vector' key if present)
-            pos_feature_matrix = [r.get('feature_vector', []) for r in pos_results if 'feature_vector' in r]
-            neg_feature_matrix = [r.get('feature_vector', []) for r in neg_results if 'feature_vector' in r]
-            all_feature_matrix = pos_feature_matrix + neg_feature_matrix
-
-            # Compute advanced contextual features
-            contextual_features = {
-                'contrast_score': positive_negative_contrast_score(pos_contrast_feats, neg_contrast_feats),
-                'mutual_information': support_set_mutual_information(pos_contrast_feats + neg_contrast_feats),
-                'label_consistency': label_consistency_ratio(pos_labels + neg_labels),
-                'concept_drift_score': concept_drift_score(pos_contrast_feats + neg_contrast_feats),
-                'shape_cooccurrence': support_set_shape_cooccurrence(pos_shape_types + neg_shape_types).tolist(),
-                'category_consistency': category_consistency_score(pos_shape_types + neg_shape_types),
-                'class_prototype_distance': class_prototype_distance(
-                    np.array(all_feature_matrix) if all_feature_matrix else np.zeros((0,)),
-                    pos_labels + neg_labels
-                ),
-                'feature_importance_ranking': feature_importance_ranking(
-                    np.array(all_feature_matrix) if all_feature_matrix else np.zeros((0,))
-                ),
-                'cross_set_symmetry_difference': cross_set_symmetry_difference(pos_symmetry, neg_symmetry)
+            problem_summary = {
+                'problem_id': problem_id,
+                'unique_shape_functions': sorted(list(problem_unique_shape_functions)),
+                'shape_function_counts': problem_shape_function_counts,
+                'modifiers': sorted(list(problem_modifiers)),
+                'num_images': num_images_in_problem,
+                'compositional_hierarchical_features': compositional_features,
+                'problem_multiscale_features': problem_multiscale,
+                'problem_spatial_topological_features': problem_spatial_topological
             }
+            logger.info(f"[PROBLEM SUMMARY] Problem: {problem_id}\n{json.dumps(problem_summary, indent=2, ensure_ascii=False)}")
+            problem_summaries.append(problem_summary)
 
-            # Attach contextual features to each image result
-            for r in pos_results + neg_results:
-                r['contextual_features_problem_level'] = contextual_features
+            # --- Verification: Ensure 7-7 split ---
+            assert len(pos_results) == 7 and len(neg_results) == 7, \
+                f"Expected 7 positives/7 negatives, got {len(pos_results)}/{len(neg_results)} for problem {problem_id}"
+
+            # --- Aggregate image-level feature vectors for each support set ---
+            positive_vectors = [list(r.get('image_level_features', {}).values()) for r in pos_results]
+            negative_vectors = [list(r.get('image_level_features', {}).values()) for r in neg_results]
+            # Compute all contextual metrics at the problem level
+            from src.Derive_labels.context_features import BongardFeatureExtractor
+            bfe = BongardFeatureExtractor()
+            problem_support_context = bfe.extract_support_set_context(positive_vectors, negative_vectors)
+            # Attach only the problem-level context to each image result
+            for result in pos_results + neg_results:
+                result['support_set_context_image'] = problem_support_context
+                result['discriminative_features_image'] = problem_support_context.get('discriminative', {})
 
             # Save problem-level canonical summary
             problem_summary = {

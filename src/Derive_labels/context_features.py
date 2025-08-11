@@ -39,15 +39,32 @@ class BongardFeatureExtractor:
         and discriminative features (mean difference). Returns a dict with all these.
         """
         logging.info(f"[extract_support_set_context] INPUT: positive_images={len(positive_images)}, negative_images={len(negative_images)}")
-        pos_features = [self.extract_image_features(img) for img in positive_images]
-        neg_features = [self.extract_image_features(img) for img in negative_images]
+        if not positive_images or not negative_images:
+            context = {
+                'valid': False,
+                'reason': 'missing_image_sets',
+                'positive_stats': {'valid': False, 'reason': 'no_positive_images', 'count': len(positive_images), 'stats': {}},
+                'negative_stats': {'valid': False, 'reason': 'no_negative_images', 'count': len(negative_images), 'stats': {}},
+                'discriminative': {'valid': False, 'reason': 'insufficient_data', 'stats': {}}
+            }
+            logging.info(f"[extract_support_set_context] OUTPUT: {context}")
+            return context
+        # Now positive_images and negative_images are lists of image-level feature vectors (list of floats)
+        pos_features = positive_images
+        neg_features = negative_images
         pos_stats = self.compute_feature_statistics(pos_features, label='positive')
         neg_stats = self.compute_feature_statistics(neg_features, label='negative')
         discriminative = self.compute_discriminative_features(pos_features, neg_features)
         context = {
+            'valid': True,
+            'reason': 'successful_problem_level_extraction',
             'positive_stats': pos_stats,
             'negative_stats': neg_stats,
-            'discriminative': discriminative
+            'discriminative': {
+                'valid': True,
+                'reason': 'cross_set_comparison_successful',
+                'stats': discriminative
+            }
         }
         logging.info(f"[extract_support_set_context] OUTPUT: {context}")
         return context
