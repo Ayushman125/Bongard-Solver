@@ -93,35 +93,21 @@ def load_action_programs(base_dir, categories=('bd', 'ff', 'hd')):
     
     Expected structure: {problem_id: [positive_examples, negative_examples]}
     """
-    import glob
     action_programs = {}
     for cat in categories:
-        # Look for action program files in the category subdirectory
-        action_file_pattern = os.path.join(base_dir, cat, f"{cat}_action_programs.json")
-        
-        # Also try direct pattern match for backward compatibility
-        if not glob.glob(action_file_pattern):
-            action_file_pattern = os.path.join(base_dir, f"{cat}_action_programs.json")
-        
-        for fname in glob.glob(action_file_pattern):
-            print(f"[INFO] Loading action programs from {fname}")
+        json_path = os.path.join(base_dir, cat, f"{cat}_action_programs.json")
+        if os.path.exists(json_path):
             try:
-                with open(fname, 'r', encoding='utf-8') as f:
-                    action_data = json.load(f)
-                    
-                # Merge action programs from this category
-                for problem_id, action_program_data in action_data.items():
-                    # Validate structure: should be [positive_examples, negative_examples]
-                    if isinstance(action_program_data, list) and len(action_program_data) == 2:
-                        action_programs[problem_id] = action_program_data
-                        # Removed per-problem log for cleaner output
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        action_programs.update(data)
                     else:
-                        print(f"[WARN] Unexpected action program structure for {problem_id}: {type(action_program_data)}")
-                        
+                        print(f"[WARN] {json_path} does not contain a dict at top level.")
             except Exception as e:
-                print(f"[WARN] Failed to load action program {fname}: {e}")
-    
-    # Removed misleading log; filtered count is now logged in pipeline
+                print(f"[ERROR] Failed to load {json_path}: {e}")
+        else:
+            print(f"[WARN] Action program file not found: {json_path}")
     return action_programs
 
 def parse_action_command(command):
@@ -169,7 +155,14 @@ def parse_action_command(command):
             'y': y,
             'full_command': command
         }
-    elif command_type == 'turn':
+            # ...existing code...
+        try:
+            pos_count = len(example_lists[0])
+            neg_count = len(example_lists[1])
+        except Exception as e:
+            pos_count = neg_count = -1
+            print(f"[DEBUG][data_loader] Problem {problem_id}: Error counting examples: {e}")
+        print(f"[DEBUG][data_loader] Problem {problem_id}: Loaded {pos_count} positive, {neg_count} negative examples.")
         # turn_angle format
         angle = float(parts[1]) if len(parts) >= 2 else 0.0
         return {
@@ -186,36 +179,40 @@ def parse_action_command(command):
         parameters = '_'.join(parts[2:]) if len(parts) > 2 else ''
         
         # Parse coordinate parameters for line/arc commands
-        coords = None
-        size = None
-        thickness = None
-        
-        if parameters and '-' in parameters:
-            try:
-                # Format: size-thickness (e.g., "1.000-0.500")
-                coord_parts = parameters.split('-')
-                if len(coord_parts) >= 2:
-                    size = float(coord_parts[0])
-                    thickness = float(coord_parts[1])
-                    coords = (size, thickness)
-            except ValueError:
-                pass
-        
-        # Determine geometric properties based on the 5 discovered shape types
-        is_closed = shape in ['circle', 'square', 'triangle']  # These form closed shapes
-        is_curved = command_type == 'arc' or shape == 'circle'  # Arcs and circles are curved
-        is_regular = shape in ['circle', 'square', 'triangle']  # Regular geometric shapes
-        is_linear_pattern = shape in ['normal', 'zigzag']  # Linear patterns
-        
-        # Shape complexity categorization
-        complexity_level = {
-            'normal': 1,      # Simplest - straight lines
-            'circle': 2,      # Simple geometric shape
-            'square': 2,      # Simple geometric shape  
-            'triangle': 2,    # Simple geometric shape
-            'zigzag': 3       # Most complex - irregular pattern
-        }.get(shape, 1)
-        
+
+        import os
+        import json
+
+        def load_action_programs(json_paths):
+            merged = {}
+            for path in json_paths:
+                if os.path.exists(path):
+                    with open(path, 'r') as f:
+                        try:
+                            data = json.load(f)
+                            merged.update(data)
+                        except Exception as e:
+                            print(f"Error loading {path}: {e}")
+            return merged
+
+        def load_bongard_problems():
+            # List all relevant JSON files
+            json_files = [
+                os.path.join('data', 'raw', 'ShapeBongard_V2', 'bd', 'bd_action_programs.json'),
+                os.path.join('data', 'raw', 'ShapeBongard_V2', 'ff', 'ff_action_programs.json'),
+                os.path.join('data', 'raw', 'ShapeBongard_V2', 'hd', 'hd_action_programs.json')
+            ]
+            problems = load_action_programs(json_files)
+            result = []
+            for problem_name, example_groups in problems.items():
+                # Defensive: ensure there are exactly two groups
+                if isinstance(example_groups, list) and len(example_groups) == 2:
+                    positives = example_groups[0]
+                    negatives = example_groups[1]
+                    result.append([positives, negatives])
+                else:
+                    print(f"Warning: Problem {problem_name} does not have two groups, skipping.")
+            return result
         return {
             'command_type': command_type,
             'shape': shape,

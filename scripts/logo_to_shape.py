@@ -1673,8 +1673,7 @@ def main():
             else:
                 category = 'unknown'
 
-
-            # Defensive: aggregate positive and negative examples from problem_data
+            # Always initialize these variables for every problem
             pos_results, neg_results = [], []
             problem_unique_shape_functions = set()
             problem_shape_function_counts = {}
@@ -1684,17 +1683,22 @@ def main():
             if isinstance(problem_data, list) and len(problem_data) == 2:
                 positive_examples, negative_examples = problem_data
                 # Process all images, collect both sets
+                logger.info(f"[DEBUG][logo_to_shape] Problem {problem_id}: Processing {len(positive_examples)} positive, {len(negative_examples)} negative images.")
+                for i, img in enumerate(positive_examples):
+                    logger.debug(f"[DEBUG][logo_to_shape] Problem {problem_id}: Positive image {i}: {img}")
+                for i, img in enumerate(negative_examples):
+                    logger.debug(f"[DEBUG][logo_to_shape] Problem {problem_id}: Negative image {i}: {img}")
                 for i, action_commands in enumerate(positive_examples):
                     total_images += 1
                     num_images_in_problem += 1
                     image_id = f"{problem_id}_pos_{i}"
                     image_path = f"images/{problem_id}/category_1/{i}.png"
-                    # Inject is_positive into each image dict before feature extraction
+                    # Tag image as positive before feature extraction
                     result = processor.process_single_image(
                         action_commands, image_id, True, problem_id, category, image_path
                     )
                     if result:
-                        logger.info(f"[LABEL OUTPUT] Image: {image_id} | Problem: {problem_id}\n{json.dumps(result, indent=2, ensure_ascii=False)}")
+                        result['is_positive'] = True
                         pos_results.append(result)
                         all_results.append(result)
                         successful_images += 1
@@ -1710,12 +1714,13 @@ def main():
                     num_images_in_problem += 1
                     image_id = f"{problem_id}_neg_{i}"
                     image_path = f"images/{problem_id}/category_0/{i}.png"
-                    # Inject is_positive into each image dict before feature extraction
+                    # Tag image as negative before feature extraction
+                    logger.debug(f"[DEBUG][logo_to_shape] Problem {problem_id}: Extracting features for negative image {i} (id={image_id})")
                     result = processor.process_single_image(
                         action_commands, image_id, False, problem_id, category, image_path
                     )
                     if result:
-                        logger.info(f"[LABEL OUTPUT] Image: {image_id} | Problem: {problem_id}\n{json.dumps(result, indent=2, ensure_ascii=False)}")
+                        result['is_positive'] = False
                         neg_results.append(result)
                         all_results.append(result)
                         successful_images += 1
@@ -1729,6 +1734,27 @@ def main():
             else:
                 logger.warning(f"Problem {problem_id} has unexpected data format, skipping.")
                 continue
+
+            # --- Verification: Ensure 7-7 split ---
+            assert len(pos_results) == 7 and len(neg_results) == 7, \
+                f"Expected 7 positives/7 negatives, got {len(pos_results)}/{len(neg_results)} for problem {problem_id}"
+
+            # --- Compute and add support-set context features ---
+            logger.info(f"[DEBUG][CONTEXTUAL] pos_results count: {len(pos_results)}")
+            logger.info(f"[DEBUG][CONTEXTUAL] neg_results count: {len(neg_results)}")
+            if pos_results:
+                logger.info(f"[DEBUG][CONTEXTUAL] Sample pos_results[0]: {json.dumps(pos_results[0], indent=2, ensure_ascii=False)}")
+            if neg_results:
+                logger.info(f"[DEBUG][CONTEXTUAL] Sample neg_results[0]: {json.dumps(neg_results[0], indent=2, ensure_ascii=False)}")
+            if not all(isinstance(r, dict) for r in pos_results):
+                logger.error(f"[ERROR][CONTEXTUAL] pos_results contains non-dict entries!")
+            if not all(isinstance(r, dict) for r in neg_results):
+                logger.error(f"[ERROR][CONTEXTUAL] neg_results contains non-dict entries!")
+            # Compute statistical support set context using context_features.py
+            from src.Derive_labels.context_features import BongardFeatureExtractor
+            logger.info(f"[SUPPORT-SET CONTEXT] Calling BongardFeatureExtractor.extract_support_set_context for problem {problem_id}")
+            bfe = BongardFeatureExtractor()
+            support_set_context = bfe.extract_support_set_context(pos_results, neg_results)
 
             # --- Compute and add support-set context features ---
             # Defensive logging for contextual feature extraction

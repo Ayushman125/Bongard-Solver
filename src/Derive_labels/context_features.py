@@ -119,6 +119,12 @@ class BongardFeatureExtractor:
         try:
             vertices = image.get('vertices') if isinstance(image, dict) else None
             strokes = image.get('strokes') if isinstance(image, dict) else []
+            # If this is a negative image, log raw input for each stroke
+            if image.get('is_positive') is False:
+                for idx, stroke in enumerate(strokes):
+                    cmd = stroke.get('command', None) if isinstance(stroke, dict) else None
+                    verts = stroke.get('vertices', []) if isinstance(stroke, dict) else []
+                    logging.info(f"[NEGATIVE][RAW INPUT] stroke_idx={idx}, command={cmd}, vertices={verts}")
             # Compute and log per-image relational features
             from src.Derive_labels.features import extract_relational_features
             stroke_dicts = [s['features'] if 'features' in s else s for s in strokes if isinstance(s, dict) and ('features' in s and 'vertices' in s['features'])]
@@ -309,6 +315,20 @@ class BongardFeatureExtractor:
                 if k not in features:
                     logging.warning(f"[extract_image_features] Missing physics key '{k}', setting default value.")
                     features[k] = 0.0
+            # Ensure output dict includes mapping for every negative stroke
+            if image.get('is_positive') is False:
+                features['negative_strokes'] = {}
+                for idx, stroke in enumerate(strokes):
+                    cmd = stroke.get('command', None) if isinstance(stroke, dict) else None
+                    verts = stroke.get('vertices', []) if isinstance(stroke, dict) else []
+                    geom = stroke.get('geometry', {}) if isinstance(stroke, dict) else {}
+                    status = "degenerate" if not verts or geom.get('area', 0) == 0 else "valid"
+                    features['negative_strokes'][f"neg_stroke_{idx}"] = {
+                        "command": cmd,
+                        "vertices": verts,
+                        "geometry": geom,
+                        "status": status
+                    }
             logging.info(f"[extract_image_features] OUTPUT: {features}")
             logging.debug(f"[extract_image_features] FINAL OUTPUT bounding_box: {features.get('bounding_box')}")
             logging.debug(f"[extract_image_features] FINAL OUTPUT width: {features.get('width')}, height: {features.get('height')}")

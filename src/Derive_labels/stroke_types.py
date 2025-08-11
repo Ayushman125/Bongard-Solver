@@ -194,17 +194,32 @@ def extract_action_type_prefixes(problems_data):
     This mirrors hybrid.py's handling and avoids information loss from naive string splitting.
     """
     prefixes = set()
+    def robust_flatten(cmds):
+        # Recursively flatten nested lists
+        if isinstance(cmds, list):
+            result = []
+            for item in cmds:
+                if isinstance(item, list):
+                    result.extend(robust_flatten(item))
+                else:
+                    result.append(item)
+            return result
+        else:
+            return [cmds]
+
     for problem_data in problems_data.values():
         if not (isinstance(problem_data, list) and len(problem_data) == 2):
             logger.info(f"[extract_action_type_prefixes] Skipping non-standard problem_data: {problem_data}")
             continue
         for example_list in problem_data:
             for action_commands in example_list:
-                # Flatten if needed
-                if isinstance(action_commands, list) and len(action_commands) == 1 and isinstance(action_commands[0], list):
-                    action_commands = action_commands[0]
+                # Log the structure and type of action_commands before flattening
+                logger.info(f"[DEBUG] action_commands type: {type(action_commands)}, value: {action_commands}")
+                # Robustly flatten action_commands before parsing
+                flat_commands = robust_flatten(action_commands)
+                logger.info(f"[DEBUG] flat_commands type: {type(flat_commands)}, value: {flat_commands}")
                 try:
-                    bongard_image = BongardImage.import_from_action_string_list(action_commands)
+                    bongard_image = BongardImage.import_from_action_string_list(flat_commands)
                     for shape in getattr(bongard_image, 'one_stroke_shapes', []):
                         stroke_type = getattr(shape, 'stroke_type', None)
                         if hasattr(stroke_type, 'value'):
@@ -215,7 +230,7 @@ def extract_action_type_prefixes(problems_data):
                             prefix = shape.__class__.__name__
                         prefixes.add(prefix)
                 except Exception as e:
-                    logger.warning(f"[extract_action_type_prefixes] Failed to robustly parse action_commands: {action_commands} | Error: {e}")
+                    logger.warning(f"[extract_action_type_prefixes] Failed to robustly parse action_commands: {flat_commands} | Error: {e}")
                     continue
     logger.info(f"[extract_action_type_prefixes] OUTPUT: {prefixes}")
     return prefixes
