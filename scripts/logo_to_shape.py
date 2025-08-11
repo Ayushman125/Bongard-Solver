@@ -122,6 +122,30 @@ from src.Derive_labels.shape_utils import _calculate_homogeneity, _calculate_ang
 from src.Derive_labels.file_io import FileIO
 from src.Derive_labels.features import extract_multiscale_features
 from src.Derive_labels.context_features import BongardFeatureExtractor
+from src.Derive_labels.spatial_topological_features import compute_spatial_topological_features
+from src.Derive_labels.contextual_features import (
+    positive_negative_contrast_score,
+    support_set_mutual_information,
+    label_consistency_ratio,
+    concept_drift_score,
+    support_set_shape_cooccurrence,
+    category_consistency_score,
+    class_prototype_distance,
+    feature_importance_ranking,
+    cross_set_symmetry_difference
+)
+from src.Derive_labels.compositional_hierarchical import (
+    hierarchical_clustering_heights,
+    composition_tree_depth,
+    composition_tree_branching_factor,
+    subgraph_isomorphism_frequencies,
+    recursive_shape_patterns,
+    multi_level_symmetry_chains,
+    layered_edge_complexity,
+    overlapping_substructure_ratios,
+    composition_regularity_score,
+    nested_convex_hull_levels
+)
 
 
 
@@ -596,6 +620,7 @@ class ComprehensiveBongardProcessor:
             topo_shape_list = [{'vertices': shape.vertices} for shape in getattr(bongard_image, 'one_stroke_shapes', []) if hasattr(shape, 'vertices') and isinstance(shape.vertices, list)]
             logger.debug(f"[process_single_image] Passing topo_shape_list to extract_topological_features: {topo_shape_list}")
             graph_features = extract_topological_features(topo_shape_list)
+            advanced_spatial_topological = compute_spatial_topological_features(image_dict)
 
             # --- PATCH: Use robust group-based stroke feature extraction ---
             from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
@@ -834,6 +859,7 @@ class ComprehensiveBongardProcessor:
                     'regularity': regularity
                 },
                 'topological_features': graph_features if isinstance(graph_features, dict) else {},
+                'advanced_spatial_topological': advanced_spatial_topological if isinstance(advanced_spatial_topological, dict) else {},
                 'multiscale': multiscale_features if isinstance(multiscale_features, dict) else {},
             }
             # Ensure required fields are always present, even if empty
@@ -1169,6 +1195,42 @@ class ComprehensiveBongardProcessor:
                 'irregularity_score': irregularity_score,
                 'standardized_complexity': complexity
             }
+            # --- Contextual & Support-Set Features Example Integration ---
+            # You must provide the correct arguments from your pipeline context
+            # Example placeholders below; replace with actual variables as needed
+            pos_features, neg_features = [], []  # Fill with your positive/negative feature lists
+            labels = []  # Fill with your label list
+            shape_types = []  # Fill with your shape type list
+            class_labels = []  # Fill with your class label list
+            feature_matrix = np.array([])  # Fill with your feature matrix
+            pos_symmetry, neg_symmetry = [], []  # Fill with your symmetry scores
+            # Contextual features
+            features['contrast_score'] = positive_negative_contrast_score(pos_features, neg_features)
+            features['mutual_information'] = support_set_mutual_information(feature_matrix.flatten()) if feature_matrix.size else 0.0
+            features['label_consistency'] = label_consistency_ratio(labels)
+            features['shape_cooccurrence'] = support_set_shape_cooccurrence(shape_types).tolist() if shape_types else []
+            features['category_consistency'] = category_consistency_score(shape_types)
+            features['class_prototype_distance'] = class_prototype_distance(feature_matrix, class_labels) if feature_matrix.size and class_labels else {}
+            features['feature_importance_ranking'] = feature_importance_ranking(feature_matrix) if feature_matrix.size else []
+            features['cross_set_symmetry_difference'] = cross_set_symmetry_difference(pos_symmetry, neg_symmetry)
+            features['concept_drift_score'] = concept_drift_score(feature_matrix.flatten()) if feature_matrix.size else 0.0
+            # --- Compositional & Hierarchical Features Example Integration ---
+            graphs = []  # Fill with your list of networkx graphs
+            tree, root = {}, None  # Fill with your composition tree and root
+            symmetries = {}  # Fill with your symmetry chains dict
+            edges = []  # Fill with your layered edge lists
+            substructures = []  # Fill with your substructure list
+            parts, position_func = [], None  # Fill with your parts and position function
+            groups = []  # Fill with your nested groups
+            features['clustering_heights'] = hierarchical_clustering_heights(feature_matrix).tolist() if feature_matrix.size else []
+            features['tree_depth'] = composition_tree_depth(tree, root) if tree and root else 0
+            features['tree_branching_factor'] = composition_tree_branching_factor(tree, root) if tree and root else 0.0
+            features['subgraph_isomorphism_count'] = subgraph_isomorphism_frequencies(graphs) if graphs else 0
+            features['composition_regularity'] = composition_regularity_score(parts, position_func) if parts and position_func else 0.0
+            features['symmetry_chains'] = multi_level_symmetry_chains(symmetries) if symmetries else 0
+            features['layered_edge_complexity'] = layered_edge_complexity(edges) if edges else 0.0
+            features['overlap_ratio'] = overlapping_substructure_ratios(substructures, lambda x, y: 0) if substructures else 0.0
+            features['nested_convex_hull_levels'] = nested_convex_hull_levels(groups) if groups else 0
             logger.info(f"[_calculate_image_features] OUTPUT: {features}")
             return json_safe(features)
         except Exception as e:
@@ -1521,9 +1583,22 @@ def main():
             bfe = BongardFeatureExtractor()
             support_set_context = bfe.extract_support_set_context(pos_results, neg_results)
             logger.info(f"[SUPPORT-SET CONTEXT] OUTPUT for problem {problem_id}: {json.dumps(support_set_context, indent=2, ensure_ascii=False)}")
-            # Add support_set_context to each image result
+            # Add support_set_context and discriminative features to each image result
             for r in pos_results + neg_results:
-                r['support_set_context'] = support_set_context
+                    # Always attach image-level support_set_context and discriminative_features
+                    r['support_set_context_image'] = support_set_context if isinstance(support_set_context, dict) else {}
+                    if 'discriminative' in support_set_context:
+                        r['discriminative_features_image'] = support_set_context['discriminative']
+                    # If support set is missing, attach a meaningful reason
+                    if not support_set_context or not support_set_context.get('positive_stats', {}).get('valid', False):
+                        r['support_set_context_image']['valid'] = False
+                        r['support_set_context_image']['reason'] = support_set_context.get('positive_stats', {}).get('reason', 'missing_support_set')
+                    if not support_set_context or not support_set_context.get('discriminative', {}).get('valid', False):
+                        r['discriminative_features_image'] = {
+                            'valid': False,
+                            'reason': support_set_context.get('discriminative', {}).get('reason', 'missing_discriminative_set'),
+                            'stats': {}
+                        }
 
             # Save problem-level canonical summary
             problem_summary = {
