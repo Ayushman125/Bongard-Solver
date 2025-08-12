@@ -1872,3 +1872,227 @@ Traceback (most recent call last):
                                               ^^
 UnboundLocalError: cannot access local variable 'np' where it is not associated with a value
 
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_0, problem_id=bd_asymmetric_unbala_x_0000, error=A linearring requires at least 4 coordinates.
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 594, in process_single_image
+    advanced_spatial_topological = compute_spatial_topological_features(image_dict)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\spatial_topological_features.py", line 39, in compute_spatial_topological_features
+    features['containment_score'] = sum(1 for i, stroke in enumerate(strokes)
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\spatial_topological_features.py", line 40, in <genexpr>
+    for j, other in enumerate(strokes) if i != j and Polygon(stroke.get('vertices', [])).contains(Polygon(other.get('vertices', []))))
+                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\geometry\polygon.py", line 237, in __new__
+    shell = LinearRing(shell)
+            ^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\geometry\polygon.py", line 104, in __new__
+    geom = shapely.linearrings(coordinates)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\decorators.py", line 173, in wrapper
+    result = func(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\decorators.py", line 88, in wrapped
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\creation.py", line 316, in linearrings
+    return lib.linearrings(coords, np.intc(handle_nan), out=out, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: A linearring requires at least 4 coordinates.
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_1, problem_id=bd_asymmetric_unbala_x_0000, error=A linearring requires at least 4 coordinates.
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 594, in process_single_image
+    advanced_spatial_topological = compute_spatial_topological_features(image_dict)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\spatial_topological_features.py", line 39, in compute_spatial_topological_features
+    features['containment_score'] = sum(1 for i, stroke in enumerate(strokes)
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\spatial_topological_features.py", line 40, in <genexpr>
+    for j, other in enumerate(strokes) if i != j and Polygon(stroke.get('vertices', [])).contains(Polygon(other.get('vertices', []))))
+                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\geometry\polygon.py", line 237, in __new__
+    shell = LinearRing(shell)
+            ^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\geometry\polygon.py", line 104, in __new__
+    geom = shapely.linearrings(coordinates)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\decorators.py", line 173, in wrapper
+    result = func(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\decorators.py", line 88, in wrapped
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\creation.py", line 316, in linearrings
+    return lib.linearrings(coords, np.intc(handle_nan), out=out, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: A linearring requires at least 4 coordinates.
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_2, problem_id=bd_asymmetric_unbala_x_0000, error=A linearring requires at least 4 coordinates.
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 594, in process_single_image
+    advanced_spatial_topological = compute_spatial_topological_features(image_dict)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\spatial_topological_features.py", line 39, in compute_spatial_topological_features
+    features['containment_score'] = sum(1 for i, stroke in enumerate(strokes)
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\spatial_topological_features.py", line 40, in <genexpr>
+    for j, other in enumerate(strokes) if i != j and Polygon(stroke.get('vertices', [])).contains(Polygon(other.get('vertices', []))))
+                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\geometry\polygon.py", line 237, in __new__
+    shell = LinearRing(shell)
+            ^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\geometry\polygon.py", line 104, in __new__
+    geom = shapely.linearrings(coordinates)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\decorators.py", line 173, in wrapper
+    result = func(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\decorators.py", line 88, in wrapped
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\creation.py", line 316, in linearrings
+    return lib.linearrings(coords, np.intc(handle_nan), out=out, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: A linearring requires at least 4 coordinates.
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_3, problem_id=bd_asymmetric_unbala_x_0000, error=A linearring requires at least 4 coordinates.
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 594, in process_single_image
+    advanced_spatial_topological = compute_spatial_topological_features(image_dict)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\spatial_topological_features.py", line 39, in compute_spatial_topological_features
+    features['containment_score'] = sum(1 for i, stroke in enumerate(strokes)
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\spatial_topological_features.py", line 40, in <genexpr>
+    for j, other in enumerate(strokes) if i != j and Polygon(stroke.get('vertices', [])).contains(Polygon(other.get('vertices', []))))
+                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\geometry\polygon.py", line 237, in __new__
+    shell = LinearRing(shell)
+            ^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\geometry\polygon.py", line 104, in __new__
+    geom = shapely.linearrings(coordinates)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\decorators.py", line 173, in wrapper
+    result = func(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\decorators.py", line 88, in wrapped
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\creation.py", line 316, in linearrings
+    return lib.linearrings(coords, np.intc(handle_nan), out=out, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: A linearring requires at least 4 coordinates.
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_4, problem_id=bd_asymmetric_unbala_x_0000, error=A linearring requires at least 4 coordinates.
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 594, in process_single_image
+    advanced_spatial_topological = compute_spatial_topological_features(image_dict)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\spatial_topological_features.py", line 39, in compute_spatial_topological_features
+    features['containment_score'] = sum(1 for i, stroke in enumerate(strokes)
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\spatial_topological_features.py", line 40, in <genexpr>
+    for j, other in enumerate(strokes) if i != j and Polygon(stroke.get('vertices', [])).contains(Polygon(other.get('vertices', []))))
+                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\geometry\polygon.py", line 237, in __new__
+    shell = LinearRing(shell)
+            ^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\geometry\polygon.py", line 104, in __new__
+    geom = shapely.linearrings(coordinates)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\decorators.py", line 173, in wrapper
+    result = func(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\decorators.py", line 88, in wrapped
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\creation.py", line 316, in linearrings
+    return lib.linearrings(coords, np.intc(handle_nan), out=out, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: A linearring requires at least 4 coordinates.
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_5, problem_id=bd_asymmetric_unbala_x_0000, error=A linearring requires at least 4 coordinates.
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 594, in process_single_image
+    advanced_spatial_topological = compute_spatial_topological_features(image_dict)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\spatial_topological_features.py", line 39, in compute_spatial_topological_features
+    features['containment_score'] = sum(1 for i, stroke in enumerate(strokes)
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\spatial_topological_features.py", line 40, in <genexpr>
+    for j, other in enumerate(strokes) if i != j and Polygon(stroke.get('vertices', [])).contains(Polygon(other.get('vertices', []))))
+                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\geometry\polygon.py", line 237, in __new__
+    shell = LinearRing(shell)
+            ^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\geometry\polygon.py", line 104, in __new__
+    geom = shapely.linearrings(coordinates)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\decorators.py", line 173, in wrapper
+    result = func(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\decorators.py", line 88, in wrapped
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\creation.py", line 316, in linearrings
+    return lib.linearrings(coords, np.intc(handle_nan), out=out, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: A linearring requires at least 4 coordinates.
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_6, problem_id=bd_asymmetric_unbala_x_0000, error=A linearring requires at least 4 coordinates.
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 594, in process_single_image
+    advanced_spatial_topological = compute_spatial_topological_features(image_dict)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\spatial_topological_features.py", line 39, in compute_spatial_topological_features
+    features['containment_score'] = sum(1 for i, stroke in enumerate(strokes)
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\spatial_topological_features.py", line 40, in <genexpr>
+    for j, other in enumerate(strokes) if i != j and Polygon(stroke.get('vertices', [])).contains(Polygon(other.get('vertices', []))))
+                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\geometry\polygon.py", line 237, in __new__
+    shell = LinearRing(shell)
+            ^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\geometry\polygon.py", line 104, in __new__
+    geom = shapely.linearrings(coordinates)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\decorators.py", line 173, in wrapper
+    result = func(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\decorators.py", line 88, in wrapped
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\creation.py", line 316, in linearrings
+    return lib.linearrings(coords, np.intc(handle_nan), out=out, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: A linearring requires at least 4 coordinates.
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_0, problem_id=bd_asymmetric_unbala_x_0000, error=A linearring requires at least 4 coordinates.
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 594, in process_single_image
+    advanced_spatial_topological = compute_spatial_topological_features(image_dict)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\spatial_topological_features.py", line 39, in compute_spatial_topological_features
+    features['containment_score'] = sum(1 for i, stroke in enumerate(strokes)
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\spatial_topological_features.py", line 40, in <genexpr>
+    for j, other in enumerate(strokes) if i != j and Polygon(stroke.get('vertices', [])).contains(Polygon(other.get('vertices', []))))
+                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\geometry\polygon.py", line 237, in __new__
+    shell = LinearRing(shell)
+            ^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\geometry\polygon.py", line 104, in __new__
+    geom = shapely.linearrings(coordinates)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\decorators.py", line 173, in wrapper
+    result = func(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\decorators.py", line 88, in wrapped
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\venv\Lib\site-packages\shapely\creation.py", line 316, in linearrings
+    return lib.linearrings(coords, np.intc(handle_nan), out=out, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: A linearring requires at least 4 coordinates.
+

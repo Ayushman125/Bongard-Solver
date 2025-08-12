@@ -140,7 +140,7 @@ class PhysicsInference:
             """
             logger = logging.getLogger("PhysicsInference")
             try:
-                if not vertices or len(vertices) < 3:
+                if vertices is None or (isinstance(vertices, np.ndarray) and vertices.shape[0] < 3) or (isinstance(vertices, list) and len(vertices) < 3):
                     logger.warning("[robust_angular_variance] Not enough vertices. Returning 0.")
                     return 0.0
                 vertices = np.array(vertices)

@@ -56,10 +56,10 @@ def process_single_image(action_commands: List[str], image_id: str,
                 except Exception:
                     continue
         return result
-    logger.info(f"[PIPELINE] Processing image_id={image_id}, problem_id={problem_id}, is_positive={is_positive}")
-    logger.info(f"[PIPELINE] action_commands type: {type(action_commands)}, value: {action_commands}")
+    logger.info(f"[INPUT] Processing image_id={image_id}, problem_id={problem_id}, is_positive={is_positive}")
+    logger.info(f"[INPUT] action_commands type: {type(action_commands)}, value: {action_commands}")
     # Improved shape splitting logic
-    logger.info(f"[PIPELINE] Raw action_commands: {action_commands}")
+    logger.info(f"[SHAPE SPLIT] Raw action_commands: {action_commands}")
     shapes_commands = []
     if isinstance(action_commands, list) and action_commands and all(isinstance(cmd, list) for cmd in action_commands):
         # List of lists: each sublist is a shape/object
@@ -70,7 +70,7 @@ def process_single_image(action_commands: List[str], image_id: str,
                 logger.warning(f"[SHAPE SPLIT] Sublist {idx} is empty or invalid: {sublist}")
             else:
                 shapes_commands.append(valid_sublist)
-        logger.info(f"[PIPELINE] Parsed shapes_commands (multi-object): {shapes_commands}")
+        logger.info(f"[SHAPE SPLIT] Parsed shapes_commands (multi-object): {shapes_commands}")
     elif isinstance(action_commands, list) and all(isinstance(cmd, str) for cmd in action_commands):
         # Flat list: single shape
         valid_flat = [cmd for cmd in action_commands if isinstance(cmd, str) and cmd.strip()]
@@ -78,7 +78,7 @@ def process_single_image(action_commands: List[str], image_id: str,
             logger.warning(f"[SHAPE SPLIT] Flat action_commands is empty or invalid: {action_commands}")
         else:
             shapes_commands.append(valid_flat)
-        logger.info(f"[PIPELINE] Parsed shapes_commands (single-object): {shapes_commands}")
+        logger.info(f"[SHAPE SPLIT] Parsed shapes_commands (single-object): {shapes_commands}")
     else:
         logger.error(f"[SHAPE SPLIT] action_commands format not recognized: {action_commands}")
         return None
@@ -88,24 +88,7 @@ def process_single_image(action_commands: List[str], image_id: str,
     one_stroke_shapes = []
     original_action_commands = []
     for idx, shape_cmds in enumerate(shapes_commands):
-        logger.info(f"[PIPELINE] Parsing shape {idx} commands: {shape_cmds}")
-    # Log parsed shapes and their actions
-    for idx, shape in enumerate(one_stroke_shapes):
-        logger.info(f"[PIPELINE] Shape {idx}: {shape}")
-        if hasattr(shape, 'basic_actions'):
-            logger.info(f"[PIPELINE] Shape {idx} basic_actions: {shape.basic_actions}")
-        if hasattr(shape, 'start_coordinates'):
-            logger.info(f"[PIPELINE] Shape {idx} start_coordinates: {shape.start_coordinates}")
-        if hasattr(shape, 'geometry'):
-            logger.info(f"[PIPELINE] Shape {idx} geometry: {shape.geometry}")
-    # Remove painter/turtle-based extraction logic. All feature extraction uses mathematical simulator for vertices.
-    # Log feature extraction output
-    try:
-        logger.info(f"[PIPELINE] Extracting stroke features for image_id={image_id}")
-        stroke_features = extract_stroke_features_from_shapes(bongard_image)
-        logger.info(f"[PIPELINE] Stroke features output: {stroke_features}")
-    except Exception as stroke_exc:
-        logger.error(f"[PIPELINE] Exception during stroke feature extraction: {stroke_exc}")
+        logger.info(f"[PARSER] Parsing shape {idx} commands: {shape_cmds}")
         parsed_shape = parser.parse_action_commands(shape_cmds, problem_id)
         # Normalize basic_actions to strings immediately after parsing
         if hasattr(parsed_shape, 'basic_actions'):
@@ -392,58 +375,6 @@ def process_single_image(action_commands: List[str], image_id: str,
         posrot_labels = posrot_labels if isinstance(posrot_labels, dict) else {'centroid': [0.0, 0.0], 'orientation_degrees': 0.0}
         # Restore BongardImage construction before any reference
         bongard_image = BongardImage(one_stroke_shapes)
-        # --- PATCH: Always attach and run the painter to generate pen traces before feature extraction ---
-        # Indentation fixed: patch block is now at correct level
-        try:
-            from bongard.bongard_painter import BongardShapePainter
-            import turtle
-            screen = None
-            wn = None
-            try:
-                screen = turtle.Screen()
-                wn = turtle.Turtle()
-            except Exception as t_exc:
-                logger.warning(f"[PAINTER FALLBACK] Turtle screen/turtle init failed: {t_exc}. Retrying with default params.")
-                import types
-                screen = types.SimpleNamespace()
-                wn = types.SimpleNamespace()
-            painter = BongardShapePainter(screen, wn)
-            bongard_image.shape_painter = painter
-            for shape_idx, shape in enumerate(bongard_image.one_stroke_shapes):
-                actions = getattr(shape, 'basic_actions', None)
-                start_coords = getattr(shape, 'start_coordinates', None)
-                start_orient = getattr(shape, 'start_orientation', None)
-                scaling_factors = getattr(shape, 'scaling_factors', None)
-                logger.info(f"[PAINTER DEBUG] Shape {shape_idx}: actions={actions}, start_coords={start_coords}, start_orient={start_orient}, scaling_factors={scaling_factors}")
-                # Always call draw, use safe defaults if missing
-                valid_actions = actions if actions else []
-                valid_coords = start_coords if start_coords and len(start_coords) == 2 else [0.0, 0.0]
-                valid_orient = start_orient if start_orient is not None else 0.0
-                valid_scaling = scaling_factors if scaling_factors else [1.0]*len(valid_actions)
-                try:
-                    painter_result = painter.draw(valid_actions, valid_scaling, valid_coords, valid_orient)
-                    logger.info(f"[PAINTER DEBUG] painter.draw returned: {painter_result}")
-                    # Log turtle state and pen traces
-                    if hasattr(wn, 'position') and hasattr(wn, 'heading'):
-                        logger.info(f"[PAINTER STATE] Turtle position: {wn.position() if callable(wn.position) else wn.position}, heading: {wn.heading() if callable(wn.heading) else wn.heading}")
-                    if hasattr(painter, 'get_pen_traces'):
-                        shape.pen_traces = painter.get_pen_traces()
-                        logger.info(f"[PAINTER DEBUG] Pen traces for shape {shape_idx}: {shape.pen_traces}")
-                        if not shape.pen_traces or all(len(trace) == 0 for trace in shape.pen_traces):
-                            logger.warning(f"[PAINTER DIAG] Pen traces missing or empty for shape {shape_idx} after draw.")
-                    else:
-                        logger.info(f"[PAINTER DEBUG] Painter does not have get_pen_traces method.")
-                except Exception as painter_exc:
-                    logger.error(f"[PAINTER DEBUG] Exception during painter.draw: {painter_exc}")
-                    # Fallback: re-initialize painter and retry
-                    try:
-                        painter = BongardShapePainter(screen, wn)
-                        painter_result = painter.draw(valid_actions, valid_scaling, valid_coords, valid_orient)
-                        logger.info(f"[PAINTER FALLBACK] painter.draw retry returned: {painter_result}")
-                    except Exception as fallback_exc:
-                        logger.error(f"[PAINTER FALLBACK] Exception during fallback painter.draw: {fallback_exc}")
-        except Exception as painter_exc:
-            logger.info(f"[PIPELINE PATCH] Could not attach/run BongardShapePainter: {painter_exc}")
 
         # --- Always include raw vertices from BongardImage ---
         vertices_raw = []

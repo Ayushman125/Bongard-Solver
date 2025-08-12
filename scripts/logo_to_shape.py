@@ -9,7 +9,7 @@ file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 file_handler.setFormatter(file_formatter)
 
 console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)  # Show info/debug logs in terminal for debugging
+console_handler.setLevel(logging.WARNING)  # Only show warnings/errors in terminal
 console_formatter = logging.Formatter('%(levelname)s: %(message)s')
 console_handler.setFormatter(console_formatter)
 
@@ -174,22 +174,22 @@ class ComprehensiveBongardProcessor:
         self.context_extractor = BongardFeatureExtractor()
 
     def _calculate_vertices_from_action(self, action, stroke_index, bongard_image=None):
-        """Extract pen trace vertices using mathematical simulator (BongardCoordinateComputer)."""
-        from src.Derive_labels.coordinate_computer import compute_shape_vertices
-        # Get start coordinates, orientation, scaling factor from BongardImage if available
-        start_coords = (0, 0)
-        start_orientation = 0
-        scaling_factor = 1.0
-        if bongard_image and hasattr(bongard_image, 'one_stroke_shapes') and stroke_index < len(bongard_image.one_stroke_shapes):
-            shape = bongard_image.one_stroke_shapes[stroke_index]
-            start_coords = getattr(shape, 'start_coordinates', (0, 0))
-            start_orientation = getattr(shape, 'start_orientation', 0)
-            scaling_factors = getattr(shape, 'scaling_factors', [1.0])
-            scaling_factor = scaling_factors[0] if scaling_factors else 1.0
-        # Compute vertices mathematically
-        verts = compute_shape_vertices([action], start_coords, start_orientation, scaling_factor)
-        logger.info(f"[_calculate_vertices_from_action] Using mathematical simulator for stroke {stroke_index}: {verts[:5]} ... total={len(verts)}")
-        return verts
+        """Always use analytic vertices from the action parser for all strokes."""
+        try:
+            if hasattr(action, 'vertices_from_command'):
+                verts = action.vertices_from_command()
+                if verts:
+                    return verts
+            # Fallback to previous extraction if analytic not available
+            from src.Derive_labels.stroke_types import _extract_stroke_vertices, _compute_bounding_box
+            verts = _extract_stroke_vertices(action, stroke_index, None, bongard_image=bongard_image)
+            if verts:
+                bbox = _compute_bounding_box(verts)
+                logger.info(f"[_calculate_vertices_from_action] Bounding box: {bbox}")
+            return verts
+        except Exception as e:
+            logger.debug(f"Failed to calculate vertices from action: {e}")
+        return []
 
 
     def _calculate_pattern_regularity_from_modifiers(self, modifier_sequence: list) -> float:
@@ -314,8 +314,6 @@ def main():
                 num_images_in_problem += 1
                 image_id = f"{problem_id}_pos_{i}"
                 image_path = f"images/{problem_id}/category_1/{i}.png"
-                # --- PATCH: Always construct BongardImage, attach painter, call draw, and extract pen traces ---
-                logger.info(f"[PIPELINE PATCH] Processing image_id={image_id}, action_commands={action_commands}")
                 result = process_single_image(
                     action_commands, image_id, True, problem_id, category, image_path,
                     processing_stats=processor.processing_stats,
@@ -324,15 +322,11 @@ def main():
                     calculate_composition_features=_calculate_composition_features,
                     calculate_physics_features=_calculate_physics_features
                 )
-                # Log painter invocation and pen traces for every stroke
-                if result and 'strokes' in result:
-                    for idx, stroke in enumerate(result['strokes']):
-                        logger.info(f"[PIPELINE PATCH] Stroke {idx}: command={stroke.get('command')}, geometry={stroke.get('geometry')}, pen_trace={stroke.get('analytic_vertices')}")
                 if result is not None and result.get('degenerate_case', False):
                     degenerate_count += 1
-                    logger.warning(f"[PIPELINE PATCH] Degenerate case detected for image: {image_path}")
-                logger.info(f"[PIPELINE PATCH] INPUT: {image_path}")
-                logger.info(f"[PIPELINE PATCH] OUTPUT: {result}")
+                    logger.warning(f"[PIPELINE] Degenerate case detected for image: {image_path}")
+                logger.info(f"[PIPELINE] INPUT: {image_path}")
+                logger.info(f"[PIPELINE] OUTPUT: {result}")
                 if result:
                     result['is_positive'] = True
                     pos_results.append(result)
@@ -352,8 +346,6 @@ def main():
                 num_images_in_problem += 1
                 image_id = f"{problem_id}_neg_{i}"
                 image_path = f"images/{problem_id}/category_0/{i}.png"
-                # --- PATCH: Always construct BongardImage, attach painter, call draw, and extract pen traces ---
-                logger.info(f"[PIPELINE PATCH] Processing image_id={image_id}, action_commands={action_commands}")
                 result = process_single_image(
                     action_commands, image_id, False, problem_id, category, image_path,
                     processing_stats=processor.processing_stats,
@@ -362,15 +354,11 @@ def main():
                     calculate_composition_features=_calculate_composition_features,
                     calculate_physics_features=_calculate_physics_features
                 )
-                # Log painter invocation and pen traces for every stroke
-                if result and 'strokes' in result:
-                    for idx, stroke in enumerate(result['strokes']):
-                        logger.info(f"[PIPELINE PATCH] Stroke {idx}: command={stroke.get('command')}, geometry={stroke.get('geometry')}, pen_trace={stroke.get('analytic_vertices')}")
                 if result is not None and result.get('degenerate_case', False):
                     degenerate_count += 1
-                    logger.warning(f"[PIPELINE PATCH] Degenerate case detected for image: {image_path}")
-                logger.info(f"[PIPELINE PATCH] INPUT: {image_path}")
-                logger.info(f"[PIPELINE PATCH] OUTPUT: {result}")
+                    logger.warning(f"[PIPELINE] Degenerate case detected for image: {image_path}")
+                logger.info(f"[PIPELINE] INPUT: {image_path}")
+                logger.info(f"[PIPELINE] OUTPUT: {result}")
                 if result:
                     result['is_positive'] = False
                     neg_results.append(result)
@@ -460,36 +448,32 @@ def main():
             # --- Compositional hierarchical features at problem level ---
             compositional_features = {}
             try:
-                shape_vertices_list = [r.get('geometry', {}).get('vertices', []) for r in all_results_for_problem if isinstance(r, dict) and 'geometry' in r]
-                compositional_features['hierarchical_clustering_heights'] = hierarchical_clustering_heights(shape_vertices_list)
-                # Build a simple tree from vertices: treat first vertex as root, each subsequent as child of previous
-                def build_vertex_tree(vertices):
-                    tree = {}
-                    if not vertices:
-                        return tree, None
-                    root = tuple(vertices[0])
-                    prev = root
-                    tree[root] = []
-                    for v in vertices[1:]:
-                        v_tuple = tuple(v)
-                        tree.setdefault(prev, []).append(v_tuple)
-                        tree[v_tuple] = []
-                        prev = v_tuple
-                    return tree, root
+                    shape_vertices_list = [r.get('geometry', {}).get('vertices', []) for r in all_results_for_problem if isinstance(r, dict) and 'geometry' in r]
+                    compositional_features['hierarchical_clustering_heights'] = hierarchical_clustering_heights(shape_vertices_list)
 
-                # For each shape, build tree and root, then aggregate
-                trees_and_roots = [build_vertex_tree(verts) for verts in shape_vertices_list]
-                # For compositional features, use the first non-empty tree/root
-                tree, root = next(((t, r) for t, r in trees_and_roots if t and r), ({}, None))
-                compositional_features['composition_tree_depth'] = composition_tree_depth(tree, root) if tree and root else 0
-                compositional_features['composition_tree_branching_factor'] = composition_tree_branching_factor(tree, root) if tree and root else 0
-                compositional_features['subgraph_isomorphism_frequencies'] = subgraph_isomorphism_frequencies(shape_vertices_list)
-                compositional_features['recursive_shape_patterns'] = recursive_shape_patterns(shape_vertices_list)
-                compositional_features['multi_level_symmetry_chains'] = multi_level_symmetry_chains(shape_vertices_list)
-                compositional_features['layered_edge_complexity'] = layered_edge_complexity(shape_vertices_list)
-                compositional_features['overlapping_substructure_ratios'] = overlapping_substructure_ratios(shape_vertices_list)
-                compositional_features['composition_regularity_score'] = composition_regularity_score(shape_vertices_list)
-                compositional_features['nested_convex_hull_levels'] = nested_convex_hull_levels(shape_vertices_list)
+                    def to_dummy_tree(vertices_list):
+                        # If already a dict, return as is
+                        if isinstance(vertices_list, dict):
+                            return vertices_list, next(iter(vertices_list)) if vertices_list else None
+                        # If list, create a dummy tree: {0: [1, 2, ...]}
+                        if isinstance(vertices_list, list):
+                            tree = {0: list(range(1, len(vertices_list)+1))}
+                            for i, v in enumerate(vertices_list, 1):
+                                tree[i] = []
+                            return tree, 0
+                        # Otherwise, return empty tree
+                        return {}, None
+
+                    tree, root = to_dummy_tree(shape_vertices_list)
+                    compositional_features['composition_tree_depth'] = composition_tree_depth(tree, root) if root is not None else 0
+                    compositional_features['composition_tree_branching_factor'] = composition_tree_branching_factor(tree, root) if root is not None else 0.0
+                    compositional_features['subgraph_isomorphism_frequencies'] = subgraph_isomorphism_frequencies(shape_vertices_list)
+                    compositional_features['recursive_shape_patterns'] = recursive_shape_patterns(shape_vertices_list)
+                    compositional_features['multi_level_symmetry_chains'] = multi_level_symmetry_chains(shape_vertices_list)
+                    compositional_features['layered_edge_complexity'] = layered_edge_complexity(shape_vertices_list)
+                    compositional_features['overlapping_substructure_ratios'] = overlapping_substructure_ratios(shape_vertices_list)
+                    compositional_features['composition_regularity_score'] = composition_regularity_score(shape_vertices_list)
+                    compositional_features['nested_convex_hull_levels'] = nested_convex_hull_levels(shape_vertices_list)
             except Exception as e:
                 logger.warning(f"[PROBLEM LEVEL] Failed to compute compositional hierarchical features: {e}")
                 compositional_features = {}
