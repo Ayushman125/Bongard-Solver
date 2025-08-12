@@ -30,34 +30,154 @@ def compute_shape_segments(basic_actions, shape_vertices):
     m_eff = m-1 if closed else m
     seg_len = m_eff // n
     segments = []
-    idx = 0
-    for i in range(n):
-        start = idx
-        end = idx + seg_len
-        if i == n-1:
-            end = m_eff
-        segments.append((start, end))
-        idx = end
-    return segments
 
+# --- Top-level function: extract_stroke_features_from_shapes ---
 def extract_stroke_features_from_shapes(bongard_image, problem_id=None):
     """
-    For each shape in bongard_image.one_stroke_shapes, iterate over its actions/strokes.
-    Extract features for each stroke within its shape context, logging group membership and mismatches.
-    Returns a list of dicts: [{shape_index, stroke_index, stroke_command, features, group_info, ...}, ...]
+    Extracts stroke-level features from all shapes in a BongardImage.
+    Returns a list of dicts, one per stroke, with features and metadata.
     """
-    logging.info(f"[extract_stroke_features_from_shapes] INPUT bongard_image type: {type(bongard_image)} | problem_id={problem_id}")
-    logging.info(f"[extract_stroke_features_from_shapes] INPUT bongard_image.one_stroke_shapes: {getattr(bongard_image, 'one_stroke_shapes', None)}")
-    results = []
-    if not hasattr(bongard_image, 'one_stroke_shapes') or not bongard_image.one_stroke_shapes:
-        logging.warning(f"[extract_stroke_features_from_shapes] No shapes found in BongardImage for problem_id={problem_id}")
-        logging.info(f"[extract_stroke_features_from_shapes] OUTPUT: {results}")
-        return results
-    shapes = bongard_image.one_stroke_shapes
+    shapes = getattr(bongard_image, 'one_stroke_shapes', [])
     total_shapes = len(shapes)
-    total_strokes = sum(len(getattr(shape, 'actions', getattr(shape, 'strokes', []))) for shape in shapes)
-    logging.info(f"[extract_stroke_features_from_shapes] problem_id={problem_id} | num_shapes={total_shapes} | total_strokes={total_strokes}")
-    logging.info(f"[extract_stroke_features_from_shapes] PATCH: shapes={shapes}")
+    total_strokes = sum(len(getattr(shape, 'actions', getattr(shape, 'basic_actions', []))) for shape in shapes)
+    results = []
+
+    # --- Aggregate positive and negative strokes ---
+    positive_strokes = []
+    negative_strokes = []
+    stroke_results = []
+
+    for shape_idx, shape in enumerate(shapes):
+        actions = getattr(shape, 'actions', None)
+        if actions is None:
+            actions = getattr(shape, 'basic_actions', None)
+            logging.warning(f"[extract_stroke_features_from_shapes] Shape {shape_idx} missing 'actions', using 'basic_actions': {actions}")
+        else:
+            logging.info(f"[extract_stroke_features_from_shapes] Shape {shape_idx} actions: {actions}")
+        logging.info(f"[extract_stroke_features_from_shapes] Shape {shape_idx}: {shape}")
+        start_coords = getattr(shape, 'start_coordinates', None)
+        if start_coords is not None:
+            logging.info(f"[extract_stroke_features_from_shapes] Shape {shape_idx} start_coordinates: {start_coords}")
+        geometry = getattr(shape, 'geometry', None)
+        if geometry is not None:
+            logging.info(f"[extract_stroke_features_from_shapes] Shape {shape_idx} geometry: {geometry}")
+            if 'width' not in geometry or 'height' not in geometry:
+                logging.error(f"[extract_stroke_features_from_shapes] Shape {shape_idx} geometry missing width/height: {geometry}")
+        if not actions:
+            logging.error(f"[extract_stroke_features_from_shapes] Shape {shape_idx} has no actions! Shape: {shape}")
+            continue
+        logging.info(f"[extract_stroke_features_from_shapes] Shape {shape_idx}: num_actions={len(actions)} | actions={actions}")
+        shape_vertices = getattr(shape, 'vertices', None)
+        from src.Derive_labels.shape_utils import ensure_vertex_list
+        shape_vertices = ensure_vertex_list(shape_vertices)
+        logging.info(f"[LOGGING PATCH] [extract_stroke_features_from_shapes] shape_idx={shape_idx} initial shape_vertices: {shape_vertices}")
+        if shape_vertices and len(shape_vertices) >= 3:
+            deduped = [shape_vertices[0]]
+            for pt in shape_vertices[1:]:
+                if pt != deduped[-1]:
+                    deduped.append(pt)
+            shape_vertices = deduped
+            if shape_vertices[0] != shape_vertices[-1]:
+                shape_vertices.append(shape_vertices[0])
+            logging.info(f"[LOGGING PATCH] [extract_stroke_features_from_shapes] shape_idx={shape_idx} deduped/closed shape_vertices: {shape_vertices}")
+        else:
+            logging.warning(f"[LOGGING PATCH] [extract_stroke_features_from_shapes] shape_idx={shape_idx} insufficient vertices: {shape_vertices}")
+
+        segments = None
+        if shape_vertices is not None and actions is not None:
+            try:
+                segments = compute_shape_segments(actions, shape_vertices)
+            except Exception as e:
+                logging.error(f"[extract_stroke_features_from_shapes] Error computing segments for shape {shape_idx}: {e}")
+                segments = None
+        stroke_lengths = []
+        def sanitize_feature_value(val, default=0.0):
+            if val is None:
+                return default
+            try:
+                return float(val)
+            except Exception:
+                return default
+
+        is_positive = getattr(shape, 'is_positive', None)
+        for stroke_idx, stroke in enumerate(actions):
+            logging.info(f"[extract_stroke_features_from_shapes] shape_idx={shape_idx} | stroke_idx={stroke_idx} | stroke={stroke}")
+            features = {}
+            try:
+                if segments is not None and shape_vertices is not None and stroke_idx < len(segments):
+                    seg_start, seg_end = segments[stroke_idx]
+                    stroke_vertices = shape_vertices[seg_start:seg_end+1]
+                else:
+                    stroke_vertices = shape_vertices if shape_vertices is not None else []
+                logging.info(f"[extract_stroke_features_from_shapes] PATCH: Input stroke_vertices to _calculate_stroke_specific_features: {stroke_vertices}")
+                features = _calculate_stroke_specific_features(stroke, stroke_idx, bongard_image=bongard_image, parent_shape_vertices=stroke_vertices, shape_obj=shape)
+                for key in ['area', 'compactness', 'convexity_ratio', 'stroke_length', 'avg_stroke_length', 'geom_complexity', 'arc_curvature_score', 'robust_curvature', 'robust_angular_variance', 'visual_complexity']:
+                    if key in features:
+                        features[key] = sanitize_feature_value(features[key])
+                arr = np.array(stroke_vertices)
+                if arr is not None and arr.shape[0] >= 2:
+                    length = float(np.sum(np.linalg.norm(arr[1:] - arr[:-1], axis=1)))
+                else:
+                    length = 0.0
+                stroke_lengths.append(sanitize_feature_value(length))
+                features['stroke_length'] = sanitize_feature_value(length)
+                logging.info(f"[extract_stroke_features_from_shapes] PATCH: Output features for shape {shape_idx}, stroke {stroke_idx}: {features}")
+            except Exception as e:
+                logging.error(f"[extract_stroke_features_from_shapes] Error extracting features for shape {shape_idx}, stroke {stroke_idx}: {e}")
+                features = {'error': str(e)}
+            result = {
+                'problem_id': problem_id,
+                'shape_index': shape_idx,
+                'stroke_index': stroke_idx,
+                'stroke_command': getattr(stroke, 'raw_command', str(stroke)),
+                'features': features,
+                'group_info': {
+                    'num_shapes': total_shapes,
+                    'num_actions_in_shape': len(actions),
+                    'shape_type': getattr(shape, '__class__', type(shape)).__name__,
+                }
+            }
+            stroke_results.append(result)
+            # Aggregate by positive/negative
+            if is_positive:
+                positive_strokes.append(features)
+            else:
+                negative_strokes.append(features)
+        avg_stroke_length = float(np.mean([sanitize_feature_value(l) for l in stroke_lengths])) if stroke_lengths else 0.0
+        for r in stroke_results[-len(actions):]:
+            r['features']['avg_stroke_length'] = avg_stroke_length
+
+    # --- Compute statistics for both sets ---
+    from src.Derive_labels.context_features import BongardFeatureExtractor
+    extractor = BongardFeatureExtractor()
+    pos_stats = extractor.compute_feature_statistics(positive_strokes, label=f"positive_{problem_id}") if positive_strokes else {'valid': False, 'reason': 'no_positive_strokes', 'stats': {}}
+    neg_stats = extractor.compute_feature_statistics(negative_strokes, label=f"negative_{problem_id}") if negative_strokes else {'valid': False, 'reason': 'no_negative_strokes', 'stats': {}}
+
+    # --- Compute discriminative features ---
+    discriminative_stats = {}
+    for key in pos_stats.get('stats', {}):
+        if key in neg_stats.get('stats', {}):
+            discriminative_stats[key] = {
+                'pos_mean': pos_stats['stats'][key].get('mean', 0.0),
+                'neg_mean': neg_stats['stats'][key].get('mean', 0.0),
+                'mean_diff': pos_stats['stats'][key].get('mean', 0.0) - neg_stats['stats'][key].get('mean', 0.0)
+            }
+    discriminative_features = {
+        'valid': True if positive_strokes and negative_strokes else False,
+        'reason': 'computed_from_pos_neg_sets' if positive_strokes and negative_strokes else 'missing_set',
+        'stats': discriminative_stats
+    }
+
+    # Attach support/discriminative context to each stroke result
+    for r in stroke_results:
+        r['features']['support_set_context'] = pos_stats
+        r['features']['discriminative_features'] = discriminative_features
+        results.append(r)
+
+    #logging.info(f"[extract_stroke_features_from_shapes] OUTPUT: {results}")
+    if total_strokes > total_shapes:
+        logging.info(f"[extract_stroke_features_from_shapes] INFO: Number of strokes ({total_strokes}) and shapes ({total_shapes}) for problem_id={problem_id} -- grouping is correct, no mismatch.")
+    return results
 
     # --- Aggregate positive and negative strokes ---
     positive_strokes = []
@@ -119,7 +239,6 @@ def extract_stroke_features_from_shapes(bongard_image, problem_id=None):
                 for key in ['area', 'compactness', 'convexity_ratio', 'stroke_length', 'avg_stroke_length', 'geom_complexity', 'arc_curvature_score', 'robust_curvature', 'robust_angular_variance', 'visual_complexity']:
                     if key in features:
                         features[key] = sanitize_feature_value(features[key])
-                import numpy as np
                 arr = np.array(stroke_vertices)
                 if len(arr) >= 2:
                     length = float(np.sum(np.linalg.norm(arr[1:] - arr[:-1], axis=1)))
@@ -206,16 +325,18 @@ def extract_action_type_prefixes(problems_data):
         else:
             return [cmds]
 
+    import re
+    from src.data_pipeline.logo_parser import ensure_all_strings
     for problem_data in problems_data.values():
         if not (isinstance(problem_data, list) and len(problem_data) == 2):
             logger.info(f"[extract_action_type_prefixes] Skipping non-standard problem_data: {problem_data}")
             continue
         for example_list in problem_data:
             for action_commands in example_list:
-                # Log the structure and type of action_commands before flattening
                 logger.info(f"[DEBUG] action_commands type: {type(action_commands)}, value: {action_commands}")
-                # Robustly flatten action_commands before parsing
+                # Robustly convert all action commands to strings
                 flat_commands = robust_flatten(action_commands)
+                flat_commands = ensure_all_strings(flat_commands)
                 logger.info(f"[DEBUG] flat_commands type: {type(flat_commands)}, value: {flat_commands}")
                 try:
                     bongard_image = BongardImage.import_from_action_string_list(flat_commands)
@@ -229,13 +350,23 @@ def extract_action_type_prefixes(problems_data):
                             prefix = shape.__class__.__name__
                         prefixes.add(prefix)
                 except Exception as e:
-                    logger.warning(f"[extract_action_type_prefixes] Failed to robustly parse action_commands: {flat_commands} | Error: {e}")
-                    continue
+                    fallback_success = False
+                    for cmd in flat_commands:
+                        if isinstance(cmd, str):
+                            if cmd.startswith('line_') or cmd.startswith('arc_'):
+                                parts = cmd.split('_')
+                                if len(parts) >= 2:
+                                    prefix = '_'.join(parts[:2])
+                                    prefixes.add(prefix)
+                                    fallback_success = True
+                                else:
+                                    prefixes.add(parts[0])
+                                    fallback_success = True
+                    if not fallback_success:
+                        logger.warning(f"[extract_action_type_prefixes] Unparseable action_commands: {flat_commands} | Error: {e}")
     logger.info(f"[extract_action_type_prefixes] OUTPUT: {prefixes}")
     return prefixes
 
-
-import numpy as np
 def interpolate_vertices(verts, target_count=3):
     """Interpolate vertices to ensure at least target_count points."""
     if len(verts) >= target_count:
@@ -276,7 +407,7 @@ def _extract_stroke_type_from_command(stroke) -> str:
 
 def _extract_stroke_vertices(stroke, stroke_index, all_vertices, bongard_image=None, parent_shape_vertices=None):
     logger = logging.getLogger(__name__)
-    # logger.info(f"[_extract_stroke_vertices] INPUT: stroke_index={stroke_index}, stroke={stroke}, all_vertices={all_vertices}, bongard_image={bongard_image}, parent_shape_vertices={parent_shape_vertices}")  # PATCH: Suppressed verbose stroke vertices log
+    logger.info(f"[LOGGING PATCH] [_extract_stroke_vertices] INPUT: stroke_index={stroke_index}, stroke={stroke}, all_vertices={all_vertices}, bongard_image={bongard_image}, parent_shape_vertices={parent_shape_vertices}")
     # Use analytic vertices from BongardImage parser if available
     from src.Derive_labels.shape_utils import compute_open_stroke_geometry, valid_verts
     verts = []
@@ -297,14 +428,13 @@ def _extract_stroke_vertices(stroke, stroke_index, all_vertices, bongard_image=N
     if not verts:
         verts = []
     geometry = compute_open_stroke_geometry(verts)
-    # logger.info(f"[_extract_stroke_vertices] OUTPUT: stroke_index={stroke_index}, verts={verts}, geometry={geometry}")
+    logger.info(f"[LOGGING PATCH] [_extract_stroke_vertices] OUTPUT: stroke_index={stroke_index}, verts={verts}, geometry={geometry}")
     return verts
 
 def _vertices_from_command(command, stroke_index):
-    logger.info(f"[_vertices_from_command] INPUT: command={command}, stroke_index={stroke_index}")
+    logger.info(f"[LOGGING PATCH] [_vertices_from_command] INPUT: command={command}, stroke_index={stroke_index}")
     import re
     import math
-    import numpy as np
     try:
         pattern = r'^(arc|line)_(\w+)_([\d.]+)(?:_([\d.]+))?-([\d.]+)$'
         match = re.match(pattern, command)
@@ -326,7 +456,7 @@ def _vertices_from_command(command, stroke_index):
                     x = center[0] + radius * math.cos(theta)
                     y = center[1] + radius * math.sin(theta)
                     vertices.append((x, y))
-                logger.info(f"[_vertices_from_command] Circle vertices: {vertices}")
+                logger.info(f"[LOGGING PATCH] [_vertices_from_command] Circle vertices: {vertices}")
                 return vertices
             # Geometric templates for modifiers
             if modifier in ['triangle', 'square']:
@@ -342,7 +472,7 @@ def _vertices_from_command(command, stroke_index):
                         vertices.append((x, y))
                     # Close polygon for triangle
                     vertices.append(vertices[0])
-                    logger.info(f"[_vertices_from_command] Triangle vertices: {vertices}")
+                    logger.info(f"[LOGGING PATCH] [_vertices_from_command] Triangle vertices: {vertices}")
                     return vertices
                 elif modifier == 'square':
                     vertices = []
@@ -353,7 +483,7 @@ def _vertices_from_command(command, stroke_index):
                         vertices.append((x, y))
                     # Close polygon for square
                     vertices.append(vertices[0])
-                    logger.info(f"[_vertices_from_command] Square vertices: {vertices}")
+                    logger.info(f"[LOGGING PATCH] [_vertices_from_command] Square vertices: {vertices}")
                     return vertices
             # Turtle simulation for line
             if action_type == 'line':
@@ -366,7 +496,7 @@ def _vertices_from_command(command, stroke_index):
                 xs = np.linspace(x0, x1, num_samples)
                 ys = np.linspace(y0, y1, num_samples)
                 vertices = list(zip(xs, ys))
-                logger.info(f"[_vertices_from_command] OUTPUT: vertices={vertices}")
+                logger.info(f"[LOGGING PATCH] [_vertices_from_command] OUTPUT: vertices={vertices}")
                 return vertices
             elif action_type == 'arc':
                 radius = param1
@@ -380,7 +510,7 @@ def _vertices_from_command(command, stroke_index):
                     x = cx + radius * math.cos(theta)
                     y = cy + radius * math.sin(theta)
                     vertices.append((x, y))
-                logger.info(f"[_vertices_from_command] OUTPUT: vertices={vertices}")
+                logger.info(f"[LOGGING PATCH] [_vertices_from_command] OUTPUT: vertices={vertices}")
                 return vertices
             # Zigzag modifier: generate a polyline with alternating y
             if modifier == 'zigzag':
@@ -394,17 +524,17 @@ def _vertices_from_command(command, stroke_index):
                     x = x0 + length * frac * math.cos(math.radians(angle))
                     y = y0 + length * frac * math.sin(math.radians(angle)) + ((-1) ** i) * 0.05
                     vertices.append((x, y))
-                logger.info(f"[_vertices_from_command] Zigzag vertices: {vertices}")
+                logger.info(f"[LOGGING PATCH] [_vertices_from_command] Zigzag vertices: {vertices}")
                 return vertices
         # Fallback: try to extract all floats and simulate as polyline
         floats = [float(x) for x in re.findall(r'[\d.]+', command)]
         if len(floats) >= 4:
             vertices = [(floats[i], floats[i+1]) for i in range(0, len(floats)-1, 2)]
-            logger.info(f"[_vertices_from_command] Fallback float extraction: vertices={vertices}")
+            logger.info(f"[LOGGING PATCH] [_vertices_from_command] Fallback float extraction: vertices={vertices}")
             return vertices
     except Exception as e:
         logger.error(f"[_vertices_from_command] Failed to parse command {command}: {e}")
-    logger.info(f"[_vertices_from_command] Fallback: returning []")
+    logger.info(f"[LOGGING PATCH] [_vertices_from_command] Fallback: returning []")
     return []
 
 
@@ -418,6 +548,7 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
         smod = 'normal'
     params = parameters or {}
     verts = _extract_stroke_vertices(stroke, stroke_index, None, bongard_image=bongard_image, parent_shape_vertices=parent_shape_vertices)
+    logger.info(f"[LOGGING PATCH] [_calculate_stroke_specific_features] stroke_index={stroke_index}, verts={verts}")
     # If analytic parameters available for arc, propagate them
     if 'arc' in stype.lower() and hasattr(stroke, 'parameters') and stroke.parameters:
         params = stroke.parameters
@@ -571,13 +702,13 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
             features['convexity_ratio'] = 0.0
         features['degenerate_case'] = False
         safe_verts = verts if len(verts) >= 3 else [verts[0], verts[0], verts[0]]
-    # try:
-    #     features['robust_curvature'] = PhysicsInference.robust_curvature(safe_verts)
-    # except Exception as e:
-    #     logger.warning(f"Curvature calculation failed for stroke {stroke_index}: {e}")
-    #     features['robust_curvature'] = 0.0
+        # PATCH: Avoid ambiguous truth value errors with numpy arrays
         try:
-            features['robust_angular_variance'] = PhysicsInference.robust_angular_variance(safe_verts)
+            arr = np.array(safe_verts)
+            if arr is not None and arr.shape[0] >= 3:
+                features['robust_angular_variance'] = PhysicsInference.robust_angular_variance(safe_verts)
+            else:
+                features['robust_angular_variance'] = 0.0
         except Exception as e:
             logger.warning(f"Angular variance calculation failed for stroke {stroke_index}: {e}")
             features['robust_angular_variance'] = 0.0

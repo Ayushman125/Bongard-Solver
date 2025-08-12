@@ -1366,3 +1366,509 @@ Traceback (most recent call last):
                                                                    ~~~~^^^^^^^^^^^^^^^^^^^
 KeyError: 'degenerate_case'
 
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_0, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_1, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_2, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_3, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_4, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_5, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_6, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_0, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_0, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_1, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_0, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_1, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_2, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_3, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_4, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_5, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_6, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_0, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_1, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_2, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_3, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_4, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_5, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_6, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_0, problem_id=bd_necked_six_lines21_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_0, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_0, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_1, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_2, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_3, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_4, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_5, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_6, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_0, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_0, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_0, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_1, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_2, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_0, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_1, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_2, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_3, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_4, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_0, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_1, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_2, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_3, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_4, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_5, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_6, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_0, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_1, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_2, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_3, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_4, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_5, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_6, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_0, problem_id=bd_necked_six_lines21_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_1, problem_id=bd_necked_six_lines21_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_0, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_1, problem_id=bd_asymmetric_unbala_x_0000, error=cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 528, in process_single_image
+    from src.Derive_labels.stroke_types import extract_stroke_features_from_shapes, _calculate_stroke_type_differentiated_features
+ImportError: cannot import name 'extract_stroke_features_from_shapes' from 'src.Derive_labels.stroke_types' (C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py)
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_0, problem_id=bd_asymmetric_unbala_x_0000, error=cannot access local variable 'np' where it is not associated with a value
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 720, in process_single_image
+    stroke_features = _calculate_stroke_specific_features(a, 0, bongard_image=shape)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py", line 562, in _calculate_stroke_specific_features
+    features['open_stroke_perimeter'] = float(np.sum(np.linalg.norm(np.array(analytic_vertices)[1:] - np.array(analytic_vertices)[:-1], axis=1))) if len(analytic_vertices) >= 2 else 0.0
+                                              ^^
+UnboundLocalError: cannot access local variable 'np' where it is not associated with a value
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_1, problem_id=bd_asymmetric_unbala_x_0000, error=cannot access local variable 'np' where it is not associated with a value
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 720, in process_single_image
+    stroke_features = _calculate_stroke_specific_features(a, 0, bongard_image=shape)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py", line 562, in _calculate_stroke_specific_features
+    features['open_stroke_perimeter'] = float(np.sum(np.linalg.norm(np.array(analytic_vertices)[1:] - np.array(analytic_vertices)[:-1], axis=1))) if len(analytic_vertices) >= 2 else 0.0
+                                              ^^
+UnboundLocalError: cannot access local variable 'np' where it is not associated with a value
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_2, problem_id=bd_asymmetric_unbala_x_0000, error=cannot access local variable 'np' where it is not associated with a value
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 720, in process_single_image
+    stroke_features = _calculate_stroke_specific_features(a, 0, bongard_image=shape)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py", line 562, in _calculate_stroke_specific_features
+    features['open_stroke_perimeter'] = float(np.sum(np.linalg.norm(np.array(analytic_vertices)[1:] - np.array(analytic_vertices)[:-1], axis=1))) if len(analytic_vertices) >= 2 else 0.0
+                                              ^^
+UnboundLocalError: cannot access local variable 'np' where it is not associated with a value
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_3, problem_id=bd_asymmetric_unbala_x_0000, error=cannot access local variable 'np' where it is not associated with a value
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 720, in process_single_image
+    stroke_features = _calculate_stroke_specific_features(a, 0, bongard_image=shape)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py", line 562, in _calculate_stroke_specific_features
+    features['open_stroke_perimeter'] = float(np.sum(np.linalg.norm(np.array(analytic_vertices)[1:] - np.array(analytic_vertices)[:-1], axis=1))) if len(analytic_vertices) >= 2 else 0.0
+                                              ^^
+UnboundLocalError: cannot access local variable 'np' where it is not associated with a value
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_4, problem_id=bd_asymmetric_unbala_x_0000, error=cannot access local variable 'np' where it is not associated with a value
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 720, in process_single_image
+    stroke_features = _calculate_stroke_specific_features(a, 0, bongard_image=shape)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py", line 562, in _calculate_stroke_specific_features
+    features['open_stroke_perimeter'] = float(np.sum(np.linalg.norm(np.array(analytic_vertices)[1:] - np.array(analytic_vertices)[:-1], axis=1))) if len(analytic_vertices) >= 2 else 0.0
+                                              ^^
+UnboundLocalError: cannot access local variable 'np' where it is not associated with a value
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_5, problem_id=bd_asymmetric_unbala_x_0000, error=cannot access local variable 'np' where it is not associated with a value
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 720, in process_single_image
+    stroke_features = _calculate_stroke_specific_features(a, 0, bongard_image=shape)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py", line 562, in _calculate_stroke_specific_features
+    features['open_stroke_perimeter'] = float(np.sum(np.linalg.norm(np.array(analytic_vertices)[1:] - np.array(analytic_vertices)[:-1], axis=1))) if len(analytic_vertices) >= 2 else 0.0
+                                              ^^
+UnboundLocalError: cannot access local variable 'np' where it is not associated with a value
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_6, problem_id=bd_asymmetric_unbala_x_0000, error=cannot access local variable 'np' where it is not associated with a value
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 720, in process_single_image
+    stroke_features = _calculate_stroke_specific_features(a, 0, bongard_image=shape)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py", line 562, in _calculate_stroke_specific_features
+    features['open_stroke_perimeter'] = float(np.sum(np.linalg.norm(np.array(analytic_vertices)[1:] - np.array(analytic_vertices)[:-1], axis=1))) if len(analytic_vertices) >= 2 else 0.0
+                                              ^^
+UnboundLocalError: cannot access local variable 'np' where it is not associated with a value
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_0, problem_id=bd_asymmetric_unbala_x_0000, error=cannot access local variable 'np' where it is not associated with a value
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 720, in process_single_image
+    stroke_features = _calculate_stroke_specific_features(a, 0, bongard_image=shape)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py", line 562, in _calculate_stroke_specific_features
+    features['open_stroke_perimeter'] = float(np.sum(np.linalg.norm(np.array(analytic_vertices)[1:] - np.array(analytic_vertices)[:-1], axis=1))) if len(analytic_vertices) >= 2 else 0.0
+                                              ^^
+UnboundLocalError: cannot access local variable 'np' where it is not associated with a value
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_1, problem_id=bd_asymmetric_unbala_x_0000, error=cannot access local variable 'np' where it is not associated with a value
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 720, in process_single_image
+    stroke_features = _calculate_stroke_specific_features(a, 0, bongard_image=shape)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py", line 562, in _calculate_stroke_specific_features
+    features['open_stroke_perimeter'] = float(np.sum(np.linalg.norm(np.array(analytic_vertices)[1:] - np.array(analytic_vertices)[:-1], axis=1))) if len(analytic_vertices) >= 2 else 0.0
+                                              ^^
+UnboundLocalError: cannot access local variable 'np' where it is not associated with a value
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_2, problem_id=bd_asymmetric_unbala_x_0000, error=cannot access local variable 'np' where it is not associated with a value
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 720, in process_single_image
+    stroke_features = _calculate_stroke_specific_features(a, 0, bongard_image=shape)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py", line 562, in _calculate_stroke_specific_features
+    features['open_stroke_perimeter'] = float(np.sum(np.linalg.norm(np.array(analytic_vertices)[1:] - np.array(analytic_vertices)[:-1], axis=1))) if len(analytic_vertices) >= 2 else 0.0
+                                              ^^
+UnboundLocalError: cannot access local variable 'np' where it is not associated with a value
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_3, problem_id=bd_asymmetric_unbala_x_0000, error=cannot access local variable 'np' where it is not associated with a value
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 720, in process_single_image
+    stroke_features = _calculate_stroke_specific_features(a, 0, bongard_image=shape)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py", line 562, in _calculate_stroke_specific_features
+    features['open_stroke_perimeter'] = float(np.sum(np.linalg.norm(np.array(analytic_vertices)[1:] - np.array(analytic_vertices)[:-1], axis=1))) if len(analytic_vertices) >= 2 else 0.0
+                                              ^^
+UnboundLocalError: cannot access local variable 'np' where it is not associated with a value
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_4, problem_id=bd_asymmetric_unbala_x_0000, error=cannot access local variable 'np' where it is not associated with a value
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 720, in process_single_image
+    stroke_features = _calculate_stroke_specific_features(a, 0, bongard_image=shape)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py", line 562, in _calculate_stroke_specific_features
+    features['open_stroke_perimeter'] = float(np.sum(np.linalg.norm(np.array(analytic_vertices)[1:] - np.array(analytic_vertices)[:-1], axis=1))) if len(analytic_vertices) >= 2 else 0.0
+                                              ^^
+UnboundLocalError: cannot access local variable 'np' where it is not associated with a value
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_5, problem_id=bd_asymmetric_unbala_x_0000, error=cannot access local variable 'np' where it is not associated with a value
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 720, in process_single_image
+    stroke_features = _calculate_stroke_specific_features(a, 0, bongard_image=shape)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py", line 562, in _calculate_stroke_specific_features
+    features['open_stroke_perimeter'] = float(np.sum(np.linalg.norm(np.array(analytic_vertices)[1:] - np.array(analytic_vertices)[:-1], axis=1))) if len(analytic_vertices) >= 2 else 0.0
+                                              ^^
+UnboundLocalError: cannot access local variable 'np' where it is not associated with a value
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_6, problem_id=bd_asymmetric_unbala_x_0000, error=cannot access local variable 'np' where it is not associated with a value
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 720, in process_single_image
+    stroke_features = _calculate_stroke_specific_features(a, 0, bongard_image=shape)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\stroke_types.py", line 562, in _calculate_stroke_specific_features
+    features['open_stroke_perimeter'] = float(np.sum(np.linalg.norm(np.array(analytic_vertices)[1:] - np.array(analytic_vertices)[:-1], axis=1))) if len(analytic_vertices) >= 2 else 0.0
+                                              ^^
+UnboundLocalError: cannot access local variable 'np' where it is not associated with a value
+

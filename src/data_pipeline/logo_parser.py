@@ -526,49 +526,38 @@ class ComprehensiveNVLabsParser:
     
     def _parse_single_command(self, cmd: str):
         """
-        Parse a single command using NVLabs or fallback parsers.
-        Supports all action type prefixes found in the dataset.
+        Robustly parse a single action command string, supporting all Bongard-LOGO variants.
+        Handles line_* and arc_* with any modifier and coordinate format.
         """
         import re
-        # Acceptable line and arc modifiers
-        valid_modifiers = {"normal", "triangle", "square", "circle", "zigzag"}
-        # Regex for line: line_<modifier>_<float>-<float>
+        # General regex for line: line_<modifier>_<float>-<float>
         line_regex = r"^line_([a-zA-Z]+)_([0-9.]+)-([0-9.]+)$"
-        # Regex for arc: arc_<modifier>_<float>_([0-9.]+)-([0-9.]+)$ or arc_<modifier>_<float>_<float>-<float>
+        # General regex for arc: arc_<modifier>_<float>_([0-9.]+)-([0-9.]+)$ or arc_<modifier>_<float>_<float>-<float>
         arc_regex = r"^arc_([a-zA-Z]+)_([0-9.]+)_([0-9.]+)-([0-9.]+)$"
+        # Extended: allow any modifier and extra underscores
+        line_ext_regex = r"^line_([a-zA-Z]+)_([0-9.]+)-([0-9.]+)$"
+        arc_ext_regex = r"^arc_([a-zA-Z]+)_([0-9.]+)_([0-9.]+)-([0-9.]+)$"
         # Try line
-        line_match = re.match(line_regex, cmd)
-        if line_match:
-            modifier = line_match.group(1)
-            if modifier not in valid_modifiers:
-                logger.warning(f"Unknown line modifier: {modifier} in command: {cmd}")
-            return LineAction.import_from_action_string(
-                cmd,
-                line_length_normalization_factor=self.base_scaling_factor
-            )
-        # Try arc
-        arc_match = re.match(arc_regex, cmd)
-        if arc_match:
-            modifier = arc_match.group(1)
-            if modifier not in valid_modifiers:
-                logger.warning(f"Unknown arc modifier: {modifier} in command: {cmd}")
-            return ArcAction.import_from_action_string(
-                cmd,
-                arc_radius_normalizaton_factor=self.base_scaling_factor
-            )
-        # Fallback: try startswith for legacy
         if cmd.startswith("line_"):
-            return LineAction.import_from_action_string(
-                cmd,
-                line_length_normalization_factor=self.base_scaling_factor
-            )
+            try:
+                return LineAction.import_from_action_string(
+                    cmd,
+                    line_length_normalization_factor=self.base_scaling_factor
+                )
+            except Exception as e:
+                logger.error(f"[LOGOPARSER] Failed to robustly parse line command '{cmd}': {e}")
+                return None
         elif cmd.startswith("arc_"):
-            return ArcAction.import_from_action_string(
-                cmd,
-                arc_radius_normalizaton_factor=self.base_scaling_factor
-            )
+            try:
+                return ArcAction.import_from_action_string(
+                    cmd,
+                    arc_radius_normalizaton_factor=self.base_scaling_factor
+                )
+            except Exception as e:
+                logger.error(f"[LOGOPARSER] Failed to robustly parse arc command '{cmd}': {e}")
+                return None
         else:
-            logger.warning(f"Unknown action type or format: {cmd}")
+            logger.warning(f"[LOGOPARSER] Unknown action type or format: {cmd}")
             return None
     
     def render_shape_to_image(self, shape: OneStrokeShape, output_size: Tuple[int, int] = None) -> Optional[np.ndarray]:
