@@ -95,50 +95,54 @@ def extract_multiscale_features(shape_vertices, scales=[0.1, 0.3, 0.5, 1.0, 2.0]
     if not shape_vertices or not isinstance(shape_vertices, list) or len(shape_vertices) < 3:
         logger.warning("[MULTISCALE][WARN] Not enough vertices for multiscale analysis.")
         logger.info(f"[MULTISCALE][OUTPUT] (degenerate): {{'scale_1': 0.0, 'scale_2': 0.0, 'scale_3': 0.0}}")
-        return {'scale_1': 0.0, 'scale_2': 0.0, 'scale_3': 0.0}
+        return {'scale_1': 0.0, 'scale_2': 0.0, 'scale_3': 0.0, 'degenerate_case': True}
     shape_vertices = [tuple(map(float, v)) if isinstance(v, (list, tuple)) and len(v) == 2 else v for v in shape_vertices]
     arr = np.array(shape_vertices)
     for scale in scales:
-    # logger.info(f"[MULTISCALE][PROCESS] scale={scale}, input_vertices={arr.tolist()}")
         smoothed_x = gaussian_filter1d(arr[:,0], sigma=scale, mode='wrap')
         smoothed_y = gaussian_filter1d(arr[:,1], sigma=scale, mode='wrap')
         smoothed_vertices = np.stack([smoothed_x, smoothed_y], axis=1)
-    curvature = PhysicsInference.robust_curvature(smoothed_vertices)
-    angular_variance = PhysicsInference.robust_angular_variance(smoothed_vertices)
-    diffs = np.diff(smoothed_vertices, axis=0)
-    angles = np.arctan2(diffs[:,1], diffs[:,0])
-    angle_diffs = np.diff(angles)
-    inflections = np.sum(np.abs(np.diff(np.sign(angle_diffs))) > 0)
-    complexity = inflections
-    n_clusters = min(max(2, int(len(smoothed_vertices) // (3 + scale * 5))), len(smoothed_vertices))
-    try:
-        clustering = AgglomerativeClustering(n_clusters=n_clusters, linkage='ward').fit(smoothed_vertices)
-        labels = clustering.labels_
-        group_features = {}
-        for group in range(n_clusters):
-            group_idx = np.where(labels == group)[0]
-            group_pts = smoothed_vertices[group_idx]
-            if len(group_pts) > 1:
-                group_curvature = PhysicsInference.robust_curvature(group_pts)
-                group_complexity = np.sum(np.abs(np.diff(np.sign(np.diff(np.arctan2(np.diff(group_pts, axis=0)[:,1], np.diff(group_pts, axis=0)[:,0]))))) > 0)
-            else:
-                group_curvature = 0.0
-                group_complexity = 0
-            group_features[f'group_{group}'] = {
-                'size': int(len(group_pts)),
-                'curvature': float(group_curvature),
-                'complexity': int(group_complexity)
-            }
-        logger.info(f"[MULTISCALE][GROUPS] scale={scale}, group_features={group_features}")
-    except Exception as e:
-        logger.warning(f"[MULTISCALE][WARN] Hierarchical clustering failed at scale {scale}: {e}")
-        group_features = {}
-    multiscale_features[f'scale_{scale}'] = {
-        'curvature': float(curvature),
-        'angular_variance': float(angular_variance),
-        'complexity': int(complexity),
-        'groups': group_features
-    }
+        curvature = PhysicsInference.robust_curvature(smoothed_vertices)
+        angular_variance = PhysicsInference.robust_angular_variance(smoothed_vertices)
+        # Robust post-processing
+        curvature = 0.0 if not np.isfinite(curvature) else float(curvature)
+        angular_variance = 0.0 if not np.isfinite(angular_variance) else float(angular_variance)
+        diffs = np.diff(smoothed_vertices, axis=0)
+        angles = np.arctan2(diffs[:,1], diffs[:,0])
+        angle_diffs = np.diff(angles)
+        inflections = np.sum(np.abs(np.diff(np.sign(angle_diffs))) > 0)
+        complexity = inflections
+        n_clusters = min(max(2, int(len(smoothed_vertices) // (3 + scale * 5))), len(smoothed_vertices))
+        try:
+            clustering = AgglomerativeClustering(n_clusters=n_clusters, linkage='ward').fit(smoothed_vertices)
+            labels = clustering.labels_
+            group_features = {}
+            for group in range(n_clusters):
+                group_idx = np.where(labels == group)[0]
+                group_pts = smoothed_vertices[group_idx]
+                if len(group_pts) > 1:
+                    group_curvature = PhysicsInference.robust_curvature(group_pts)
+                    group_curvature = 0.0 if not np.isfinite(group_curvature) else float(group_curvature)
+                    group_complexity = np.sum(np.abs(np.diff(np.sign(np.diff(np.arctan2(np.diff(group_pts, axis=0)[:,1], np.diff(group_pts, axis=0)[:,0]))))) > 0)
+                else:
+                    group_curvature = 0.0
+                    group_complexity = 0
+                group_features[f'group_{group}'] = {
+                    'size': int(len(group_pts)),
+                    'curvature': float(group_curvature),
+                    'complexity': int(group_complexity)
+                }
+            logger.info(f"[MULTISCALE][GROUPS] scale={scale}, group_features={group_features}")
+        except Exception as e:
+            logger.warning(f"[MULTISCALE][WARN] Hierarchical clustering failed at scale {scale}: {e}")
+            group_features = {}
+        multiscale_features[f'scale_{scale}'] = {
+            'curvature': curvature,
+            'angular_variance': angular_variance,
+            'complexity': int(complexity),
+            'groups': group_features,
+            'degenerate_case': (len(shape_vertices) < 3)
+        }
     logger.info(f"[MULTISCALE][FEATURES] scale={scale}, features={multiscale_features[f'scale_{scale}']}")
     logger.info(f"[MULTISCALE][OUTPUT] {multiscale_features}")
     return multiscale_features

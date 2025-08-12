@@ -127,16 +127,18 @@ def process_single_image(action_commands: List[str], image_id: str,
     posrot_labels = {'centroid': [0.0, 0.0], 'orientation_degrees': 0.0}
     feature_extractor = BongardFeatureExtractor()
     for idx, shape in enumerate(one_stroke_shapes):
-        # --- Correct assignment and population of image_dict ---
         image_dict = {}
-        # Vertices
         image_dict['vertices'] = []
+        image_dict['degenerate_case'] = False
         if hasattr(shape, 'vertices') and isinstance(shape.vertices, list):
             safe_vertices = [tuple(v) for v in shape.vertices if v is not None and isinstance(v, (list, tuple)) and len(v) == 2]
             image_dict['vertices'] = safe_vertices
+            if len(safe_vertices) < 3:
+                image_dict['degenerate_case'] = True
+                logger.warning(f"[ATTR DEBUG] Shape {idx} has degenerate vertices: {safe_vertices}")
         else:
+            image_dict['degenerate_case'] = True
             logger.warning(f"[ATTR DEBUG] Shape {idx} has no vertices.")
-        # Strokes as dicts with vertices
         image_dict['strokes'] = []
         if hasattr(shape, 'basic_actions'):
             for i, a in enumerate(shape.basic_actions):
@@ -146,6 +148,8 @@ def process_single_image(action_commands: List[str], image_id: str,
                 from src.Derive_labels.stroke_types import _calculate_stroke_specific_features
                 stroke_features = _calculate_stroke_specific_features(a, i, bongard_image=shape, parent_shape_vertices=stroke_vertices)
                 analytic_verts = stroke_features.get('analytic_vertices', stroke_vertices)
+                stroke_dict = {}
+                # Robust geometry assignment
                 if analytic_verts and len(analytic_verts) == 2:
                     stroke_geometry = compute_open_stroke_geometry(analytic_verts)
                     stroke_geometry['compactness'] = 0.0
@@ -155,11 +159,69 @@ def process_single_image(action_commands: List[str], image_id: str,
                     stroke_geometry['visual_complexity'] = min(max(stroke_geometry['perimeter']/max(stroke_geometry['perimeter'],1)*(1+stroke_features.get('robust_curvature',0)),0),1)
                 elif analytic_verts and len(analytic_verts) >= 3:
                     stroke_geometry = calculate_geometry_consistent(analytic_verts)
+                    # Arc-specific calculations
                     if 'arc' in command_str:
-                        r = stroke_geometry.get('width',1.0)/2
+                        r = stroke_geometry.get('width', 1.0) / 2
                         theta = math.radians(90)
-                        area = 0.5*r*r*(theta-math.sin(theta))
-                        perim = r*theta
+                        area = 0.5 * r * r * (theta - math.sin(theta))
+                        perim = r * theta
+                        stroke_geometry['compactness'] = min(max(4 * math.pi * area / (perim ** 2), 0), 1)
+                        stroke_geometry['convexity_ratio'] = min(max(area / perim, 0), 1)
+                    else:
+                        stroke_geometry['compactness'] = 0.0
+                        stroke_geometry['convexity_ratio'] = 0.0
+                    stroke_geometry['geom_complexity'] = min(len(analytic_verts) / 10, 1)
+                    stroke_geometry['degenerate_case'] = False
+                    stroke_geometry['visual_complexity'] = min(max(stroke_geometry.get('perimeter', 0.0) / max(stroke_geometry.get('perimeter', 1.0), 1) * (1 + stroke_features.get('robust_curvature', 0)), 0), 1)
+                else:
+                    stroke_geometry = {
+                        'width': 0.0,
+                        'height': 0.0,
+                        'area': 0.0,
+                        'perimeter': 0.0,
+                        'centroid': [0.0, 0.0],
+                        'bounds': [0, 0, 0, 0],
+                        'compactness': 0.0,
+                        'convexity_ratio': 0.0,
+                        'geom_complexity': 0.0,
+                        'degenerate_case': True,
+                        'visual_complexity': 0.0
+                    }
+                # Robust post-processing for NaN/inf
+                for k, v in stroke_geometry.items():
+                    if isinstance(v, float) and (not math.isfinite(v) or abs(v) > 1e6):
+                        stroke_geometry[k] = 0.0
+                        logger.warning(f"[STROKE FEATURE] Non-finite value for {k}: {v} (set to 0.0)")
+                stroke_dict.update(stroke_geometry)
+                stroke_dict['analytic_vertices'] = analytic_verts
+                stroke_dict['open_stroke_perimeter'] = stroke_features.get('open_stroke_perimeter', stroke_geometry.get('perimeter', 0.0))
+                if hasattr(a, 'arc_radius') and hasattr(a, 'arc_angle'):
+                    radius = a.arc_radius
+                    span = a.arc_angle
+                    stroke_dict['arc_length'] = span/360*2*math.pi*radius
+                    stroke_dict['arc_curvature'] = 1/max(radius,1e-6)
+                if 'line' in command_str:
+                    angle = stroke_features.get('line_angle',0)
+                    if abs(angle) < 5:
+                        stroke_dict['shape_modifier'] = 'horizontal'
+                    elif abs(angle-90) < 5 or abs(angle+90) < 5:
+                        stroke_dict['shape_modifier'] = 'vertical'
+                    else:
+                        stroke_dict['shape_modifier'] = 'normal'
+                stroke_dict['command'] = command_str
+                stroke_dict['vertices'] = analytic_verts
+                stroke_dict['geometry'] = stroke_geometry
+                stroke_dict['label'] = category if category else 'unknown'
+                stroke_dict['class_label'] = problem_id if problem_id else 'unknown'
+                stroke_dict['is_positive'] = is_positive
+                logger.debug(f"[PATCH][is_positive] image_id={image_id}, stroke_idx={i}, assigned is_positive={is_positive}")
+                if not is_positive:
+                    logger.info(f"[PATCH][NEGATIVE STROKE] image_id={image_id}, stroke_idx={i}, stroke_dict: {stroke_dict}")
+                if 'support_set_context' in stroke_dict:
+                    del stroke_dict['support_set_context']
+                if 'discriminative_features' in stroke_dict and 'stats' in stroke_dict['discriminative_features']:
+                    logger.info(f"[logo_to_shape] Attached discriminative_features['stats'] to stroke: {stroke_dict['discriminative_features']['stats']}")
+                image_dict['strokes'].append(stroke_dict)
                         stroke_geometry['compactness'] = min(max(4*math.pi*area/(perim**2),0),1)
                         stroke_geometry['convexity_ratio'] = min(max(area/perim,0),1)
                     stroke_geometry['geom_complexity'] = min(len(analytic_verts)/10, 1)

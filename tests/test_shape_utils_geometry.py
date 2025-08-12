@@ -1,3 +1,13 @@
+def test_degenerate_geometry_cases():
+    from src.physics_inference import PhysicsInference
+    # <3 vertices
+    assert PhysicsInference.shoelace_area([(0,0),(1,1)]) == 0.0
+    # collinear points
+    assert PhysicsInference.shoelace_area([(0,0),(1,1),(2,2)]) == 0.0
+    # duplicate points
+    assert PhysicsInference.shoelace_area([(0,0),(0,0),(1,1),(1,1)]) == 0.0
+    # zero-area shape
+    assert PhysicsInference.shoelace_area([(0,0),(1,0),(2,0)]) == 0.0
 import pytest
 import numpy as np
 from src.Derive_labels import shape_utils

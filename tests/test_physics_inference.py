@@ -1,3 +1,13 @@
+def test_degenerate_physics_features():
+    from src.physics_inference import PhysicsInference
+    # <3 vertices
+    assert PhysicsInference.robust_curvature([(0,0),(1,1)]) == 0.0
+    # collinear points
+    assert PhysicsInference.robust_curvature([(0,0),(1,1),(2,2)]) == 0.0
+    # duplicate points
+    assert PhysicsInference.robust_curvature([(0,0),(0,0),(1,1),(1,1)]) == 0.0
+    # zero-area shape
+    assert PhysicsInference.robust_curvature([(0,0),(1,0),(2,0)]) == 0.0
 import numpy as np
 from src.physics_inference import PhysicsInference
 

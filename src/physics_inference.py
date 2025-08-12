@@ -113,13 +113,24 @@ class PhysicsInference:
             float: Area of the polygon (always positive).
         """
         import numpy as np
-        if len(vertices) < 3:
+        if not vertices or len(vertices) < 3:
+            logging.warning(f"[shoelace_area] Degenerate input: vertices={vertices}")
             return 0.0
         arr = np.array(vertices)
+        if arr.shape[0] < 3:
+            logging.warning(f"[shoelace_area] Degenerate array shape: {arr.shape}")
+            return 0.0
         x = arr[:, 0]
         y = arr[:, 1]
-        area = 0.5 * np.abs(np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1)))
-        return area
+        try:
+            area = 0.5 * np.abs(np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1)))
+            if not np.isfinite(area) or area < 1e-8:
+                logging.warning(f"[shoelace_area] Non-finite or zero area computed: {area}")
+                return 0.0
+            return area
+        except Exception as e:
+            logging.error(f"[shoelace_area] Exception: {e}")
+            return 0.0
 
     @staticmethod
     def robust_angular_variance(vertices):
@@ -129,10 +140,13 @@ class PhysicsInference:
             """
             logger = logging.getLogger("PhysicsInference")
             try:
-                if len(vertices) < 3:
-                    logger.warning("Not enough vertices for angular variance. Returning 0.")
+                if not vertices or len(vertices) < 3:
+                    logger.warning("[robust_angular_variance] Not enough vertices. Returning 0.")
                     return 0.0
                 vertices = np.array(vertices)
+                if vertices.shape[0] < 3:
+                    logger.warning(f"[robust_angular_variance] Degenerate array shape: {vertices.shape}")
+                    return 0.0
                 # Compute edge vectors
                 edges = np.diff(vertices, axis=0, append=vertices[:1])
                 # Normalize edge vectors
@@ -144,10 +158,13 @@ class PhysicsInference:
                 angles = np.arccos(dot_products)
                 # Angular variance
                 variance = np.var(angles)
-                logger.info(f"Computed angular variance: {variance:.6f} for {len(vertices)} vertices.")
+                if not np.isfinite(variance):
+                    logger.warning(f"[robust_angular_variance] Non-finite variance computed: {variance}")
+                    return 0.0
+                logger.info(f"[robust_angular_variance] Computed angular variance: {variance:.6f} for {len(vertices)} vertices.")
                 return variance
             except Exception as e:
-                logger.error(f"Error in robust_angular_variance: {e}")
+                logger.error(f"[robust_angular_variance] Exception: {e}")
                 return 0.0
 
     @staticmethod

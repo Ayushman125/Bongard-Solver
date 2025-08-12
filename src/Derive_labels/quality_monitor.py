@@ -14,6 +14,10 @@ class QualityMonitor:
         self.scores.append((feature_name, quality_info))
         if quality_info.get('degenerate', False):
             self.errors.append((feature_name, quality_info))
+            if quality_info.get('zero_area', False):
+                logging.warning(f"[QualityMonitor] Zero-area detected for {feature_name}: {quality_info}")
+            if quality_info.get('qhull_failure', False):
+                logging.error(f"[QualityMonitor] QHull failure for {feature_name}: {quality_info}")
         logging.info(f"[QualityMonitor] {feature_name}: {quality_info}")
 
     def get_stats(self):

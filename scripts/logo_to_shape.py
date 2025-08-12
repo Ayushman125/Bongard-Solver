@@ -308,6 +308,7 @@ def main():
             problem_modifiers = set()
 
             # Process positive examples
+            degenerate_count = 0
             for i, action_commands in enumerate(positive_examples):
                 total_images += 1
                 num_images_in_problem += 1
@@ -321,6 +322,11 @@ def main():
                     calculate_composition_features=_calculate_composition_features,
                     calculate_physics_features=_calculate_physics_features
                 )
+                if result is not None and result.get('degenerate_case', False):
+                    degenerate_count += 1
+                    logger.warning(f"[PIPELINE] Degenerate case detected for image: {image_path}")
+                logger.info(f"[PIPELINE] INPUT: {image_path}")
+                logger.info(f"[PIPELINE] OUTPUT: {result}")
                 if result:
                     result['is_positive'] = True
                     pos_results.append(result)
@@ -348,6 +354,11 @@ def main():
                     calculate_composition_features=_calculate_composition_features,
                     calculate_physics_features=_calculate_physics_features
                 )
+                if result is not None and result.get('degenerate_case', False):
+                    degenerate_count += 1
+                    logger.warning(f"[PIPELINE] Degenerate case detected for image: {image_path}")
+                logger.info(f"[PIPELINE] INPUT: {image_path}")
+                logger.info(f"[PIPELINE] OUTPUT: {result}")
                 if result:
                     result['is_positive'] = False
                     neg_results.append(result)
@@ -547,6 +558,7 @@ def main():
 
         logger.info(f"Successfully processed {successful_images}/{total_images} images")
         logger.info(f"Saved {len(all_results)} records to {args.output}")
+        logger.info(f"[PIPELINE] Degenerate cases detected: {degenerate_count}")
 
         # Save flagged cases
         if processor.flagged_cases:
