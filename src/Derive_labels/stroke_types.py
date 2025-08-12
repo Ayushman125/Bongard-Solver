@@ -415,32 +415,23 @@ def _extract_stroke_type_from_command(stroke) -> str:
 def _extract_stroke_vertices(stroke, stroke_index, all_vertices, bongard_image=None, parent_shape_vertices=None):
     logger = logging.getLogger(__name__)
     logger.info(f"[LOGGING PATCH] [_extract_stroke_vertices] INPUT: stroke_index={stroke_index}, stroke={stroke}, all_vertices={all_vertices}, bongard_image={bongard_image}, parent_shape_vertices={parent_shape_vertices}")
-    from src.Derive_labels.shape_utils import compute_open_stroke_geometry, valid_verts
-    verts = []
-    # Prefer ordered pen traces if available
-    if bongard_image and hasattr(bongard_image, 'shape_painter') and hasattr(bongard_image.shape_painter, 'get_pen_traces'):
-        pen_traces = bongard_image.shape_painter.get_pen_traces()
-        if pen_traces and stroke_index < len(pen_traces):
-            verts = pen_traces[stroke_index]
-    # Fallback to analytic vertices if pen traces are missing
-    if not verts and hasattr(bongard_image, 'one_stroke_shapes'):
-        shape = bongard_image.one_stroke_shapes[stroke_index] if stroke_index < len(bongard_image.one_stroke_shapes) else None
-        if shape and hasattr(shape, 'vertices') and valid_verts(shape.vertices):
-            verts = shape.vertices
-    if not verts and parent_shape_vertices and len(parent_shape_vertices) > 1:
-        verts = parent_shape_vertices
-    if not verts and hasattr(stroke, 'vertices') and valid_verts(stroke.vertices):
-        verts = stroke.vertices
-    if not verts and hasattr(stroke, 'polyline_points') and valid_verts(stroke.polyline_points):
-        verts = stroke.polyline_points
-    if not verts:
-        command = getattr(stroke, 'raw_command', stroke if isinstance(stroke, str) else None)
-        if command:
-            verts = _vertices_from_command(command, stroke_index)
-    if not verts:
-        verts = []
-    geometry = compute_open_stroke_geometry(verts)
-    logger.info(f"[LOGGING PATCH] [_extract_stroke_vertices] OUTPUT: stroke_index={stroke_index}, verts={verts}, geometry={geometry}")
+    # Use mathematical simulator for vertex extraction
+    from src.Derive_labels.coordinate_computer import compute_shape_vertices
+    # Get start coordinates, orientation, scaling factor from shape or parent
+    start_coords = (0, 0)
+    start_orientation = 0
+    scaling_factor = 1.0
+    if bongard_image and hasattr(bongard_image, 'one_stroke_shapes') and stroke_index < len(bongard_image.one_stroke_shapes):
+        shape = bongard_image.one_stroke_shapes[stroke_index]
+        start_coords = getattr(shape, 'start_coordinates', (0, 0))
+        start_orientation = getattr(shape, 'start_orientation', 0)
+        scaling_factors = getattr(shape, 'scaling_factors', [1.0])
+        scaling_factor = scaling_factors[0] if scaling_factors else 1.0
+    elif parent_shape_vertices and len(parent_shape_vertices) > 0:
+        start_coords = parent_shape_vertices[0]
+    # Compute vertices mathematically
+    verts = compute_shape_vertices([stroke], start_coords, start_orientation, scaling_factor)
+    logger.info(f"[LOGGING PATCH] [_extract_stroke_vertices] OUTPUT: stroke_index={stroke_index}, verts={verts}")
     return verts
 
 def _vertices_from_command(command, stroke_index):

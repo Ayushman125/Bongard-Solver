@@ -174,35 +174,22 @@ class ComprehensiveBongardProcessor:
         self.context_extractor = BongardFeatureExtractor()
 
     def _calculate_vertices_from_action(self, action, stroke_index, bongard_image=None):
-        """Extract pen trace vertices using BongardImage and BongardShapePainter. Use ActionMaskGenerator only as fallback."""
-        try:
-            # Prefer painter-based pen traces if available
-            if bongard_image and hasattr(bongard_image, 'shape_painter') and hasattr(bongard_image.shape_painter, 'get_pen_traces'):
-                pen_traces = bongard_image.shape_painter.get_pen_traces()
-                if pen_traces and len(pen_traces) > stroke_index and pen_traces[stroke_index]:
-                    logger.info(f"[_calculate_vertices_from_action] Using painter pen trace for stroke {stroke_index}: {pen_traces[stroke_index][:5]} ... total={len(pen_traces[stroke_index])}")
-                    return pen_traces[stroke_index]
-                else:
-                    logger.warning(f"[_calculate_vertices_from_action] Painter pen trace missing/empty for stroke {stroke_index}, falling back to ActionMaskGenerator.")
-            # Fallback: use ActionMaskGenerator if painter trace is missing
-            from src.bongard_augmentor.hybrid import ActionMaskGenerator
-            mask_gen = ActionMaskGenerator()
-            if hasattr(action, 'raw_command'):
-                action_commands = [str(action.raw_command)]
-            elif hasattr(action, 'raw_commands'):
-                action_commands = [str(cmd) for cmd in action.raw_commands]
-            else:
-                action_commands = [str(action)]
-            mask = mask_gen.generate_mask(action_commands, problem_id="debug_shape")
-            import numpy as np
-            points = np.argwhere(mask > 0)
-            verts = [(int(y), int(x)) for x, y in points]
-            if verts:
-                logger.info(f"[_calculate_vertices_from_action][fallback] Pen trace vertices: {verts[:5]} ... total={len(verts)}")
-            return verts
-        except Exception as e:
-            logger.error(f"Failed to calculate pen trace from painter or ActionMaskGenerator: {e}")
-        return []
+        """Extract pen trace vertices using mathematical simulator (BongardCoordinateComputer)."""
+        from src.Derive_labels.coordinate_computer import compute_shape_vertices
+        # Get start coordinates, orientation, scaling factor from BongardImage if available
+        start_coords = (0, 0)
+        start_orientation = 0
+        scaling_factor = 1.0
+        if bongard_image and hasattr(bongard_image, 'one_stroke_shapes') and stroke_index < len(bongard_image.one_stroke_shapes):
+            shape = bongard_image.one_stroke_shapes[stroke_index]
+            start_coords = getattr(shape, 'start_coordinates', (0, 0))
+            start_orientation = getattr(shape, 'start_orientation', 0)
+            scaling_factors = getattr(shape, 'scaling_factors', [1.0])
+            scaling_factor = scaling_factors[0] if scaling_factors else 1.0
+        # Compute vertices mathematically
+        verts = compute_shape_vertices([action], start_coords, start_orientation, scaling_factor)
+        logger.info(f"[_calculate_vertices_from_action] Using mathematical simulator for stroke {stroke_index}: {verts[:5]} ... total={len(verts)}")
+        return verts
 
 
     def _calculate_pattern_regularity_from_modifiers(self, modifier_sequence: list) -> float:

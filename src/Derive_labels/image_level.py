@@ -98,17 +98,7 @@ def process_single_image(action_commands: List[str], image_id: str,
             logger.info(f"[PIPELINE] Shape {idx} start_coordinates: {shape.start_coordinates}")
         if hasattr(shape, 'geometry'):
             logger.info(f"[PIPELINE] Shape {idx} geometry: {shape.geometry}")
-    # Log painter call and output
-    try:
-        logger.info(f"[PIPELINE] Calling BongardShapePainter for image_id={image_id}")
-        painter_result = None
-        if 'painter' in locals():
-            painter_result = painter.draw(actions, scaling_factors, start_coords, start_orient)
-            logger.info(f"[PIPELINE] BongardShapePainter.draw returned: {painter_result}")
-        else:
-            logger.warning(f"[PIPELINE] Painter not initialized for image_id={image_id}")
-    except Exception as painter_exc:
-        logger.error(f"[PIPELINE] Exception during painter.draw: {painter_exc}")
+    # Remove painter/turtle-based extraction logic. All feature extraction uses mathematical simulator for vertices.
     # Log feature extraction output
     try:
         logger.info(f"[PIPELINE] Extracting stroke features for image_id={image_id}")
