@@ -480,7 +480,8 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
             for i in range(len(parent_shape_vertices)-1)
         ) or 0.0
         raw = length/max(shape_perimeter,1e-6)*(1+0.0) if length and shape_perimeter else 0.0
-        features['visual_complexity'] = raw
+    # Clamp visual_complexity to [0, 1] to avoid out-of-range values
+        features['visual_complexity'] = max(0.0, min(raw, 1.0))
         features['robust_curvature'] = 0.0
         features['robust_angular_variance'] = 0.0
         features['line_curvature_score'] = 0.0
@@ -548,8 +549,8 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
                 pass
             if 'discriminative_features' in features and 'stats' in features['discriminative_features']:
                 pass
-    elif verts and len(verts) >= 3:
-        geometry = calculate_geometry_consistent(verts)
+        elif verts and len(verts) >= 3:
+            geometry = calculate_geometry_consistent(verts)
         try:
             compactness = _calculate_compactness(geometry.get('area', 0.0), geometry.get('perimeter', 0.0))
             features['compactness'] = min(max(compactness, 0.0), 1.0)
@@ -591,7 +592,8 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
         base = stroke_length / max(shape_perimeter, 1e-6)
         weight = 1 + (features.get('robust_curvature') or 0)
         raw_vc = base * weight
-        features['visual_complexity'] = min(raw_vc, 1.0)
+    # Clamp visual_complexity to [0, 1] to avoid out-of-range values
+        features['visual_complexity'] = max(0.0, min(raw_vc, 1.0))
         # PATCH: Ensure aggregation features are always populated
         features['support_set_context'] = features.get('support_set_context', {'valid': True, 'stats': {}})
         features['discriminative_features'] = features.get('discriminative_features', {'valid': True, 'stats': {}})
@@ -633,7 +635,8 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
         base = arc_length / max(shape_perimeter, 1e-6)
         weight = 1 + (features.get('robust_curvature') or 0)
         raw_vc = base * weight
-        features['visual_complexity'] = min(raw_vc, 1.0)
+    # Clamp visual_complexity to [0, 1] to avoid out-of-range values
+        features['visual_complexity'] = max(0.0, min(raw_vc, 1.0))
         features['compactness'] = 0.0
         try:
             convexity = open_stroke_convexity(verts)
@@ -648,6 +651,13 @@ def _calculate_stroke_specific_features(stroke, stroke_index: int, stroke_type_v
         features['convexity_ratio'] = 1e-6
         features['geom_complexity'] = 0.0
         features['arc_curvature_score'] = 0.0
+        features['degenerate_case'] = True
+        features['stroke_length'] = 0.0
+        features['avg_stroke_length'] = 0.0
+        features['visual_complexity'] = 0.0
+        features['robust_curvature'] = 0.0
+        features['robust_angular_variance'] = 0.0
+        features['line_curvature_score'] = 0.0
         features['degenerate_case'] = True
         features['stroke_length'] = 0.0
         features['avg_stroke_length'] = 0.0

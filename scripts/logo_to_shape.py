@@ -1658,12 +1658,23 @@ def main():
             # --- Aggregate multiscale and spatial topological features at problem level ---
             import numpy as np
             def aggregate_feature_dicts(dicts):
+                import logging
+                logger = logging.getLogger("aggregate_feature_dicts")
                 if not dicts:
                     return {}
-                keys = set().union(*(d.keys() for d in dicts if isinstance(d, dict)))
+                valid_dicts = []
+                for idx, d in enumerate(dicts):
+                    if not isinstance(d, dict):
+                        logger.warning(f"aggregate_feature_dicts: Non-dict item at index {idx}: type={type(d)}, value={repr(d)[:200]}")
+                    else:
+                        valid_dicts.append(d)
+                if not valid_dicts:
+                    logger.error("aggregate_feature_dicts: No valid dicts to aggregate!")
+                    return {}
+                keys = set().union(*(d.keys() for d in valid_dicts))
                 agg = {}
                 for k in keys:
-                    vals = [d[k] for d in dicts if isinstance(d, dict) and k in d and isinstance(d[k], (int, float, np.integer, np.floating))]
+                    vals = [d[k] for d in valid_dicts if k in d and isinstance(d[k], (int, float, np.integer, np.floating))]
                     if vals:
                         agg[k] = {
                             'mean': float(np.mean(vals)),
