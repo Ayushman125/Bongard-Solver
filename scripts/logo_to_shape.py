@@ -9,7 +9,7 @@ file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 file_handler.setFormatter(file_formatter)
 
 console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.WARNING)  # Only show warnings/errors in terminal
+console_handler.setLevel(logging.INFO)  # Show info/debug logs in terminal for debugging
 console_formatter = logging.Formatter('%(levelname)s: %(message)s')
 console_handler.setFormatter(console_formatter)
 
@@ -174,21 +174,34 @@ class ComprehensiveBongardProcessor:
         self.context_extractor = BongardFeatureExtractor()
 
     def _calculate_vertices_from_action(self, action, stroke_index, bongard_image=None):
-        """Always use analytic vertices from the action parser for all strokes."""
+        """Extract pen trace vertices using BongardImage and BongardShapePainter. Use ActionMaskGenerator only as fallback."""
         try:
-            if hasattr(action, 'vertices_from_command'):
-                verts = action.vertices_from_command()
-                if verts:
-                    return verts
-            # Fallback to previous extraction if analytic not available
-            from src.Derive_labels.stroke_types import _extract_stroke_vertices, _compute_bounding_box
-            verts = _extract_stroke_vertices(action, stroke_index, None, bongard_image=bongard_image)
+            # Prefer painter-based pen traces if available
+            if bongard_image and hasattr(bongard_image, 'shape_painter') and hasattr(bongard_image.shape_painter, 'get_pen_traces'):
+                pen_traces = bongard_image.shape_painter.get_pen_traces()
+                if pen_traces and len(pen_traces) > stroke_index and pen_traces[stroke_index]:
+                    logger.info(f"[_calculate_vertices_from_action] Using painter pen trace for stroke {stroke_index}: {pen_traces[stroke_index][:5]} ... total={len(pen_traces[stroke_index])}")
+                    return pen_traces[stroke_index]
+                else:
+                    logger.warning(f"[_calculate_vertices_from_action] Painter pen trace missing/empty for stroke {stroke_index}, falling back to ActionMaskGenerator.")
+            # Fallback: use ActionMaskGenerator if painter trace is missing
+            from src.bongard_augmentor.hybrid import ActionMaskGenerator
+            mask_gen = ActionMaskGenerator()
+            if hasattr(action, 'raw_command'):
+                action_commands = [str(action.raw_command)]
+            elif hasattr(action, 'raw_commands'):
+                action_commands = [str(cmd) for cmd in action.raw_commands]
+            else:
+                action_commands = [str(action)]
+            mask = mask_gen.generate_mask(action_commands, problem_id="debug_shape")
+            import numpy as np
+            points = np.argwhere(mask > 0)
+            verts = [(int(y), int(x)) for x, y in points]
             if verts:
-                bbox = _compute_bounding_box(verts)
-                logger.info(f"[_calculate_vertices_from_action] Bounding box: {bbox}")
+                logger.info(f"[_calculate_vertices_from_action][fallback] Pen trace vertices: {verts[:5]} ... total={len(verts)}")
             return verts
         except Exception as e:
-            logger.debug(f"Failed to calculate vertices from action: {e}")
+            logger.error(f"Failed to calculate pen trace from painter or ActionMaskGenerator: {e}")
         return []
 
 
@@ -314,6 +327,8 @@ def main():
                 num_images_in_problem += 1
                 image_id = f"{problem_id}_pos_{i}"
                 image_path = f"images/{problem_id}/category_1/{i}.png"
+                # --- PATCH: Always construct BongardImage, attach painter, call draw, and extract pen traces ---
+                logger.info(f"[PIPELINE PATCH] Processing image_id={image_id}, action_commands={action_commands}")
                 result = process_single_image(
                     action_commands, image_id, True, problem_id, category, image_path,
                     processing_stats=processor.processing_stats,
@@ -322,11 +337,15 @@ def main():
                     calculate_composition_features=_calculate_composition_features,
                     calculate_physics_features=_calculate_physics_features
                 )
+                # Log painter invocation and pen traces for every stroke
+                if result and 'strokes' in result:
+                    for idx, stroke in enumerate(result['strokes']):
+                        logger.info(f"[PIPELINE PATCH] Stroke {idx}: command={stroke.get('command')}, geometry={stroke.get('geometry')}, pen_trace={stroke.get('analytic_vertices')}")
                 if result is not None and result.get('degenerate_case', False):
                     degenerate_count += 1
-                    logger.warning(f"[PIPELINE] Degenerate case detected for image: {image_path}")
-                logger.info(f"[PIPELINE] INPUT: {image_path}")
-                logger.info(f"[PIPELINE] OUTPUT: {result}")
+                    logger.warning(f"[PIPELINE PATCH] Degenerate case detected for image: {image_path}")
+                logger.info(f"[PIPELINE PATCH] INPUT: {image_path}")
+                logger.info(f"[PIPELINE PATCH] OUTPUT: {result}")
                 if result:
                     result['is_positive'] = True
                     pos_results.append(result)
@@ -346,6 +365,8 @@ def main():
                 num_images_in_problem += 1
                 image_id = f"{problem_id}_neg_{i}"
                 image_path = f"images/{problem_id}/category_0/{i}.png"
+                # --- PATCH: Always construct BongardImage, attach painter, call draw, and extract pen traces ---
+                logger.info(f"[PIPELINE PATCH] Processing image_id={image_id}, action_commands={action_commands}")
                 result = process_single_image(
                     action_commands, image_id, False, problem_id, category, image_path,
                     processing_stats=processor.processing_stats,
@@ -354,11 +375,15 @@ def main():
                     calculate_composition_features=_calculate_composition_features,
                     calculate_physics_features=_calculate_physics_features
                 )
+                # Log painter invocation and pen traces for every stroke
+                if result and 'strokes' in result:
+                    for idx, stroke in enumerate(result['strokes']):
+                        logger.info(f"[PIPELINE PATCH] Stroke {idx}: command={stroke.get('command')}, geometry={stroke.get('geometry')}, pen_trace={stroke.get('analytic_vertices')}")
                 if result is not None and result.get('degenerate_case', False):
                     degenerate_count += 1
-                    logger.warning(f"[PIPELINE] Degenerate case detected for image: {image_path}")
-                logger.info(f"[PIPELINE] INPUT: {image_path}")
-                logger.info(f"[PIPELINE] OUTPUT: {result}")
+                    logger.warning(f"[PIPELINE PATCH] Degenerate case detected for image: {image_path}")
+                logger.info(f"[PIPELINE PATCH] INPUT: {image_path}")
+                logger.info(f"[PIPELINE PATCH] OUTPUT: {result}")
                 if result:
                     result['is_positive'] = False
                     neg_results.append(result)
@@ -450,8 +475,27 @@ def main():
             try:
                 shape_vertices_list = [r.get('geometry', {}).get('vertices', []) for r in all_results_for_problem if isinstance(r, dict) and 'geometry' in r]
                 compositional_features['hierarchical_clustering_heights'] = hierarchical_clustering_heights(shape_vertices_list)
-                compositional_features['composition_tree_depth'] = composition_tree_depth(shape_vertices_list)
-                compositional_features['composition_tree_branching_factor'] = composition_tree_branching_factor(shape_vertices_list)
+                # Build a simple tree from vertices: treat first vertex as root, each subsequent as child of previous
+                def build_vertex_tree(vertices):
+                    tree = {}
+                    if not vertices:
+                        return tree, None
+                    root = tuple(vertices[0])
+                    prev = root
+                    tree[root] = []
+                    for v in vertices[1:]:
+                        v_tuple = tuple(v)
+                        tree.setdefault(prev, []).append(v_tuple)
+                        tree[v_tuple] = []
+                        prev = v_tuple
+                    return tree, root
+
+                # For each shape, build tree and root, then aggregate
+                trees_and_roots = [build_vertex_tree(verts) for verts in shape_vertices_list]
+                # For compositional features, use the first non-empty tree/root
+                tree, root = next(((t, r) for t, r in trees_and_roots if t and r), ({}, None))
+                compositional_features['composition_tree_depth'] = composition_tree_depth(tree, root) if tree and root else 0
+                compositional_features['composition_tree_branching_factor'] = composition_tree_branching_factor(tree, root) if tree and root else 0
                 compositional_features['subgraph_isomorphism_frequencies'] = subgraph_isomorphism_frequencies(shape_vertices_list)
                 compositional_features['recursive_shape_patterns'] = recursive_shape_patterns(shape_vertices_list)
                 compositional_features['multi_level_symmetry_chains'] = multi_level_symmetry_chains(shape_vertices_list)
