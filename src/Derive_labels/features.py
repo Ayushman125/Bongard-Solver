@@ -61,24 +61,22 @@ def extract_topological_features(shapes):
         result = {'type': 'none', 'connectivity': '0', 'shape_distribution': {}}
         logger.info(f"[extract_topological_features] OUTPUT: {result}")
         return result
+    from .quality_monitor import quality_monitor
+    from .shape_utils import calculate_geometry
     shape_types = []
     connectivity = 0
     for idx, shape in enumerate(shapes):
         verts = shape.get('vertices', [])
-    # logger.debug(f"[extract_topological_features] Shape {idx} vertices: {verts}")
-        if len(verts) >= 3:
-            try:
-                dist = np.linalg.norm(np.array(verts[0]) - np.array(verts[-1]))
-                # logger.debug(f"[extract_topological_features] Shape {idx} closure distance: {dist}")
-                if dist < 1e-2:
-                    shape_types.append('closed')
-                else:
-                    shape_types.append('open')
-            except Exception as e:
-                # logger.warning(f"[extract_topological_features] Error comparing vertices for shape {idx}: {e}")
-                shape_types.append('unknown')
-        else:
+        geom = calculate_geometry(verts)
+        quality_monitor.log_quality('topological_features', {'degenerate': geom['degenerate_case'], 'area': geom['area']})
+        if geom['degenerate_case']:
+            # Fallback: try symbolic perturbation or alternative extraction
             shape_types.append('degenerate')
+        else:
+            if geom['area'] and geom['area'] > 0:
+                shape_types.append('closed')
+            else:
+                shape_types.append('open')
         connectivity += 1
     topology_type = shape_types[0] if len(set(shape_types)) == 1 else 'mixed'
     result = {

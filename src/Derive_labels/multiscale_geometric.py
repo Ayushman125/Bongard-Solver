@@ -25,8 +25,16 @@ def compute_multiscale_geometric_features(image_dict):
     features['gaussian_shape_complexity'] = float(np.std(vertices)) if vertices.size else 0
     # 3.5 Wavelet-Based Feature Coefficients
     features['wavelet_coeffs'] = [float(np.mean(vertices[:max(3, i+1)])) for i in range(len(vertices))]
-    # 3.6 Persistence Diagram Summaries
-    features['persistence_diagram'] = [float(np.ptp(vertices[:max(3, i+1)])) for i in range(len(vertices))]
+    # 3.6 Persistence Diagram Summaries (using ripser)
+    try:
+        from ripser import ripser
+        if vertices.size:
+            pd = ripser(vertices)['dgms']
+            features['persistence_diagram'] = str(pd)
+        else:
+            features['persistence_diagram'] = []
+    except ImportError:
+        features['persistence_diagram'] = 'ripser not installed'
     # 3.7 Multi-Scale Fractal Dimension
     features['fractal_dimension'] = float(np.log(len(vertices)) / np.log(2)) if vertices.size else 0
     # 3.8 Multi-Scale Self-Similarity Score

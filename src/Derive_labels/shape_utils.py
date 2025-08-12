@@ -295,30 +295,11 @@ def normalize_vertices(vertices_raw):
     import numpy as np
     import logging
     # logging.info(f"[normalize_vertices] INPUT vertices_raw: {vertices_raw}")  # PATCH: Suppressed verbose log
-    verts = ensure_vertex_list(vertices_raw)
-    verts = PhysicsInference.dedup_vertices(verts)
-    if len(verts) < 2:
-        logging.warning(f"[normalize_vertices] Not enough vertices to normalize: {verts}")
-        return verts
-    minx, miny, maxx, maxy = PhysicsInference.rounded_bbox(verts)
-    width = maxx - minx
-    height = maxy - miny
-    if width < 1e-8 or height < 1e-8:
-        logging.warning(f"[normalize_vertices] Degenerate width/height, returning verts: {verts}")
-        # PATCH: Explicitly set degenerate_case for collapsed vertices
-        for v in verts:
-            if hasattr(v, 'degenerate_case'):
-                v.degenerate_case = True
-        return verts
-    arr = np.array(verts)
-    arr = (arr - [minx, miny]) / [width, height]
-    arr[np.abs(arr) < 1e-10] = 0.0
-    normalized = [tuple(pt) for pt in arr]
-    # PATCH: If normalization collapses to two points, set degenerate_case
-    if len(normalized) == 2:
-        logging.warning(f"[normalize_vertices] PATCH: Normalization collapsed to two points, degenerate_case set True: {normalized}")
-    # logging.info(f"[normalize_vertices] OUTPUT normalized vertices: {normalized}")  # PATCH: Suppressed verbose log
-    return normalized
+    from .robust_geometry import robust_normalize
+    from .quality_monitor import quality_monitor
+    normalized, quality = robust_normalize(vertices_raw)
+    quality_monitor.log_quality('normalize_vertices', quality)
+    return [tuple(pt) for pt in normalized]
 
 def calculate_geometry(vertices):
     """Calculate geometry properties from normalized vertices, robustly constructing polygon."""
@@ -326,15 +307,17 @@ def calculate_geometry(vertices):
     import logging
     # logging.info(f"[calculate_geometry] INPUT vertices: {vertices}")  # PATCH: Suppressed verbose log
     # PATCH: Validate and correct input vertices
+    from .robust_geometry import robust_area
+    from .quality_monitor import quality_monitor
     if not vertices or len(vertices) < 3:
-        logging.warning(f"[calculate_geometry] PATCH: Not enough vertices for geometry: {vertices}")
-        # PATCH: Explicitly set degenerate_case in geometry output
+        area, quality = robust_area(vertices)
+        quality_monitor.log_quality('calculate_geometry', quality)
         return {
             'bbox': None,
             'centroid': None,
             'width': None,
             'height': None,
-            'area': None,
+            'area': area,
             'perimeter': None,
             'moment_of_inertia': None,
             'convexity_ratio': None,
@@ -349,17 +332,16 @@ def calculate_geometry(vertices):
     # Close polygon if not closed
     if verts[0] != verts[-1]:
         verts.append(verts[0])
-    # logging.info(f"[calculate_geometry] PATCH: Validated/corrected vertices: {verts}")  # PATCH: Suppressed verbose log
     verts = normalize_vertices(list(verts))
     if len(verts) < 3:
-        logging.warning(f"[calculate_geometry] PATCH: Normalization collapsed points: {verts}")
-        # PATCH: Explicitly set degenerate_case in geometry output
+        area, quality = robust_area(verts)
+        quality_monitor.log_quality('calculate_geometry', quality)
         return {
             'bbox': {'min_x': 0, 'max_x': 0, 'min_y': 0, 'max_y': 0},
             'centroid': [0.0, 0.0],
             'width': 0.0,
             'height': 0.0,
-            'area': 0.0,
+            'area': area,
             'perimeter': 0.0,
             'moment_of_inertia': 0.0,
             'convexity_ratio': 0.0,

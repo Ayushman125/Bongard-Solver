@@ -1,0 +1,1288 @@
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_0, problem_id=bd_asymmetric_unbala_x_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_1, problem_id=bd_asymmetric_unbala_x_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_2, problem_id=bd_asymmetric_unbala_x_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_3, problem_id=bd_asymmetric_unbala_x_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_4, problem_id=bd_asymmetric_unbala_x_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_5, problem_id=bd_asymmetric_unbala_x_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_6, problem_id=bd_asymmetric_unbala_x_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_0, problem_id=bd_asymmetric_unbala_x_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_1, problem_id=bd_asymmetric_unbala_x_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_2, problem_id=bd_asymmetric_unbala_x_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_3, problem_id=bd_asymmetric_unbala_x_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_4, problem_id=bd_asymmetric_unbala_x_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_5, problem_id=bd_asymmetric_unbala_x_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_6, problem_id=bd_asymmetric_unbala_x_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_0, problem_id=bd_necked_six_lines21_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_1, problem_id=bd_necked_six_lines21_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_2, problem_id=bd_necked_six_lines21_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_3, problem_id=bd_necked_six_lines21_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_4, problem_id=bd_necked_six_lines21_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_5, problem_id=bd_necked_six_lines21_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_6, problem_id=bd_necked_six_lines21_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_neg_0, problem_id=bd_necked_six_lines21_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_neg_1, problem_id=bd_necked_six_lines21_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_neg_2, problem_id=bd_necked_six_lines21_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_neg_3, problem_id=bd_necked_six_lines21_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_neg_4, problem_id=bd_necked_six_lines21_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_neg_5, problem_id=bd_necked_six_lines21_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_neg_6, problem_id=bd_necked_six_lines21_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_two_equilateral_triangles-open_symm_arc60_0000_pos_0, problem_id=bd_two_equilateral_triangles-open_symm_arc60_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_two_equilateral_triangles-open_symm_arc60_0000_pos_1, problem_id=bd_two_equilateral_triangles-open_symm_arc60_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_two_equilateral_triangles-open_symm_arc60_0000_pos_2, problem_id=bd_two_equilateral_triangles-open_symm_arc60_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_two_equilateral_triangles-open_symm_arc60_0000_pos_3, problem_id=bd_two_equilateral_triangles-open_symm_arc60_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_two_equilateral_triangles-open_symm_arc60_0000_pos_4, problem_id=bd_two_equilateral_triangles-open_symm_arc60_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_two_equilateral_triangles-open_symm_arc60_0000_pos_5, problem_id=bd_two_equilateral_triangles-open_symm_arc60_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_two_equilateral_triangles-open_symm_arc60_0000_pos_6, problem_id=bd_two_equilateral_triangles-open_symm_arc60_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_two_equilateral_triangles-open_symm_arc60_0000_neg_0, problem_id=bd_two_equilateral_triangles-open_symm_arc60_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_two_equilateral_triangles-open_symm_arc60_0000_neg_1, problem_id=bd_two_equilateral_triangles-open_symm_arc60_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_two_equilateral_triangles-open_symm_arc60_0000_neg_2, problem_id=bd_two_equilateral_triangles-open_symm_arc60_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_two_equilateral_triangles-open_symm_arc60_0000_neg_3, problem_id=bd_two_equilateral_triangles-open_symm_arc60_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_two_equilateral_triangles-open_symm_arc60_0000_neg_4, problem_id=bd_two_equilateral_triangles-open_symm_arc60_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_two_equilateral_triangles-open_symm_arc60_0000_neg_5, problem_id=bd_two_equilateral_triangles-open_symm_arc60_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_two_equilateral_triangles-open_symm_arc60_0000_neg_6, problem_id=bd_two_equilateral_triangles-open_symm_arc60_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_necked_six_lines15-rectangle_new1_0000_pos_0, problem_id=bd_necked_six_lines15-rectangle_new1_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_necked_six_lines15-rectangle_new1_0000_pos_1, problem_id=bd_necked_six_lines15-rectangle_new1_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_necked_six_lines15-rectangle_new1_0000_pos_2, problem_id=bd_necked_six_lines15-rectangle_new1_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_necked_six_lines15-rectangle_new1_0000_pos_3, problem_id=bd_necked_six_lines15-rectangle_new1_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_necked_six_lines15-rectangle_new1_0000_pos_4, problem_id=bd_necked_six_lines15-rectangle_new1_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_necked_six_lines15-rectangle_new1_0000_pos_5, problem_id=bd_necked_six_lines15-rectangle_new1_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_necked_six_lines15-rectangle_new1_0000_pos_6, problem_id=bd_necked_six_lines15-rectangle_new1_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_necked_six_lines15-rectangle_new1_0000_neg_0, problem_id=bd_necked_six_lines15-rectangle_new1_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_necked_six_lines15-rectangle_new1_0000_neg_1, problem_id=bd_necked_six_lines15-rectangle_new1_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_necked_six_lines15-rectangle_new1_0000_neg_2, problem_id=bd_necked_six_lines15-rectangle_new1_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_necked_six_lines15-rectangle_new1_0000_neg_3, problem_id=bd_necked_six_lines15-rectangle_new1_0000, error=name 'ensure_all_strings' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 349, in process_single_image
+    all_actions = ensure_all_strings(all_actions)
+                  ^^^^^^^^^^^^^^^^^^
+NameError: name 'ensure_all_strings' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_0, problem_id=bd_asymmetric_unbala_x_0000, error=name 'extract_multiscale_features' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 393, in process_single_image
+    multiscale_features = extract_multiscale_features(norm_vertices_for_features) if norm_vertices_for_features else {}
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'extract_multiscale_features' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_1, problem_id=bd_asymmetric_unbala_x_0000, error=name 'extract_multiscale_features' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 393, in process_single_image
+    multiscale_features = extract_multiscale_features(norm_vertices_for_features) if norm_vertices_for_features else {}
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'extract_multiscale_features' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_2, problem_id=bd_asymmetric_unbala_x_0000, error=name 'extract_multiscale_features' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 393, in process_single_image
+    multiscale_features = extract_multiscale_features(norm_vertices_for_features) if norm_vertices_for_features else {}
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'extract_multiscale_features' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_3, problem_id=bd_asymmetric_unbala_x_0000, error=name 'extract_multiscale_features' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 393, in process_single_image
+    multiscale_features = extract_multiscale_features(norm_vertices_for_features) if norm_vertices_for_features else {}
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'extract_multiscale_features' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_4, problem_id=bd_asymmetric_unbala_x_0000, error=name 'extract_multiscale_features' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 393, in process_single_image
+    multiscale_features = extract_multiscale_features(norm_vertices_for_features) if norm_vertices_for_features else {}
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'extract_multiscale_features' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_5, problem_id=bd_asymmetric_unbala_x_0000, error=name 'extract_multiscale_features' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 393, in process_single_image
+    multiscale_features = extract_multiscale_features(norm_vertices_for_features) if norm_vertices_for_features else {}
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'extract_multiscale_features' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_6, problem_id=bd_asymmetric_unbala_x_0000, error=name 'extract_multiscale_features' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 393, in process_single_image
+    multiscale_features = extract_multiscale_features(norm_vertices_for_features) if norm_vertices_for_features else {}
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'extract_multiscale_features' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_0, problem_id=bd_asymmetric_unbala_x_0000, error=name 'extract_multiscale_features' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 393, in process_single_image
+    multiscale_features = extract_multiscale_features(norm_vertices_for_features) if norm_vertices_for_features else {}
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'extract_multiscale_features' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_1, problem_id=bd_asymmetric_unbala_x_0000, error=name 'extract_multiscale_features' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 393, in process_single_image
+    multiscale_features = extract_multiscale_features(norm_vertices_for_features) if norm_vertices_for_features else {}
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'extract_multiscale_features' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_2, problem_id=bd_asymmetric_unbala_x_0000, error=name 'extract_multiscale_features' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 393, in process_single_image
+    multiscale_features = extract_multiscale_features(norm_vertices_for_features) if norm_vertices_for_features else {}
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'extract_multiscale_features' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_3, problem_id=bd_asymmetric_unbala_x_0000, error=name 'extract_multiscale_features' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 393, in process_single_image
+    multiscale_features = extract_multiscale_features(norm_vertices_for_features) if norm_vertices_for_features else {}
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'extract_multiscale_features' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_4, problem_id=bd_asymmetric_unbala_x_0000, error=name 'extract_multiscale_features' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 393, in process_single_image
+    multiscale_features = extract_multiscale_features(norm_vertices_for_features) if norm_vertices_for_features else {}
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'extract_multiscale_features' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_5, problem_id=bd_asymmetric_unbala_x_0000, error=name 'extract_multiscale_features' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 393, in process_single_image
+    multiscale_features = extract_multiscale_features(norm_vertices_for_features) if norm_vertices_for_features else {}
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'extract_multiscale_features' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_6, problem_id=bd_asymmetric_unbala_x_0000, error=name 'extract_multiscale_features' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 393, in process_single_image
+    multiscale_features = extract_multiscale_features(norm_vertices_for_features) if norm_vertices_for_features else {}
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'extract_multiscale_features' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_0, problem_id=bd_necked_six_lines21_0000, error=name 'extract_multiscale_features' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 393, in process_single_image
+    multiscale_features = extract_multiscale_features(norm_vertices_for_features) if norm_vertices_for_features else {}
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'extract_multiscale_features' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_0, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_1, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_2, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_3, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_4, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_5, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_6, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_0, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_1, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_2, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_3, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_4, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_5, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_6, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_0, problem_id=bd_necked_six_lines21_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_1, problem_id=bd_necked_six_lines21_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_2, problem_id=bd_necked_six_lines21_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_3, problem_id=bd_necked_six_lines21_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_4, problem_id=bd_necked_six_lines21_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_5, problem_id=bd_necked_six_lines21_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_6, problem_id=bd_necked_six_lines21_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_necked_six_lines21_0000_neg_0, problem_id=bd_necked_six_lines21_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_necked_six_lines21_0000_neg_1, problem_id=bd_necked_six_lines21_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_necked_six_lines21_0000_neg_2, problem_id=bd_necked_six_lines21_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_necked_six_lines21_0000_neg_3, problem_id=bd_necked_six_lines21_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_necked_six_lines21_0000_neg_4, problem_id=bd_necked_six_lines21_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_necked_six_lines21_0000_neg_5, problem_id=bd_necked_six_lines21_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_necked_six_lines21_0000_neg_6, problem_id=bd_necked_six_lines21_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_0, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_1, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_2, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_3, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_4, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_5, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_6, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_0, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_1, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_2, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_3, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_4, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_5, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 431, in process_single_image
+    composition_features = calculate_composition_features(all_actions)  # all_actions is now a list of strings
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_0, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 432, in process_single_image
+    physics_features = calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_1, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 432, in process_single_image
+    physics_features = calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_2, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 432, in process_single_image
+    physics_features = calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_3, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 432, in process_single_image
+    physics_features = calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_4, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 432, in process_single_image
+    physics_features = calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_5, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 432, in process_single_image
+    physics_features = calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_6, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 432, in process_single_image
+    physics_features = calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_0, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 432, in process_single_image
+    physics_features = calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_1, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 432, in process_single_image
+    physics_features = calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_2, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 432, in process_single_image
+    physics_features = calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_3, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 432, in process_single_image
+    physics_features = calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_4, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 432, in process_single_image
+    physics_features = calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_5, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 432, in process_single_image
+    physics_features = calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_6, problem_id=bd_asymmetric_unbala_x_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 432, in process_single_image
+    physics_features = calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_0, problem_id=bd_necked_six_lines21_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 432, in process_single_image
+    physics_features = calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_1, problem_id=bd_necked_six_lines21_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 432, in process_single_image
+    physics_features = calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_2, problem_id=bd_necked_six_lines21_0000, error='NoneType' object is not callable
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 432, in process_single_image
+    physics_features = calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_0, problem_id=bd_asymmetric_unbala_x_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_1, problem_id=bd_asymmetric_unbala_x_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_2, problem_id=bd_asymmetric_unbala_x_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_3, problem_id=bd_asymmetric_unbala_x_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_4, problem_id=bd_asymmetric_unbala_x_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_5, problem_id=bd_asymmetric_unbala_x_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_6, problem_id=bd_asymmetric_unbala_x_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_0, problem_id=bd_asymmetric_unbala_x_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_1, problem_id=bd_asymmetric_unbala_x_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_2, problem_id=bd_asymmetric_unbala_x_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_3, problem_id=bd_asymmetric_unbala_x_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_4, problem_id=bd_asymmetric_unbala_x_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_5, problem_id=bd_asymmetric_unbala_x_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_6, problem_id=bd_asymmetric_unbala_x_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_0, problem_id=bd_necked_six_lines21_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_1, problem_id=bd_necked_six_lines21_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_2, problem_id=bd_necked_six_lines21_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_3, problem_id=bd_necked_six_lines21_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_4, problem_id=bd_necked_six_lines21_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_5, problem_id=bd_necked_six_lines21_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_6, problem_id=bd_necked_six_lines21_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_neg_0, problem_id=bd_necked_six_lines21_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_neg_1, problem_id=bd_necked_six_lines21_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_neg_2, problem_id=bd_necked_six_lines21_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_neg_3, problem_id=bd_necked_six_lines21_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_neg_4, problem_id=bd_necked_six_lines21_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_neg_5, problem_id=bd_necked_six_lines21_0000, error=name '_extract_modifier_from_stroke' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 456, in process_single_image
+    mod = _extract_modifier_from_stroke(s)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name '_extract_modifier_from_stroke' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_0, problem_id=bd_asymmetric_unbala_x_0000, error=name '_detect_alternation' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 469, in process_single_image
+    alternation = _detect_alternation(corrected_modifiers)
+                  ^^^^^^^^^^^^^^^^^^^
+NameError: name '_detect_alternation' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_1, problem_id=bd_asymmetric_unbala_x_0000, error=name '_detect_alternation' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 469, in process_single_image
+    alternation = _detect_alternation(corrected_modifiers)
+                  ^^^^^^^^^^^^^^^^^^^
+NameError: name '_detect_alternation' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_2, problem_id=bd_asymmetric_unbala_x_0000, error=name '_detect_alternation' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 469, in process_single_image
+    alternation = _detect_alternation(corrected_modifiers)
+                  ^^^^^^^^^^^^^^^^^^^
+NameError: name '_detect_alternation' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_3, problem_id=bd_asymmetric_unbala_x_0000, error=name '_detect_alternation' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 469, in process_single_image
+    alternation = _detect_alternation(corrected_modifiers)
+                  ^^^^^^^^^^^^^^^^^^^
+NameError: name '_detect_alternation' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_4, problem_id=bd_asymmetric_unbala_x_0000, error=name '_detect_alternation' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 469, in process_single_image
+    alternation = _detect_alternation(corrected_modifiers)
+                  ^^^^^^^^^^^^^^^^^^^
+NameError: name '_detect_alternation' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_5, problem_id=bd_asymmetric_unbala_x_0000, error=name '_detect_alternation' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 469, in process_single_image
+    alternation = _detect_alternation(corrected_modifiers)
+                  ^^^^^^^^^^^^^^^^^^^
+NameError: name '_detect_alternation' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_6, problem_id=bd_asymmetric_unbala_x_0000, error=name '_detect_alternation' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 469, in process_single_image
+    alternation = _detect_alternation(corrected_modifiers)
+                  ^^^^^^^^^^^^^^^^^^^
+NameError: name '_detect_alternation' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_0, problem_id=bd_asymmetric_unbala_x_0000, error=name '_detect_alternation' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 469, in process_single_image
+    alternation = _detect_alternation(corrected_modifiers)
+                  ^^^^^^^^^^^^^^^^^^^
+NameError: name '_detect_alternation' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_1, problem_id=bd_asymmetric_unbala_x_0000, error=name '_detect_alternation' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 469, in process_single_image
+    alternation = _detect_alternation(corrected_modifiers)
+                  ^^^^^^^^^^^^^^^^^^^
+NameError: name '_detect_alternation' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_2, problem_id=bd_asymmetric_unbala_x_0000, error=name '_detect_alternation' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 469, in process_single_image
+    alternation = _detect_alternation(corrected_modifiers)
+                  ^^^^^^^^^^^^^^^^^^^
+NameError: name '_detect_alternation' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_3, problem_id=bd_asymmetric_unbala_x_0000, error=name '_detect_alternation' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 469, in process_single_image
+    alternation = _detect_alternation(corrected_modifiers)
+                  ^^^^^^^^^^^^^^^^^^^
+NameError: name '_detect_alternation' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_4, problem_id=bd_asymmetric_unbala_x_0000, error=name '_detect_alternation' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 469, in process_single_image
+    alternation = _detect_alternation(corrected_modifiers)
+                  ^^^^^^^^^^^^^^^^^^^
+NameError: name '_detect_alternation' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_5, problem_id=bd_asymmetric_unbala_x_0000, error=name '_detect_alternation' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 469, in process_single_image
+    alternation = _detect_alternation(corrected_modifiers)
+                  ^^^^^^^^^^^^^^^^^^^
+NameError: name '_detect_alternation' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_6, problem_id=bd_asymmetric_unbala_x_0000, error=name '_detect_alternation' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 469, in process_single_image
+    alternation = _detect_alternation(corrected_modifiers)
+                  ^^^^^^^^^^^^^^^^^^^
+NameError: name '_detect_alternation' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_0, problem_id=bd_necked_six_lines21_0000, error=name '_detect_alternation' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 469, in process_single_image
+    alternation = _detect_alternation(corrected_modifiers)
+                  ^^^^^^^^^^^^^^^^^^^
+NameError: name '_detect_alternation' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_1, problem_id=bd_necked_six_lines21_0000, error=name '_detect_alternation' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 469, in process_single_image
+    alternation = _detect_alternation(corrected_modifiers)
+                  ^^^^^^^^^^^^^^^^^^^
+NameError: name '_detect_alternation' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_2, problem_id=bd_necked_six_lines21_0000, error=name '_detect_alternation' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 469, in process_single_image
+    alternation = _detect_alternation(corrected_modifiers)
+                  ^^^^^^^^^^^^^^^^^^^
+NameError: name '_detect_alternation' is not defined
+
+[ERROR] image_id=bd_necked_six_lines21_0000_pos_3, problem_id=bd_necked_six_lines21_0000, error=name '_detect_alternation' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 469, in process_single_image
+    alternation = _detect_alternation(corrected_modifiers)
+                  ^^^^^^^^^^^^^^^^^^^
+NameError: name '_detect_alternation' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_0, problem_id=bd_asymmetric_unbala_x_0000, error=name 'compute_spatial_topological_features' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 491, in process_single_image
+    advanced_spatial_topological = compute_spatial_topological_features(image_dict)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'compute_spatial_topological_features' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_1, problem_id=bd_asymmetric_unbala_x_0000, error=name 'compute_spatial_topological_features' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 491, in process_single_image
+    advanced_spatial_topological = compute_spatial_topological_features(image_dict)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'compute_spatial_topological_features' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_2, problem_id=bd_asymmetric_unbala_x_0000, error=name 'compute_spatial_topological_features' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 491, in process_single_image
+    advanced_spatial_topological = compute_spatial_topological_features(image_dict)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'compute_spatial_topological_features' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_3, problem_id=bd_asymmetric_unbala_x_0000, error=name 'compute_spatial_topological_features' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 491, in process_single_image
+    advanced_spatial_topological = compute_spatial_topological_features(image_dict)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'compute_spatial_topological_features' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_4, problem_id=bd_asymmetric_unbala_x_0000, error=name 'compute_spatial_topological_features' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 491, in process_single_image
+    advanced_spatial_topological = compute_spatial_topological_features(image_dict)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'compute_spatial_topological_features' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_5, problem_id=bd_asymmetric_unbala_x_0000, error=name 'compute_spatial_topological_features' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 491, in process_single_image
+    advanced_spatial_topological = compute_spatial_topological_features(image_dict)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'compute_spatial_topological_features' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_6, problem_id=bd_asymmetric_unbala_x_0000, error=name 'compute_spatial_topological_features' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 491, in process_single_image
+    advanced_spatial_topological = compute_spatial_topological_features(image_dict)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'compute_spatial_topological_features' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_0, problem_id=bd_asymmetric_unbala_x_0000, error=name 'compute_spatial_topological_features' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 491, in process_single_image
+    advanced_spatial_topological = compute_spatial_topological_features(image_dict)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'compute_spatial_topological_features' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_1, problem_id=bd_asymmetric_unbala_x_0000, error=name 'compute_spatial_topological_features' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 491, in process_single_image
+    advanced_spatial_topological = compute_spatial_topological_features(image_dict)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'compute_spatial_topological_features' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_2, problem_id=bd_asymmetric_unbala_x_0000, error=name 'compute_spatial_topological_features' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 491, in process_single_image
+    advanced_spatial_topological = compute_spatial_topological_features(image_dict)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'compute_spatial_topological_features' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_3, problem_id=bd_asymmetric_unbala_x_0000, error=name 'compute_spatial_topological_features' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 491, in process_single_image
+    advanced_spatial_topological = compute_spatial_topological_features(image_dict)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'compute_spatial_topological_features' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_0, problem_id=bd_asymmetric_unbala_x_0000, error=name 'robust_flatten_and_stringify' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 512, in process_single_image
+    actions_flat_str = robust_flatten_and_stringify(all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'robust_flatten_and_stringify' is not defined
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_1, problem_id=bd_asymmetric_unbala_x_0000, error=name 'robust_flatten_and_stringify' is not defined
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 512, in process_single_image
+    actions_flat_str = robust_flatten_and_stringify(all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'robust_flatten_and_stringify' is not defined
+
