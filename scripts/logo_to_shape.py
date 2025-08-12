@@ -1,4 +1,21 @@
 import logging
+from logging.handlers import RotatingFileHandler
+
+# --- LOGGING SETUP ---
+LOG_FILENAME = 'logo_to_shape_debug.log'
+file_handler = RotatingFileHandler(LOG_FILENAME, maxBytes=5_000_000, backupCount=3, encoding='utf-8')
+file_handler.setLevel(logging.DEBUG)
+file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(file_formatter)
+
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.WARNING)  # Only show warnings/errors in terminal
+console_formatter = logging.Formatter('%(levelname)s: %(message)s')
+console_handler.setFormatter(console_formatter)
+
+logging.basicConfig(level=logging.DEBUG, handlers=[file_handler, console_handler])
+logger = logging.getLogger(__name__)
+
 import importlib.util
 import sys
 sys.stdout.reconfigure(encoding='utf-8')
@@ -93,9 +110,6 @@ from src.bongard_augmentor.hybrid import HybridAugmentor
 
 from bongard.bongard import BongardImage
 from src.physics_inference import PhysicsInference
-
-logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
-logger = logging.getLogger(__name__)
 
 # Flagging thresholds and constants
 FLAGGING_THRESHOLDS = {
@@ -581,6 +595,10 @@ class ComprehensiveBongardProcessor:
                     'visual_complexity_mean': float(np.mean(visual_complexities)) if visual_complexities else 0.0,
                 }
             image_level_features = aggregate_stroke_features(image_dict['strokes'])
+            # Guarantee image_level_features is a dict
+            if not isinstance(image_level_features, dict):
+                logger.warning(f"image_level_features was not a dict: {image_level_features!r}; forcing empty dict")
+                image_level_features = {}
             # Attach image-level features to output record
             centroid = geometry.get('centroid')
             width = geometry.get('width')
@@ -1506,10 +1524,6 @@ class ComprehensiveBongardProcessor:
             logger.warning(f"[_calculate_composition_features] Error: {e}")
             return {}
 
-
-
-
-
 def main():
     def fully_stringify(obj):
         if isinstance(obj, dict):
@@ -1643,8 +1657,27 @@ def main():
                 f"Expected 7 positives/7 negatives, got {len(pos_results)}/{len(neg_results)} for problem {problem_id}"
 
             # --- Aggregate image-level feature vectors for each support set ---
-            positive_vectors = [list(r.get('image_level_features', {}).values()) for r in pos_results]
-            negative_vectors = [list(r.get('image_level_features', {}).values()) for r in neg_results]
+            def extract_feature_vector(result):
+                features = result.get('image_level_features', {})
+                if isinstance(features, dict):
+                    return list(features.values())
+                elif isinstance(features, list):
+                    return features
+                else:
+                    logger.warning(f"[DEBUG] Unexpected image_level_features type: {type(features)} value: {features}")
+                    return []
+
+            # Debug the data structure
+            for i, result in enumerate(pos_results[:2]):  # Check first 2 results
+                features = result.get('image_level_features', {})
+                logger.info(f"[DEBUG] pos_results[{i}] image_level_features type: {type(features)}")
+                logger.info(f"[DEBUG] pos_results[{i}] image_level_features value: {features}")
+                if hasattr(features, 'keys'):
+                    logger.info(f"[DEBUG] pos_results[{i}] has keys: {list(features.keys())}")
+
+            positive_vectors = [extract_feature_vector(r) for r in pos_results]
+            negative_vectors = [extract_feature_vector(r) for r in neg_results]
+
             # Compute all contextual metrics at the problem level
             from src.Derive_labels.context_features import BongardFeatureExtractor
             bfe = BongardFeatureExtractor()
@@ -1661,6 +1694,7 @@ def main():
                 import logging
                 logger = logging.getLogger("aggregate_feature_dicts")
                 if not dicts:
+                    logger.warning("aggregate_feature_dicts: Input is empty.")
                     return {}
                 valid_dicts = []
                 for idx, d in enumerate(dicts):
@@ -1669,7 +1703,7 @@ def main():
                     else:
                         valid_dicts.append(d)
                 if not valid_dicts:
-                    logger.error("aggregate_feature_dicts: No valid dicts to aggregate!")
+                    logger.warning(f"aggregate_feature_dicts: No valid dicts to aggregate; input was: {dicts!r}")
                     return {}
                 keys = set().union(*(d.keys() for d in valid_dicts))
                 agg = {}
@@ -1726,8 +1760,8 @@ def main():
                 f"Expected 7 positives/7 negatives, got {len(pos_results)}/{len(neg_results)} for problem {problem_id}"
 
             # --- Aggregate image-level feature vectors for each support set ---
-            positive_vectors = [list(r.get('image_level_features', {}).values()) for r in pos_results]
-            negative_vectors = [list(r.get('image_level_features', {}).values()) for r in neg_results]
+            positive_vectors = [extract_feature_vector(r) for r in pos_results]
+            negative_vectors = [extract_feature_vector(r) for r in neg_results]
             # Compute all contextual metrics at the problem level
             from src.Derive_labels.context_features import BongardFeatureExtractor
             bfe = BongardFeatureExtractor()
