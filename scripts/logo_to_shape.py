@@ -32,7 +32,6 @@ def fully_stringify(obj):
         return str(obj)
 
 # Robust flatten and stringify for any nested actions list
-from src.Derive_labels.utils import robust_flatten_and_stringify
 #!/usr/bin/env python3
 """
 Logo to Shape Conversion Script - Complete End-to-End Pipeline
@@ -93,7 +92,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.data_pipeline.data_loader import load_action_programs
 from src.bongard_augmentor.hybrid import HybridAugmentor
-
+from src.Derive_labels.utils import robust_flatten_and_stringify
 from bongard.bongard import BongardImage
 from src.physics_inference import PhysicsInference
 from src.Derive_labels.image_level import process_single_image
@@ -370,12 +369,13 @@ def main():
             def extract_feature_vector(result):
                 features = result.get('image_level_features', {})
                 if isinstance(features, dict):
-                    return list(features.values())
-                elif isinstance(features, list):
                     return features
+                elif isinstance(features, list):
+                    # Convert list to dict with keys feature_0, feature_1, ...
+                    return {f'feature_{i}': v for i, v in enumerate(features)}
                 else:
                     logger.warning(f"[DEBUG] Unexpected image_level_features type: {type(features)} value: {features}")
-                    return []
+                    return {}
 
             # Debug the data structure
             for i, result in enumerate(pos_results[:2]):  # Check first 2 results

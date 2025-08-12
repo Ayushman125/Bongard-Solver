@@ -321,7 +321,7 @@ def calculate_geometry(vertices):
             'perimeter': None,
             'moment_of_inertia': None,
             'convexity_ratio': None,
-            'degenerate_case': True
+               'degenerate_case': True
         }
     # Remove duplicate consecutive points
     deduped = [vertices[0]]
@@ -345,7 +345,7 @@ def calculate_geometry(vertices):
             'perimeter': 0.0,
             'moment_of_inertia': 0.0,
             'convexity_ratio': 0.0,
-            'degenerate_case': True
+            'degenerate_case': True,
         }
     xs, ys = zip(*verts)
     bbox = {'min_x': min(xs), 'max_x': max(xs), 'min_y': min(ys), 'max_y': max(ys)}
@@ -385,7 +385,8 @@ def calculate_geometry(vertices):
             'area': _json_safe(area_val),
             'perimeter': _json_safe(perimeter),
             'moment_of_inertia': _json_safe(inertia),
-            'convexity_ratio': _json_safe(convexity)
+            'convexity_ratio': _json_safe(convexity),
+            'degenerate_case': False,
         }
     # logging.info(f"[calculate_geometry] OUTPUT geometry: {geometry}")  # PATCH: Suppressed verbose log
         return geometry
@@ -399,7 +400,8 @@ def calculate_geometry(vertices):
             'area': 0.0,
             'perimeter': 0.0,
             'moment_of_inertia': 0.0,
-            'convexity_ratio': 0.0
+            'convexity_ratio': 0.0,
+            'degenerate_case': True
         }
         return geometry
 def validate_features(features: dict) -> list:

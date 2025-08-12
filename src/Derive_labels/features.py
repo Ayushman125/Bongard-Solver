@@ -103,43 +103,43 @@ def extract_multiscale_features(shape_vertices, scales=[0.1, 0.3, 0.5, 1.0, 2.0]
         smoothed_x = gaussian_filter1d(arr[:,0], sigma=scale, mode='wrap')
         smoothed_y = gaussian_filter1d(arr[:,1], sigma=scale, mode='wrap')
         smoothed_vertices = np.stack([smoothed_x, smoothed_y], axis=1)
-        curvature = PhysicsInference.robust_curvature(smoothed_vertices)
-        angular_variance = PhysicsInference.robust_angular_variance(smoothed_vertices)
-        diffs = np.diff(smoothed_vertices, axis=0)
-        angles = np.arctan2(diffs[:,1], diffs[:,0])
-        angle_diffs = np.diff(angles)
-        inflections = np.sum(np.abs(np.diff(np.sign(angle_diffs))) > 0)
-        complexity = inflections
-        n_clusters = min(max(2, int(len(smoothed_vertices) // (3 + scale * 5))), len(smoothed_vertices))
-        try:
-            clustering = AgglomerativeClustering(n_clusters=n_clusters, linkage='ward').fit(smoothed_vertices)
-            labels = clustering.labels_
-            group_features = {}
-            for group in range(n_clusters):
-                group_idx = np.where(labels == group)[0]
-                group_pts = smoothed_vertices[group_idx]
-                if len(group_pts) > 1:
-                    group_curvature = PhysicsInference.robust_curvature(group_pts)
-                    group_complexity = np.sum(np.abs(np.diff(np.sign(np.diff(np.arctan2(np.diff(group_pts, axis=0)[:,1], np.diff(group_pts, axis=0)[:,0]))))) > 0)
-                else:
-                    group_curvature = 0.0
-                    group_complexity = 0
-                group_features[f'group_{group}'] = {
-                    'size': int(len(group_pts)),
-                    'curvature': float(group_curvature),
-                    'complexity': int(group_complexity)
-                }
-            logger.info(f"[MULTISCALE][GROUPS] scale={scale}, group_features={group_features}")
-        except Exception as e:
-            logger.warning(f"[MULTISCALE][WARN] Hierarchical clustering failed at scale {scale}: {e}")
-            group_features = {}
-        multiscale_features[f'scale_{scale}'] = {
-            'curvature': float(curvature),
-            'angular_variance': float(angular_variance),
-            'complexity': int(complexity),
-            'groups': group_features
-        }
-        logger.info(f"[MULTISCALE][FEATURES] scale={scale}, features={multiscale_features[f'scale_{scale}']}")
+    curvature = PhysicsInference.robust_curvature(smoothed_vertices)
+    angular_variance = PhysicsInference.robust_angular_variance(smoothed_vertices)
+    diffs = np.diff(smoothed_vertices, axis=0)
+    angles = np.arctan2(diffs[:,1], diffs[:,0])
+    angle_diffs = np.diff(angles)
+    inflections = np.sum(np.abs(np.diff(np.sign(angle_diffs))) > 0)
+    complexity = inflections
+    n_clusters = min(max(2, int(len(smoothed_vertices) // (3 + scale * 5))), len(smoothed_vertices))
+    try:
+        clustering = AgglomerativeClustering(n_clusters=n_clusters, linkage='ward').fit(smoothed_vertices)
+        labels = clustering.labels_
+        group_features = {}
+        for group in range(n_clusters):
+            group_idx = np.where(labels == group)[0]
+            group_pts = smoothed_vertices[group_idx]
+            if len(group_pts) > 1:
+                group_curvature = PhysicsInference.robust_curvature(group_pts)
+                group_complexity = np.sum(np.abs(np.diff(np.sign(np.diff(np.arctan2(np.diff(group_pts, axis=0)[:,1], np.diff(group_pts, axis=0)[:,0]))))) > 0)
+            else:
+                group_curvature = 0.0
+                group_complexity = 0
+            group_features[f'group_{group}'] = {
+                'size': int(len(group_pts)),
+                'curvature': float(group_curvature),
+                'complexity': int(group_complexity)
+            }
+        logger.info(f"[MULTISCALE][GROUPS] scale={scale}, group_features={group_features}")
+    except Exception as e:
+        logger.warning(f"[MULTISCALE][WARN] Hierarchical clustering failed at scale {scale}: {e}")
+        group_features = {}
+    multiscale_features[f'scale_{scale}'] = {
+        'curvature': float(curvature),
+        'angular_variance': float(angular_variance),
+        'complexity': int(complexity),
+        'groups': group_features
+    }
+    logger.info(f"[MULTISCALE][FEATURES] scale={scale}, features={multiscale_features[f'scale_{scale}']}")
     logger.info(f"[MULTISCALE][OUTPUT] {multiscale_features}")
     return multiscale_features
 
@@ -300,21 +300,21 @@ def extract_dominant_shape_modifiers(shape):
     return result
 
 def _detect_alternation(sequence):
-        """Compute maximal alternation score using PhysicsInference.alternation_score."""
-        from src.Derive_labels.features import ensure_str_list
-        logger.debug(f"[_detect_alternation] INPUTS: sequence={sequence}")
-        # Ensure sequence is stringified
-        sequence_str = ensure_str_list(sequence)
-        logger.debug(f"[_detect_alternation] Sequence after stringification: {sequence_str}")
-        score = PhysicsInference.alternation_score(sequence_str)
-        logger.debug(f"[_detect_alternation] OUTPUT: {score}")
-        # Validate output is JSON serializable
-        try:
-            json.dumps(score)
-            logger.debug(f"[_detect_alternation] Output is JSON serializable.")
-        except Exception as e:
-            logger.error(f"[_detect_alternation] Output not JSON serializable: {e}")
-        return score
+    """Compute maximal alternation score using alternation_score."""
+    from src.Derive_labels.features import ensure_str_list
+    logger.debug(f"[_detect_alternation] INPUTS: sequence={sequence}")
+    # Ensure sequence is stringified
+    sequence_str = ensure_str_list(sequence)
+    logger.debug(f"[_detect_alternation] Sequence after stringification: {sequence_str}")
+    score = PhysicsInference.alternation_score(sequence_str)
+    logger.debug(f"[_detect_alternation] OUTPUT: {score}")
+    # Validate output is JSON serializable
+    try:
+        json.dumps(score)
+        logger.debug(f"[_detect_alternation] Output is JSON serializable.")
+    except Exception as e:
+        logger.error(f"[_detect_alternation] Output not JSON serializable: {e}")
+    return score
 
 def _extract_graph_features(strokes):
     """

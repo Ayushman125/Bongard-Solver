@@ -3,7 +3,7 @@ Multi-Scale Geometric Feature Extraction Module
 Implements scale-space, moment invariants, wavelet, fractal, and related features for Bongard-Solver.
 """
 import numpy as np
-from skimage.measure import moments_zernike
+from skimage.measure import moments_hu
 
 def compute_multiscale_geometric_features(image_dict):
     """
@@ -17,8 +17,22 @@ def compute_multiscale_geometric_features(image_dict):
     vertices = np.array(image_dict.get('vertices', []))
     # 3.1 Scale-Space Curvature Signatures
     features['scale_space_curvature'] = [np.std(vertices[:max(3, i+1)]) for i in range(len(vertices))]
-    # 3.2 Multi-Scale Moment Invariants
-    features['moment_invariants'] = [moments_zernike(vertices, r) for r in [1,2,3]] if vertices.size else []
+    # 3.2 Multi-Scale Moment Invariants (Hu moments)
+    if vertices.size:
+        # Hu moments require a 2D image, so we create a dummy image if needed
+        try:
+            # If vertices are points, create a binary image
+            img = np.zeros((64, 64), dtype=np.float32)
+            norm = (vertices - vertices.min(axis=0)) / (vertices.ptp(axis=0) + 1e-8)
+            pix = (norm * 63).astype(int)
+            for x, y in pix:
+                img[y, x] = 1.0
+            hu = moments_hu(img)
+            features['moment_invariants'] = hu.tolist()
+        except Exception as e:
+            features['moment_invariants'] = f"hu moments error: {e}"
+    else:
+        features['moment_invariants'] = []
     # 3.3 Laplacian Pyramid Edge Energy
     features['laplacian_edge_energy'] = float(np.sum(np.abs(np.diff(vertices, axis=0)))) if vertices.size else 0
     # 3.4 Gaussian Pyramid Shape Complexity
@@ -49,8 +63,11 @@ def compute_multiscale_geometric_features(image_dict):
     features['curvelet_energy'] = float(np.sum(vertices)) if vertices.size else 0
     # 3.13 Multi-Resolution Pixel-Stroke Correlation
     features['pixel_stroke_correlation'] = float(np.corrcoef(vertices[:,0], vertices[:,1])[0,1]) if vertices.size > 1 else 0
-    # 3.14 Multi-Scale Zernike Moments
-    features['zernike_moments'] = [moments_zernike(vertices, r) for r in [1,2,3]] if vertices.size else []
+    # 3.14 Multi-Scale Zernike Moments (not available, fallback to Hu moments)
+    if vertices.size:
+        features['zernike_moments'] = features['moment_invariants']
+    else:
+        features['zernike_moments'] = []
     # 3.15 Multi-Scale Shape Context
     features['shape_context'] = [float(np.mean(vertices[:max(3, i+1)])) for i in range(len(vertices))]
     return features

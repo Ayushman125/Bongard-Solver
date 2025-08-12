@@ -46,7 +46,6 @@ def extract_stroke_features_from_shapes(bongard_image, problem_id=None):
     Extract features for each stroke within its shape context, logging group membership and mismatches.
     Returns a list of dicts: [{shape_index, stroke_index, stroke_command, features, group_info, ...}, ...]
     """
-    import logging
     logging.info(f"[extract_stroke_features_from_shapes] INPUT bongard_image type: {type(bongard_image)} | problem_id={problem_id}")
     logging.info(f"[extract_stroke_features_from_shapes] INPUT bongard_image.one_stroke_shapes: {getattr(bongard_image, 'one_stroke_shapes', None)}")
     results = []

@@ -1286,3 +1286,83 @@ Traceback (most recent call last):
                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 NameError: name 'robust_flatten_and_stringify' is not defined
 
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_0, problem_id=bd_asymmetric_unbala_x_0000, error='degenerate_case'
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 436, in process_single_image
+    physics_features = calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\physics_features.py", line 36, in _calculate_physics_features
+    quality_monitor.log_quality('physics_features', {'degenerate': geom['degenerate_case'], 'area': geom['area']})
+                                                                   ~~~~^^^^^^^^^^^^^^^^^^^
+KeyError: 'degenerate_case'
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_1, problem_id=bd_asymmetric_unbala_x_0000, error='degenerate_case'
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 436, in process_single_image
+    physics_features = calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\physics_features.py", line 36, in _calculate_physics_features
+    quality_monitor.log_quality('physics_features', {'degenerate': geom['degenerate_case'], 'area': geom['area']})
+                                                                   ~~~~^^^^^^^^^^^^^^^^^^^
+KeyError: 'degenerate_case'
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_2, problem_id=bd_asymmetric_unbala_x_0000, error='degenerate_case'
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 436, in process_single_image
+    physics_features = calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\physics_features.py", line 36, in _calculate_physics_features
+    quality_monitor.log_quality('physics_features', {'degenerate': geom['degenerate_case'], 'area': geom['area']})
+                                                                   ~~~~^^^^^^^^^^^^^^^^^^^
+KeyError: 'degenerate_case'
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_3, problem_id=bd_asymmetric_unbala_x_0000, error='degenerate_case'
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 436, in process_single_image
+    physics_features = calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\physics_features.py", line 36, in _calculate_physics_features
+    quality_monitor.log_quality('physics_features', {'degenerate': geom['degenerate_case'], 'area': geom['area']})
+                                                                   ~~~~^^^^^^^^^^^^^^^^^^^
+KeyError: 'degenerate_case'
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_4, problem_id=bd_asymmetric_unbala_x_0000, error='degenerate_case'
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 436, in process_single_image
+    physics_features = calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\physics_features.py", line 36, in _calculate_physics_features
+    quality_monitor.log_quality('physics_features', {'degenerate': geom['degenerate_case'], 'area': geom['area']})
+                                                                   ~~~~^^^^^^^^^^^^^^^^^^^
+KeyError: 'degenerate_case'
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_5, problem_id=bd_asymmetric_unbala_x_0000, error='degenerate_case'
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 436, in process_single_image
+    physics_features = calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\physics_features.py", line 36, in _calculate_physics_features
+    quality_monitor.log_quality('physics_features', {'degenerate': geom['degenerate_case'], 'area': geom['area']})
+                                                                   ~~~~^^^^^^^^^^^^^^^^^^^
+KeyError: 'degenerate_case'
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_pos_6, problem_id=bd_asymmetric_unbala_x_0000, error='degenerate_case'
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 436, in process_single_image
+    physics_features = calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\physics_features.py", line 36, in _calculate_physics_features
+    quality_monitor.log_quality('physics_features', {'degenerate': geom['degenerate_case'], 'area': geom['area']})
+                                                                   ~~~~^^^^^^^^^^^^^^^^^^^
+KeyError: 'degenerate_case'
+
+[ERROR] image_id=bd_asymmetric_unbala_x_0000_neg_0, problem_id=bd_asymmetric_unbala_x_0000, error='degenerate_case'
+Traceback (most recent call last):
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\image_level.py", line 436, in process_single_image
+    physics_features = calculate_physics_features(norm_vertices_for_features, centroid=centroid, strokes=all_actions)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\HP\AI_Projects\BongordSolver\src\Derive_labels\physics_features.py", line 36, in _calculate_physics_features
+    quality_monitor.log_quality('physics_features', {'degenerate': geom['degenerate_case'], 'area': geom['area']})
+                                                                   ~~~~^^^^^^^^^^^^^^^^^^^
+KeyError: 'degenerate_case'
+
