@@ -346,63 +346,58 @@ else:
         
         def _calculate_vertices(self):
             """Calculate vertices from actions using NVLabs coordinate system."""
-            vertices = []
-            current_x, current_y = 0.0, 0.0  # Start at center
-            current_angle = 0.0  # Start facing right (0 degrees)
-            
-            vertices.append((current_x, current_y))
-            
             try:
+                vertices = []
+                current_x, current_y = 0.0, 0.0
+                current_angle = 0.0
                 for action in self.basic_actions:
+                    # Turn first (like turtle graphics)
+                    if action.turn_direction == "L":
+                        current_angle += action.turn_angle
+                    elif action.turn_direction == "R":
+                        current_angle -= action.turn_angle
                     if isinstance(action, LineAction):
-                        # Move forward by line_length in current direction
                         distance = action.line_length
-                        angle_rad = np.radians(current_angle)
-                        
-                        new_x = current_x + distance * np.cos(angle_rad)
-                        new_y = current_y + distance * np.sin(angle_rad)
-                        
+                        if hasattr(action, 'line_length_normalization_factor') and action.line_length_normalization_factor:
+                            distance *= action.line_length_normalization_factor
+                        angle_rad = math.radians(current_angle)
+                        new_x = current_x + distance * math.cos(angle_rad)
+                        new_y = current_y + distance * math.sin(angle_rad)
+                        # Clamp/quantize coordinates
+                        new_x = round(new_x, 6)
+                        new_y = round(new_y, 6)
                         vertices.append((new_x, new_y))
                         current_x, current_y = new_x, new_y
-                        
-                        # Turn by the specified angle
-                        if action.turn_direction == "L":
-                            current_angle += action.turn_angle
-                        elif action.turn_direction == "R":
-                            current_angle -= action.turn_angle
-                            
                     elif isinstance(action, ArcAction):
-                        # Handle arc drawing (simplified as line segments)
                         radius = action.arc_radius
+                        if hasattr(action, 'arc_radius_normalizaton_factor') and action.arc_radius_normalizaton_factor:
+                            radius *= action.arc_radius_normalizaton_factor
                         arc_angle = action.arc_angle
-                        
-                        # Approximate arc with line segments
                         num_segments = max(4, int(abs(arc_angle) / 10))
                         angle_step = arc_angle / num_segments
-                        
                         for i in range(num_segments):
                             segment_angle = current_angle + (i + 1) * angle_step
-                            angle_rad = np.radians(segment_angle)
-                            
-                            new_x = current_x + radius * np.cos(angle_rad)
-                            new_y = current_y + radius * np.sin(angle_rad)
-                            
+                            angle_rad = math.radians(segment_angle)
+                            step_distance = radius * math.radians(abs(angle_step))
+                            new_x = current_x + step_distance * math.cos(angle_rad)
+                            new_y = current_y + step_distance * math.sin(angle_rad)
+                            # Clamp/quantize coordinates
+                            new_x = round(new_x, 6)
+                            new_y = round(new_y, 6)
                             vertices.append((new_x, new_y))
                             current_x, current_y = new_x, new_y
-                        
-                        # Update angle after arc
                         current_angle += arc_angle
-                        
-                        # Turn by the specified angle
-                        if action.turn_direction == "L":
-                            current_angle += action.turn_angle
-                        elif action.turn_direction == "R":
-                            current_angle -= action.turn_angle
-                            
+                # Robust normalization: perturb collinear points before scaling
+                from src.Derive_labels.shape_utils import simulate_simplicity
+                vertices = simulate_simplicity(vertices)
+                # Validate mapped coordinates against image grid
+                for idx, (x, y) in enumerate(vertices):
+                    if not (-360 <= x <= 360 and -360 <= y <= 360):
+                        logging.warning(f"[OneStrokeShape._calculate_vertices] Vertex {idx} out of bounds: ({x}, {y})")
+                logging.info(f"[OneStrokeShape._calculate_vertices] OUTPUT vertices: {vertices}")
                 return vertices
-                
             except Exception as e:
-                logger.error(f"Failed to calculate vertices: {e}")
+                logging.error(f"[OneStrokeShape._calculate_vertices] Exception: {e}")
                 return []
 
 

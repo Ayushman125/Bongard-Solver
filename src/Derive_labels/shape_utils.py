@@ -1,3 +1,32 @@
+def simulate_simplicity(vertices, epsilon=1e-6):
+    """
+    Symbolically perturb collinear/duplicate points to guarantee non-degenerate input for convex hull.
+    Returns a new list of vertices with small random noise added to collinear/duplicate points.
+    """
+    import numpy as np
+    import logging
+    logger = logging.getLogger(__name__)
+    if not vertices or len(vertices) < 3:
+        return vertices
+    arr = np.array(vertices, dtype=float)
+    # Detect collinear: area of triangle for every triplet
+    def is_collinear(a, b, c, eps=epsilon):
+        area = np.abs(np.cross(b - a, c - a))
+        return area < eps
+    perturbed = arr.copy()
+    for i in range(1, len(arr) - 1):
+        if is_collinear(arr[i-1], arr[i], arr[i+1]):
+            noise = np.random.uniform(-epsilon, epsilon, size=2)
+            perturbed[i] += noise
+            logger.info(f"[SoS] Perturbed collinear vertex {i}: {arr[i]} -> {perturbed[i]}")
+    # Deduplicate
+    deduped = [tuple(perturbed[0])]
+    for pt in perturbed[1:]:
+        if not any(np.linalg.norm(np.array(pt) - np.array(d)) < epsilon for d in deduped):
+            deduped.append(tuple(pt))
+        else:
+            logger.info(f"[SoS] Removed duplicate vertex: {pt}")
+    return deduped
 import numpy as np
 
 def valid_verts(verts):
@@ -99,23 +128,42 @@ def calculate_geometry_consistent(vertices):
             'compactness': 0.0,
             'convexity_ratio': 0.0
         }
+    # SoS: perturb collinear/duplicate points
+    vertices = simulate_simplicity(vertices)
     try:
         poly = Polygon(vertices)
         if not poly.is_valid:
             poly = make_valid(poly)
         if poly.geom_type == 'MultiPolygon':
-            # Take largest polygon
             poly = max(poly.geoms, key=lambda x: x.area)
         if not poly.is_valid or poly.area == 0.0:
-            logging.warning(f"[calculate_geometry_consistent] Invalid or zero-area polygon. Returning default geometry.")
-            return {
-                'area': 0.0,
-                'perimeter': 0.0,
-                'centroid': [0.0, 0.0],
-                'bounds': [0, 0, 0, 0],
-                'width': 0.0,
-                'height': 0.0
-            }
+            logging.warning(f"[calculate_geometry_consistent] Invalid or zero-area polygon. Trying fallback hull.")
+            # Fallback: gift-wrapping hull
+            try:
+                from scipy.spatial import ConvexHull
+                hull = ConvexHull(vertices)
+                hull_pts = [vertices[i] for i in hull.vertices]
+                poly = Polygon(hull_pts)
+                if not poly.is_valid or poly.area == 0.0:
+                    logging.warning(f"[calculate_geometry_consistent] Fallback hull also degenerate. Returning default geometry.")
+                    return {
+                        'area': 0.0,
+                        'perimeter': 0.0,
+                        'centroid': [0.0, 0.0],
+                        'bounds': [0, 0, 0, 0],
+                        'width': 0.0,
+                        'height': 0.0
+                    }
+            except Exception as e:
+                logging.error(f"[calculate_geometry_consistent] Fallback hull failed: {e}. Returning default geometry.")
+                return {
+                    'area': 0.0,
+                    'perimeter': 0.0,
+                    'centroid': [0.0, 0.0],
+                    'bounds': [0, 0, 0, 0],
+                    'width': 0.0,
+                    'height': 0.0
+                }
         min_x, min_y, max_x, max_y = poly.bounds
         width = max_x - min_x
         height = max_y - min_y
@@ -127,7 +175,6 @@ def calculate_geometry_consistent(vertices):
             'width': width,
             'height': height
         }
-    # logging.info(f"[calculate_geometry_consistent] OUTPUT geometry: {geometry}")  # PATCH: Suppressed verbose log
         return geometry
     except Exception as e:
         logging.error(f"[calculate_geometry_consistent] Exception: {e}. Returning default geometry.")
