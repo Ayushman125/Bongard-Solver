@@ -1,178 +1,242 @@
-def _calculate_stroke_specific_features(stroke, stroke_index, context=None, shape_info=None):
-    """
-    Extracts rich, context-aware features from a single stroke.
-    Args:
-        stroke: The stroke object or action command string.
-        stroke_index: Index of the stroke in the shape sequence.
-        context: Optional, contextual info for dynamic adaptation.
-        shape_info: Additional geometric info about the shape.
-    Returns:
-        features: dict with symbolic and continuous stroke features.
-    """
-    # Parse stroke class and modifier
+import logging
+import math
+import numpy as np
+from typing import Dict, List, Any, Optional, Union
+from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
+
+@dataclass
+class StrokePrimitive:
+    """Structured representation of stroke primitives"""
+    stroke_class: str  # 'line' or 'arc'
+    modifier: str      # 'normal', 'zigzag', 'triangle', 'circle', 'square'
+    length: float      # normalized [0,1]
+    angle: float       # normalized [0,1] 
+    curvature: Optional[float] = None  # for arcs
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'stroke_class': self.stroke_class,
+            'modifier': self.modifier,
+            'length': self.length,
+            'angle': self.angle,
+            'curvature': self.curvature
+        }
+
+class ContextualStrokeExtractor:
+    def __init__(self):
+        self.stroke_class_dim = 32
+        self.modifier_dim = 64
+        self.param_dim = 32
+        self._init_embeddings()
+    def _init_embeddings(self):
+        self.stroke_class_embeddings = {
+            'line': np.random.randn(self.stroke_class_dim),
+            'arc': np.random.randn(self.stroke_class_dim),
+            'unknown': np.zeros(self.stroke_class_dim)
+        }
+        self.modifier_embeddings = {
+            'normal': np.random.randn(self.modifier_dim),
+            'zigzag': np.random.randn(self.modifier_dim),
+            'triangle': np.random.randn(self.modifier_dim),
+            'circle': np.random.randn(self.modifier_dim),
+            'square': np.random.randn(self.modifier_dim)
+        }
+        self.modifier_embeddings['zigzag'] = (
+            0.7 * self.modifier_embeddings['normal'] + 
+            0.3 * np.random.randn(self.modifier_dim)
+        )
+
+def parse_stroke_command(command: str) -> StrokePrimitive:
     try:
-        parsed = extract_modifier_from_stroke(stroke)
+        parts = command.split('_')
+        if len(parts) < 2:
+            return StrokePrimitive('unknown', 'normal', 0.0, 0.0)
+        stroke_class = parts[0] if parts[0] in ['line', 'arc'] else 'unknown'
+        modifier = parts[1] if parts[1] in ['normal', 'zigzag', 'triangle', 'circle', 'square'] else 'normal'
+        param_str = '_'.join(parts[2:]) if len(parts) > 2 else '0.5-0.5'
+        param_parts = param_str.split('-')
+        if stroke_class == 'line':
+            length = float(param_parts[0]) if param_parts else 0.5
+            angle = float(param_parts[1]) if len(param_parts) > 1 else 0.5
+            return StrokePrimitive(stroke_class, modifier, length, angle)
+        elif stroke_class == 'arc':
+            first_params = param_parts[0].split('_') if param_parts else ['0.5', '0.5']
+            radius = float(first_params[0]) if first_params else 0.5
+            span = float(first_params[1]) if len(first_params) > 1 else 0.25
+            angle = float(param_parts[1]) if len(param_parts) > 1 else 0.5
+            curvature = 1.0 / max(radius, 0.01) if radius > 0 else 0.0
+            return StrokePrimitive(stroke_class, modifier, radius, angle, curvature)
     except Exception as e:
-        parsed = {'class': 'unknown', 'modifier': 'unknown', 'params': [0.0, 0.0]}
-    stroke_class = parsed['class']
-    modifier = parsed['modifier']
-    params = parsed['params']
-    # Geometric features (stub: replace with real geometric extraction as needed)
-    length = params[0] if params else 0.0
-    angle = params[1] if len(params) > 1 else 0.0
-    curvature = params[2] if len(params) > 2 else 0.0
-    # If shape_info provides vertices, use them for advanced metrics
-    num_vertices = 0
-    compactness = 0.0
-    convexity_ratio = 0.0
-    complexity = 0.0
-    if shape_info and 'vertices' in shape_info:
-        vertices = shape_info['vertices']
-        num_vertices = len(vertices)
-        # Example: use open_stroke_convexity from shape_utils
-        try:
-            from src.Derive_labels.shape_utils import open_stroke_convexity
-            convexity_ratio = open_stroke_convexity(vertices)
-        except Exception:
-            convexity_ratio = 0.0
-        # Example: compactness = perimeter^2 / area (stub)
-        try:
-            import numpy as np
-            from shapely.geometry import Polygon
-            poly = Polygon(vertices)
-            perimeter = poly.length if poly.is_valid else 0.0
-            area = poly.area if poly.is_valid else 1.0
-            compactness = (perimeter ** 2) / area if area > 0 else 0.0
-        except Exception:
-            compactness = 0.0
-        # Complexity: number of vertices as a proxy
-        complexity = num_vertices
+        logger.warning(f"Failed to parse stroke command '{command}': {e}")
+        return StrokePrimitive('unknown', 'normal', 0.0, 0.0)
+
+def _calculate_stroke_specific_features(stroke_command: Union[str, object], 
+                                      stroke_index: int,
+                                      context: Optional[Dict] = None,
+                                      bongard_image=None,
+                                      parent_shape_vertices=None,
+                                      shape_obj=None) -> Dict[str, Any]:
+    if isinstance(stroke_command, str):
+        primitive = parse_stroke_command(stroke_command)
+    else:
+        raw_cmd = getattr(stroke_command, 'raw_command', str(stroke_command))
+        primitive = parse_stroke_command(raw_cmd)
     features = {
         'stroke_index': stroke_index,
-        'stroke_class': stroke_class,
-        'modifier': modifier,
-        'length': length,
-        'angle': angle,
-        'curvature': curvature,
-        'compactness': compactness,
-        'convexity_ratio': convexity_ratio,
-        'complexity': complexity,
-        'num_vertices': num_vertices,
+        'stroke_class': primitive.stroke_class,
+        'modifier': primitive.modifier,
+        'length': primitive.length,
+        'angle': primitive.angle,
+        'curvature': primitive.curvature or 0.0,
     }
-    # Optionally adapt features dynamically based on context (few-shot, analogy-making)
-    if context is not None:
-        # Example: context-driven feature adaptation (stub)
-        if 'analogical_map' in context:
-            features['modifier'] = context['analogical_map'].get(modifier, modifier)
+    extractor = ContextualStrokeExtractor()
+    class_emb = extractor.stroke_class_embeddings.get(primitive.stroke_class, 
+                                                     extractor.stroke_class_embeddings['unknown'])
+    modifier_emb = extractor.modifier_embeddings.get(primitive.modifier,
+                                                    extractor.modifier_embeddings['normal'])
+    param_features = np.array([primitive.length, primitive.angle, primitive.curvature or 0.0, 
+                              primitive.length * primitive.angle])
+    stroke_embedding = np.concatenate([
+        class_emb,
+        modifier_emb, 
+        param_features
+    ])
+    features['embedding'] = stroke_embedding
+    features['embedding_dim'] = len(stroke_embedding)
+    if context and 'support_set_stats' in context:
+        features = _adapt_features_to_context(features, context)
+    features['analogy_scores'] = _compute_analogy_scores(primitive, extractor)
+    features.update(_compute_abstract_properties(primitive, parent_shape_vertices))
     return features
-"""
-stroke_types.py
-Symbolic, compositional, and context-aware concept extraction for Bongard Solver.
-All geometric/statistical logic, legacy code, and logging removed. Only symbolic concept extraction functions remain.
-"""
 
-import re
+def _adapt_features_to_context(features: Dict, context: Dict) -> Dict:
+    if 'curvature_importance' in context:
+        features['curvature'] *= context['curvature_importance']
+    if context.get('allow_analogies', True):
+        modifier = features['modifier']
+        if modifier == 'zigzag' and context.get('treat_zigzag_as_line', False):
+            features['effective_modifier'] = 'normal'
+            features['analogy_applied'] = True
+        else:
+            features['effective_modifier'] = modifier
+            features['analogy_applied'] = False
+    return features
 
-def extract_modifier_from_stroke(action_command: str) -> dict:
-    """
-    Parses a LOGO shape action command into stroke class, modifier, and numerical params.
-    Examples:
-     - line_normal_1.000-0.833
-     - arc_normal_0.500_0.542-0.750
-    Returns a dict with:
-      - class: 'line' or 'arc'
-      - modifier: e.g., 'normal', 'triangle', 'circle', etc.
-      - params: list of floats (length/angle or arc parameters)
-    """
-    # Pattern for line and arc commands
-    pattern = r'^(line|arc)_(normal|triangle|circle|square|zigzag)_(.+)$'
-    match = re.match(pattern, action_command)
-    if not match:
-        raise ValueError(f"Invalid action command format: {action_command}")
-    stroke_class = match.group(1)
-    modifier = match.group(2)
-    numeric_part = match.group(3)
-    if stroke_class == 'line':
-        # Expected format: <float>-<float>
-        parts = numeric_part.split('-')
-        if len(parts) != 2:
-            raise ValueError(f"Unexpected line numeric format: {numeric_part}")
-        length = float(parts[0])
-        angle = float(parts[1])
-        params = [length, angle]
-    elif stroke_class == 'arc':
-        # Expected format: <float>_<float>-<float>
-        parts_underscore = numeric_part.split('_')
-        if len(parts_underscore) != 3:
-            raise ValueError(f"Unexpected arc numeric format: {numeric_part}")
-        param1 = float(parts_underscore[0])
-        param2_str, param3_str = parts_underscore[1].split('-')
-        param2 = float(param2_str)
-        param3 = float(param3_str)
-        params = [param1, param2, param3]
+def _compute_analogy_scores(primitive: StrokePrimitive, extractor: ContextualStrokeExtractor) -> Dict[str, float]:
+    current_emb = extractor.modifier_embeddings.get(primitive.modifier,
+                                                   extractor.modifier_embeddings['normal'])
+    scores = {}
+    for modifier, emb in extractor.modifier_embeddings.items():
+        similarity = np.dot(current_emb, emb) / (np.linalg.norm(current_emb) * np.linalg.norm(emb))
+        scores[f'similar_to_{modifier}'] = float(similarity)
+    return scores
+
+def _compute_abstract_properties(primitive: StrokePrimitive, vertices=None) -> Dict[str, float]:
+    properties = {}
+    if primitive.stroke_class == 'line':
+        if primitive.modifier == 'normal':
+            properties['straightness'] = 1.0
+        elif primitive.modifier == 'zigzag':
+            properties['straightness'] = 0.6
+        else:
+            properties['straightness'] = 0.3
     else:
-        raise ValueError(f"Unknown stroke class: {stroke_class}")
+        properties['straightness'] = 0.1
+    regularity_map = {
+        'normal': 1.0,
+        'circle': 0.9,
+        'square': 0.8,
+        'triangle': 0.7,
+        'zigzag': 0.4
+    }
+    properties['regularity'] = regularity_map.get(primitive.modifier, 0.5)
+    if primitive.stroke_class == 'arc' and primitive.curvature:
+        properties['compactness'] = min(primitive.curvature, 1.0)
+    else:
+        properties['compactness'] = 0.1
+    complexity_map = {
+        'normal': 0.1,
+        'circle': 0.3,
+        'square': 0.5,
+        'triangle': 0.6,
+        'zigzag': 0.8
+    }
+    properties['visual_complexity'] = complexity_map.get(primitive.modifier, 0.5)
+    return properties
+
+def _calculate_stroke_type_differentiated_features(stroke_features: List[Dict], 
+                                                 context: Optional[Dict] = None) -> Dict[str, Any]:
+    if not stroke_features:
+        return {'valid': False, 'reason': 'no_stroke_features'}
+    line_features = [f for f in stroke_features if f.get('stroke_class') == 'line']
+    arc_features = [f for f in stroke_features if f.get('stroke_class') == 'arc']
+    differentiated = {
+        'stroke_composition': {
+            'num_lines': len(line_features),
+            'num_arcs': len(arc_features),
+            'total_strokes': len(stroke_features),
+            'line_ratio': len(line_features) / max(len(stroke_features), 1),
+            'arc_ratio': len(arc_features) / max(len(stroke_features), 1)
+        }
+    }
+    if len(stroke_features) > 1:
+        embeddings = np.array([f['embedding'] for f in stroke_features if 'embedding' in f])
+        if len(embeddings) > 1:
+            similarity_matrix = np.dot(embeddings, embeddings.T)
+            differentiated['embedding_clusters'] = _find_embedding_clusters(similarity_matrix)
+    if line_features:
+        differentiated['line_properties'] = {
+            'avg_straightness': np.mean([f.get('straightness', 0) for f in line_features]),
+            'avg_regularity': np.mean([f.get('regularity', 0) for f in line_features]),
+            'modifier_diversity': len(set(f.get('modifier') for f in line_features))
+        }
+    if arc_features:
+        differentiated['arc_properties'] = {
+            'avg_curvature': np.mean([f.get('curvature', 0) for f in arc_features]),
+            'avg_compactness': np.mean([f.get('compactness', 0) for f in arc_features]),
+            'modifier_diversity': len(set(f.get('modifier') for f in arc_features))
+        }
+    if context:
+        differentiated = _adapt_differentiated_features(differentiated, context)
+    differentiated['valid'] = True
+    return differentiated
+
+def _find_embedding_clusters(similarity_matrix: np.ndarray, threshold: float = 0.7) -> Dict:
+    n = similarity_matrix.shape[0]
+    clusters = []
+    visited = set()
+    for i in range(n):
+        if i in visited:
+            continue
+        cluster = [i]
+        visited.add(i)
+        for j in range(i+1, n):
+            if similarity_matrix[i, j] > threshold:
+                cluster.append(j)
+                visited.add(j)
+        clusters.append(cluster)
     return {
-        'class': stroke_class,
-        'modifier': modifier,
-        'params': params
+        'num_clusters': len(clusters),
+        'clusters': clusters,
+        'avg_cluster_size': np.mean([len(c) for c in clusters])
     }
 
-def extract_symbolic_stroke_concepts(action_sequence, problem_context=None):
-    """
-    Extract symbolic stroke-level concepts from a LOGO action sequence.
-    Args:
-        action_sequence (list): List of LOGO action commands.
-        problem_context (dict, optional): Context for concept extraction.
-    Returns:
-        dict: Symbolic stroke concepts (e.g., stroke type, compositional structure, context tags).
-    """
-    return {
-        'stroke_types': get_stroke_types(action_sequence),
-        'compositional_structure': analyze_stroke_structure(action_sequence),
-        'context_tags': extract_context_tags(action_sequence, problem_context)
-    }
+def _adapt_differentiated_features(features: Dict, context: Dict) -> Dict:
+    if context.get('emphasize_curvature', False):
+        if 'arc_properties' in features:
+            features['arc_properties']['importance_weight'] = 1.5
+    if context.get('treat_modifiers_equally', False):
+        for prop_key in ['line_properties', 'arc_properties']:
+            if prop_key in features:
+                features[prop_key]['modifier_diversity'] *= 0.5
+    return features
 
-def get_stroke_types(action_sequence):
-    types = []
-    for cmd in action_sequence:
-        if 'line' in str(cmd):
-            types.append('line')
-        elif 'arc' in str(cmd):
-            types.append('arc')
-        else:
-            types.append('unknown')
-    return types
-
-def analyze_stroke_structure(action_sequence):
-    return {
-        'sequence_patterns': find_repeating_stroke_patterns(action_sequence),
-        'hierarchical_structure': build_stroke_tree(action_sequence),
-        'compositional_rules': extract_stroke_composition_rules(action_sequence)
-    }
-
-def find_repeating_stroke_patterns(action_sequence):
-    patterns = []
-    seen = set()
-    for cmd in action_sequence:
-        if cmd in seen:
-            patterns.append(cmd)
-        else:
-            seen.add(cmd)
-    return patterns
-
-def build_stroke_tree(action_sequence):
-    return {'root': action_sequence[0] if action_sequence else None, 'children': action_sequence[1:]}
-
-def extract_stroke_composition_rules(action_sequence):
-    return [f'rule_{i}' for i, _ in enumerate(action_sequence)]
-
-def extract_context_tags(action_sequence, problem_context=None):
-    tags = []
-    if problem_context:
-        tags.extend(problem_context.get('tags', []))
-    if any('zigzag' in str(cmd) for cmd in action_sequence):
-        tags.append('pattern_zigzag')
-    if any('circle' in str(cmd) for cmd in action_sequence):
-        tags.append('shape_circle')
-    return tags
+def extract_modifier_from_stroke(stroke) -> str:
+    if isinstance(stroke, str):
+        primitive = parse_stroke_command(stroke)
+        return primitive.modifier
+    else:
+        raw_cmd = getattr(stroke, 'raw_command', str(stroke))
+        primitive = parse_stroke_command(raw_cmd)
+        return primitive.modifier
