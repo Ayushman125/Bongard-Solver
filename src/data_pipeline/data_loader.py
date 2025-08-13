@@ -217,14 +217,6 @@ def parse_action_command(command):
             'command_type': command_type,
             'shape': shape,
             'parameters': parameters,
-            'coords': coords,
-            'size': size,
-            'thickness': thickness,
-            'is_closed': is_closed,
-            'is_curved': is_curved,
-            'is_regular': is_regular,
-            'is_linear_pattern': is_linear_pattern,
-            'complexity_level': complexity_level,
             'full_command': command
         }
     else:

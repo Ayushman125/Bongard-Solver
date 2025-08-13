@@ -5,13 +5,18 @@ This parser uses the NVLabs coordinate system and geometry without hardcoding.
 Now using DIRECT NVLabs classes for exact compatibility.
 """
 
+# Typing fix for List
+from typing import List
 import sys
 from pathlib import Path
 # --- SINGLE, EARLY MONKEY-PATCH ---
 nvlabs_path = Path(__file__).parent.parent.parent / "Bongard-LOGO"
 sys.path.insert(0, str(nvlabs_path))
+NVLABS_AVAILABLE = False
 try:
-    from bongard import LineAction, ArcAction
+    from bongard.bongard import BasicAction, LineAction, ArcAction, OneStrokeShape
+    NVLABS_AVAILABLE = True
+    # Monkey-patch string methods only if classes are available
     def _universal_action_str(self):
         if hasattr(self, 'raw_command') and isinstance(self.raw_command, str):
             return self.raw_command
@@ -29,6 +34,36 @@ try:
     LineAction.__repr__ = _universal_action_str
     ArcAction.__str__ = _universal_action_str
     ArcAction.__repr__ = _universal_action_str
+    print("✅ Successfully patched LineAction/ArcAction string methods")
+except ImportError as e:
+    print(f"⚠️ Could not import NVLabs Bongard-LOGO classes. Falling back to dummy classes. Error: {e}")
+    # Fallback: define dummy classes for LineAction, ArcAction, OneStrokeShape
+    class LineAction:
+        def __init__(self, *args, **kwargs):
+            pass
+        def __str__(self):
+            return "<LineAction>"
+        def __repr__(self):
+            return "<LineAction>"
+        @classmethod
+        def import_from_action_string(cls, action_string, line_length_normalization_factor=None):
+            return cls()
+    class ArcAction:
+        def __init__(self, *args, **kwargs):
+            pass
+        def __str__(self):
+            return "<ArcAction>"
+        def __repr__(self):
+            return "<ArcAction>"
+        @classmethod
+        def import_from_action_string(cls, action_string, arc_radius_normalizaton_factor=None):
+            return cls()
+    class OneStrokeShape:
+        def __init__(self, *args, **kwargs):
+            self.basic_actions = []
+        @property
+        def vertices(self):
+            return []
     print("✅ Successfully patched LineAction/ArcAction string methods")
 except ImportError as e:
     print(f"⚠️ Could not patch NVLabs classes: {e}")
@@ -84,34 +119,7 @@ nvlabs_path = Path(__file__).parent.parent.parent / "Bongard-LOGO"
 sys.path.insert(0, str(nvlabs_path))
 
 try:
-    from bongard import LineAction, ArcAction, OneStrokeShape, BongardImage
-    from bongard.bongard import BasicAction  # Import BasicAction directly from bongard.py
-    from bongard.bongard_painter import BongardImagePainter, BongardProblemPainter, BongardShapePainter
-    print("Successfully imported ALL NVLabs classes directly from Bongard-LOGO repo")
-    NVLABS_AVAILABLE = True
-    
-    # We can use these directly without any wrapper classes!
-    NVLabsLineAction = LineAction
-    NVLabsArcAction = ArcAction
-    NVLabsOneStrokeShape = OneStrokeShape
-    # Robust monkey-patch: always return raw_command if present and is str, else fallback to class name and id
-    def safe_action_str(self):
-        val = getattr(self, "raw_command", None)
-        if isinstance(val, str):
-            return val
-        return f"<{self.__class__.__name__} at {hex(id(self))}>"
-    LineAction.__str__ = safe_action_str
-    ArcAction.__str__ = safe_action_str
-    LineAction.__repr__ = safe_action_str
-    ArcAction.__repr__ = safe_action_str
-    
-    # Add granular logging after shape construction
-    import logging
-    def log_shape_construction(action_commands, shapes, problem_id=None):
-        logging.info(f"[SHAPE CONSTRUCTION] problem_id={problem_id} | input_action_commands={action_commands}")
-        for idx, shape in enumerate(shapes):
-            actions = getattr(shape, 'actions', getattr(shape, 'strokes', []))
-            logging.info(f"[SHAPE CONSTRUCTION] Shape {idx}: actions={actions} | shape_obj={shape}")
+    pass
 except ImportError as e:
     print(f"⚠️ NVLabs classes not available, using fallback: {e}")
     NVLABS_AVAILABLE = False
@@ -150,15 +158,11 @@ class ImageProgram:
     stroke_commands: List[StrokeCommand]
     vertices: Optional[List[Tuple[float, float]]] = None
 
-# NVLabs-compatible action classes
+## NVLabs-compatible action classes
 if NVLABS_AVAILABLE:
     # Use the original NVLabs classes directly but extend OneStrokeShape with vertices property
-    LineAction = NVLabsLineAction
-    ArcAction = NVLabsArcAction
-    
-    class OneStrokeShape(NVLabsOneStrokeShape):
+    class OneStrokeShape(OneStrokeShape):
         """Extended NVLabs OneStrokeShape with vertices property for compatibility."""
-        
         def __init__(self, basic_actions, start_coordinates=None, start_orientation=None, scaling_factors=None):
             import logging
             logging.info(f"[OneStrokeShape.__init__] basic_actions: {basic_actions}, start_coordinates: {start_coordinates}, start_orientation: {start_orientation}, scaling_factors: {scaling_factors}")
@@ -168,7 +172,6 @@ if NVLABS_AVAILABLE:
             self.actions = basic_actions
             # PATCH: Ensure start_coordinates is set and exposed
             self.start_coordinates = start_coordinates
-            
         @property
         def vertices(self):
             """
@@ -181,7 +184,6 @@ if NVLABS_AVAILABLE:
             if isinstance(self._vertices, np.ndarray):
                 return self._vertices.tolist()
             return self._vertices
-        
         def _calculate_vertices(self):
             """Calculate vertices from actions using NVLabs coordinate system with turtle graphics simulation."""
             import logging

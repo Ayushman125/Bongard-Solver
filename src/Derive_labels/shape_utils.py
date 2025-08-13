@@ -1,5 +1,5 @@
 # --- Symbolic, compositional, and context-aware concept extraction functions ---
-
+from typing import List
 def extract_symbolic_concepts_from_actions(action_sequence):
     """
     Extract abstract symbolic concepts from a LOGO action sequence.
