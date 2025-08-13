@@ -4,6 +4,53 @@ Symbolic, compositional, and context-aware concept extraction for Bongard Solver
 All geometric/statistical logic, legacy code, and logging removed. Only symbolic concept extraction functions remain.
 """
 
+import re
+
+def extract_modifier_from_stroke(action_command: str) -> dict:
+    """
+    Parses a LOGO shape action command into stroke class, modifier, and numerical params.
+    Examples:
+     - line_normal_1.000-0.833
+     - arc_normal_0.500_0.542-0.750
+    Returns a dict with:
+      - class: 'line' or 'arc'
+      - modifier: e.g., 'normal', 'triangle', 'circle', etc.
+      - params: list of floats (length/angle or arc parameters)
+    """
+    # Pattern for line and arc commands
+    pattern = r'^(line|arc)_(normal|triangle|circle|square|zigzag)_(.+)$'
+    match = re.match(pattern, action_command)
+    if not match:
+        raise ValueError(f"Invalid action command format: {action_command}")
+    stroke_class = match.group(1)
+    modifier = match.group(2)
+    numeric_part = match.group(3)
+    if stroke_class == 'line':
+        # Expected format: <float>-<float>
+        parts = numeric_part.split('-')
+        if len(parts) != 2:
+            raise ValueError(f"Unexpected line numeric format: {numeric_part}")
+        length = float(parts[0])
+        angle = float(parts[1])
+        params = [length, angle]
+    elif stroke_class == 'arc':
+        # Expected format: <float>_<float>-<float>
+        parts_underscore = numeric_part.split('_')
+        if len(parts_underscore) != 3:
+            raise ValueError(f"Unexpected arc numeric format: {numeric_part}")
+        param1 = float(parts_underscore[0])
+        param2_str, param3_str = parts_underscore[1].split('-')
+        param2 = float(param2_str)
+        param3 = float(param3_str)
+        params = [param1, param2, param3]
+    else:
+        raise ValueError(f"Unknown stroke class: {stroke_class}")
+    return {
+        'class': stroke_class,
+        'modifier': modifier,
+        'params': params
+    }
+
 def extract_symbolic_stroke_concepts(action_sequence, problem_context=None):
     """
     Extract symbolic stroke-level concepts from a LOGO action sequence.

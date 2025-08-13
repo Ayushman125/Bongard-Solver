@@ -1,8 +1,7 @@
 import logging
 from typing import Dict, List, Any, Optional
 from src.physics_inference import symbolic_concept_features
-from src.Derive_labels.shape_utils import _calculate_homogeneity, _calculate_pattern_regularity_from_modifiers
-from src.Derive_labels.stroke_types import _extract_modifier_from_stroke, _calculate_stroke_specific_features, _calculate_stroke_type_differentiated_features
+from src.Derive_labels.stroke_types import extract_modifier_from_stroke, _calculate_stroke_specific_features, _calculate_stroke_type_differentiated_features
 import numpy as np
 import networkx as nx
 from scipy.cluster.hierarchy import linkage
