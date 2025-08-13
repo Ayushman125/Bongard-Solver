@@ -22,12 +22,16 @@ def ensure_all_strings(obj):
 from src.Derive_labels.emergence import EmergenceDetector, AbstractionHierarchy, ConceptMemoryBank
 
 def extract_topological_features(action_sequence, context_memory=None):
+    logger.info(f"[extract_topological_features] action_sequence input: {repr(action_sequence)}")
     # Stage 1: Mine frequent stroke-pattern motifs
     motifs = EmergenceDetector.mine_stroke_patterns(action_sequence)
+    logger.info(f"[extract_topological_features] motifs: {repr(motifs)}")
     # Stage 2: Detect emergent concepts from motifs
     emergent = EmergenceDetector.detect_emergent_concepts(motifs, context_memory)
+    logger.info(f"[extract_topological_features] emergent: {repr(emergent)}")
     # Stage 3: Abstract to higher-level concepts
     abstracted = AbstractionHierarchy.abstract(emergent)
+    logger.info(f"[extract_topological_features] abstracted: {repr(abstracted)}")
     # Stage 4: Integrate into memory for cross-problem generalization
     ConceptMemoryBank.integrate(abstracted)
     return abstracted

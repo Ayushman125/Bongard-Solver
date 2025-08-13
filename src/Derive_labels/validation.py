@@ -3,7 +3,7 @@ import logging
 import time
 import math
 from typing import Dict, List, Any, Optional
-from scripts.logo_to_shape import FLAGGING_THRESHOLDS
+from src.Derive_labels.config import FLAGGING_THRESHOLDS
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 

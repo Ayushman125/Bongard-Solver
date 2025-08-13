@@ -1,4 +1,4 @@
-
+import torch
 import sys
 import os
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -14,11 +14,12 @@ try:
     from src.Derive_labels.features import extract_topological_features, extract_multiscale_features, extract_relational_features, extract_problem_level_features
     from src.Derive_labels.compositional_features import _calculate_composition_features
     from src.Derive_labels.contextual_features import positive_negative_contrast_score, label_consistency_ratio
-    from src.Derive_labels.context_features import compute_discriminative_features
+    ## compute_discriminative_features import removed; use embedding-based differentiation instead
     from src.Derive_labels.validation import validate_features
     from src.Derive_labels.emergence import ConceptMemoryBank
     from src.Derive_labels.scene_graph import SceneGraphFormatter
     from src.Derive_labels.tsv_validation import TSVValidator
+    from src.Derive_labels.stroke_types import _calculate_stroke_type_differentiated_features
 except Exception as e:
     print(f"[IMPORT ERROR] Could not import required modules: {e}")
     import traceback
@@ -58,7 +59,12 @@ def assess_problem_level_concept(problem_id, positive_examples, negative_example
     logger.info(f"[{problem_id}] Context hypotheses: {context_hypotheses.tolist()}")
 
     # Discriminative features
-    discriminative = compute_discriminative_features(support_pos_features, support_neg_features)
+    # Use embedding-based differentiation for support sets
+    # Ensure context is defined (example: can be empty or constructed from support sets)
+    context = context if 'context' in locals() else {}
+    pos_diff = _calculate_stroke_type_differentiated_features(support_pos_features, context)
+    neg_diff = _calculate_stroke_type_differentiated_features(support_neg_features, context)
+    # For cross-set discrimination, compare pos_diff and neg_diff embeddings/statistics as needed
     induced = extract_problem_level_features(support_pos, support_neg)
     # Combine: emergent + compositional + contextual
     combined_concepts = {
@@ -122,7 +128,9 @@ def assess_problem_level_concept(problem_id, positive_examples, negative_example
     return {
         'problem_id': problem_id,
         'induced_concept': induced,
-        'discriminative_features': discriminative,
+    # 'discriminative_features': discriminative,  # Removed legacy reference
+    'pos_differentiation': pos_diff,
+    'neg_differentiation': neg_diff,
         'contrast_score': pos_contrast,
         'label_consistency': label_consistency,
         'holdout_results': holdout_results,
@@ -133,7 +141,6 @@ def main():
     parser.add_argument('--input-dir', required=True, help='Input directory containing ShapeBongard_V2')
     parser.add_argument('--output', required=True, help='Output JSON file for derived labels')
     parser.add_argument('--problems-list', required=True, help='File listing problem IDs to process')
-    parser.add_argument('--tsv-file', required=True, help='TSV file for validation')
     args = parser.parse_args()
 
     import logging
@@ -146,7 +153,11 @@ def main():
     from src.Derive_labels.scene_graph import SceneGraphFormatter
     from src.Derive_labels.tsv_validation import TSVValidator
     sg_formatter = SceneGraphFormatter()
-    validator = TSVValidator(tsv_path=args.tsv_file)
+    # Automate TSV file detection
+    import glob
+    tsv_files = glob.glob(os.path.join('data', '*.tsv'))
+    validator1 = TSVValidator(tsv_path=tsv_files[0]) if len(tsv_files) > 0 else None
+    validator2 = TSVValidator(tsv_path=tsv_files[1]) if len(tsv_files) > 1 else None
 
     logger.info(f"Loading action programs from {args.input_dir}")
     action_programs = load_action_programs(args.input_dir)
@@ -154,6 +165,37 @@ def main():
         problem_ids = [line.strip() for line in f if line.strip()]
 
     derived_records = []
+    def to_tensor(feat):
+        logger.info(f"[to_tensor] Input: {repr(feat)} (type: {type(feat)})")
+        import numbers
+        if isinstance(feat, dict):
+            vals = list(feat.values())
+            logger.info(f"[to_tensor] Dict values: {vals}")
+            logger.info(f"[to_tensor] Dict value types: {[type(v) for v in vals]}")
+            return torch.tensor([v for v in vals if isinstance(v, numbers.Number)], dtype=torch.float)
+        elif isinstance(feat, list):
+            logger.info(f"[to_tensor] List length: {len(feat)}")
+            logger.info(f"[to_tensor] List element types: {[type(f) for f in feat]}")
+            # If feat is a list of dicts, flatten to numeric values
+            if all(isinstance(f, dict) for f in feat):
+                vals = []
+                for f in feat:
+                    vlist = list(f.values())
+                    logger.info(f"[to_tensor] List[Dict] values: {vlist}")
+                    logger.info(f"[to_tensor] List[Dict] value types: {[type(v) for v in vlist]}")
+                    vals.extend([v for v in vlist if isinstance(v, numbers.Number)])
+                logger.info(f"[to_tensor] Flattened numeric values: {vals}")
+                return torch.tensor(vals, dtype=torch.float)
+            else:
+                logger.info(f"[to_tensor] List values: {feat}")
+                logger.info(f"[to_tensor] List value types: {[type(v) for v in feat]}")
+                non_numeric = [v for v in feat if not isinstance(v, numbers.Number)]
+                if non_numeric:
+                    logger.warning(f"[to_tensor] Non-numeric values found in list: {non_numeric}")
+                return torch.tensor([v for v in feat if isinstance(v, numbers.Number)], dtype=torch.float)
+        else:
+            logger.error(f"[to_tensor] Invalid type: {type(feat)}")
+            raise TypeError(f"Feature must be dict or list, got {type(feat)}")
     for problem_id in problem_ids:
         if problem_id not in action_programs:
             logger.warning(f"No valid action program for problem_id: {problem_id}")
@@ -164,9 +206,9 @@ def main():
         support_neg_features = [extract_topological_features(ex, context_memory=context_memory) for ex in negative_examples[:6]]
         emergent = support_pos_features + support_neg_features
         # Contextual hypotheses
-        support_pos_feats = [torch.tensor(list(feat.values()), dtype=torch.float) for feat in support_pos_features]
-        support_neg_feats = [torch.tensor(list(feat.values()), dtype=torch.float) for feat in support_neg_features]
-        query_feat = torch.tensor(list(support_pos_features[0].values()), dtype=torch.float)
+        support_pos_feats = [to_tensor(feat) for feat in support_pos_features]
+        support_neg_feats = [to_tensor(feat) for feat in support_neg_features]
+        query_feat = to_tensor(support_pos_features[0])
         from src.Derive_labels.contextual_features import contextual_concept_hypotheses
         context_hyps = contextual_concept_hypotheses(support_pos_feats, support_neg_feats, query_feat)
         # Meta-learning
@@ -211,8 +253,12 @@ def main():
         }
         # Scene graph formatting
         record['scene_graph'] = sg_formatter.format(record)
-        # TSV validation
-        record['validation'] = validator.validate(problem_id, record)
+        # TSV validation (dual, automated)
+        record['validation'] = {}
+        if validator1:
+            record['validation']['primary'] = validator1.validate(problem_id, record)
+        if validator2:
+            record['validation']['secondary'] = validator2.validate(problem_id, record)
         derived_records.append(record)
 
     logger.info(f"Writing derived labels to {args.output}")

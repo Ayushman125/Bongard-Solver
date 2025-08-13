@@ -239,7 +239,8 @@ class BongardFeatureExtractor:
                             parts = cmd.split('_')
                             stroke_type = parts[0] if parts else 'unknown'
                             modifier = parts[1] if len(parts) > 1 else 'normal'
-                            stroke_type_distribution[stroke_type] = stroke_type_distribution.get(stroke_type, 0) + 1
+                        # The old compute_discriminative_features is deprecated.
+                        # Use embedding-based differentiation via _calculate_stroke_type_differentiated_features instead.
                             modifier_distribution[modifier] = modifier_distribution.get(modifier, 0) + 1
                     elif isinstance(stroke, str):
                         parts = stroke.split('_')
