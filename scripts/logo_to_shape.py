@@ -47,6 +47,50 @@ def assess_problem_level_concept(problem_id, positive_examples, negative_example
     support_pos_compositional = [_calculate_composition_features(ex, context=context_memory) for ex in support_pos]
     support_neg_compositional = [_calculate_composition_features(ex, context=context_memory) for ex in support_neg]
 
+    # Phase 2: Context-Dependent Perception
+    from src.Derive_labels.contextual_features import contextual_concept_hypotheses
+    support_pos_feats = [torch.tensor(list(feat.values()), dtype=torch.float) for feat in support_pos_features]
+    support_neg_feats = [torch.tensor(list(feat.values()), dtype=torch.float) for feat in support_neg_features]
+    query_feat = torch.tensor(list(support_pos_features[0].values()), dtype=torch.float)
+    context_hypotheses = contextual_concept_hypotheses(support_pos_feats, support_neg_feats, query_feat)
+    logger.info(f"[{problem_id}] Context hypotheses: {context_hypotheses.tolist()}")
+
+    # Discriminative features
+    discriminative = compute_discriminative_features(support_pos_features, support_neg_features)
+    induced = extract_problem_level_features(support_pos, support_neg)
+    # Combine: emergent + compositional + contextual
+    combined_concepts = {
+      'emergent': induced,
+      'compositional': support_pos_compositional,
+      'contextual': context_hypotheses.tolist()
+    }
+
+    # Phase 3: Meta-Learning Episode
+    from src.Derive_labels.meta_learning import MAML, MetaLearnerWrapper, construct_episode
+    from src.Derive_labels.models import FeatureExtractorDNN, AdaptiveClassifierDNN
+    input_dim = support_pos_feats[0].shape[0] if support_pos_feats else 128
+    base_feature_net = FeatureExtractorDNN(input_dim=input_dim, hidden_dims=[256,128])
+    base_classifier = AdaptiveClassifierDNN(input_dim=128, output_dim=1)
+    meta_model = MetaLearnerWrapper(base_feature_net, base_classifier)
+    maml = MAML(meta_model, inner_lr=0.01, outer_lr=0.001, inner_steps=1)
+
+    # Prepare support and query examples for meta-learning
+    support_feats = support_pos_feats + support_neg_feats
+    support_labels = [1]*len(support_pos_feats) + [0]*len(support_neg_feats)
+    query_feats = [torch.tensor(list(extract_topological_features(holdout_pos, context_memory).values()), dtype=torch.float)]
+    query_labels = [1]
+
+    # Construct and run meta-learning
+    sup_x, sup_y, qry_x, qry_y = construct_episode(support_feats, support_labels, query_feats, query_labels)
+    fast_weights = maml.inner_update(sup_x, sup_y)
+    meta_loss = maml.outer_update(qry_x, qry_y, fast_weights)
+    logger.info(f"[{problem_id}] Meta-learning loss: {meta_loss:.4f}")
+
+    # Generate final adapted prediction
+    final_logit = meta_model(qry_x, params=fast_weights)
+    final_prob = torch.sigmoid(final_logit).item()
+    combined_concepts['meta_prob'] = final_prob
+
     # Contextual statistics
     pos_contrast = positive_negative_contrast_score(
         [f.get('stroke_diversity', 0) for f in support_pos_compositional],
@@ -55,11 +99,6 @@ def assess_problem_level_concept(problem_id, positive_examples, negative_example
     label_consistency = label_consistency_ratio(
         [f.get('dominant_stroke_type', '') for f in support_pos_compositional + support_neg_compositional]
     )
-
-    # Discriminative features
-    discriminative = compute_discriminative_features(support_pos_features, support_neg_features)
-    induced = extract_problem_level_features(support_pos, support_neg)
-    logger.info(f"[{problem_id}] Induced concept: {induced}, Discriminative: {discriminative}, Contrast: {pos_contrast}, Consistency: {label_consistency}")
 
     # Hold-out validation
     holdout_results = []
@@ -84,7 +123,8 @@ def assess_problem_level_concept(problem_id, positive_examples, negative_example
         'discriminative_features': discriminative,
         'contrast_score': pos_contrast,
         'label_consistency': label_consistency,
-        'holdout_results': holdout_results
+        'holdout_results': holdout_results,
+        'combined_concepts': combined_concepts
     }
 def main():
     parser = argparse.ArgumentParser(description="Extract derived labels for Bongard-LOGO problems.")
