@@ -19,12 +19,18 @@ def ensure_all_strings(obj):
         return str(obj)
     return obj
 
-def extract_topological_features(action_sequence):
-    """
-    Extract symbolic topological features from a LOGO action sequence.
-    Returns abstract concepts such as connectivity, compositional structure, and symbolic attributes.
-    """
-    return symbolic_concept_features(action_sequence)
+from src.Derive_labels.emergence import EmergenceDetector, AbstractionHierarchy, ConceptMemoryBank
+
+def extract_topological_features(action_sequence, context_memory=None):
+    # Stage 1: Mine frequent stroke-pattern motifs
+    motifs = EmergenceDetector.mine_stroke_patterns(action_sequence)
+    # Stage 2: Detect emergent concepts from motifs
+    emergent = EmergenceDetector.detect_emergent_concepts(motifs, context_memory)
+    # Stage 3: Abstract to higher-level concepts
+    abstracted = AbstractionHierarchy.abstract(emergent)
+    # Stage 4: Integrate into memory for cross-problem generalization
+    ConceptMemoryBank.integrate(abstracted)
+    return abstracted
 
 def extract_multiscale_features(action_sequence):
     """

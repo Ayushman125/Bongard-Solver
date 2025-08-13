@@ -16,6 +16,7 @@ try:
     from src.Derive_labels.contextual_features import positive_negative_contrast_score, label_consistency_ratio
     from src.Derive_labels.context_features import compute_discriminative_features
     from src.Derive_labels.validation import validate_features
+    from src.Derive_labels.emergence import ConceptMemoryBank
 except Exception as e:
     print(f"[IMPORT ERROR] Could not import required modules: {e}")
     import traceback
@@ -29,7 +30,7 @@ def split_support_holdout(examples):
     """
     return examples[:6], examples[6]
 
-def assess_problem_level_concept(problem_id, positive_examples, negative_examples, logger):
+def assess_problem_level_concept(problem_id, positive_examples, negative_examples, logger, context_memory):
     """
     Assess the concept at the problem level using Derive_labels modules for symbolic, compositional, and contextual features.
     Returns: dict with induced concept, hold-out validation, and logs.
@@ -40,11 +41,11 @@ def assess_problem_level_concept(problem_id, positive_examples, negative_example
     support_pos, holdout_pos = positive_examples[:6], positive_examples[6]
     support_neg, holdout_neg = negative_examples[:6], negative_examples[6]
 
-    # Feature extraction for support sets
-    support_pos_features = [extract_topological_features(ex) for ex in support_pos]
-    support_neg_features = [extract_topological_features(ex) for ex in support_neg]
-    support_pos_compositional = [_calculate_composition_features(ex) for ex in support_pos]
-    support_neg_compositional = [_calculate_composition_features(ex) for ex in support_neg]
+    # Feature extraction for support sets with context memory
+    support_pos_features = [extract_topological_features(ex, context_memory=context_memory) for ex in support_pos]
+    support_neg_features = [extract_topological_features(ex, context_memory=context_memory) for ex in support_neg]
+    support_pos_compositional = [_calculate_composition_features(ex, context=context_memory) for ex in support_pos]
+    support_neg_compositional = [_calculate_composition_features(ex, context=context_memory) for ex in support_neg]
 
     # Contextual statistics
     pos_contrast = positive_negative_contrast_score(
@@ -63,8 +64,8 @@ def assess_problem_level_concept(problem_id, positive_examples, negative_example
     # Hold-out validation
     holdout_results = []
     for ex, label in zip([holdout_pos, holdout_neg], ['positive', 'negative']):
-        feats = extract_topological_features(ex)
-        comp_feats = _calculate_composition_features(ex)
+        feats = extract_topological_features(ex, context_memory=context_memory)
+        comp_feats = _calculate_composition_features(ex, context=context_memory)
         valid = validate_features(feats)
         match = any(v for k, v in feats.items() if k in induced and induced[k])
         logger.info(f"[Hold-out] {problem_id} [{label}]: features={feats}, comp={comp_feats}, induced={induced}, match={match}, valid={valid}")
@@ -96,6 +97,10 @@ def main():
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger("logo_to_shape")
 
+    # Initialize concept memory
+    ConceptMemoryBank.initialize()
+    context_memory = ConceptMemoryBank.load()
+
     logger.info(f"Loading problem IDs from {args.problems_list}")
     with open(args.problems_list, 'r') as f:
         problem_ids = [line.strip() for line in f if line.strip()]
@@ -112,7 +117,7 @@ def main():
             continue
         positive_examples, negative_examples = action_prog
         # Problem-level concept assessment (contextual, set-level)
-        result = assess_problem_level_concept(problem_id, positive_examples, negative_examples, logger)
+        result = assess_problem_level_concept(problem_id, positive_examples, negative_examples, logger, context_memory)
         if result:
             derived_records.append(result)
 

@@ -24,13 +24,11 @@ def detect_containment_pattern(action_sequence):
     modifiers = [parse_logo_action(a)['modifier'] for a in action_sequence if parse_logo_action(a)]
     return 'square' in modifiers and 'circle' in modifiers
 
+from src.physics_inference_advanced import AdvancedPhysicsInference
+
 def symbolic_concept_features(action_sequence):
-    """Extract abstract concepts from action sequence."""
-    return {
-        'convexity': detect_convex_pattern(action_sequence),
-        'symmetry': detect_symmetry_pattern(action_sequence),
-        'containment': detect_containment_pattern(action_sequence)
-    }
+    api = AdvancedPhysicsInference()
+    return api.infer_compositional_physics(action_sequence)
 
 def extract_problem_level_features(positive_examples, negative_examples):
     """Extract features by comparing positive vs negative examples."""

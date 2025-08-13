@@ -9,53 +9,17 @@ from scipy.cluster.hierarchy import linkage
 from typing import List, Dict, Any
 
 
-def _calculate_composition_features(action_commands: List[str]) -> Dict[str, Any]:
-        """
-        Calculate features about stroke composition and relationships.
-        Expects a list of action command strings (not objects).
-        Defensive: always convert to strings before any operation.
-        """
-        logger = logging.getLogger(__name__)
-        strokes = ensure_all_strings(action_commands)
-        logger.debug(f"[_calculate_composition_features] INPUTS: strokes count={len(strokes) if strokes else 0}")
-        if not strokes:
-            logger.debug("[_calculate_composition_features] No strokes, returning empty dict")
-            return {}
-        try:
-            stroke_types = {}
-            shape_modifiers = {}
-            modifier_sequence = []
-            for stroke in strokes:
-                # Defensive: parse type and modifier from string
-                if isinstance(stroke, str):
-                    parts = stroke.split('_')
-                    stroke_type = parts[0] if parts else 'unknown'
-                    modifier = parts[1] if len(parts) > 1 else 'normal'
-                else:
-                    stroke_type = type(stroke).__name__.replace('Action', '').lower()
-                    modifier = _extract_modifier_from_stroke(stroke)
-                stroke_types[stroke_type] = stroke_types.get(stroke_type, 0) + 1
-                shape_modifiers[modifier] = shape_modifiers.get(modifier, 0) + 1
-                modifier_sequence.append(modifier)
-            # Use json.dumps for serialization of distributions
-            features = {
-                'stroke_type_distribution': stroke_types,
-                'shape_modifier_distribution': shape_modifiers,
-                'stroke_diversity': len(stroke_types),
-                'shape_diversity': len(shape_modifiers),
-                'dominant_stroke_type': max(stroke_types.items(), key=lambda x: x[1])[0] if stroke_types else 'unknown',
-                'dominant_shape_modifier': max(shape_modifiers.items(), key=lambda x: x[1])[0] if shape_modifiers else 'unknown'
-            }
-            features.update({
-                'composition_complexity': len(strokes) + len(shape_modifiers),
-                'homogeneity_score': _calculate_homogeneity(shape_modifiers),
-                'pattern_regularity': _calculate_pattern_regularity_from_modifiers(modifier_sequence)
-            })
-            logger.debug(f"[_calculate_composition_features] OUTPUT: {features}")
-            return features
-        except Exception as e:
-            logger.warning(f"[_calculate_composition_features] Error: {e}")
-            return {}
+from src.Derive_labels.composition import CompositionEngine
+
+def _calculate_composition_features(action_sequence, context=None):
+    primitives = CompositionEngine.extract_primitives(action_sequence)
+    rules = CompositionEngine.learn_composition_rules(primitives, context)
+    compositions = CompositionEngine.generate_combinations(primitives, rules)
+    return {
+        'primitives': primitives,
+        'composition_rules': rules,
+        'compositions': compositions
+    }
 
 def ensure_all_strings(items):
     """Ensure all items in the list are strings."""
