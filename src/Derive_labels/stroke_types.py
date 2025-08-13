@@ -82,6 +82,9 @@ def _calculate_stroke_specific_features(stroke_command: Union[str, object],
     else:
         raw_cmd = getattr(stroke_command, 'raw_command', str(stroke_command))
         primitive = parse_stroke_command(raw_cmd)
+    # Ensure primitive is always a valid StrokePrimitive
+    if primitive is None or not hasattr(primitive, 'stroke_class'):
+        primitive = StrokePrimitive('unknown', 'normal', 0.0, 0.0)
     features = {
         'stroke_index': stroke_index,
         'stroke_class': primitive.stroke_class,

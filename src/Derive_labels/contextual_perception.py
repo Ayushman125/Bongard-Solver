@@ -49,6 +49,11 @@ class ContextualPerceptionEncoder(nn.Module):
                 x = support_feats + pos_enc
             return self.transformer(x)  # (batch_size, embed_dim)
 
+    def to(self, device):
+        super().to(device)
+        self.positional_encoding.data = self.positional_encoding.data.to(device)
+        return self
+
 class QueryContextAttention(nn.Module):
     def __init__(self, embed_dim=512, nhead=8):
         super().__init__()
@@ -59,11 +64,29 @@ class QueryContextAttention(nn.Module):
         query_feat: (1, embed_dim)
         context_feats: (12, embed_dim)
         """
-        q = query_feat.unsqueeze(0)        # (1, embed_dim)
-        k = context_feats.unsqueeze(1)     # (12, 1, embed_dim)
-        v = context_feats.unsqueeze(1)
+        device = next(self.cross_attn.parameters()).device
+        query_feat = query_feat.to(device)
+        context_feats = context_feats.to(device)
+        # Ensure query_feat is (1, embed_dim)
+        if query_feat.dim() == 1:
+            query_feat = query_feat.unsqueeze(0)
+        # Now query_feat: (1, embed_dim)
+        # Add batch dimension: (seq_len, batch_size, embed_dim)
+        q = query_feat.unsqueeze(1)  # (1, 1, embed_dim)
+        # context_feats: (N, embed_dim) -> (N, 1, embed_dim)
+        if context_feats.dim() == 2:
+            k = context_feats.unsqueeze(1)
+            v = context_feats.unsqueeze(1)
+        else:
+            k = context_feats
+            v = context_feats
         attn_output, _ = self.cross_attn(q, k, v)
-        return attn_output.squeeze(0)       # (embed_dim,)
+        # attn_output: (1, 1, embed_dim) -> (embed_dim,)
+        return attn_output.squeeze(0).squeeze(0)
+
+    def to(self, device):
+        super().to(device)
+        return self
 
 class AdaptiveConceptGenerator(nn.Module):
     def __init__(self, embed_dim=512, num_concepts=128):
@@ -71,5 +94,12 @@ class AdaptiveConceptGenerator(nn.Module):
         self.fc = nn.Linear(embed_dim*2, num_concepts)
 
     def forward(self, query_context, context_summary):
+        device = next(self.fc.parameters()).device
+        query_context = query_context.to(device)
+        context_summary = context_summary.to(device)
         combined = torch.cat([query_context, context_summary], dim=-1)
         return torch.sigmoid(self.fc(combined))  # (num_concepts,)
+
+    def to(self, device):
+        super().to(device)
+        return self

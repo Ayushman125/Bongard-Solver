@@ -20,17 +20,39 @@ class MAML:
 
     def inner_update(self, support_x, support_y):
         """Perform inner-loop adaptation on support set."""
+        device = next(self.base_model.parameters()).device
+        support_x = support_x.to(device)
+        support_y = support_y.to(device)
         fast_weights = {name: param.clone() for name, param in self.base_model.named_parameters()}
         for _ in range(self.inner_steps):
             preds = self.base_model.forward(support_x, params=fast_weights)
+            # Fix shape mismatch for BCEWithLogitsLoss
+            if preds.shape != support_y.shape:
+                if preds.shape[-1] == 1 and preds.shape[:-1] == support_y.shape:
+                    preds = preds.squeeze(-1)
+                elif support_y.dim() == 1 and preds.dim() == 2 and preds.shape[1] == 1:
+                    support_y = support_y.unsqueeze(-1)
+            # Ensure support_y is float for BCEWithLogitsLoss
+            support_y = support_y.float()
             loss = nn.BCEWithLogitsLoss()(preds, support_y)
-            grads = torch.autograd.grad(loss, fast_weights.values(), create_graph=True)
-            fast_weights = {name: w - self.inner_lr * g for (name, w), g in zip(fast_weights.items(), grads)}
+            grads = torch.autograd.grad(loss, fast_weights.values(), create_graph=True, allow_unused=True)
+            # Only update weights for parameters with valid gradients
+            fast_weights = {name: (w - self.inner_lr * g) if g is not None else w for (name, w), g in zip(fast_weights.items(), grads)}
         return fast_weights
 
     def outer_update(self, query_x, query_y, fast_weights):
         """Perform outer-loop meta-update."""
+        device = next(self.base_model.parameters()).device
+        query_x = query_x.to(device)
+        query_y = query_y.to(device)
         preds = self.base_model.forward(query_x, params=fast_weights)
+        # Fix shape mismatch for BCEWithLogitsLoss
+        if preds.shape != query_y.shape:
+            if preds.shape[-1] == 1 and preds.shape[:-1] == query_y.shape:
+                preds = preds.squeeze(-1)
+            elif query_y.dim() == 1 and preds.dim() == 2 and preds.shape[1] == 1:
+                query_y = query_y.unsqueeze(-1)
+        query_y = query_y.float()
         loss = nn.BCEWithLogitsLoss()(preds, query_y)
         self.outer_optimizer.zero_grad(); loss.backward(); self.outer_optimizer.step()
         return loss.item()

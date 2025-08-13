@@ -13,7 +13,7 @@ try:
     from src.data_pipeline.logo_parser import ComprehensiveNVLabsParser, OneStrokeShape, ensure_all_strings
     from src.Derive_labels.features import extract_topological_features, extract_multiscale_features, extract_relational_features, extract_problem_level_features
     from src.Derive_labels.compositional_features import _calculate_composition_features
-    from src.Derive_labels.contextual_features import positive_negative_contrast_score, label_consistency_ratio
+    from src.Derive_labels.contextual_features import positive_negative_contrast_score, label_consistency_ratio, contextual_concept_hypotheses, discriminative_concepts
     ## compute_discriminative_features import removed; use embedding-based differentiation instead
     from src.Derive_labels.validation import validate_features
     from src.Derive_labels.emergence import ConceptMemoryBank
@@ -25,6 +25,9 @@ except Exception as e:
     import traceback
     traceback.print_exc()
     sys.exit(1)
+
+# Device selection for CUDA support
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def split_support_holdout(examples):
     """
@@ -51,7 +54,7 @@ def assess_problem_level_concept(problem_id, positive_examples, negative_example
     support_neg_compositional = [_calculate_composition_features(ex, context=context_memory) for ex in support_neg]
 
     # Phase 2: Context-Dependent Perception
-    from src.Derive_labels.contextual_features import contextual_concept_hypotheses
+    from src.Derive_labels.contextual_features import contextual_concept_hypotheses, discriminative_concepts
     support_pos_feats = [torch.tensor(list(feat.values()), dtype=torch.float) for feat in support_pos_features]
     support_neg_feats = [torch.tensor(list(feat.values()), dtype=torch.float) for feat in support_neg_features]
     query_feat = torch.tensor(list(support_pos_features[0].values()), dtype=torch.float)
@@ -77,8 +80,8 @@ def assess_problem_level_concept(problem_id, positive_examples, negative_example
     from src.Derive_labels.meta_learning import MAML, MetaLearnerWrapper, construct_episode
     from src.Derive_labels.models import FeatureExtractorDNN, AdaptiveClassifierDNN
     input_dim = support_pos_feats[0].shape[0] if support_pos_feats else 128
-    base_feature_net = FeatureExtractorDNN(input_dim=input_dim, hidden_dims=[256,128])
-    base_classifier = AdaptiveClassifierDNN(input_dim=128, output_dim=1)
+    base_feature_net = FeatureExtractorDNN(input_dim=input_dim, hidden_dims=[256,128]).to(DEVICE)
+    base_classifier = AdaptiveClassifierDNN(input_dim=128, output_dim=1).to(DEVICE)
     meta_model = MetaLearnerWrapper(base_feature_net, base_classifier)
     maml = MAML(meta_model, inner_lr=0.01, outer_lr=0.001, inner_steps=1)
 
@@ -87,6 +90,10 @@ def assess_problem_level_concept(problem_id, positive_examples, negative_example
     support_labels = [1]*len(support_pos_feats) + [0]*len(support_neg_feats)
     query_feats = [torch.tensor(list(extract_topological_features(holdout_pos, context_memory).values()), dtype=torch.float)]
     query_labels = [1]
+
+    # Move tensors to device
+    support_feats = [f.to(DEVICE) for f in support_feats]
+    query_feats = [f.to(DEVICE) for f in query_feats]
 
     # Construct and run meta-learning
     sup_x, sup_y, qry_x, qry_y = construct_episode(support_feats, support_labels, query_feats, query_labels)
@@ -137,6 +144,10 @@ def assess_problem_level_concept(problem_id, positive_examples, negative_example
         'combined_concepts': combined_concepts
     }
 def main():
+    # Import ConceptEmbedder
+    from src.Derive_labels.concept_embeddings import ConceptEmbedder
+    concept_embed_dim = 512
+    embedder = ConceptEmbedder(vocab_size=1000, emb_dim=concept_embed_dim)
     parser = argparse.ArgumentParser(description="Extract derived labels for Bongard-LOGO problems.")
     parser.add_argument('--input-dir', required=True, help='Input directory containing ShapeBongard_V2')
     parser.add_argument('--output', required=True, help='Output JSON file for derived labels')
@@ -146,6 +157,7 @@ def main():
     import logging
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger("logo_to_shape")
+    logger.info(f"Using device: {DEVICE}")
 
     # Initialize concept memory
     ConceptMemoryBank.initialize()
@@ -205,18 +217,80 @@ def main():
         support_pos_features = [extract_topological_features(ex, context_memory=context_memory) for ex in positive_examples[:6]]
         support_neg_features = [extract_topological_features(ex, context_memory=context_memory) for ex in negative_examples[:6]]
         emergent = support_pos_features + support_neg_features
-        # Contextual hypotheses
-        support_pos_feats = [to_tensor(feat) for feat in support_pos_features]
-        support_neg_feats = [to_tensor(feat) for feat in support_neg_features]
-        query_feat = to_tensor(support_pos_features[0])
-        from src.Derive_labels.contextual_features import contextual_concept_hypotheses
+
+        # Gather all concept tokens for embedding (for this batch)
+        all_tokens = []
+        def extract_tokens(feat):
+            if isinstance(feat, list):
+                return [t for t in feat if isinstance(t, str)]
+            elif isinstance(feat, str):
+                return [feat]
+            return []
+        for feat in support_pos_features + support_neg_features:
+            all_tokens.extend(extract_tokens(feat))
+        embedder.register_tokens(all_tokens)
+
+        # Get concept embeddings for each support example (only registered tokens)
+        support_pos_embeds = [embedder(extract_tokens(feat)) for feat in support_pos_features]
+        support_neg_embeds = [embedder(extract_tokens(feat)) for feat in support_neg_features]
+        def numeric_tensor(feat):
+            import numbers
+            if isinstance(feat, dict):
+                return torch.tensor([v for v in feat.values() if isinstance(v, numbers.Number)], dtype=torch.float)
+            elif isinstance(feat, list):
+                vals = [v for v in feat if isinstance(v, numbers.Number)]
+                return torch.tensor(vals, dtype=torch.float) if vals else None
+            return None
+        support_pos_feats = []
+        for feat, emb in zip(support_pos_features, support_pos_embeds):
+            num_tensor = numeric_tensor(feat)
+            if num_tensor is not None and num_tensor.numel() > 0:
+                support_pos_feats.append(torch.cat([num_tensor, emb.squeeze(0)], dim=-1))
+            else:
+                support_pos_feats.append(emb.squeeze(0))
+        support_neg_feats = []
+        for feat, emb in zip(support_neg_features, support_neg_embeds):
+            num_tensor = numeric_tensor(feat)
+            if num_tensor is not None and num_tensor.numel() > 0:
+                support_neg_feats.append(torch.cat([num_tensor, emb.squeeze(0)], dim=-1))
+            else:
+                support_neg_feats.append(emb.squeeze(0))
+        # For query_feat, use the same logic
+        num_tensor = numeric_tensor(support_pos_features[0])
+        if num_tensor is not None and num_tensor.numel() > 0:
+            query_feat = torch.cat([num_tensor, support_pos_embeds[0].squeeze(0)], dim=-1)
+        else:
+            query_feat = support_pos_embeds[0].squeeze(0)
+
+        # Aggregate multi-token embeddings to a single vector before attention
+        def aggregate_feat(f):
+            if isinstance(f, torch.Tensor) and f.dim() == 2 and f.shape[1] == 512:
+                return f.mean(dim=0)
+            return f
+        support_pos_feats = [aggregate_feat(f) for f in support_pos_feats]
+        support_neg_feats = [aggregate_feat(f) for f in support_neg_feats]
+        query_feat = aggregate_feat(query_feat)
+
+        # Move tensors to device
+        support_pos_feats = [f.to(DEVICE) for f in support_pos_feats]
+        support_neg_feats = [f.to(DEVICE) for f in support_neg_feats]
+        query_feat = query_feat.to(DEVICE)
+
         context_hyps = contextual_concept_hypotheses(support_pos_feats, support_neg_feats, query_feat)
+        # Bongard-style concept reasoning: find discriminative concepts
+        # Use raw concept token lists (not tensors/embeddings)
+        disc_concepts = discriminative_concepts(
+            [extract_tokens(feat) for feat in support_pos_features],
+            [extract_tokens(feat) for feat in support_neg_features]
+        )
+        logger.info(f"[Bongard-style] Discriminative concepts (present in positive, absent in negative): {disc_concepts}")
+
         # Meta-learning
         from src.Derive_labels.meta_learning import MAML, MetaLearnerWrapper, construct_episode
         from src.Derive_labels.models import FeatureExtractorDNN, AdaptiveClassifierDNN
         input_dim = support_pos_feats[0].shape[0] if support_pos_feats else 128
-        base_feature_net = FeatureExtractorDNN(input_dim=input_dim, hidden_dims=[256,128])
-        base_classifier = AdaptiveClassifierDNN(input_dim=128, output_dim=1)
+        base_feature_net = FeatureExtractorDNN(input_dim=input_dim, hidden_dims=[256,128]).to(DEVICE)
+        base_classifier = AdaptiveClassifierDNN(input_dim=128, output_dim=1).to(DEVICE)
         meta_model = MetaLearnerWrapper(base_feature_net, base_classifier)
         maml = MAML(meta_model, inner_lr=0.01, outer_lr=0.001, inner_steps=1)
         support_feats = support_pos_feats + support_neg_feats
@@ -234,13 +308,17 @@ def main():
         for ex in positive_examples[:6]:
             stroke_features = []
             for idx, cmd in enumerate(ex):
-                # Optionally pass context and shape_info if available
-                shape_info = None # Replace with actual shape info if available
+                # Optionally pass context and parent_shape_vertices/shape_obj if available
                 context_dict = {'problem_id': problem_id}
-                primitive = _calculate_stroke_specific_features(cmd, idx, context=context_dict, shape_info=shape_info)
+                # If you have shape_info and it contains vertices, pass as parent_shape_vertices
+                # primitive = _calculate_stroke_specific_features(cmd, idx, context=context_dict, parent_shape_vertices=shape_info['vertices'])
+                # If you have shape_info and it contains a shape object, pass as shape_obj
+                # primitive = _calculate_stroke_specific_features(cmd, idx, context=context_dict, shape_obj=shape_info['shape_obj'])
+                # If no shape_info, just pass context
+                primitive = _calculate_stroke_specific_features(cmd, idx, context=context_dict)
                 stroke_features.append(primitive)
             logger.info(f"[STROKE FEATURE EXTRACTION] Problem {problem_id} Example: {ex}\nExtracted Features: {stroke_features}")
-            comp_feat = _calculate_composition_features([cmd for cmd in ex], context={'problem_id':problem_id, 'shape_info': shape_info})
+            comp_feat = _calculate_composition_features([cmd for cmd in ex], context={'problem_id': problem_id})
             comp_feat['stroke_features'] = stroke_features
             comp_feats.append(comp_feat)
         # Combine all

@@ -1,3 +1,24 @@
+def discriminative_concepts(pos_features: list, neg_features: list) -> set:
+    """
+    Find concepts/rules present in the positive set but absent in the negative set.
+    Each feature is a list/set of concept tokens (strings).
+    Returns a set of discriminative concepts.
+    """
+    # Flatten and collect all concepts in positives and negatives
+    pos_concepts = set()
+    for feat in pos_features:
+        if isinstance(feat, (list, set)):
+            pos_concepts.update(feat)
+        elif isinstance(feat, str):
+            pos_concepts.add(feat)
+    neg_concepts = set()
+    for feat in neg_features:
+        if isinstance(feat, (list, set)):
+            neg_concepts.update(feat)
+        elif isinstance(feat, str):
+            neg_concepts.add(feat)
+    # Discriminative concepts: present in positives, absent in negatives
+    return pos_concepts - neg_concepts
 import numpy as np
 from collections import Counter
 from scipy.stats import entropy, wasserstein_distance
@@ -23,7 +44,9 @@ def contextual_concept_hypotheses(support_pos_feats, support_neg_feats, query_fe
     query_feat: tensor
     """
     # 1. Encode support as context
-    support_feats = torch.stack(support_pos_feats + support_neg_feats)  # (12, D)
+    device = next(_encoder.parameters()).device
+    support_feats = torch.stack(support_pos_feats + support_neg_feats).to(device)  # (12, D)
+    query_feat = query_feat.to(device)
     context_encoded = _encoder(support_feats)                          # (12, D)
     # 2. Summarize context (e.g., mean pooling)
     context_summary = context_encoded.mean(dim=0)                      # (D,)
@@ -32,7 +55,7 @@ def contextual_concept_hypotheses(support_pos_feats, support_neg_feats, query_fe
     # 4. Generate adaptive concept hypotheses
     hypotheses = _generator(query_context, context_summary)           # (C,)
     # 5. Persist learned context for future problems
-    ConceptMemoryBank.update(context_summary.detach().numpy())
+    ConceptMemoryBank.integrate(context_summary.detach().cpu().numpy())
     return hypotheses
 def positive_negative_contrast_score(pos_features: List[float], neg_features: List[float]) -> float:
     """Compute contrast score between positive and negative sets."""

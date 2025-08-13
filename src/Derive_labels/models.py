@@ -20,6 +20,12 @@ class AdaptiveClassifierDNN(nn.Module):
 
     def forward(self, features, params=None):
         if params:
-            w = params['fc.weight']; b = params['fc.bias']
+            # Support both 'fc.weight' and 'classifier.fc.weight' keys
+            if 'fc.weight' in params and 'fc.bias' in params:
+                w = params['fc.weight']; b = params['fc.bias']
+            elif 'classifier.fc.weight' in params and 'classifier.fc.bias' in params:
+                w = params['classifier.fc.weight']; b = params['classifier.fc.bias']
+            else:
+                raise KeyError(f"Expected 'fc.weight' or 'classifier.fc.weight' in params, got keys: {list(params.keys())}")
             return nn.functional.linear(features, w, b)
         return self.fc(features)
