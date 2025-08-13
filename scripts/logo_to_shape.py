@@ -17,6 +17,8 @@ try:
     from src.Derive_labels.context_features import compute_discriminative_features
     from src.Derive_labels.validation import validate_features
     from src.Derive_labels.emergence import ConceptMemoryBank
+    from src.Derive_labels.scene_graph import SceneGraphFormatter
+    from src.Derive_labels.tsv_validation import TSVValidator
 except Exception as e:
     print(f"[IMPORT ERROR] Could not import required modules: {e}")
     import traceback
@@ -131,6 +133,7 @@ def main():
     parser.add_argument('--input-dir', required=True, help='Input directory containing ShapeBongard_V2')
     parser.add_argument('--output', required=True, help='Output JSON file for derived labels')
     parser.add_argument('--problems-list', required=True, help='File listing problem IDs to process')
+    parser.add_argument('--tsv-file', required=True, help='TSV file for validation')
     args = parser.parse_args()
 
     import logging
@@ -140,41 +143,63 @@ def main():
     # Initialize concept memory
     ConceptMemoryBank.initialize()
     context_memory = ConceptMemoryBank.load()
+    from src.Derive_labels.scene_graph import SceneGraphFormatter
+    from src.Derive_labels.tsv_validation import TSVValidator
+    sg_formatter = SceneGraphFormatter()
+    validator = TSVValidator(tsv_path=args.tsv_file)
 
-    logger.info(f"Loading problem IDs from {args.problems_list}")
+    logger.info(f"Loading action programs from {args.input_dir}")
+    action_programs = load_action_programs(args.input_dir)
     with open(args.problems_list, 'r') as f:
         problem_ids = [line.strip() for line in f if line.strip()]
 
-    logger.info(f"Loading action programs from {args.input_dir}")
-            # Phase 2: Context-Dependent Perception
-            from src.Derive_labels.contextual_features import contextual_concept_hypotheses
-
-            # Convert extracted features to embedding vectors
-            support_pos_feats = [torch.tensor(list(feat.values()), dtype=torch.float) for feat in support_pos_features]
-            support_neg_feats = [torch.tensor(list(feat.values()), dtype=torch.float) for feat in support_neg_features]
-            query_feat = torch.tensor(list(support_pos_features[0].values()), dtype=torch.float)
-
-            # Generate context-dependent concept hypothesis vector
-            context_hypotheses = contextual_concept_hypotheses(support_pos_feats, support_neg_feats, query_feat)
-            logger.info(f"[{problem_id}] Context hypotheses: {context_hypotheses.tolist()}")
-
-            # Integrate with existing discriminative and compositional features
-            discriminative = compute_discriminative_features(support_pos_features, support_neg_features)
-            induced = extract_problem_level_features(support_pos, support_neg)
-            # Combine: emergent + compositional + contextual
-            combined_concepts = {
-                'emergent': induced,
-                'compositional': support_pos_compositional,
-                'contextual': context_hypotheses.tolist()
-            }
-        if not action_prog or not isinstance(action_prog, list) or len(action_prog) != 2:
+    derived_records = []
+    for problem_id in problem_ids:
+        if problem_id not in action_programs:
             logger.warning(f"No valid action program for problem_id: {problem_id}")
             continue
-        positive_examples, negative_examples = action_prog
-        # Problem-level concept assessment (contextual, set-level)
-        result = assess_problem_level_concept(problem_id, positive_examples, negative_examples, logger, context_memory)
-        if result:
-            derived_records.append(result)
+        positive_examples, negative_examples = action_programs[problem_id]
+        # Emergent concepts
+        support_pos_features = [extract_topological_features(ex, context_memory=context_memory) for ex in positive_examples[:6]]
+        support_neg_features = [extract_topological_features(ex, context_memory=context_memory) for ex in negative_examples[:6]]
+        emergent = support_pos_features + support_neg_features
+        # Contextual hypotheses
+        support_pos_feats = [torch.tensor(list(feat.values()), dtype=torch.float) for feat in support_pos_features]
+        support_neg_feats = [torch.tensor(list(feat.values()), dtype=torch.float) for feat in support_neg_features]
+        query_feat = torch.tensor(list(support_pos_features[0].values()), dtype=torch.float)
+        from src.Derive_labels.contextual_features import contextual_concept_hypotheses
+        context_hyps = contextual_concept_hypotheses(support_pos_feats, support_neg_feats, query_feat)
+        # Meta-learning
+        from src.Derive_labels.meta_learning import MAML, MetaLearnerWrapper, construct_episode
+        from src.Derive_labels.models import FeatureExtractorDNN, AdaptiveClassifierDNN
+        input_dim = support_pos_feats[0].shape[0] if support_pos_feats else 128
+        base_feature_net = FeatureExtractorDNN(input_dim=input_dim, hidden_dims=[256,128])
+        base_classifier = AdaptiveClassifierDNN(input_dim=128, output_dim=1)
+        meta_model = MetaLearnerWrapper(base_feature_net, base_classifier)
+        maml = MAML(meta_model, inner_lr=0.01, outer_lr=0.001, inner_steps=1)
+        support_feats = support_pos_feats + support_neg_feats
+        support_labels = [1]*len(support_pos_feats) + [0]*len(support_neg_feats)
+        query_feats = [query_feat]
+        query_labels = [1]
+        sup_x, sup_y, qry_x, qry_y = construct_episode(support_feats, support_labels, query_feats, query_labels)
+        fast_weights = maml.inner_update(sup_x, sup_y)
+        maml.outer_update(qry_x, qry_y, fast_weights)
+        meta_prob = float(torch.sigmoid(meta_model(qry_x, params=fast_weights)))
+        # Compositional features
+        comp_feats = [_calculate_composition_features(ex, context={'problem_id':problem_id}) for ex in positive_examples[:6]]
+        # Combine all
+        record = {
+            'problem_id': problem_id,
+            'emergent_concepts': {f'pos_{i}': v for i,v in enumerate(support_pos_features)} | {f'neg_{i}': v for i,v in enumerate(support_neg_features)},
+            'contextual_hypotheses': context_hyps.tolist() if hasattr(context_hyps, 'tolist') else context_hyps,
+            'compositional': {f'comp_{i}': v for i,v in enumerate(comp_feats)},
+            'meta_prob': meta_prob
+        }
+        # Scene graph formatting
+        record['scene_graph'] = sg_formatter.format(record)
+        # TSV validation
+        record['validation'] = validator.validate(problem_id, record)
+        derived_records.append(record)
 
     logger.info(f"Writing derived labels to {args.output}")
     with open(args.output, 'w') as f:
