@@ -9,11 +9,35 @@ class ContextualPerceptionEncoder(nn.Module):
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers)
         self.positional_encoding = nn.Parameter(torch.randn(1, 12, embed_dim))
 
-    def forward(self, support_feats):
+    def forward(self, support_feats, stroke_primitives=None):
         """
         support_feats: Tensor of shape (batch=12, embed_dim)
+        stroke_primitives: Optional list of symbolic primitives for each support example
         """
-        x = support_feats + self.positional_encoding
+        # If stroke_primitives are provided, embed and concatenate to support_feats
+        if stroke_primitives is not None:
+            # Example: one-hot or learned embedding for each modifier, concatenate to numeric params
+            # This is a placeholder for actual embedding logic
+            # You can replace with a learned embedding layer for modifiers
+            import numpy as np
+            embed_dim = support_feats.shape[-1]
+            primitive_vecs = []
+            for primitives in stroke_primitives:
+                # Flatten all primitives for one example
+                vec = np.concatenate([
+                    np.array(p['params']) for p in primitives
+                ]) if primitives else np.zeros(embed_dim)
+                primitive_vecs.append(vec)
+            primitive_tensor = torch.tensor(primitive_vecs, dtype=torch.float)
+            # Pad or truncate to match embed_dim
+            if primitive_tensor.shape[1] < embed_dim:
+                pad = torch.zeros((primitive_tensor.shape[0], embed_dim - primitive_tensor.shape[1]))
+                primitive_tensor = torch.cat([primitive_tensor, pad], dim=1)
+            elif primitive_tensor.shape[1] > embed_dim:
+                primitive_tensor = primitive_tensor[:, :embed_dim]
+            x = support_feats + primitive_tensor + self.positional_encoding
+        else:
+            x = support_feats + self.positional_encoding
         return self.transformer(x)  # (12, embed_dim)
 
 class QueryContextAttention(nn.Module):

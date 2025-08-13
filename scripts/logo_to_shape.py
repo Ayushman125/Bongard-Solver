@@ -185,8 +185,14 @@ def main():
         fast_weights = maml.inner_update(sup_x, sup_y)
         maml.outer_update(qry_x, qry_y, fast_weights)
         meta_prob = float(torch.sigmoid(meta_model(qry_x, params=fast_weights)))
-        # Compositional features
-        comp_feats = [_calculate_composition_features(ex, context={'problem_id':problem_id}) for ex in positive_examples[:6]]
+        # Compositional features: extract stroke primitives for each example
+        from src.Derive_labels.stroke_types import extract_modifier_from_stroke
+        comp_feats = []
+        for ex in positive_examples[:6]:
+            stroke_primitives = [extract_modifier_from_stroke(cmd) for cmd in ex]
+            comp_feat = _calculate_composition_features([cmd for cmd in ex], context={'problem_id':problem_id})
+            comp_feat['stroke_primitives'] = stroke_primitives
+            comp_feats.append(comp_feat)
         # Combine all
         record = {
             'problem_id': problem_id,

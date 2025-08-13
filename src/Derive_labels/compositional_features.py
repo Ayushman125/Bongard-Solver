@@ -11,7 +11,8 @@ from typing import List, Dict, Any
 from src.Derive_labels.composition import CompositionEngine
 
 def _calculate_composition_features(action_sequence, context=None):
-    primitives = CompositionEngine.extract_primitives(action_sequence)
+    primitives = [extract_modifier_from_stroke(cmd) for cmd in action_sequence]
+    # Optionally, embed primitives for neural modules here
     rules = CompositionEngine.learn_composition_rules(primitives, context)
     compositions = CompositionEngine.generate_combinations(primitives, rules)
     return {
