@@ -11,19 +11,17 @@ class ContextualPerceptionEncoder(nn.Module):
 
     def forward(self, support_feats, stroke_primitives=None):
         """
-        support_feats: Tensor of shape (batch=12, embed_dim)
+        support_feats: Tensor of shape (batch_size, embed_dim)
         stroke_primitives: Optional list of symbolic primitives for each support example
         """
-        # If stroke_primitives are provided, embed and concatenate to support_feats
+        batch_size = support_feats.size(0)
+        embed_dim = support_feats.size(-1)
+        # Slice positional encoding to match batch size
+        pos_enc = self.positional_encoding[:, :batch_size, :].squeeze(0)  # shape (batch_size, embed_dim)
         if stroke_primitives is not None:
-            # Example: one-hot or learned embedding for each modifier, concatenate to numeric params
-            # This is a placeholder for actual embedding logic
-            # You can replace with a learned embedding layer for modifiers
             import numpy as np
-            embed_dim = support_feats.shape[-1]
             primitive_vecs = []
             for primitives in stroke_primitives:
-                # Flatten all primitives for one example
                 vec = np.concatenate([
                     np.array(p['params']) for p in primitives
                 ]) if primitives else np.zeros(embed_dim)
@@ -35,10 +33,10 @@ class ContextualPerceptionEncoder(nn.Module):
                 primitive_tensor = torch.cat([primitive_tensor, pad], dim=1)
             elif primitive_tensor.shape[1] > embed_dim:
                 primitive_tensor = primitive_tensor[:, :embed_dim]
-            x = support_feats + primitive_tensor + self.positional_encoding
+            x = support_feats + primitive_tensor + pos_enc.to(support_feats.device)
         else:
-            x = support_feats + self.positional_encoding
-        return self.transformer(x)  # (12, embed_dim)
+            x = support_feats + pos_enc.to(support_feats.device)
+        return self.transformer(x)  # (batch_size, embed_dim)
 
 class QueryContextAttention(nn.Module):
     def __init__(self, embed_dim=512, nhead=8):
