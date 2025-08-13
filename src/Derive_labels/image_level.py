@@ -511,8 +511,28 @@ def process_single_image(action_commands: List[str], image_id: str,
         canonical_summary = {}
         support_set_context = {}
         try:
-            # Example: load canonical summary from TSV using FileIO
-            canonical_summary = FileIO.load_canonical_features(image_id)
+            # Updated: load canonical summary from TSV using per-shape actions
+            # If available, use bongard_image.one_stroke_shapes to get actions for each shape
+            canonical_summary = {}
+            if hasattr(bongard_image, 'one_stroke_shapes'):
+                canonical_summary['shapes'] = []
+                for shape in bongard_image.one_stroke_shapes:
+                    shape_actions = []
+                    for action in getattr(shape, 'basic_actions', []):
+                        if hasattr(action, 'raw_command') and isinstance(action.raw_command, str):
+                            shape_actions.append(action.raw_command)
+                        else:
+                            shape_actions.append(str(action))
+                    canonical_labels = FileIO.get_shape_labels_and_attributes(shape_actions)
+                    canonical_summary['shapes'].append({
+                        'actions': shape_actions,
+                        'canonical_labels': canonical_labels
+                    })
+            else:
+                # Fallback: try to use all_actions if available
+                if 'all_actions' in locals():
+                    canonical_labels = FileIO.get_shape_labels_and_attributes(all_actions)
+                    canonical_summary['canonical_labels'] = canonical_labels
         except Exception as e:
             logger.warning(f"[PATCH] Failed to load canonical summary for image_id={image_id}: {e}")
         # Remove per-image support-set context extraction. Only compute support-set context at the problem level in main().

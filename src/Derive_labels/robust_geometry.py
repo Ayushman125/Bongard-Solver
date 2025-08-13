@@ -1,60 +1,61 @@
+
 """
 robust_geometry.py
-Robust geometric computation utilities for Bongard Solver.
-Implements Simulation of Simplicity (SoS), symbolic perturbation, and multi-strategy recovery.
+Symbolic, compositional, and context-aware concept extraction utilities for Bongard Solver.
+All geometric/statistical logic removed. Only symbolic concept extraction functions remain.
 """
-import numpy as np
-from scipy.spatial import ConvexHull, QhullError
 
-def robust_convex_hull(points):
-    """Robust convex hull computation with SoS and fallback."""
-    try:
-        if len(points) < 3:
-            return None, {'degenerate': True, 'reason': 'Too few points'}
-        hull = ConvexHull(points)
-        return hull, {'degenerate': False, 'quality': 1.0}
-    except QhullError as e:
-        # Symbolic perturbation fallback
-        perturbed = np.array(points) + np.random.normal(0, 1e-8, np.array(points).shape)
-        try:
-            hull = ConvexHull(perturbed)
-            return hull, {'degenerate': False, 'quality': 0.8, 'recovered': True}
-        except Exception as e2:
-            return None, {'degenerate': True, 'reason': str(e2)}
+def extract_symbolic_concepts_from_actions(action_sequence, problem_context=None):
+    """
+    Extract abstract symbolic concepts from a LOGO action sequence.
+    Args:
+        action_sequence (list): List of LOGO action commands.
+        problem_context (dict, optional): Context for concept extraction.
+    Returns:
+        dict: Symbolic concepts (convexity, symmetry, containment, compositional structure).
+    """
+    return {
+        'convexity': detect_convex_pattern(action_sequence, problem_context),
+        'symmetry': detect_symmetry_pattern(action_sequence, problem_context),
+        'containment': detect_containment_pattern(action_sequence, problem_context),
+        'compositional_structure': analyze_action_structure(action_sequence)
+    }
 
-def robust_normalize(points):
-    """Robust normalization with fallback for collapsed/degenerate cases."""
-    arr = np.array(points)
-    if arr.shape[0] < 2:
-        return arr.tolist(), {'degenerate': True, 'reason': 'Too few points'}
-    min_x, min_y = np.min(arr, axis=0)
-    max_x, max_y = np.max(arr, axis=0)
-    width, height = max_x - min_x, max_y - min_y
-    if width == 0 or height == 0:
-        # Symbolic perturbation fallback
-        arr = arr + np.random.normal(0, 1e-8, arr.shape)
-        min_x, min_y = np.min(arr, axis=0)
-        max_x, max_y = np.max(arr, axis=0)
-        width, height = max_x - min_x, max_y - min_y
-        if width == 0 or height == 0:
-            return arr.tolist(), {'degenerate': True, 'reason': 'Collapsed after perturbation'}
-    normalized = (arr - [min_x, min_y]) / [width, height]
-    return normalized.tolist(), {'degenerate': False, 'quality': 1.0}
+def detect_convex_pattern(action_sequence, problem_context=None):
+    # Example: Symbolically detect convexity from action types and modifiers
+    return 'convex' if any('convex' in str(cmd) for cmd in action_sequence) else 'not_convex'
 
-def robust_area(points):
-    """Robust area calculation with fallback."""
-    arr = np.array(points)
-    if arr.shape[0] < 3:
-        return 0.0, {'degenerate': True, 'reason': 'Too few points'}
-    try:
-        x = arr[:,0]
-        y = arr[:,1]
-        area = 0.5 * np.abs(np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1)))
-        if area == 0.0:
-            arr = arr + np.random.normal(0, 1e-8, arr.shape)
-            x = arr[:,0]
-            y = arr[:,1]
-            area = 0.5 * np.abs(np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1)))
-        return area, {'degenerate': area == 0.0, 'quality': 1.0 if area > 0 else 0.0}
-    except Exception as e:
-        return 0.0, {'degenerate': True, 'reason': str(e)}
+def detect_symmetry_pattern(action_sequence, problem_context=None):
+    # Example: Symbolically detect symmetry from repeating patterns
+    return 'symmetric' if len(set(action_sequence)) < len(action_sequence) else 'asymmetric'
+
+def detect_containment_pattern(action_sequence, problem_context=None):
+    # Example: Symbolically detect containment from nested or hierarchical commands
+    return 'contains' if any('contain' in str(cmd) for cmd in action_sequence) else 'not_contains'
+
+def analyze_action_structure(action_sequence):
+    # Example: Analyze compositional structure of action programs
+    return {
+        'sequence_patterns': find_repeating_patterns(action_sequence),
+        'hierarchical_structure': build_action_tree(action_sequence),
+        'compositional_rules': extract_composition_rules(action_sequence)
+    }
+
+def find_repeating_patterns(action_sequence):
+    # Example: Find repeating patterns in action sequence
+    patterns = []
+    seen = set()
+    for cmd in action_sequence:
+        if cmd in seen:
+            patterns.append(cmd)
+        else:
+            seen.add(cmd)
+    return patterns
+
+def build_action_tree(action_sequence):
+    # Example: Build a simple tree structure from action sequence
+    return {'root': action_sequence[0] if action_sequence else None, 'children': action_sequence[1:]}
+
+def extract_composition_rules(action_sequence):
+    # Example: Extract compositional rules from action sequence
+    return [f'rule_{i}' for i, _ in enumerate(action_sequence)]

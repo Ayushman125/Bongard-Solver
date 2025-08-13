@@ -1,5 +1,0 @@
-2025-08-13 03:14:46,550 - INFO - Successfully processed 700/700 images
-2025-08-13 03:14:46,554 - INFO - Saved 700 records to data/derived_labels.json
-2025-08-13 03:14:46,555 - INFO - [PIPELINE] Degenerate cases detected: 0
-2025-08-13 03:14:46,555 - INFO - Saved processing statistics to data\processing_statistics.json
-2025-08-13 03:14:46,559 - INFO - Saved 100 problem-level canonical summaries to data\problem_summaries.json

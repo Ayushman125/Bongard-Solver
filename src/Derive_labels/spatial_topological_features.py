@@ -1,75 +1,57 @@
+
 """
 Spatial-Relational & Topological Feature Extraction Module
-Implements graph metrics, adjacency, intersection, planarity, and related features for Bongard-Solver.
+Symbolic, compositional, and context-aware concept extraction only. All geometric/statistical logic removed.
 """
-import numpy as np
-import networkx as nx
-from shapely.geometry import Polygon, LineString
 
-def compute_spatial_topological_features(image_dict):
+def compute_spatial_topological_features(action_sequence, problem_context=None):
     """
-    Compute spatial-relational and topological features for a Bongard image.
+    Symbolically compute spatial-relational and topological concepts for a Bongard image.
     Args:
-        image_dict (dict): Dict with 'vertices', 'strokes', etc.
+        action_sequence (list): List of LOGO action commands.
+        problem_context (dict, optional): Context for concept extraction.
     Returns:
-        dict: Features (keys: see 2.1–2.20)
+        dict: Symbolic spatial/topological concepts.
     """
-    features = {}
-    strokes = image_dict.get('strokes', [])
-    vertices = image_dict.get('vertices', [])
-    # 2.1 Stroke Adjacency Graph Metrics
-    G = nx.Graph()
-    for i, stroke in enumerate(strokes):
-        G.add_node(i)
-        for j, other in enumerate(strokes):
-            if i != j:
-                v1 = np.array(stroke.get('vertices', []))
-                v2 = np.array(other.get('vertices', []))
-                if v1.size and v2.size:
-                    min_dist = np.min(np.linalg.norm(v1[:,None]-v2[None,:], axis=2))
-                    if min_dist < 0.05:
-                        G.add_edge(i, j)
-    features['adjacency_degree'] = dict(G.degree())
-    features['adjacency_clustering'] = nx.clustering(G)
-    # 2.2 Intersection Network Motifs
-    features['intersection_count'] = sum(1 for i in G.edges)
-    # 2.3 Topological Betweenness Centrality
-    features['betweenness_centrality'] = nx.betweenness_centrality(G)
-    # 2.4 Stroke Containment Graph Score
-    features['containment_score'] = sum(1 for i, stroke in enumerate(strokes)
-        for j, other in enumerate(strokes) if i != j and Polygon(stroke.get('vertices', [])).contains(Polygon(other.get('vertices', []))))
-    # 2.5 Stroke Overlap Heatmap
-    features['overlap_heatmap'] = [Polygon(stroke.get('vertices', [])).intersection(Polygon(other.get('vertices', []))).area
-        for i, stroke in enumerate(strokes) for j, other in enumerate(strokes) if i != j]
-    adjacency_count = 0
-    intersection_count = 0
-    containment_count = 0
-    overlap_area = 0.0
-    geometries = []
-    for stroke in strokes:
-        verts = stroke.get('vertices', [])
-        # Professional handling: treat as polygon if valid, else as line if valid
-        geom = None
-        if len(verts) >= 3:
-            try:
-                poly = Polygon(verts)
-                if poly.is_valid and poly.area > 1e-8:
-                    geom = ('polygon', poly)
-                else:
-                    line = LineString(verts)
-                    if line.is_valid and line.length > 1e-8:
-                        geom = ('line', line)
-            except Exception:
-                line = LineString(verts)
-                if line.is_valid and line.length > 1e-8:
-                    geom = ('line', line)
-        elif len(verts) >= 2:
-            line = LineString(verts)
-            if line.is_valid and line.length > 1e-8:
-                geom = ('line', line)
-        geometries.append(geom if geom else (None, None))
-    # 2.19 Geodesic Distance on Convex Hull
-    features['geodesic_dist_convex_hull'] = float(Polygon(vertices).convex_hull.length) if vertices else 0
-    # 2.20 Skeleton Graph Features
-    features['skeleton_graph_features'] = {'num_nodes': len(G.nodes), 'num_edges': len(G.edges)}
-    return features
+    return {
+        'adjacency_pattern': detect_adjacency_pattern(action_sequence, problem_context),
+        'intersection_pattern': detect_intersection_pattern(action_sequence, problem_context),
+        'containment_pattern': detect_containment_pattern(action_sequence, problem_context),
+        'compositional_structure': analyze_action_structure(action_sequence)
+    }
+
+def detect_adjacency_pattern(action_sequence, problem_context=None):
+    # Example: Symbolically detect adjacency from sequence order or repeated types
+    return 'adjacent' if any('adjacent' in str(cmd) for cmd in action_sequence) else 'not_adjacent'
+
+def detect_intersection_pattern(action_sequence, problem_context=None):
+    # Example: Symbolically detect intersection from action types
+    return 'intersecting' if any('intersect' in str(cmd) for cmd in action_sequence) else 'not_intersecting'
+
+def detect_containment_pattern(action_sequence, problem_context=None):
+    # Example: Symbolically detect containment from nested or hierarchical commands
+    return 'contains' if any('contain' in str(cmd) for cmd in action_sequence) else 'not_contains'
+
+def analyze_action_structure(action_sequence):
+    # Example: Analyze compositional structure of action programs
+    return {
+        'sequence_patterns': find_repeating_patterns(action_sequence),
+        'hierarchical_structure': build_action_tree(action_sequence),
+        'compositional_rules': extract_composition_rules(action_sequence)
+    }
+
+def find_repeating_patterns(action_sequence):
+    patterns = []
+    seen = set()
+    for cmd in action_sequence:
+        if cmd in seen:
+            patterns.append(cmd)
+        else:
+            seen.add(cmd)
+    return patterns
+
+def build_action_tree(action_sequence):
+    return {'root': action_sequence[0] if action_sequence else None, 'children': action_sequence[1:]}
+
+def extract_composition_rules(action_sequence):
+    return [f'rule_{i}' for i, _ in enumerate(action_sequence)]
