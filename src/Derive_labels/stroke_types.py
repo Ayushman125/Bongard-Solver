@@ -1,3 +1,70 @@
+def _calculate_stroke_specific_features(stroke, stroke_index, context=None, shape_info=None):
+    """
+    Extracts rich, context-aware features from a single stroke.
+    Args:
+        stroke: The stroke object or action command string.
+        stroke_index: Index of the stroke in the shape sequence.
+        context: Optional, contextual info for dynamic adaptation.
+        shape_info: Additional geometric info about the shape.
+    Returns:
+        features: dict with symbolic and continuous stroke features.
+    """
+    # Parse stroke class and modifier
+    try:
+        parsed = extract_modifier_from_stroke(stroke)
+    except Exception as e:
+        parsed = {'class': 'unknown', 'modifier': 'unknown', 'params': [0.0, 0.0]}
+    stroke_class = parsed['class']
+    modifier = parsed['modifier']
+    params = parsed['params']
+    # Geometric features (stub: replace with real geometric extraction as needed)
+    length = params[0] if params else 0.0
+    angle = params[1] if len(params) > 1 else 0.0
+    curvature = params[2] if len(params) > 2 else 0.0
+    # If shape_info provides vertices, use them for advanced metrics
+    num_vertices = 0
+    compactness = 0.0
+    convexity_ratio = 0.0
+    complexity = 0.0
+    if shape_info and 'vertices' in shape_info:
+        vertices = shape_info['vertices']
+        num_vertices = len(vertices)
+        # Example: use open_stroke_convexity from shape_utils
+        try:
+            from src.Derive_labels.shape_utils import open_stroke_convexity
+            convexity_ratio = open_stroke_convexity(vertices)
+        except Exception:
+            convexity_ratio = 0.0
+        # Example: compactness = perimeter^2 / area (stub)
+        try:
+            import numpy as np
+            from shapely.geometry import Polygon
+            poly = Polygon(vertices)
+            perimeter = poly.length if poly.is_valid else 0.0
+            area = poly.area if poly.is_valid else 1.0
+            compactness = (perimeter ** 2) / area if area > 0 else 0.0
+        except Exception:
+            compactness = 0.0
+        # Complexity: number of vertices as a proxy
+        complexity = num_vertices
+    features = {
+        'stroke_index': stroke_index,
+        'stroke_class': stroke_class,
+        'modifier': modifier,
+        'length': length,
+        'angle': angle,
+        'curvature': curvature,
+        'compactness': compactness,
+        'convexity_ratio': convexity_ratio,
+        'complexity': complexity,
+        'num_vertices': num_vertices,
+    }
+    # Optionally adapt features dynamically based on context (few-shot, analogy-making)
+    if context is not None:
+        # Example: context-driven feature adaptation (stub)
+        if 'analogical_map' in context:
+            features['modifier'] = context['analogical_map'].get(modifier, modifier)
+    return features
 """
 stroke_types.py
 Symbolic, compositional, and context-aware concept extraction for Bongard Solver.

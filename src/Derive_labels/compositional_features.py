@@ -11,7 +11,13 @@ from typing import List, Dict, Any
 from src.Derive_labels.composition import CompositionEngine
 
 def _calculate_composition_features(action_sequence, context=None):
-    primitives = [extract_modifier_from_stroke(cmd) for cmd in action_sequence]
+    from src.Derive_labels.stroke_types import _calculate_stroke_specific_features
+    primitives = []
+    for idx, cmd in enumerate(action_sequence):
+        # shape_info and context can be passed if available
+        shape_info = context.get('shape_info') if context and 'shape_info' in context else None
+        primitive = _calculate_stroke_specific_features(cmd, idx, context=context, shape_info=shape_info)
+        primitives.append(primitive)
     # Optionally, embed primitives for neural modules here
     rules = CompositionEngine.learn_composition_rules(primitives, context)
     compositions = CompositionEngine.generate_combinations(primitives, rules)

@@ -187,11 +187,19 @@ def main():
         meta_prob = float(torch.sigmoid(meta_model(qry_x, params=fast_weights)))
         # Compositional features: extract stroke primitives for each example
         from src.Derive_labels.stroke_types import extract_modifier_from_stroke
+        from src.Derive_labels.stroke_types import _calculate_stroke_specific_features
         comp_feats = []
         for ex in positive_examples[:6]:
-            stroke_primitives = [extract_modifier_from_stroke(cmd) for cmd in ex]
-            comp_feat = _calculate_composition_features([cmd for cmd in ex], context={'problem_id':problem_id})
-            comp_feat['stroke_primitives'] = stroke_primitives
+            stroke_features = []
+            for idx, cmd in enumerate(ex):
+                # Optionally pass context and shape_info if available
+                shape_info = None # Replace with actual shape info if available
+                context_dict = {'problem_id': problem_id}
+                primitive = _calculate_stroke_specific_features(cmd, idx, context=context_dict, shape_info=shape_info)
+                stroke_features.append(primitive)
+            logger.info(f"[STROKE FEATURE EXTRACTION] Problem {problem_id} Example: {ex}\nExtracted Features: {stroke_features}")
+            comp_feat = _calculate_composition_features([cmd for cmd in ex], context={'problem_id':problem_id, 'shape_info': shape_info})
+            comp_feat['stroke_features'] = stroke_features
             comp_feats.append(comp_feat)
         # Combine all
         record = {
