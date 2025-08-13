@@ -306,20 +306,46 @@ def main():
         from src.Derive_labels.stroke_types import _calculate_stroke_specific_features
         comp_feats = []
         for ex in positive_examples[:6]:
+            from src.Derive_labels.shape_utils import extract_shape_vertices
+            from src.Derive_labels.file_io import FileIO
+            # If ex is a list of lists (multiple shapes per image), map each separately
+            if isinstance(ex, list) and len(ex) > 0 and isinstance(ex[0], list):
+                shape_infos = []
+                tsv_shape_labels = []
+                for shape_cmds in ex:
+                    shape_vertices = extract_shape_vertices(shape_cmds)
+                    shape_info = {'vertices': shape_vertices}
+                    shape_infos.append(shape_info)
+                    # Map TSV shape labels for this shape
+                    shape_labels = FileIO.get_shape_labels_and_attributes(shape_cmds, problem_name=problem_id)
+                    tsv_shape_labels.append(shape_labels)
+            else:
+                shape_vertices = extract_shape_vertices(ex)
+                shape_info = {'vertices': shape_vertices}
+                shape_infos = [shape_info]
+                tsv_shape_labels = [FileIO.get_shape_labels_and_attributes(ex, problem_name=problem_id)]
             stroke_features = []
             for idx, cmd in enumerate(ex):
-                # Optionally pass context and parent_shape_vertices/shape_obj if available
                 context_dict = {'problem_id': problem_id}
-                # If you have shape_info and it contains vertices, pass as parent_shape_vertices
-                # primitive = _calculate_stroke_specific_features(cmd, idx, context=context_dict, parent_shape_vertices=shape_info['vertices'])
-                # If you have shape_info and it contains a shape object, pass as shape_obj
-                # primitive = _calculate_stroke_specific_features(cmd, idx, context=context_dict, shape_obj=shape_info['shape_obj'])
-                # If no shape_info, just pass context
-                primitive = _calculate_stroke_specific_features(cmd, idx, context=context_dict)
-                stroke_features.append(primitive)
+                primitive = None
+                # Use correct shape_info for each shape if multiple
+                if isinstance(ex, list) and len(ex) > 0 and isinstance(ex[0], list):
+                    # Find which shape this cmd belongs to
+                    for shape_idx, shape_cmds in enumerate(ex):
+                        if cmd in shape_cmds:
+                            primitive = _calculate_stroke_specific_features(cmd, idx, context=context_dict, parent_shape_vertices=shape_infos[shape_idx]['vertices'])
+                            break
+                else:
+                    primitive = _calculate_stroke_specific_features(cmd, idx, context=context_dict, parent_shape_vertices=shape_info['vertices'])
+                # Only process primitive if assigned
+                if primitive is not None:
+                    if 'embedding' in primitive and hasattr(primitive['embedding'], 'tolist'):
+                        primitive['embedding'] = primitive['embedding'].tolist()
+                    stroke_features.append(primitive)
             logger.info(f"[STROKE FEATURE EXTRACTION] Problem {problem_id} Example: {ex}\nExtracted Features: {stroke_features}")
-            comp_feat = _calculate_composition_features([cmd for cmd in ex], context={'problem_id': problem_id})
+            comp_feat = _calculate_composition_features([cmd for cmd in ex], context={'problem_id': problem_id, 'shape_info': shape_infos[0] if shape_infos else None})
             comp_feat['stroke_features'] = stroke_features
+            comp_feat['tsv_shape_labels'] = tsv_shape_labels
             comp_feats.append(comp_feat)
         # Combine all
         record = {
@@ -339,9 +365,20 @@ def main():
             record['validation']['secondary'] = validator2.validate(problem_id, record)
         derived_records.append(record)
 
+    import numpy as np
+    def convert_ndarray(obj):
+        if isinstance(obj, dict):
+            return {k: convert_ndarray(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [convert_ndarray(v) for v in obj]
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        else:
+            return obj
+
     logger.info(f"Writing derived labels to {args.output}")
     with open(args.output, 'w') as f:
-        json.dump(derived_records, f, indent=2)
+        json.dump(convert_ndarray(derived_records), f, indent=2)
     logger.info("Finished writing derived labels.")
 
 if __name__ == "__main__":

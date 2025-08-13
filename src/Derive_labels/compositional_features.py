@@ -14,9 +14,12 @@ def _calculate_composition_features(action_sequence, context=None):
     from src.Derive_labels.stroke_types import _calculate_stroke_specific_features
     primitives = []
     for idx, cmd in enumerate(action_sequence):
-        # shape_info and context can be passed if available
+        # Pass parent_shape_vertices if shape_info is present
         shape_info = context.get('shape_info') if context and 'shape_info' in context else None
-        primitive = _calculate_stroke_specific_features(cmd, idx, context=context, shape_info=shape_info)
+        if shape_info and 'vertices' in shape_info:
+            primitive = _calculate_stroke_specific_features(cmd, idx, context=context, parent_shape_vertices=shape_info['vertices'])
+        else:
+            primitive = _calculate_stroke_specific_features(cmd, idx, context=context)
         primitives.append(primitive)
     # Optionally, embed primitives for neural modules here
     rules = CompositionEngine.learn_composition_rules(primitives, context)

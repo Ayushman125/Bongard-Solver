@@ -1,3 +1,53 @@
+from typing import List, Tuple
+
+def extract_shape_vertices(action_commands: List[str]) -> List[Tuple[float, float]]:
+    """
+    Replay LOGO-style action commands and return a list of (x, y) vertices.
+    Assumes turtle starts at (0,0) facing right (0 degrees).
+    Supports 'line' and 'arc' commands with modifiers and normalized params.
+    """
+    import math
+    vertices = []
+    x, y = 0.0, 0.0
+    heading = 0.0  # in degrees, 0 = right
+    vertices.append((x, y))
+    for cmd in action_commands:
+        parts = cmd.split('_')
+        if len(parts) < 2:
+            continue
+        stroke_class = parts[0]
+        modifier = parts[1]
+        param_str = '_'.join(parts[2:]) if len(parts) > 2 else '0.5-0.5'
+        param_parts = param_str.split('-')
+        if stroke_class == 'line':
+            length = float(param_parts[0]) if param_parts else 0.5
+            angle = float(param_parts[1]) if len(param_parts) > 1 else 0.0
+            # Move turtle forward by length in current heading
+            rad = math.radians(heading)
+            dx = length * math.cos(rad)
+            dy = length * math.sin(rad)
+            x += dx
+            y += dy
+            vertices.append((x, y))
+            # Optionally turn by angle
+            heading += angle * 360.0  # normalized angle
+        elif stroke_class == 'arc':
+            first_params = param_parts[0].split('_') if param_parts else ['0.5', '0.5']
+            radius = float(first_params[0]) if first_params else 0.5
+            span = float(first_params[1]) if len(first_params) > 1 else 0.25
+            angle = float(param_parts[1]) if len(param_parts) > 1 else 0.5
+            # Approximate arc by small segments
+            arc_points = 10
+            for i in range(arc_points):
+                theta = heading + (span * 360.0) * (i / arc_points)
+                rad = math.radians(theta)
+                px = x + radius * math.cos(rad)
+                py = y + radius * math.sin(rad)
+                vertices.append((px, py))
+            # Move turtle to end of arc
+            heading += span * 360.0
+            x, y = vertices[-1]
+    return vertices
 # --- Symbolic, compositional, and context-aware concept extraction functions ---
 from typing import List
 def extract_symbolic_concepts_from_actions(action_sequence):
