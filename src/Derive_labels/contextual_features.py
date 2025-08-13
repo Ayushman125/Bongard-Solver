@@ -3,6 +3,37 @@ from collections import Counter
 from scipy.stats import entropy, wasserstein_distance
 from typing import List, Dict, Any
 
+import torch
+import torch.nn.functional as F
+from .contextual_perception import (
+    ContextualPerceptionEncoder,
+    QueryContextAttention,
+    AdaptiveConceptGenerator
+)
+from src.Derive_labels.emergence import ConceptMemoryBank
+
+# Initialize modules (singleton or per-call)
+_encoder = ContextualPerceptionEncoder()
+_attention = QueryContextAttention()
+_generator = AdaptiveConceptGenerator()
+
+def contextual_concept_hypotheses(support_pos_feats, support_neg_feats, query_feat):
+    """
+    support_pos_feats/support_neg_feats: list of feature dicts → convert to tensors
+    query_feat: tensor
+    """
+    # 1. Encode support as context
+    support_feats = torch.stack(support_pos_feats + support_neg_feats)  # (12, D)
+    context_encoded = _encoder(support_feats)                          # (12, D)
+    # 2. Summarize context (e.g., mean pooling)
+    context_summary = context_encoded.mean(dim=0)                      # (D,)
+    # 3. Cross-attention with query
+    query_context = _attention(query_feat, context_encoded)           # (D,)
+    # 4. Generate adaptive concept hypotheses
+    hypotheses = _generator(query_context, context_summary)           # (C,)
+    # 5. Persist learned context for future problems
+    ConceptMemoryBank.update(context_summary.detach().numpy())
+    return hypotheses
 def positive_negative_contrast_score(pos_features: List[float], neg_features: List[float]) -> float:
     """Compute contrast score between positive and negative sets."""
     if not pos_features or not neg_features:

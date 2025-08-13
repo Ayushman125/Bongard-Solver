@@ -106,12 +106,27 @@ def main():
         problem_ids = [line.strip() for line in f if line.strip()]
 
     logger.info(f"Loading action programs from {args.input_dir}")
-    action_programs = load_action_programs(args.input_dir)
+            # Phase 2: Context-Dependent Perception
+            from src.Derive_labels.contextual_features import contextual_concept_hypotheses
 
-    derived_records = []
-    for problem_id in problem_ids:
-        logger.info(f"Parsing problem: {problem_id}")
-        action_prog = action_programs.get(problem_id)
+            # Convert extracted features to embedding vectors
+            support_pos_feats = [torch.tensor(list(feat.values()), dtype=torch.float) for feat in support_pos_features]
+            support_neg_feats = [torch.tensor(list(feat.values()), dtype=torch.float) for feat in support_neg_features]
+            query_feat = torch.tensor(list(support_pos_features[0].values()), dtype=torch.float)
+
+            # Generate context-dependent concept hypothesis vector
+            context_hypotheses = contextual_concept_hypotheses(support_pos_feats, support_neg_feats, query_feat)
+            logger.info(f"[{problem_id}] Context hypotheses: {context_hypotheses.tolist()}")
+
+            # Integrate with existing discriminative and compositional features
+            discriminative = compute_discriminative_features(support_pos_features, support_neg_features)
+            induced = extract_problem_level_features(support_pos, support_neg)
+            # Combine: emergent + compositional + contextual
+            combined_concepts = {
+                'emergent': induced,
+                'compositional': support_pos_compositional,
+                'contextual': context_hypotheses.tolist()
+            }
         if not action_prog or not isinstance(action_prog, list) or len(action_prog) != 2:
             logger.warning(f"No valid action program for problem_id: {problem_id}")
             continue

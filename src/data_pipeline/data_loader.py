@@ -250,6 +250,11 @@ def extract_features_from_actions(action_sequence):
         action_sequence = [str(a) for a in action_sequence]
         logging.debug(f"[DATA_LOADER] Action sequence after str fallback: {[type(a) for a in action_sequence]}")
     parsed_commands = [parse_action_command(cmd) for cmd in action_sequence]
+    # After extracting features
+    action_feats = extract_features_from_actions(parsed_commands)
+    # Convert numeric subset to tensor-ready lists
+    numeric_feats = [action_feats[k] for k in NUMERIC_FEATURE_KEYS]
+    record['feature_vector'] = numeric_feats
     
     # Count command types and shapes
     command_types = [cmd['command_type'] for cmd in parsed_commands]

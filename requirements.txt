@@ -9,7 +9,7 @@ Pillow
 matplotlib
 pyyaml
 scikit-image
-torch
+torch>=1.12.0
 torchvision
 segment-anything
 requests
