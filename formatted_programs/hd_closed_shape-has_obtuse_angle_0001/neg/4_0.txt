@@ -1,0 +1,3 @@
+line_circle_1.000-0.500
+line_zigzag_1.000-0.833
+line_square_1.000-0.833

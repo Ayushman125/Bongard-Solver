@@ -1,0 +1,3 @@
+arc_triangle_0.500_0.625-0.500
+line_triangle_0.300-0.500
+arc_normal_0.500_0.375-1.000
