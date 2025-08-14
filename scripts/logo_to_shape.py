@@ -7,6 +7,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 import argparse
 import json
+import numpy as np
 # Add src to sys.path for imports
 try:
     from src.data_pipeline.data_loader import load_action_programs
@@ -18,7 +19,6 @@ try:
     from src.Derive_labels.validation import validate_features
     from src.Derive_labels.emergence import ConceptMemoryBank
     from src.Derive_labels.scene_graph import SceneGraphFormatter
-    from src.Derive_labels.tsv_validation import TSVValidator
     from src.Derive_labels.stroke_types import _calculate_stroke_type_differentiated_features
 except Exception as e:
     print(f"[IMPORT ERROR] Could not import required modules: {e}")
@@ -53,13 +53,23 @@ def assess_problem_level_concept(problem_id, positive_examples, negative_example
     support_pos_compositional = [_calculate_composition_features(ex, context=context_memory) for ex in support_pos]
     support_neg_compositional = [_calculate_composition_features(ex, context=context_memory) for ex in support_neg]
 
-    # Phase 2: Context-Dependent Perception
-    from src.Derive_labels.contextual_features import contextual_concept_hypotheses, discriminative_concepts
-    support_pos_feats = [torch.tensor(list(feat.values()), dtype=torch.float) for feat in support_pos_features]
-    support_neg_feats = [torch.tensor(list(feat.values()), dtype=torch.float) for feat in support_neg_features]
-    query_feat = torch.tensor(list(support_pos_features[0].values()), dtype=torch.float)
-    context_hypotheses = contextual_concept_hypotheses(support_pos_feats, support_neg_feats, query_feat)
-    logger.info(f"[{problem_id}] Context hypotheses: {context_hypotheses.tolist()}")
+    # Use new feature extraction output (numerical vector)
+    support_pos_feats = [torch.tensor(feat, dtype=torch.float).to(DEVICE) for feat in support_pos_features]
+    support_neg_feats = [torch.tensor(feat, dtype=torch.float).to(DEVICE) for feat in support_neg_features]
+    query_feat = torch.tensor(support_pos_features[0], dtype=torch.float).to(DEVICE)
+
+    # Encode program tensor for each image using prog_str2prog_idx
+    from Bongard_LOGO_Baselines.datasets.shape_program import prog_str2prog_idx
+    support_pos_programs = [torch.tensor(prog_str2prog_idx(ex), dtype=torch.float32).unsqueeze(0).to(DEVICE) for ex in support_pos]
+    support_neg_programs = [torch.tensor(prog_str2prog_idx(ex), dtype=torch.float32).unsqueeze(0).to(DEVICE) for ex in support_neg]
+    query_program = torch.tensor(prog_str2prog_idx(support_pos[0]), dtype=torch.float32).unsqueeze(0).to(DEVICE)
+
+    # Example: pass both image and program tensors to Bongard-LOGO model
+    # You may need to adapt this for batch inference or meta-learning episodes
+    # Here, we show inference for the query image
+    # bongard_model should be instantiated earlier in the pipeline
+    # meta_prob = bongard_model.infer(query_feat.unsqueeze(0), query_program)
+    # ...existing code...
 
     # Discriminative features
     # Use embedding-based differentiation for support sets
@@ -71,9 +81,8 @@ def assess_problem_level_concept(problem_id, positive_examples, negative_example
     induced = extract_problem_level_features(support_pos, support_neg)
     # Combine: emergent + compositional + contextual
     combined_concepts = {
-      'emergent': induced,
-      'compositional': support_pos_compositional,
-      'contextual': context_hypotheses.tolist()
+        'emergent': induced,
+        'compositional': support_pos_compositional
     }
 
     # Phase 3: Meta-Learning Episode
@@ -162,19 +171,14 @@ def main():
     # Initialize concept memory
     ConceptMemoryBank.initialize()
     context_memory = ConceptMemoryBank.load()
-    from src.Derive_labels.scene_graph import SceneGraphFormatter
-    from src.Derive_labels.tsv_validation import TSVValidator
-    sg_formatter = SceneGraphFormatter()
-    # Automate TSV file detection
-    import glob
-    tsv_files = glob.glob(os.path.join('data', '*.tsv'))
-    validator1 = TSVValidator(tsv_path=tsv_files[0]) if len(tsv_files) > 0 else None
-    validator2 = TSVValidator(tsv_path=tsv_files[1]) if len(tsv_files) > 1 else None
+    # Removed SceneGraphFormatter and TSVValidator logic
 
     logger.info(f"Loading action programs from {args.input_dir}")
     action_programs = load_action_programs(args.input_dir)
+    logger.info(f"Loaded action_programs keys: {list(action_programs.keys())}")
     with open(args.problems_list, 'r') as f:
         problem_ids = [line.strip() for line in f if line.strip()]
+    logger.info(f"Loaded problem_ids ({len(problem_ids)}): {problem_ids}")
 
     derived_records = []
     def to_tensor(feat):
@@ -182,32 +186,21 @@ def main():
         import numbers
         if isinstance(feat, dict):
             vals = list(feat.values())
-            logger.info(f"[to_tensor] Dict values: {vals}")
-            logger.info(f"[to_tensor] Dict value types: {[type(v) for v in vals]}")
             return torch.tensor([v for v in vals if isinstance(v, numbers.Number)], dtype=torch.float)
         elif isinstance(feat, list):
-            logger.info(f"[to_tensor] List length: {len(feat)}")
-            logger.info(f"[to_tensor] List element types: {[type(f) for f in feat]}")
-            # If feat is a list of dicts, flatten to numeric values
             if all(isinstance(f, dict) for f in feat):
                 vals = []
                 for f in feat:
                     vlist = list(f.values())
-                    logger.info(f"[to_tensor] List[Dict] values: {vlist}")
-                    logger.info(f"[to_tensor] List[Dict] value types: {[type(v) for v in vlist]}")
                     vals.extend([v for v in vlist if isinstance(v, numbers.Number)])
-                logger.info(f"[to_tensor] Flattened numeric values: {vals}")
                 return torch.tensor(vals, dtype=torch.float)
             else:
-                logger.info(f"[to_tensor] List values: {feat}")
-                logger.info(f"[to_tensor] List value types: {[type(v) for v in feat]}")
-                non_numeric = [v for v in feat if not isinstance(v, numbers.Number)]
-                if non_numeric:
-                    logger.warning(f"[to_tensor] Non-numeric values found in list: {non_numeric}")
                 return torch.tensor([v for v in feat if isinstance(v, numbers.Number)], dtype=torch.float)
+        elif isinstance(feat, np.ndarray):
+            return torch.from_numpy(feat).float()
         else:
             logger.error(f"[to_tensor] Invalid type: {type(feat)}")
-            raise TypeError(f"Feature must be dict or list, got {type(feat)}")
+            raise TypeError(f"Feature must be dict, list, or numpy.ndarray, got {type(feat)}")
     # Import BongardLOGOModelWrapper
     from src.Derive_labels.bongard_wrapper import BongardLOGOModelWrapper
     bongard_model = BongardLOGOModelWrapper(
@@ -228,7 +221,6 @@ def main():
 
     def check_internal_consistency(concepts):
         # Example: average cosine similarity between concept embeddings
-        import numpy as np
         embeddings = [np.array(c) for c in concepts if isinstance(c, (list, np.ndarray))]
         if len(embeddings) < 2:
             return 1.0
@@ -240,106 +232,128 @@ def main():
                 sims.append(sim)
         return float(np.mean(sims)) if sims else 1.0
 
+    processed_count = 0
     for problem_id in problem_ids:
+        logger.info(f"[PROCESSING] problem_id: {problem_id}")
         if problem_id not in action_programs:
             logger.warning(f"No valid action program for problem_id: {problem_id}")
             continue
         positive_examples, negative_examples = action_programs[problem_id]
-    support_pos_features = [extract_topological_features(ex, context_memory=context_memory) for ex in positive_examples[:6]]
-    support_neg_features = [extract_topological_features(ex, context_memory=context_memory) for ex in negative_examples[:6]]
-    # Use to_tensor helper to handle both dict and list feature types
-    support_feats = [to_tensor(feat).to(DEVICE) for feat in support_pos_features + support_neg_features]
-    support_labels = [1]*6 + [0]*6
-    query_feat = to_tensor(support_pos_features[0]).to(DEVICE)
-    support_x = torch.stack(support_feats)
-    support_y = torch.tensor(support_labels)
-    query_x = query_feat.unsqueeze(0)
-    # Convert action_sequence to program tensor for ProgramDecoder
-    from Bongard_LOGO_Baselines.datasets.shape_program import prog_str2prog_idx
-    # Assume positive_examples[0] is the query action sequence
-    query_action_sequence = positive_examples[0] if isinstance(positive_examples[0], list) else [positive_examples[0]]
-    program_idx = prog_str2prog_idx(query_action_sequence)
-    query_program = torch.tensor(program_idx, dtype=torch.float32).unsqueeze(0).to(DEVICE)
-    meta_prob = bongard_model.infer(query_x, query_program)
-    # Compositional features: extract stroke primitives for each example
-    from src.Derive_labels.stroke_types import extract_modifier_from_stroke
-    from src.Derive_labels.stroke_types import _calculate_stroke_specific_features
-    comp_feats = []
-    for ex in positive_examples[:6]:
-        from src.Derive_labels.shape_utils import extract_shape_vertices
-        from src.Derive_labels.file_io import FileIO
-        if isinstance(ex, list) and len(ex) > 0 and isinstance(ex[0], list):
-            shape_infos = []
-            tsv_shape_labels = []
-            for shape_cmds in ex:
-                shape_vertices = extract_shape_vertices(shape_cmds)
-                shape_info = {'vertices': shape_vertices}
-                shape_infos.append(shape_info)
-                shape_labels = FileIO.get_shape_labels_and_attributes(shape_cmds, problem_name=problem_id)
-                tsv_shape_labels.append(shape_labels)
-        else:
-            shape_vertices = extract_shape_vertices(ex)
-            shape_info = {'vertices': shape_vertices}
-            shape_infos = [shape_info]
-            tsv_shape_labels = [FileIO.get_shape_labels_and_attributes(ex, problem_name=problem_id)]
-        stroke_features = []
-        for idx, cmd in enumerate(ex):
-            context_dict = {'problem_id': problem_id}
-            primitive = None
+
+        # ...existing code for feature extraction and record creation...
+        support_feats = []
+        support_labels = []
+        parser = ComprehensiveNVLabsParser()
+        import torchvision.transforms as transforms
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+        ])
+        from Bongard_LOGO.Bongard_LOGO_Baselines.datasets.shape_program import prog_str2prog_idx
+        for ex in positive_examples[:6]:
+            img_np = parser.process_action_commands_to_image(ex, problem_id)
+            if img_np.ndim == 3 and img_np.shape[2] == 3:
+                img_np = np.dot(img_np[...,:3], [0.2989, 0.5870, 0.1140]).astype(np.uint8)
+            elif img_np.ndim == 2:
+                img_np = img_np.astype(np.uint8)
+            img_tensor = transform(img_np).unsqueeze(0).to(DEVICE)
+            query_action_sequence = ex if isinstance(ex, list) else [ex]
+            program_idx = prog_str2prog_idx(query_action_sequence)
+            program_tensor = torch.tensor(program_idx, dtype=torch.float32).unsqueeze(0).to(DEVICE)
+            with torch.no_grad():
+                embedding = bongard_model.model.encoder(img_tensor)
+            logger.info(f"[MODEL FEATURE EXTRACTION] Problem {problem_id} Positive Example: {ex}\nExtracted Embedding: {embedding}")
+            support_feats.append(embedding.squeeze().cpu())
+            support_labels.append(1)
+            del img_tensor, embedding, program_tensor, img_np
+            torch.cuda.empty_cache()
+        for ex in negative_examples[:6]:
+            img_np = parser.process_action_commands_to_image(ex, problem_id)
+            if img_np.ndim == 3 and img_np.shape[2] == 3:
+                img_np = np.dot(img_np[...,:3], [0.2989, 0.5870, 0.1140]).astype(np.uint8)
+            elif img_np.ndim == 2:
+                img_np = img_np.astype(np.uint8)
+            img_tensor = transform(img_np).unsqueeze(0).to(DEVICE)
+            query_action_sequence = ex if isinstance(ex, list) else [ex]
+            program_idx = prog_str2prog_idx(query_action_sequence)
+            program_tensor = torch.tensor(program_idx, dtype=torch.float32).unsqueeze(0).to(DEVICE)
+            with torch.no_grad():
+                embedding = bongard_model.model.encoder(img_tensor)
+            logger.info(f"[MODEL FEATURE EXTRACTION] Problem {problem_id} Negative Example: {ex}\nExtracted Embedding: {embedding}")
+            support_feats.append(embedding.squeeze().cpu())
+            support_labels.append(0)
+            del img_tensor, embedding, program_tensor, img_np
+            torch.cuda.empty_cache()
+        support_x = torch.stack(support_feats)
+        support_y = torch.tensor(support_labels)
+        img_np = parser.process_action_commands_to_image(positive_examples[0], problem_id)
+        if img_np.ndim == 3 and img_np.shape[2] == 3:
+            img_np = np.dot(img_np[...,:3], [0.2989, 0.5870, 0.1140]).astype(np.uint8)
+        elif img_np.ndim == 2:
+            img_np = img_np.astype(np.uint8)
+        query_x = transform(img_np).unsqueeze(0).to(DEVICE)
+        query_action_sequence = positive_examples[0] if isinstance(positive_examples[0], list) else [positive_examples[0]]
+        program_idx = prog_str2prog_idx(query_action_sequence)
+        query_program = torch.tensor(program_idx, dtype=torch.float32).unsqueeze(0).to(DEVICE)
+        meta_prob = bongard_model.infer(query_x, query_program)
+        logger.info(f"[MODEL META PROB] Problem {problem_id} meta_prob: {meta_prob}")
+        from src.Derive_labels.stroke_types import extract_modifier_from_stroke
+        from src.Derive_labels.stroke_types import _calculate_stroke_specific_features
+        comp_feats = []
+        for ex in positive_examples[:6]:
+            from src.Derive_labels.shape_utils import extract_shape_vertices
             if isinstance(ex, list) and len(ex) > 0 and isinstance(ex[0], list):
-                for shape_idx, shape_cmds in enumerate(ex):
-                    if cmd in shape_cmds:
-                        primitive = _calculate_stroke_specific_features(cmd, idx, context=context_dict, parent_shape_vertices=shape_infos[shape_idx]['vertices'])
-                        break
+                shape_infos = []
+                tsv_shape_labels = []
+                for shape_cmds in ex:
+                    shape_vertices = extract_shape_vertices(shape_cmds)
+                    shape_info = {'vertices': shape_vertices}
+                    shape_infos.append(shape_info)
+                    shape_labels = None
+                    tsv_shape_labels.append(shape_labels)
             else:
+                shape_vertices = extract_shape_vertices(ex)
+                shape_info = {'vertices': shape_vertices}
+                shape_infos = [shape_info]
+                tsv_shape_labels = None
+            if isinstance(ex, list) and len(ex) > 0 and isinstance(ex[0], list):
+                stroke_cmds = [cmd for sublist in ex for cmd in sublist]
+            else:
+                stroke_cmds = ex
+            stroke_features = []
+            for idx, cmd in enumerate(stroke_cmds):
+                context_dict = {'problem_id': problem_id}
                 primitive = _calculate_stroke_specific_features(cmd, idx, context=context_dict, parent_shape_vertices=shape_info['vertices'])
-            if primitive is not None:
-                if 'embedding' in primitive and hasattr(primitive['embedding'], 'tolist'):
-                    primitive['embedding'] = primitive['embedding'].tolist()
-                stroke_features.append(primitive)
-        logger.info(f"[STROKE FEATURE EXTRACTION] Problem {problem_id} Example: {ex}\nExtracted Features: {stroke_features}")
-        comp_feat = _calculate_composition_features([cmd for cmd in ex], context={'problem_id': problem_id, 'shape_info': shape_infos[0] if shape_infos else None})
-        comp_feat['stroke_features'] = stroke_features
-        comp_feat['tsv_shape_labels'] = tsv_shape_labels
-        comp_feats.append(comp_feat)
-        # Internal consistency metric
+                if primitive is not None:
+                    if 'embedding' in primitive and hasattr(primitive['embedding'], 'tolist'):
+                        primitive['embedding'] = primitive['embedding'].tolist()
+                    stroke_features.append(primitive)
+            logger.info(f"[STROKE FEATURE EXTRACTION] Problem {problem_id} Example: {ex}\nExtracted Features: {stroke_features}")
+            comp_feat = _calculate_composition_features([cmd for cmd in ex], context={'problem_id': problem_id, 'shape_info': shape_infos[0] if shape_infos else None})
+            comp_feat['stroke_features'] = stroke_features
+            comp_feat['tsv_shape_labels'] = tsv_shape_labels
+            comp_feats.append(comp_feat)
         consistency = check_internal_consistency([f.tolist() for f in support_feats])
         metrics = {'consistency': consistency}
         monitor.log(problem_id, [f.tolist() for f in support_feats], metrics)
-        # Continuous learning buffer
         learning_buffer.append({
             'support_x': support_x,
             'support_y': support_y,
             'query_x': query_x
         })
         if len(learning_buffer) >= update_threshold:
-            # Example: update model incrementally (pseudo-code, adapt as needed)
-            # for task in learning_buffer:
-            #     fast_weights = bongard_model.model.inner_update(task['support_x'], task['support_y'])
-            #     loss = bongard_model.model.outer_update(task['query_x'], torch.tensor([1]), fast_weights)
-            #     bongard_model.model.zero_grad()
-            #     loss.backward()
-            #     bongard_model.model.optimizer.step()
             learning_buffer.clear()
-        # Combine all
         record = {
             'problem_id': problem_id,
-            'emergent_concepts': {f'pos_{i}': v for i,v in enumerate(support_pos_features)} | {f'neg_{i}': v for i,v in enumerate(support_neg_features)},
+            'support_features': [f.tolist() for f in support_feats],
+            'support_labels': support_labels,
             'meta_prob': meta_prob,
             'compositional': {f'comp_{i}': v for i,v in enumerate(comp_feats)},
             'metrics': metrics
         }
-        # Scene graph formatting
-        record['scene_graph'] = sg_formatter.format(record)
-        # TSV validation (dual, automated)
-        record['validation'] = {}
-        if validator1:
-            record['validation']['primary'] = validator1.validate(problem_id, record)
-        if validator2:
-            record['validation']['secondary'] = validator2.validate(problem_id, record)
         derived_records.append(record)
+        processed_count += 1
+        logger.info(f"[SUMMARY] Processed {processed_count} problems so far.")
 
-    import numpy as np
     def convert_ndarray(obj):
         if isinstance(obj, dict):
             return {k: convert_ndarray(v) for k, v in obj.items()}
@@ -350,10 +364,10 @@ def main():
         else:
             return obj
 
+    logger.info(f"[FINAL SUMMARY] Total processed problems: {processed_count}")
     logger.info(f"Writing derived labels to {args.output}")
     with open(args.output, 'w') as f:
         json.dump(convert_ndarray(derived_records), f, indent=2)
-    # Save performance monitor data
     monitor.save('output/performance_monitor.json')
     logger.info("Finished writing derived labels and performance metrics.")
 

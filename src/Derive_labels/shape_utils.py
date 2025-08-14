@@ -1,15 +1,30 @@
-from typing import List, Tuple
+import numpy as np
+def simulate_simplicity(vertices, min_dist=1e-2, perturb_scale=1e-1):
+    """
+    Perturb collinear or degenerate points to avoid geometric issues in shape rendering.
+    This is a minimal implementation; you can improve it for your needs.
+    """
+    arr = np.array(vertices)
+    if arr.shape[0] < 3:
+        return vertices
+    # Add small noise to each vertex
+    noise = np.random.normal(0, 1e-3, arr.shape)
+    arr = arr + noise
+    return [tuple(v) for v in arr]
+
+import math
+import numpy as np
+from typing import List, Tuple, Dict
+from shapely.geometry import MultiPoint, Polygon
 
 def extract_shape_vertices(action_commands: List[str]) -> List[Tuple[float, float]]:
     """
     Replay LOGO-style action commands and return a list of (x, y) vertices.
-    Assumes turtle starts at (0,0) facing right (0 degrees).
-    Supports 'line' and 'arc' commands with modifiers and normalized params.
+    Supports 'line' and 'arc' commands with normalized params.
     """
-    import math
     vertices = []
     x, y = 0.0, 0.0
-    heading = 0.0  # in degrees, 0 = right
+    heading = 0.0
     vertices.append((x, y))
     for cmd in action_commands:
         parts = cmd.split('_')
@@ -22,62 +37,166 @@ def extract_shape_vertices(action_commands: List[str]) -> List[Tuple[float, floa
         if stroke_class == 'line':
             length = float(param_parts[0]) if param_parts else 0.5
             angle = float(param_parts[1]) if len(param_parts) > 1 else 0.0
-            # Move turtle forward by length in current heading
             rad = math.radians(heading)
             dx = length * math.cos(rad)
             dy = length * math.sin(rad)
             x += dx
             y += dy
             vertices.append((x, y))
-            # Optionally turn by angle
-            heading += angle * 360.0  # normalized angle
+            heading += angle * 360.0
         elif stroke_class == 'arc':
-            first_params = param_parts[0].split('_') if param_parts else ['0.5', '0.5']
-            radius = float(first_params[0]) if first_params else 0.5
-            span = float(first_params[1]) if len(first_params) > 1 else 0.25
-            angle = float(param_parts[1]) if len(param_parts) > 1 else 0.5
-            # Approximate arc by small segments
+            # Parse arc parameters, interpolate between start and end radius if two values are present
+            if param_parts:
+                if '_' in param_parts[0]:
+                    radius_parts = param_parts[0].split('_')
+                    try:
+                        radius_start = float(radius_parts[0])
+                        radius_end = float(radius_parts[1]) if len(radius_parts) > 1 else radius_start
+                    except ValueError:
+                        radius_start = radius_end = 0.5
+                else:
+                    try:
+                        radius_start = radius_end = float(param_parts[0])
+                    except ValueError:
+                        radius_start = radius_end = 0.5
+            else:
+                radius_start = radius_end = 0.5
+            span = float(param_parts[1]) if len(param_parts) > 1 else 0.25
             arc_points = 10
             for i in range(arc_points):
-                theta = heading + (span * 360.0) * (i / arc_points)
+                # Interpolate radius for each arc point
+                t = i / (arc_points - 1) if arc_points > 1 else 0
+                radius_val = radius_start + t * (radius_end - radius_start)
+                theta = heading + (span * 360.0) * t
                 rad = math.radians(theta)
-                px = x + radius * math.cos(rad)
-                py = y + radius * math.sin(rad)
+                px = x + radius_val * math.cos(rad)
+                py = y + radius_val * math.sin(rad)
                 vertices.append((px, py))
-            # Move turtle to end of arc
             heading += span * 360.0
             x, y = vertices[-1]
     return vertices
-# --- Symbolic, compositional, and context-aware concept extraction functions ---
-from typing import List
-def extract_symbolic_concepts_from_actions(action_sequence):
+    def extract_topological_features(action_sequence: List[str]) -> np.ndarray:
+        features = []
+        for cmd in action_sequence:
+            parts = cmd.split('_')
+            if len(parts) < 2:
+                features.extend([0, 0, 0])
+                continue
+            stroke_class = parts[0]
+            param_str = '_'.join(parts[2:]) if len(parts) > 2 else '0.5-0.5'
+            param_parts = param_str.split('-')
+            if stroke_class == 'arc':
+                # Robustly handle multi-parameter arcs, always produce three values
+                if param_parts:
+                    if '_' in param_parts[0]:
+                        radius_parts = param_parts[0].split('_')
+                        try:
+                            radius_start = float(radius_parts[0])
+                            radius_end = float(radius_parts[1]) if len(radius_parts) > 1 else radius_start
+                        except ValueError:
+                            radius_start = radius_end = 0.5
+                    else:
+                        try:
+                            radius_start = radius_end = float(param_parts[0])
+                        except ValueError:
+                            radius_start = radius_end = 0.5
+                else:
+                    radius_start = radius_end = 0.5
+                try:
+                    span = float(param_parts[1]) if len(param_parts) > 1 else 0.25
+                except ValueError:
+                    span = 0.25
+                features.extend([radius_start, radius_end, span])
+            else:
+                # For lines and others, always produce two values, pad with zero for consistency
+                try:
+                    val1 = float(param_parts[0]) if param_parts else 0.5
+                except ValueError:
+                    val1 = 0.5
+                try:
+                    val2 = float(param_parts[1]) if len(param_parts) > 1 else 0.0
+                except ValueError:
+                    val2 = 0.0
+                features.extend([val1, val2, 0])
+        return np.array(features)
+
+def extract_symbolic_concepts_from_actions(action_sequence: List[str]) -> Dict:
     """
-    Extract abstract symbolic concepts from a LOGO action sequence.
-    Returns a dict of high-level concept attributes (e.g., convexity, symmetry, containment).
+    Extract abstract symbolic concepts from a LOGO action sequence using geometric and graph-based analysis.
+    Returns a dict of high-level concept attributes (convexity, symmetry, containment, stroke types, compositional rules).
     """
+    vertices = extract_shape_vertices(action_sequence)
     concepts = {}
-    # Example symbolic extraction logic
-    concepts['convexity'] = detect_convex_pattern(action_sequence)
-    concepts['symmetry'] = detect_symmetry_pattern(action_sequence)
-    concepts['containment'] = detect_containment_pattern(action_sequence)
+    concepts['convexity'] = compute_convexity(vertices)
+    concepts['symmetry'] = compute_symmetry(vertices)
+    concepts['containment'] = compute_containment(vertices)
     concepts['stroke_types'] = extract_stroke_types(action_sequence)
     concepts['compositional_rules'] = extract_compositional_rules(action_sequence)
+
+    # Add robust action signature parsing for logging and feature extraction
+    action_signatures = []
+    for cmd in action_sequence:
+        parts = cmd.split('_')
+        if len(parts) < 2:
+            # For malformed commands, pad with zeros for arc, or (0,0) for line
+            action_signatures.append((0.0, 0.0, 0.0))
+            continue
+        stroke_class = parts[0]
+        param_str = '_'.join(parts[2:]) if len(parts) > 2 else '0.5-0.5'
+        param_parts = param_str.split('-')
+        if stroke_class == 'arc':
+            # Always return a tuple of three values for arc commands
+            if param_parts:
+                if '_' in param_parts[0]:
+                    radius_parts = param_parts[0].split('_')
+                    try:
+                        radius_start = float(radius_parts[0])
+                        radius_end = float(radius_parts[1]) if len(radius_parts) > 1 else radius_start
+                    except ValueError:
+                        radius_start = radius_end = 0.5
+                else:
+                    try:
+                        radius_start = radius_end = float(param_parts[0])
+                    except ValueError:
+                        radius_start = radius_end = 0.5
+            else:
+                radius_start = radius_end = 0.5
+            try:
+                span = float(param_parts[1]) if len(param_parts) > 1 else 0.25
+            except ValueError:
+                span = 0.25
+            # Use tuple of (radius_start, radius_end, span) for signature
+            action_signatures.append((radius_start, radius_end, span))
+        else:
+            # For lines and others, always return a tuple of two values
+            try:
+                val1 = float(param_parts[0]) if param_parts else 0.5
+            except ValueError:
+                val1 = 0.5
+            try:
+                val2 = float(param_parts[1]) if len(param_parts) > 1 else 0.0
+            except ValueError:
+                val2 = 0.0
+            action_signatures.append((val1, val2))
+    concepts['action_signatures'] = action_signatures
     return concepts
 
-def extract_problem_level_features(positive_examples, negative_examples):
+def extract_problem_level_features(positive_examples: List[List[str]], negative_examples: List[List[str]]) -> List:
     """
     Extract discriminative features by comparing positive and negative examples at the problem level.
     Returns a list of consistent concept patterns.
     """
     discriminative_patterns = []
     for pos_actions, neg_actions in zip(positive_examples, negative_examples):
-        pattern_diff = compare_action_patterns(pos_actions, neg_actions)
+        pos_concepts = extract_symbolic_concepts_from_actions(pos_actions)
+        neg_concepts = extract_symbolic_concepts_from_actions(neg_actions)
+        pattern_diff = {k: pos_concepts[k] for k in pos_concepts if pos_concepts[k] != neg_concepts.get(k)}
         discriminative_patterns.append(pattern_diff)
-    return find_consistent_concept(discriminative_patterns)
+    return discriminative_patterns
 
-def analyze_action_structure(action_sequence):
+def analyze_action_structure(action_sequence: List[str]) -> Dict:
     """
-    Analyze compositional structure of action programs.
+    Analyze compositional structure of action programs using pattern mining and hierarchical analysis.
     Returns a dict with sequence patterns, hierarchical structure, and compositional rules.
     """
     return {
@@ -86,70 +205,67 @@ def analyze_action_structure(action_sequence):
         'compositional_rules': extract_compositional_rules(action_sequence)
     }
 
-# --- Symbolic concept extraction helpers (stubs, to be implemented as needed) ---
-def detect_convex_pattern(action_sequence):
-    # Placeholder: implement symbolic convexity detection
-    return 'abstract_convex' if 'convex' in str(action_sequence) else 'not_convex'
-
-def detect_symmetry_pattern(action_sequence):
-    # Placeholder: implement symbolic symmetry detection
-    return 'symmetric' if 'symmetry' in str(action_sequence) else 'not_symmetric'
-
-def detect_containment_pattern(action_sequence):
-    # Placeholder: implement symbolic containment detection
-    return 'contains' if 'contain' in str(action_sequence) else 'not_contained'
-
-def extract_stroke_types(action_sequence):
-    # Placeholder: extract stroke types from action sequence
-    return ['line' if 'line' in str(action_sequence) else 'arc']
-
-def extract_compositional_rules(action_sequence):
-    # Placeholder: extract compositional rules from action sequence
-    return ['rule1', 'rule2']
-
-def compare_action_patterns(pos_actions, neg_actions):
-    # Placeholder: compare positive and negative action patterns
-    return {'difference': str(pos_actions) + ' vs ' + str(neg_actions)}
-
-def find_consistent_concept(discriminative_patterns):
-    # Placeholder: find consistent concept from patterns
-    return {'consistent_concept': discriminative_patterns}
-
-def find_repeating_patterns(action_sequence):
-    # Placeholder: find repeating patterns in action sequence
-    return ['repeat1', 'repeat2']
-
-def build_action_tree(action_sequence):
-    # Placeholder: build hierarchical tree from action sequence
-
-    return {'tree': 'hierarchy'}
-
-def open_stroke_convexity(vertices: List[tuple]) -> float:
-    """Convexity for open polylines: count sign changes in turn angles."""
-    import numpy as np
-    import logging
-    logger = logging.getLogger(__name__)
+def compute_convexity(vertices: List[Tuple[float, float]]) -> float:
     if not vertices or len(vertices) < 3:
-        logger.info("Convexity: <3 vertices, returning 0.0 (degenerate)")
         return 0.0
     arr = np.array(vertices)
-    from shapely.geometry import MultiPoint
-    try:
-        hull = MultiPoint(arr).convex_hull
-        hull_area = hull.area if hasattr(hull, 'area') else 0.0
-        poly_area = 0.0
-        if len(vertices) >= 3:
-            from shapely.geometry import Polygon
-            poly = Polygon(vertices)
-            poly_area = poly.area if poly.is_valid else 0.0
-        if hull_area > 0 and poly_area > 0:
-            ratio = float(poly_area / hull_area)
-            logger.info(f"Convexity: poly_area={poly_area:.4f}, hull_area={hull_area:.4f}, ratio={ratio:.4f}")
-            return ratio
-        else:
-            logger.info(f"Convexity: hull_area={hull_area:.4f}, poly_area={poly_area:.4f}, returning 0.0 (degenerate or fallback)")
-            return 0.0
+    hull = MultiPoint(arr).convex_hull
+    hull_area = hull.area if hasattr(hull, 'area') else 0.0
+    poly_area = 0.0
+    if len(vertices) >= 3:
+        poly = Polygon(vertices)
+        poly_area = poly.area if poly.is_valid else 0.0
+    if hull_area > 0 and poly_area > 0:
+        return float(poly_area / hull_area)
+    return 0.0
 
-    except Exception as e:
-        logger.error(f"Convexity: Exception occurred - {e}")
+def compute_symmetry(vertices: List[Tuple[float, float]]) -> float:
+    # Example: symmetry score by comparing mirrored halves
+    if not vertices or len(vertices) < 3:
         return 0.0
+    arr = np.array(vertices)
+    mid = len(arr) // 2
+    left = arr[:mid]
+    right = arr[-mid:][::-1]
+    if len(left) != len(right):
+        return 0.0
+    return float(np.mean(np.linalg.norm(left - right, axis=1)))
+
+def compute_containment(vertices: List[Tuple[float, float]]) -> int:
+    # Example: containment as area ratio threshold
+    if not vertices or len(vertices) < 3:
+        return 0
+    poly = Polygon(vertices)
+    return int(poly.is_valid and poly.area > 0)
+
+def extract_stroke_types(action_sequence: List[str]) -> List[str]:
+    types = set()
+    for cmd in action_sequence:
+        parts = cmd.split('_')
+        if parts:
+            types.add(parts[0])
+    return list(types)
+
+def extract_compositional_rules(action_sequence: List[str]) -> List[str]:
+    # Example: mine frequent n-grams as compositional rules
+    n = 2
+    rules = set()
+    for i in range(len(action_sequence) - n + 1):
+        rule = tuple(action_sequence[i:i+n])
+        rules.add(str(rule))
+    return list(rules)
+
+def find_repeating_patterns(action_sequence: List[str]) -> List[str]:
+    # Example: find repeating subsequences
+    from collections import Counter
+    counts = Counter(action_sequence)
+    return [k for k, v in counts.items() if v > 1]
+
+def build_action_tree(action_sequence: List[str]) -> Dict:
+    # Example: build a simple hierarchy by grouping by stroke type
+    tree = {}
+    for cmd in action_sequence:
+        parts = cmd.split('_')
+        if parts:
+            tree.setdefault(parts[0], []).append(cmd)
+    return tree
