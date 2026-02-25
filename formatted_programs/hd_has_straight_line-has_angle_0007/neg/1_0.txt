@@ -1,4 +1,0 @@
-arc_triangle_0.500_0.604-0.500
-arc_square_0.500_0.396-0.167
-arc_zigzag_0.500_0.396-0.208
-arc_triangle_0.500_0.604-0.833

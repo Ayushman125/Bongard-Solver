@@ -1,6 +1,0 @@
-line_circle_0.361-0.500
-line_circle_0.361-0.313
-arc_zigzag_0.500_0.648-0.696
-line_zigzag_0.361-0.696
-line_normal_0.361-0.313
-arc_circle_0.500_0.648-0.696

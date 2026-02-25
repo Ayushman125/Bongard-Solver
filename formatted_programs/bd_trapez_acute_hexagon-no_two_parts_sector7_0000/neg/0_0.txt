@@ -1,6 +1,0 @@
-line_normal_0.500-0.500
-line_normal_0.316-0.551
-line_normal_0.316-0.898
-line_normal_0.500-0.551
-line_normal_0.510-0.531
-line_normal_0.510-0.937

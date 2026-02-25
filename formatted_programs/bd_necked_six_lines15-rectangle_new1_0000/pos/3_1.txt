@@ -1,4 +1,0 @@
-line_square_1.000-0.500
-line_normal_0.800-0.750
-line_normal_1.000-0.750
-line_zigzag_0.800-0.750

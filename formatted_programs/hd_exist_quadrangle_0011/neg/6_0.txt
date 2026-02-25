@@ -1,4 +1,0 @@
-line_normal_0.700-0.500
-arc_normal_0.500_0.352-0.898
-line_normal_0.700-0.898
-arc_normal_0.500_0.625-0.102

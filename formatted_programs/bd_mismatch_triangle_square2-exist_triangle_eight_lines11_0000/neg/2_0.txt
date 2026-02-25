@@ -1,6 +1,0 @@
-line_triangle_0.700-0.500
-line_triangle_0.990-0.875
-line_normal_0.700-0.875
-line_normal_0.300-0.167
-line_normal_0.300-0.833
-line_normal_0.300-0.833

@@ -1,3 +1,0 @@
-line_circle_1.000-0.500
-line_normal_1.000-0.833
-arc_zigzag_0.500_0.625-0.833

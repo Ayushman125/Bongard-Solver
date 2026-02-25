@@ -1,5 +1,0 @@
-line_zigzag_0.360-0.500
-line_triangle_0.360-0.813
-line_circle_0.860-0.692
-line_normal_0.600-0.151
-line_circle_0.860-0.151

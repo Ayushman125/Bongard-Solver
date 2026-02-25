@@ -1,4 +1,0 @@
-line_triangle_1.000-0.500
-line_triangle_1.000-0.750
-line_zigzag_1.000-0.750
-line_triangle_1.000-0.750
