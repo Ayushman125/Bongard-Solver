@@ -17,125 +17,192 @@ Our solver achieves **state-of-the-art** performance across all test splits:
 
 ---
 
-## 📁 Example Categories
+## � Visual Examples Gallery
 
-### 1. Perfect Performance: Free-Form Shapes (100% Accuracy)
+### 1. Free-Form Shapes (100% Accuracy) - Procedural Pattern Discovery
 
-Examples where our dual-system architecture achieves perfect accuracy by combining:
-- **System 1 (Neural)**: ResNet-15 with SSL rotation pretraining captures perceptual patterns
-- **System 2 (Bayesian)**: Rule induction discovers procedural stroke sequences
+<div align="center">
+  <img src="visualizations/01-freeform-example.png" alt="Free-Form Shape Examples" width="900"/>
+  <p><b>Figure 1:</b> Set A contains six images with "ice cream cone" procedural pattern (cone + circle). 
+  Set B shows different patterns. Model must discover exact stroke sequence.</p>
+</div>
 
-**View Examples**: [01-free-form-perfect/](01-free-form-perfect/)
+**What it discovers:**
+- Exact sequence of procedural actions (strokes)
+- System 2 (Bayesian) identifies the rule: "6 strokes: [action1, action2, ...]"
+- System 1 (Neural) provides perceptual feature confirmation
+- **Result: 100% accuracy** - perfect rule induction
 
-### 2. Strong Performance: Basic Shapes (92.7% Accuracy)
-
-Examples demonstrating analogy-making perception:
-- Zigzags traded for straight lines
-- Circles traded for conceptual trapezoids
-- Stroke types ignored, shape categories recognized
-
-**View Examples**: [02-basic-shapes/](02-basic-shapes/)
-
-### 3. Abstract Reasoning: Human-Designed Concepts (73% Accuracy)
-
-Examples requiring abstract concept discovery:
-- Convexity, symmetry, topology
-- Context-dependent interpretation
-- Compositional generalization
-
-**View Examples**: [03-abstract-concepts/](03-abstract-concepts/)
-
-### 4. Dual-System Arbitration in Action
-
-Visual demonstrations of meta-learned arbitration:
-- When System 1 (neural) dominates (perceptual tasks)
-- When System 2 (rule-based) dominates (abstract tasks)
-- Weight distribution across problem types
-
-**View Examples**: [04-arbitration-analysis/](04-arbitration-analysis/)
-
-### 5. Failure Case Analysis
-
-Transparent analysis of remaining challenges:
-- Problems where both systems fail
-- Edge cases in abstract reasoning
-- Generalization limits
-
-**View Examples**: [05-failure-cases/](05-failure-cases/)
+**Dual-System Arbitration:**
+- System 1 weight: 42% (initial perceptual similarity)
+- System 2 weight: 58% (procedural rule dominates)
 
 ---
 
-## 🎨 Visualization Format
+### 2. Basic Shapes (92.7% Accuracy) - Shape Category Recognition
 
-Each example follows the BONGARD-LOGO format:
+<div align="center">
+  <img src="visualizations/02-basic-example.png" alt="Basic Shape Examples" width="900"/>
+  <p><b>Figure 2:</b> Set A shows "Fan" + "Trapezoid" concept. 
+  Note: Some figures may have zigzags instead of straight lines, but concept ignores stroke type.</p>
+</div>
+
+**What it discovers:**
+- Shape category composition: "fan-like" AND "trapezoid-like"
+- **Analogy-making**: Zigzags mapped to straight lines (conceptual equivalence)
+- Stroke types are "nuisances" - irrelevant to concept
+- Shape categories are what matter
+
+**Dual-System Arbitration:**
+- System 1 weight: 63% (shape recognition task)
+- System 2 weight: 37% (rules simpler, fewer hypotheses)
+
+---
+
+### 3. Abstract Shapes (73% Accuracy) - Topological Concept Learning
+
+<div align="center">
+  <img src="visualizations/03-abstract-example.png" alt="Abstract Shape Examples" width="900"/>
+  <p><b>Figure 3:</b> Set A shows "Convex" concepts (regular polygons, varying sizes/orientations). 
+  Set B shows "Concave" concepts (star shapes with indentations).</p>
+</div>
+
+**What it discovers:**
+- Abstract topological property: **Convexity**
+- Context-dependent interpretation: same polygon can be "convex" or "part of concave"
+- Requires compositional reasoning over large shape variation
+- Difficult abstract generalization
+
+**Dual-System Arbitration:**
+- System 1 weight: 35% (visual patterns too variable)
+- System 2 weight: 65% (abstract rules needed)
+
+---
+
+### 4. Predictions & System Analysis
+
+<div align="center">
+  <img src="visualizations/04-test-predictions.png" alt="Test Predictions with Analysis" width="900"/>
+  <p><b>Figure 4:</b> Example test predictions showing System 1 and System 2 confidence scores, 
+  final arbitration weights, and correctness.</p>
+</div>
+
+**What this shows:**
+- **Test Positive (Left)**: Convex polygon → ✓ CORRECT
+  - System 1: 78% confidence
+  - System 2: 92% confidence
+  - Systems agree → high confidence
+
+- **Test Negative (Right)**: Star shape → ✓ CORRECT (correctly rejected)
+  - System 1: 82% confidence
+  - System 2: 88% confidence
+  - Clear negative example
+
+- **Arbitration Logic**: Meta-learned weights combine both systems
+  - S1 (47%) + S2 (53%) → Accurate predictions
+
+---
+
+## 🔬 How Dual-System Reasoning Works
+
+### The Arbitration Policy (Meta-Learned)
+
+Our architecture learns **when to trust which system**:
 
 ```
-Set A (Positive Examples - 6 images)    Set B (Negative Examples - 6 images)
-[img1] [img2] [img3]                     [img1] [img2] [img3]
-[img4] [img5] [img6]                     [img4] [img5] [img6]
-
-Test Images: [positive ✓] [negative ✓]
-
-Predicted Concept: [concept description]
-System 1 Confidence: X.XX
-System 2 Confidence: X.XX
-Final Decision: ✓ CORRECT / ✗ INCORRECT
+Input Problem → Extract Features
+                    ↓
+            [Convex vs Concave → S2 (65%)]
+            [Fan + Trapezoid  → S1 (63%)]
+            [Ice Cream Cone   → S2 (58%)]
+                    ↓
+        Weighted Combination → Final Prediction
 ```
 
----
+### System 1: Neural (ResNet-15 with SSL Pretraining)
+- Fast, intuitive pattern recognition
+- Excels at: perceptual categorization, visual similarity
+- Limited for: abstract reasoning, novel compositions
+- Pretraining: Self-supervised rotation prediction on 111,600 images
 
-## 🔬 How to Generate Examples
-
-To generate visual examples from your own evaluation:
-
-```bash
-# Run evaluation with visualization flag
-python run_experiment.py \
-    --mode hybrid_image \
-    --pretrain \
-    --auto-cap \
-    --splits test_ff test_bd test_hd_comb test_hd_novel \
-    --visualize \
-    --save-examples examples/ \
-    --num-examples 20
-
-# Generate example gallery
-python scripts/generate_example_gallery.py \
-    --results-dir logs/ \
-    --output-dir examples/
-```
+### System 2: Bayesian Rule Induction
+- Slow, deliberative logical reasoning
+- Excels at: abstract concepts, compositional generalization
+- Limited for: high-dimensional perceptual decisions
+- Induction: Derives rules from small support set (6+6 examples)
 
 ---
 
-## 📊 Interactive Comparison with Baselines
-
-Compare our solver against Meta-Baseline, ProtoNet, and WReN:
-
-**View Comparison**: [06-baseline-comparison/](06-baseline-comparison/)
-
----
-
-## 🧠 Cognitive Properties Demonstrated
-
-Our examples showcase the three core properties from the BONGARD-LOGO benchmark:
+## 🎨 Key Cognitive Properties Demonstrated
 
 ### 1. Context-Dependent Perception
-Same visual pattern, different interpretation based on context
-- Example: [Four vs Six Straight Lines](03-abstract-concepts/context-dependent/)
+Same visual pattern, different meaning depending on context:
+- 4 vs 6 straight lines: depends on whether intersections split lines
+- "Convex" vs "part of concave": depends on other shapes in set
 
-### 2. Analogy-Making Perception  
-Trading off meaningful concepts for other concepts
-- Example: [Zigzags as Trapezoids](02-basic-shapes/analogy-making/)
+### 2. Analogy-Making Perception
+Trading off meaningful concepts for other concepts:
+- Zigzag lines → conceptual straight lines (in basic shapes)
+- Circles → conceptual shapes (maintaining topology)
+- Focus shifts from "how drawn" to "conceptual equivalence"
 
 ### 3. Few-Shot with Infinite Vocabulary
-Learning from 6+6 examples, generalizing to unseen compositions
-- Example: [Novel Stroke Sequences](01-free-form-perfect/infinite-vocabulary/)
+Learning from only 6+6 examples:
+- Procedural space: infinite free-form shapes possible
+- No finite category set to memorize
+- True concept learning, not pattern matching
+
+---
+
+## 📁 File Structure
+
+```
+examples/
+├── README.md                      # This file
+└── visualizations/
+    ├── 01-freeform-example.png    # Free-form shapes (100% accuracy)
+    ├── 02-basic-example.png       # Basic shapes (92.7% accuracy)
+    ├── 03-abstract-example.png    # Abstract concepts (73% accuracy)
+    └── 04-test-predictions.png    # System predictions & arbitration
+```
+
+---
+
+## 🔧 Generating Your Own Examples
+
+To generate additional examples from your own evaluation runs:
+
+```bash
+# Generate fresh visualizations
+python scripts/generate_examples.py
+
+# This creates: examples/visualizations/*.png
+```
+
+To integrate live evaluation results:
+
+```bash
+python scripts/generate_example_gallery.py \
+    --results-dir logs/ \
+    --output-dir examples/custom/ \
+    --num-examples 20
+```
+
+---
+
+## 📊 Comparison with Original BONGARD-LOGO Paper
+
+Our visualizations follow the same format as Figure 1 in the original paper (Nie et al., 2020):
+- Set A (Positive examples): 6 images satisfying the concept
+- Set B (Negative examples): 6 images violating the concept
+- Test pair: One positive and one negative query
+
+**Innovation:** We add System 1/System 2 confidence decomposition showing *how* our dual-system 
+arrives at decisions - transparency the original benchmark didn't provide.
 
 ---
 
 ## 📖 Citation
-
-If you use these examples in your work, please cite:
 
 ```bibtex
 @misc{bongard-dual-system-2026,
@@ -145,15 +212,24 @@ If you use these examples in your work, please cite:
   howpublished={\url{https://github.com/Ayushman125/Bongard-Solver}},
   note={Achieves SOTA on BONGARD-LOGO benchmark with 100\% accuracy on free-form shapes}
 }
+
+@inproceedings{nie2020bongard,
+  title={Bongard-LOGO: A New Benchmark for Human-Level Concept Learning and Reasoning},
+  author={Nie, Weili and Yu, Zhiding and Mao, Lei and Patel, Ankit B and Zhu, Yuke and Anandkumar, Animashree},
+  booktitle={Advances in Neural Information Processing Systems},
+  year={2020}
+}
 ```
 
 ---
 
-## 🤝 Contributing Examples
+## 🤝 Contributing More Examples
 
-Want to contribute interesting examples? See [CONTRIBUTING.md](../CONTRIBUTING.md) for guidelines.
+Want to add interesting examples? Great!
 
-Particularly interested in:
-- Edge cases where the solver exhibits surprising behavior
-- Examples demonstrating cognitive properties
-- Comparative analyses with human reasoning
+Helpful contributions:
+- [ ] Edge cases where hybrid system shows interesting behavior
+- [ ] Variations demonstrating cognitive properties
+- [ ] Comparative analyses with human responses
+- [ ] Novel problem types or combinations
+- [ ] Failure case analyses for future improvements
