@@ -778,7 +778,7 @@ MIT License - see `LICENSE` for details.
 
 For questions, issues, or collaboration:
 - **GitHub Issues**: [Project Issues](https://github.com/yourusername/BongardSolver/issues)
-- **Email**: your.email@example.com
+- **Email**: ayushmansaini120@gamil.com
 
 ---
 
