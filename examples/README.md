@@ -47,27 +47,99 @@ Each PNG in `real_dataset/[ff|bd|hd]/` contains:
 
 ---
 
-## 🧠 Understanding the Benchmark Format
+## 🎨 Real Benchmark Examples with Analysis
 
-The BONGARD-LOGO format (from the original paper) tests one-shot concept learning:
+### Free-Form Shapes (FF) - 100% Solver Accuracy ⭐
 
-### Free-Form Shapes (FF) - 100% Solver Accuracy
+**From the Dataset:**
+
+![FF Example 1](real_dataset/ff/01_ff_nact5_0088.png)
+**One of 8 real free-form problems from the 3,600-problem FF split**
+
 - **Concept Space**: Procedural action programs (line/arc sequences)
-- **Example Pattern**: "Ice cream cone" = 6-stroke sequence
+- **Example Pattern**: Specific sequence of strokes (lines, arcs, angles)
 - **Challenge**: Infinite vocabulary from compositional strokes
-- **Solver Strength**: Perfect rule induction from support set
+- **Solver Strength**: Perfect rule induction from 6 support examples
+- **What Solver Does**: Discovers exact action program sequence that generates all positive images
+
+![FF Example 2](real_dataset/ff/02_ff_nact5_0285.png)
+
+![FF Example 3](real_dataset/ff/03_ff_nact7_0074.png)
+
+---
 
 ### Basic Shapes (BD) - 92.7% Solver Accuracy  
+
+**From the Dataset:**
+
+![BD Example 1](real_dataset/bd/01_bd_parallel_sector5-hat_sector8_0000.png)
+**One of 8 real basic shape problems from the 4,000-problem BD split**
+
 - **Concept Space**: 627 human-designed shape categories
-- **Example Pattern**: "Fan + Trapezoid" composition
-- **Challenge**: Analogy-making (ignore stroke type, recognize shape category)
-- **Solver Strength**: Strong shape category recognition
+- **Example Pattern**: Single or dual shape composition (e.g., "Fan + Trapezoid")
+- **Challenge**: Analogy-making (stroke type is "nuisance", only shape category matters)
+- **Solver Strength**: Strong shape category recognition and composition discovery
+- **What Solver Does**: Recognizes that zigzags/triangles/circles can render trapezoids or fans
+
+![BD Example 2](real_dataset/bd/02_bd_bala_four_intersect_circles6-no_two_parts_sector9_0000.png)
+
+![BD Example 3](real_dataset/bd/03_bd_inverse_quasi_sector73-open_arbitrary_arc2_0000.png)
+
+---
 
 ### Abstract Attributes (HD) - 73.0-73.4% Solver Accuracy
-- **Concept Space**: 25 geometric/topological attributes (convex, symmetric, etc.)
-- **Example Pattern**: "Convex" vs "Concave" across huge visual variations
-- **Challenge**: High-level abstraction despite appearance diversity
-- **Solver Weakness**: Difficult semantic abstraction (biggest gap from human expert)
+
+**From the Dataset:**
+
+![HD Example 1](real_dataset/hd/01_hd_has_three_straight_lines-has_obtuse_angle_0013.png)
+**One of 8 real abstract attribute problems from the 4,400-problem HD split**
+
+- **Concept Space**: 25 geometric/topological attributes (convex, symmetric, necked, etc.)
+- **Example Pattern**: "Convex" or "have_six_straight_lines" or attribute combinations
+- **Challenge**: High-level abstraction despite massive appearance diversity
+- **Solver Strength**: Compositional attribute reasoning on novel combinations
+- **Solver Weakness**: Difficult semantic abstraction (17.7% gap from human expert - hardest problem type)
+- **What Solver Does**: Abstracts away size/position/rotation to find topological invariants
+
+![HD Example 2](real_dataset/hd/02_hd_has_eight_straight_lines-exist_regular_0012.png)
+
+![HD Example 3](real_dataset/hd/03_hd_has_three_straight_lines-has_obtuse_angle_0015.png)
+
+---
+
+## 🧠 Understanding the Benchmark Format
+
+Each visualization shows the official BONGARD-LOGO format:
+
+**Format Structure:**
+- **Top Section (Images)**: Problem with Set A (positive, green) vs Set B (negative, red) examples
+- **Bottom Section (Analysis)**: Solver performance, architecture, and cognitive properties tested
+
+**Problem Statement:**
+Given Set A (6 images that satisfy a concept) and Set B (6 images that violate it), 
+identify the concept/rule that separates them. Binary classification task on test queries.
+
+---
+
+### More Real Examples
+
+**Additional Free-Form Examples:**
+
+![FF Example 4](real_dataset/ff/04_ff_nact5_0255.png)
+
+![FF Example 5](real_dataset/ff/05_ff_nact5_0183.png)
+
+**Additional Basic Shape Examples:**
+
+![BD Example 4](real_dataset/bd/04_bd_inverse_obtuse_hexagon-bird5_0000.png)
+
+![BD Example 5](real_dataset/bd/05_bd_inverse_asymm_dagger-unbala_two_intersect_circles3_0000.png)
+
+**Additional Abstract Attribute Examples:**
+
+![HD Example 4](real_dataset/hd/04_hd_has_five_straight_lines-has_line_crossing_0010.png)
+
+![HD Example 5](real_dataset/hd/05_hd_exist_quadrangle-symmetric_transposed_0019.png)
 
 ---
 
@@ -137,7 +209,27 @@ Learn novel concepts from unbounded space, given only 6 support images.
 | HD_Comb | Abstract Combined | 73.0% | 90.7% | -17.7% | Large gap on attribute combinations |
 | HD_Novel | Abstract Novel | 73.4% | 71.0% | **+2.4%** ✓ | First model to exceed amateur human on novel attributes! |
 
-### Comparison with Other SOTA Methods
+**All Real Examples Visualized:**
+
+![FF Example 6](real_dataset/ff/06_ff_nact5_0034.png)
+
+![FF Example 7](real_dataset/ff/07_ff_nact7_0137.png)
+
+![FF Example 8](real_dataset/ff/08_ff_nact8_0092.png)
+
+![BD Example 6](real_dataset/bd/06_bd_trans_arc_cup-two_mismatch_triangles2_0000.png)
+
+![BD Example 7](real_dataset/bd/07_bd_irregular_heptagon_0000.png)
+
+![BD Example 8](real_dataset/bd/08_bd_open_arc_line_arc6_0000.png)
+
+![HD Example 6](real_dataset/hd/06_hd_has_six_straight_lines-exist_triangle_0004.png)
+
+![HD Example 7](real_dataset/hd/07_hd_exist_regular-exist_triangle_0005.png)
+
+![HD Example 8](real_dataset/hd/08_hd_has_six_straight_lines-necked_0015.png)
+
+---
 
 | Method | FF | BD | HD |
 |--------|----|----|-----|
