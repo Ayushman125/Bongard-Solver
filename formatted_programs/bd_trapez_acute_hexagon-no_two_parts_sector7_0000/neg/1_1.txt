@@ -1,0 +1,9 @@
+line_circle_0.500-0.500
+arc_circle_0.500_0.667-0.750
+line_circle_0.500-0.750
+line_normal_0.400-0.083
+line_triangle_0.400-0.750
+line_triangle_0.566-0.875
+line_circle_0.566-0.250
+line_normal_0.400-0.875
+line_zigzag_0.400-0.750

@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Bongard Problem Schema",
+  "description": "Defines the structure for a Bongard problem input.",
+  "type": "object",
+  "properties": {
+    "problem_id": {
+      "type": "string",
+      "description": "Unique identifier for the problem."
+    },
+    "positive_examples": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique image identifier."
+          },
+          "image": {
+            "type": "string",
+            "description": "File path or base64 encoded image. Optional."
+          },
+          "logo_program": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "Symbolic LOGO command string."
+            },
+            "minItems": 1,
+            "description": "List of symbolic LOGO commands for this image. Required."
+          }
+        },
+        "required": ["logo_program"]
+      },
+      "minItems": 6
+    },
+    "negative_examples": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique image identifier."
+          },
+          "image": {
+            "type": "string",
+            "description": "File path or base64 encoded image. Optional."
+          },
+          "logo_program": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "Symbolic LOGO command string."
+            },
+            "minItems": 1,
+            "description": "List of symbolic LOGO commands for this image. Required."
+          }
+        },
+        "required": ["logo_program"]
+      },
+      "minItems": 6
+    }
+  },
+  "required": ["problem_id", "positive_examples", "negative_examples"]
+}

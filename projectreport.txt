@@ -1,0 +1,1096 @@
+________________________________________
+Phase 0: Foundation & System-1 Abstraction Layer (S1-AL)
+Objective & Scope
+Lay the sensory and orchestration groundwork under MVI-1 constraints. Deliver end-to-end solving on 50 puzzles with performance budgets relaxed ×2 for local hardware. Establish interface contracts, KPI infrastructure, and progressive integration testing to support downstream phases.
+Key Enhancements
+•	Interface Contract Freeze
+• Define and version S1-AL, TaskProfiler, CUDAStreamManager APIs by Week 2.
+• Enforce JSON/Protobuf schemas in CI for all new messages.
+•	Observability & KPI Dashboard
+• Deploy core KPI panels tracking end-to-end solve rate, per-module latencies (P50/P95), and resource utilization.
+• Configure automated alerts on latency regressions or drift thresholds.
+•	Progressive Integration Tests
+• Phase-slice test suite running on a 20-puzzle subset within a 5-minute budget.
+• End-to-end validation on 50 puzzles by Week 7, locking all interfaces.
+•	Domain-Invariant Feature Extraction
+• Physics proxies (COM, inertia tensors, support surfaces).
+• DriftMonitor stub for early OOD detection in S1 embeddings.
+•	Hybrid Commonsense KB Stub
+• ConceptNet-lite loader in src/system1_al.py.
+• .query(predicate) hook for social/intention reasoning.
+•	Profiling & Scheduling Instrumentation
+• integration/task_profiler.py and integration/adaptive_scheduler.py for kernel batching.
+• integration/cuda_stream_manager.py for double-buffered host-device transfers.
+•	Cross-Module Debug Dashboard
+• Single-pane UI correlating S1 outputs, scheduler logs, HIC events, and drift alerts.
+Modules & Responsibilities
+Module	Responsibility
+src/system1_al.py	S1-AL feature extractor with physics proxies and commonsense stub
+integration/task_profiler.py	Profiles per-kernel latency and data-transfer overheads
+integration/cuda_stream_manager.py	Double-buffered CUDA streams for overlap
+integration/adaptive_scheduler.py	Batches GPU/CPU tasks based on profiling insights
+integration/hic.py (extended)	Monitors hardware utilization and load-shedding policies
+integration/data_validator.py	Enforces JSON/Protobuf schemas in CI
+integration/debug_dashboard.py	Real-time correlation of events and performance metrics
+src/drift_monitor.py (stub)	Sliding-window drift detection on S1 embeddings
+Milestones & Timeline
+Week	Deliverable
+1–2	Freeze S1-AL, TaskProfiler, CUDAStreamManager interfaces; deploy minimal KPI dashboard
+3–4	Integrate AdaptiveScheduler into Resource Orchestrator; enable phase-slice tests (20 puzzles)
+5–6	Embed Hybrid Commonsense stub; add DriftMonitor; enforce CI schema and dependency checks
+7	Complete unit tests; stabilize end-to-end MVI-1 on 50 puzzles; lock all Phase 0 interfaces
+Testing & CI
+•	tests/test_system1.py – feature correctness, physics proxies, drift stub
+•	tests/test_task_profiler.py – latency logging accuracy
+•	tests/test_cuda_stream_manager.py – overlap behavior
+•	tests/test_adaptive_scheduler.py – batching decision logic
+•	tests/test_hic.py – event routing and load-shedding
+•	tests/test_data_validator.py – schema conformance
+•	tests/test_debug_dashboard.py – metric correlation integrity
+
+________________________________________
+Phase 1: Enhanced Perception & Neural-Symbolic Grounding
+Objective & Scope
+Complete MVI-1 on the 50-puzzle subset by integrating perception, symbol grounding, dynamic DSL evolution, and initial adversarial mining. Extend the KPI dashboard and integration tests to cover new modules and flows.
+Key Enhancements
+•	Hybrid Commonsense Fusion
+• Load and query ConceptNet-lite in src/physics_inference.py and src/cross_domain_reasoner.py.
+• Human-loop bootstrapping feeds new social/intention concepts back into the KB.
+•	Dynamic DSL & Meta-Grammar Stub
+• src/grammar_extender.py estimates coverage on held-out puzzles; proposes “diff_ratio” operators when < 80%.
+• Enforce near-deterministic sampling (τ = 0.3) for template induction, reserving τ > 1.0 for LLM calls.
+•	OOD-Aware Embedding Stubs
+• Hook in S1-AL for future adversarial domain-classifier integration.
+• DriftMonitor alerts on perception embedding shifts.
+•	Adversarial & Hard-Negative Mining
+• Physics-informed augmentations in data/hard_negative_miner.py.
+• CI tests verify diversity metrics and negative injection behavior.
+•	Profiling & Scheduling Continuity
+• Extend TaskProfiler and AdaptiveScheduler to src/image_augmentor.py and src/physics_inference.py.
+• CUDAStreamManager prefetches data for augmentation pipelines.
+•	CI-Driven Contracts & Dependency Checks
+• Add all Phase 1 modules to integration/data_validator.py.
+• Generate dependency-graph reports highlighting new couplings.
+Modules & Responsibilities
+Module	Responsibility
+src/image_augmentor.py (updated)	GPU-batched geometric and relational augmentations
+src/physics_inference.py (updated)	Batched COM, stability, affordance calculations; commonsense KB lookups
+src/commonsense_kb.py	Loader and embedding-based query API for ConceptNet-lite
+src/cross_domain_reasoner.py (updated)	Fuses physics proxies with commonsense predicates
+grounder/anytime_inference.py (updated)	Coarse/refine grounding under dynamic time budgets
+src/grammar_extender.py (updated)	Meta-Grammar generator stub with deterministic sampling
+src/quantifier_module.py	∀/∃ detection on repeated relations
+data/hard_negative_miner.py	Physics-informed adversarial sample miner
+integration/debug_dashboard.py	Perception and grounding metric panels
+integration/data_validator.py	CI-enforced schema validation for new modules
+Milestones & Timeline
+Week	Deliverable
+1–2	Wire TaskProfiler into ImageAugmentor and PhysicsInference; validate CUDAStreamManager overlap
+3–4	Embed Hybrid Commonsense KB with human-loop bootstrapping; integrate hard-negative miner
+5–6	Implement Meta-Grammar stub; run unsupervised grammar validation on held-out puzzles
+7	Achieve end-to-end MVI-1 on 50 puzzles with Phase 1 modules; finalize CI and dependency reports
+Testing & CI
+•	tests/test_augmentor.py – GPU-batched augmentations and latency profiling
+•	tests/test_physics_inference.py – physics proxy accuracy and KB queries
+•	tests/test_commonsense_kb.py – predicate query correctness
+•	tests/test_cross_domain_reasoner.py – fused reasoning output validation
+•	tests/test_anytime_inference.py – grounding under budget constraints
+•	tests/test_grammar_extender.py – coverage estimation and stub proposals
+•	tests/test_hard_negative_miner.py – adversarial sample diversity metrics
+•	tests/test_data_validator.py – schema conformance for Phase 1
+•	tests/test_debug_dashboard.py – new panels and metric integrations
+________________________________________
+This updated report captures both the original Phase 0/1 integrations and the critical success factors—interface contracts, KPI dashboard, and progressive integration tests—needed to support smooth scaling into later phases.
+
+
+Phase 1: Enhanced Perception & Neural-Symbolic Grounding
+Objective & Scope
+Deliver MVI-1 end-to-end solving on the 50-puzzle subset by integrating visual perception, symbol grounding, dynamic DSL evolution, and initial adversarial mining. Extend Phase 0’s KPI dashboard, integration tests, and schema validations to cover all new modules and data flows.
+Maintain a 2× relaxed performance budget on local hardware (Ryzen 7, 16 GB, RTX 3050 Ti) while ensuring robust CI-driven interface contracts and dependency checks.
+________________________________________
+Key Enhancements
+•	Hybrid Commonsense Fusion
+• Load and query ConceptNet-lite in src/physics_inference.py and src/cross_domain_reasoner.py.
+• Human-loop bootstrapping feeds new social/intention concepts back into the KB.
+•	Dynamic DSL & Meta-Grammar Stub
+• src/grammar_extender.py estimates grammar coverage on held-out puzzles; proposes diff_ratio operators when coverage < 80%.
+• Enforce near-deterministic sampling (τ = 0.3) for template induction; reserve τ > 1.0 for LLM-backed creative calls.
+•	OOD-Aware Embedding Stubs
+• Hook System-1 embeddings for future adversarial domain-classifier integration.
+• DriftMonitor alerts on perception embedding shifts.
+•	Adversarial & Hard-Negative Mining
+• Physics-informed augmentations in data/hard_negative_miner.py.
+• CI tests to verify diversity metrics and negative sample injection behavior.
+•	Profiling & Scheduling Continuity
+• Extend TaskProfiler and AdaptiveScheduler to src/image_augmentor.py and src/physics_inference.py.
+• CUDAStreamManager prefetches data for the augmentation pipelines.
+•	CI-Driven Contracts & Dependency Checks
+• Add all Phase 1 modules to integration/data_validator.py.
+• Generate automated dependency-graph reports highlighting new couplings.
+________________________________________
+Modules & Responsibilities
+Module	Responsibility
+src/image_augmentor.py	GPU-batched geometric and relational augmentations
+src/physics_inference.py	Batched COM, stability, affordance calculations; commonsense KB lookups
+src/commonsense_kb.py	Loader and embedding-based query API for ConceptNet-lite
+src/cross_domain_reasoner.py	Fuses physics proxies with commonsense predicates
+grounder/anytime_inference.py	Coarse/refine symbol grounding under dynamic time budgets
+src/grammar_extender.py	Meta-Grammar generator stub with deterministic sampling
+src/quantifier_module.py	∀/∃ detection on repeated relations
+data/hard_negative_miner.py	Physics-informed adversarial sample miner
+integration/debug_dashboard.py	Perception and grounding metric panels
+integration/data_validator.py	CI-enforced JSON/Protobuf schema validation for all Phase 1 modules
+________________________________________
+Milestones & Timeline
+Week	Deliverable
+1–2	Wire TaskProfiler into ImageAugmentor & PhysicsInference; validate CUDAStreamManager prefetch overlap
+3–4	Embed Hybrid Commonsense KB with human-loop bootstrapping; integrate hard-negative miner
+5–6	Implement Meta-Grammar stub; run unsupervised grammar validation on held-out puzzles
+7	Achieve end-to-end MVI-1 on 50 puzzles with Phase 1 modules; finalize CI checks and update dependency reports
+________________________________________
+Testing & CI
+•	tests/test_augmentor.py – GPU-batched augmentations and latency profiling
+•	tests/test_physics_inference.py – COM/stability/proxy accuracy and KB queries
+•	tests/test_commonsense_kb.py – predicate query correctness
+•	tests/test_cross_domain_reasoner.py – fused reasoning output validation
+•	tests/test_anytime_inference.py – grounding under budget constraints
+•	tests/test_grammar_extender.py – coverage estimation and stub proposals
+•	tests/test_hard_negative_miner.py – adversarial diversity sampling metrics
+•	tests/test_data_validator.py – schema conformance for Phase 1 modules
+•	tests/test_debug_dashboard.py – new dashboard panel integrity
+________________________________________
+This fully updated Phase 1 document captures the enhanced perception and neural-symbolic grounding integrations, extended CI contracts, and the milestones needed to complete MVI-1 on the 50-puzzle subset. Let me know if you’d like deeper detail on any module or help drafting the Phase 1 smoke test harness!
+
+
+
+
+
+# Phase 2: Enhanced Perception & Neural-Symbolic Grounding – Detailed Implementation Guide  
+
+**Objective & Scope**  
+Complete Phase 2 of the Bongard-Solver on local hardware (zen 7, 16 GB RAM, RTX 3050 Ti) by integrating:  
+1. A hybrid perception module that fuses lightweight cues, Tiny-CLIP embeddings, and ConceptNet-Lite lookups.  
+2. A Multimodal Chain-of-Thought (MCoT) wrapper for transparent LLM-assisted inference.  
+3. Symbol grounding via anonymous shape IDs and cue-based clustering.  
+4. A slim DSL (“small-to-large” ladder) with five primitive predicates and dynamic coverage checks.  
+5. Hard-negative mining continuations, profiling instrumentation, and CI contracts.  
+
+Maintain 2× relaxed latency budgets (P50 ≤ 200 ms for perception, P95 ≤ 750 ms for grounding), enforce schema validations, and extend the dashboard to surfacing Phase 2 KPIs.  
+
+## 1. Repository & Folder Structure  
+
+```
+bongard-solver/
+├── data/
+│   ├── raw/                           # Phase 1 raw inputs
+│   ├── derived_full.csv               # 600×52 primitive-cue table
+│   ├── conceptnet_lite.json           # downloaded Phase 1 KB
+│   ├── scene_graphs_physics.pkl.zst   # Phase 1 scene graphs + physics
+│   └── hard_negatives.txt             # Phase 1 negatives
+├── src/
+│   ├── cues/
+│   │   └── primitive_cues.py          # stroke count, Hu moments, Zernike, symmetry
+│   ├── perception/
+│   │   ├── encoder.py                 # Tiny-CLIP + cue fusion
+│   │   ├── cot_wrapper.py             # MCoT prompt & parse logic
+│   │   └── config.yaml                # batch sizes, thresholds
+│   ├── grounding/
+│   │   ├── shape_aligner.py           # cosine clustering (θ=0.82)
+│   │   ├── dsl/
+│   │   │   ├── primitives.py          # larger(x,y), inside(x,y), sym(x,a), stroke_count, touch
+│   │   │   └── coverage_checker.py    # dynamic DSL “ladder” logic
+│   │   └── codelets.py                # Propose_Cue_Rule, Merge_Shapes, Try_Quantifier, Search_Spatial_Pair, Prune
+│   ├── profiling/
+│   │   ├── task_profiler.py           # per-module P50/P95 logging
+│   │   └── cuda_stream_manager.py     # double-buffered transfers
+│   └── utils/
+│       └── schema_validator.py        # CI-driven JSON/Protobuf checks
+├── scripts/
+│   ├── extract_cues.py                # build derived_full.csv from derived_labels.json
+│   ├── encode_embeddings.py           # run encoder.py in batch
+│   ├── run_cot.py                     # wrap llava inference on fused embeddings
+│   ├── ground_rules.py                # orchestrate shape alignment & codelet swarm
+│   └── validate_phase2.py             # end-to-end Phase 2 smoke test
+├── tests/
+│   ├── test_primitive_cues.py
+│   ├── test_encoder.py
+│   ├── test_cot_wrapper.py
+│   ├── test_shape_aligner.py
+│   ├── test_primitives.py
+│   ├── test_codelets.py
+│   ├── test_task_profiler.py
+│   └── test_schema_validator.py
+└── integration/
+    └── debug_dashboard.py             # panels: cue coverage, embed drift, grounding latency
+```
+
+## 2. Step-by-Step Implementation  
+
+### 2.1 Primitive Cue Extraction  
+1. **File:** `src/cues/primitive_cues.py`  
+2. **Implement:**  
+   - `compute_stroke_count(polygon)`  
+   - `total_stroke_length(polygon)`  
+   - `mean_curvature(polygon)`  
+   - `hu_moments(polygon)` (first 3)  
+   - `zernike_moments(polygon, order=4)`  
+   - `axis_symmetry_score(polygon)` via 2D FFT  
+3. **Script:**  
+   ```bash
+   python scripts/extract_cues.py \
+       --input data/derived_labels.json \
+       --output data/derived_full.csv
+   ```
+4. **Validate:**  
+   - CSV has 600 rows × 52 fields.  
+   - Cue distributions near‐uniform (check in dashboard).  
+
+### 2.2 Fused Embedding Encoder  
+1. **File:** `src/perception/encoder.py`  
+   - Load Tiny-CLIP ViT-B/16 (batch=8).  
+   - Read per‐image cue vector (size = 52).  
+   - Concatenate to 512 + 52 = 564 d, then L2‐normalize.  
+2. **Script:**  
+   ```bash
+   python scripts/encode_embeddings.py \
+       --cues data/derived_full.csv \
+       --out data/embeddings.npy \
+       --batch 8
+   ```
+3. **Test:**  
+   - `pytest tests/test_encoder.py`  
+   - Embedding dims & norms correct.  
+
+### 2.3 Multimodal Chain-of-Thought (MCoT) Wrapper  
+1. **File:** `src/perception/cot_wrapper.py`  
+   - Template with prompt:  
+     ```
+     You are a visual analyst.
+     Q: {query}
+     IMG_EMBED: {embed}
+     Think step by step in two lines:
+     1. Primitive cues noticed.
+     2. Short logic clause.
+     A:
+     ```
+2. **LLM Backend:** Llava-1.5-7B-Q4 via `llama.cpp --n-gpu-layers 20`.  
+3. **Script:**  
+   ```bash
+   python scripts/run_cot.py \
+       --embeddings data/embeddings.npy \
+       --queries data/queries.jsonl \
+       --out data/cot_outputs.jsonl
+   ```
+4. **Test:**  
+   - `pytest tests/test_cot_wrapper.py` for parse correctness.  
+
+### 2.4 Symbol Grounding & Rule Induction  
+#### 2.4.1 Anonymous Shape IDs & Clustering  
+1. **File:** `src/grounding/shape_aligner.py`  
+   - Assign `shape_{id}` to each connected component.  
+   - Compute cosine similarity on fused embeddings.  
+   - Single‐link clustering with threshold = 0.82.  
+
+#### 2.4.2 DSL Primitives & Coverage Ladder  
+1. **File:** `src/grounding/dsl/primitives.py`  
+   - Define five functions: `larger(x,y)`, `inside(x,y)`, `sym(x,axis)`, `stroke_count(x,n)`, `touch(x,y)`.  
+2. **Coverage Checker:** `coverage_checker.py` determines percentage of puzzles solvable by primitives alone.  
+3. **Graduation Logic:** When coverage < 80%, trigger dynamic grammar extender (Phase 3 stub).  
+
+#### 2.4.3 Codelet Swarm  
+1. **File:** `src/grounding/codelets.py`  
+   - Five thread‐safe codelets:  
+     - `ProposeCueRule`  
+     - `MergeShapes`  
+     - `TryQuantifier`  
+     - `SearchSpatialPair`  
+     - `Prune`  
+   - Each must complete < 40 ms (watchdog).  
+   - Append CoT rationale to a shared trace store.  
+2. **Orchestration Script:**  
+   ```bash
+   python scripts/ground_rules.py \
+       --cot data/cot_outputs.jsonl \
+       --embeddings data/embeddings.npy \
+       --out data/phase2_rules.json
+   ```
+3. **Test:**  
+   - `pytest tests/test_shape_aligner.py`  
+   - `pytest tests/test_primitives.py`  
+   - `pytest tests/test_codelets.py`  
+
+### 2.5 Hard-Negative Mining Continuation  
+- Continue Phase 1’s progressive miner: `k=5` per puzzle per epoch.  
+- Ensure new negatives integrate into `hard_negatives.txt`.  
+
+### 2.6 Profiling & CI Contracts  
+1. **Profiling:**  
+   - Integrate `task_profiler.py` to log P50/P95 for encoder, CoT, grounding.  
+   - Dashboard panels in `integration/debug_dashboard.py`:  
+     - **Cue Extraction Coverage**  
+     - **Embedding Drift**  
+     - **Grounding Latencies**  
+2. **Schema Validation:**  
+   - Define JSON schemas for:  
+     - `derived_full.csv` fields  
+     - `embeddings.npy` shape metadata  
+     - `cot_outputs.jsonl` fields  
+     - `phase2_rules.json` rule format  
+   - Run `scripts/validate_phase2.py` in CI.  
+3. **Tests:**  
+   ```bash
+   pytest tests/test_task_profiler.py
+   pytest tests/test_schema_validator.py
+   ```
+
+## 3. Phase 2 Timeline (2 Months)  
+
+| Week | Deliverable                                 | Validation                         |
+|------|---------------------------------------------|------------------------------------|
+| 1    | Implement & test primitive cues extraction  | test_primitive_cues.py green        |
+| 2    | Build fused encoder & embedding script      | test_encoder.py; P50 ≤ 50 ms       |
+| 3    | Develop MCoT wrapper & run end-to-end       | test_cot_wrapper.py; drift ≤ 2 σ   |
+| 4    | Shape alignment & primitive DSL             | tests for primitives & aligner       |
+| 5    | Codelet swarm orchestration & rule output   | test_codelets.py; latency < 40 ms  |
+| 6    | Integrate hard-negative updates             | review hard_negatives.txt          |
+| 7    | Profiling integration & dashboard panels    | inspect debug_dashboard            |
+| 8    | CI schema validation & full smoke test      | scripts/validate_phase2.py; tests pass |
+
+## 4. Key KPIs & Risk Mitigation  
+
+| Risk                       | KPI Target               | Mitigation                                 |
+|----------------------------|--------------------------|--------------------------------------------|
+| Cue extraction failure     | 600/600 rows extracted   | Unit tests; fallback NumPy implementation  |
+| Embedding OOM              | GPU mem < 3.8 GB         | batch=8; split on CPU if necessary        |
+| LLM timeout                | CoT < 200 ms/query       | Reduce prompt size; cache partial chains   |
+| Grounding latency drift    | P95 < 750 ms             | Codelet timeouts; profiling alerts         |
+| Schema violations          | 0                        | CI-driven validator; strict pre-commit     |
+
+**Phase 2 Completion** is achieved when:  
+- All tests in `tests/` pass.  
+- `scripts/validate_phase2.py` reports zero schema errors.  
+- Debug dashboard shows cue coverage ≥ 93%, embedding drift ≤ 2 σ, grounding latencies within targets.  
+- 100% of the 50-puzzle MVI-1 slice is solved end-to-end under Phase 2 modules.
+
+[1] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/6010715/f85bb9ce-0f1d-4083-86a7-d6a974339adb/projectreport.txt
+[2] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/6010715/a758f4d2-5f83-45ed-9da1-f66cd767bb12/A-Hybrid-AI-Architecture-for-Solving-Bongard-Problems.docx
+
+
+# Phase 3: Emergent Codelet Swarm & Hierarchical Schema Induction – Detailed Implementation Guide  
+
+**Objective & Scope**  
+Extend the Bongard-Solver from Phase 2’s grounding DSL bootstrapping into a resilient, prioritized **codelet swarm** and initial **schema induction** under local constraints (Ryzen 7, 16 GB, RTX 3050 Ti). Deliver MVI-2 slice performance on a 200-puzzle subset with a relaxed 2× latency budget (full codelet cycle ≤ 2 s, schema clustering "`.  
+- Return `(predicate, why)`.
+
+**Tests:**  
+```bash
+pytest tests/test_codelet_factory.py
+pytest tests/test_timeout_manager.py
+```
+
+### 2.4 Strategic Metacognitive Agent (SMA)  
+1. **File:** `src/meta/sma.py`  
+2. **Implement:**  
+   - Load fingerprints CSV.  
+   - For each puzzle, compute spawn weights per codelet using softmax over negative past latency + error rates.  
+   - Output per-puzzle schedule (e.g., 10 runs of ProposeCueRule, 5 of MergeShapes).  
+3. **Integration:** Called by swarm orchestrator before each puzzle.  
+4. **Test:**  
+   ```bash
+   pytest tests/test_sma.py
+   ```
+
+### 2.5 Swarm Orchestration Script  
+1. **File:** `scripts/run_codelet_swarm.py`  
+2. **Implement:**  
+   - For each puzzle:  
+     1. Load context fingerprint and scene graphs.  
+     2. Invoke SMA for schedule.  
+     3. Spawn codelets via `AdaptiveScheduler`, gather proposals and `why`.  
+     4. Aggregate proposals: rank by confidence (e.g., rule coverage) and prune low-scoring ones.  
+     5. Log trace to `phase3_swarm_traces.jsonl`.  
+3. **Command:**  
+   ```bash
+   python scripts/run_codelet_swarm.py \
+     --puzzles data/phase2_scene_graphs_physics.pkl \
+     --fingers data/phase3_fingerprints.csv \
+     --out data/phase3_swarm_traces.jsonl
+   ```
+4. **Smoke Test:**  
+   ```bash
+   pytest tests/test_codelet_factory.py  # integration test included
+   ```
+
+### 2.6 Hierarchical Schema Induction  
+1. **File:** `src/abstraction/graph_kernel.py`  
+   - Compute WL kernel embeddings for each puzzle’s scene graph.  
+2. **File:** `src/abstraction/schema_induction.py`  
+   - Perform agglomerative clustering (Ward linkage) on embedded scene graphs.  
+   - Compute **novelty scores**: distance to nearest existing cluster center.  
+   - Retain clusters up to 10 levels; output JSON detailing cluster IDs and member puzzles.  
+3. **Script:**  
+   ```bash
+   python scripts/induce_schemas.py \
+     --embeddings data/phase2_scene_graphs_physics.pkl \
+     --out data/phase3_schema_clusters.json
+   ```
+4. **Test:**  
+   ```bash
+   pytest tests/test_graph_kernel.py
+   pytest tests/test_schema_induction.py
+   ```
+
+## 3. Phase 3 Timeline (2 Months)  
+
+| Week | Deliverable                                       | Validation                               |
+|------|---------------------------------------------------|------------------------------------------|
+| 1    | Fingerprint extractor & SMA prototype             | test_sma.py green; sample schedules     |
+| 2    | TimeoutManager & Codelet Base/Factory integration | test_timeout_manager.py; factory coverage |
+| 3    | Implement five codelets & register                | tests for each codelet; latency <500 ms |
+| 4    | AdaptiveScheduler integration & profiling         | profiling.py logs; dashboard panel      |
+| 5    | Swarm orchestration script end-to-end             | runs on 50 puzzles; traces logged       |
+| 6    | WL Graph Kernel embeddings                        | test_graph_kernel.py; embedding dims    |
+| 7    | Schema induction & novelty scoring                | clusters JSON; test_schema_induction.py  |
+| 8    | Dashboard panels & CI schema validation           | scripts/validate_phase3.py passes; dashboard |
+
+## 4. Key KPIs & Risk Mitigation  
+
+| Risk                         | KPI Target                      | Mitigation                                 |
+|------------------------------|---------------------------------|--------------------------------------------|
+| Codelet hang or overrun      | 0 timeouts per 200 puzzles      | TimeoutManager; CI test timeouts          |
+| Unbalanced spawn distribution| entropy ≥ 1.5 bits per puzzle   | SMA softmax temperature tuning            |
+| Low proposal quality         | average rule F1 ≥ 0.65          | prune codelet; adjust quotas              |
+| Schema overfitting           | hold-out cluster purity ≥ 0.7   | unsupervised validation; novelty pruning  |
+| Trace log errors             | 0 malformed JSONL entries       | schema validator in CI; pre-commit hook   |
+
+**Phase 3 Completion** is achieved when end-to-end MVI-2 on 200 puzzles:  
+- All codelets run within deadlines, producing rule proposals that achieve ≥ 65% average F1.  
+- Schema induction clusters validated on a held-out 20% subset with purity and novelty within thresholds.  
+- CI schema checks pass and the debug dashboard reflects stable metrics.
+
+[1] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/6010715/f85bb9ce-0f1d-4083-86a7-d6a974339adb/projectreport.txt
+[2] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/6010715/a758f4d2-5f83-45ed-9da1-f66cd767bb12/A-Hybrid-AI-Architecture-for-Solving-Bongard-Problems.docx
+
+
+
+
+# Phase 4: Continuous Causal Engine – Detailed Implementation Guide  
+
+**Objective & Scope**  
+Enhance the Bongard-Solver with a three-rung causal‐analysis pipeline (PC‐→Intervention→Counterfactual) on local hardware (Ryzen 7, 16 GB RAM, RTX 3050 Ti), meeting MVI-2 targets on a 200-puzzle slice. Enforce strict latency budgets (200 ms per prune, 750 ms per intervention, 2 s per full analysis) and adaptively degrade when necessary.
+
+## 1. Repository & Folder Structure  
+
+```
+bongard-solver/
+├── data/
+│   └── phase4_causal_inputs.pkl          # fused cue+scene embeddings from Phase 3
+├── src/
+│   ├── causal/
+│   │   ├── surrogate_pruner.py           # Lasso‐based variable pruning
+│   │   ├── incremental_updater.py        # drift‐aware graph update
+│   │   └── do_why_interface.py           # wrappers for DoWhy counterfactuals
+│   ├── timeout/
+│   │   └── timeout_manager.py            # per‐call deadline enforcement
+│   └── causal_engine.py                  # three‐rung orchestrator
+├── scripts/
+│   ├── run_surrogate_pruner.py           # prune to ≤12 vars per puzzle
+│   ├── update_causal_graphs.py           # incremental graph maintenance
+│   ├── run_interventions.py              # ATE estimation on pruned graph
+│   └── run_counterfactuals.py            # DoWhy refutations with early exit
+├── tests/
+│   ├── test_surrogate_pruner.py
+│   ├── test_incremental_updater.py
+│   ├── test_timeout_manager.py
+│   ├── test_causal_engine.py
+│   └── test_do_why_interface.py
+└── integration/
+    └── debug_dashboard.py                # panels: prune sizes, p-value distributions, exit counts
+```
+
+## 2. Step-by-Step Implementation  
+
+### 2.1 Surrogate Pruner (Rung 1)  
+1. **File:** `src/causal/surrogate_pruner.py`  
+2. **Implement:**  
+   - Load per-puzzle variables (cue features ≤ 52 + scene graph props).  
+   - Fit a Lasso regression (`α=0.01`) to predict label membership.  
+   - Select top 12 covariates with nonzero coefficients.  
+3. **Script:**  
+   ```bash
+   python scripts/run_surrogate_pruner.py \
+     --input data/phase4_causal_inputs.pkl \
+     --output data/phase4_pruned_vars.pkl
+   ```
+4. **Test:**  
+   ```bash
+   pytest tests/test_surrogate_pruner.py
+   ```
+5. **KPI:** Prune time P95 ≤ 200 ms; variables ≤ 12.
+
+### 2.2 Incremental Graph Updater (Rung 1.5)  
+1. **File:** `src/causal/incremental_updater.py`  
+2. **Implement:**  
+   - Load previous graph edges and new pruned variables.  
+   - Apply Kolmogorov–Smirnov drift test per edge; update only changed relations.  
+3. **Script:**  
+   ```bash
+   python scripts/update_causal_graphs.py \
+     --old data/prev_graph.pkl \
+     --pruned data/phase4_pruned_vars.pkl \
+     --out data/phase4_graph.pkl
+   ```
+4. **Test:**  
+   ```bash
+   pytest tests/test_incremental_updater.py
+   ```
+5. **KPI:** Update time P95 ≤ 150 ms.
+
+### 2.3 Average Treatment Effect Estimation (Rung 2)  
+1. **File:** `src/causal/causal_engine.py` (method `estimate_ate`)  
+2. **Implement:**  
+   - For each candidate predicate, perform back-door adjustment via `do_why_interface`.  
+   - Estimate ATE with 50 bootstrap samples; record p-values.  
+3. **Script:**  
+   ```bash
+   python scripts/run_interventions.py \
+     --graph data/phase4_graph.pkl \
+     --out data/phase4_ate_results.json
+   ```
+4. **Test:**  
+   ```bash
+   pytest tests/test_causal_engine.py::test_ate_estimation
+   ```
+5. **KPI:** Intervention time P95 ≤ 750 ms; bootstrap p > 0.05 pruned.
+
+### 2.4 Counterfactual Refutation (Rung 3)  
+1. **File:** `src/causal/do_why_interface.py`  
+2. **Implement:**  
+   - Wrap DoWhy’s API with a timeout guard (200 ms) via `timeout_manager`.  
+   - For each high-confidence edge, compute counterfactual query; capture effect size.  
+3. **Script:**  
+   ```bash
+   python scripts/run_counterfactuals.py \
+     --ate data/phase4_ate_results.json \
+     --out data/phase4_counterfactuals.json
+   ```
+4. **Test:**  
+   ```bash
+   pytest tests/test_do_why_interface.py
+   ```
+5. **KPI:** Counterfactual time P95 ≤ 2 s; early-exit count ≤ 10%.
+
+### 2.5 Timeout Manager Integration  
+1. **File:** `src/timeout/timeout_manager.py`  
+2. **Implement:**  
+   - Provide decorator `@timeout(ms)` for functions in pruner, updater, ATE, and counterfactual.  
+3. **Test:**  
+   ```bash
+   pytest tests/test_timeout_manager.py
+   ```
+4. **KPI:** No uncaught timeouts; logged via dashboard.
+
+### 2.6 Causal Engine Orchestrator  
+1. **File:** `src/causal_engine.py`  
+2. **Implement:**  
+   - Method `analyze(puzzle_id)` invokes Rung 1→1.5→2→3 sequentially.  
+   - Applies early‐exit: skip Rung 2/3 if latency budget exceeded or variables  0.05 removed | Increase bootstrap samples; log for review |
+| Counterfactual overruns     | Early-exit ≤ 10% puzzles | Lower sample size; coarse CF only             |
+| Budget overshoot            | Full analysis ≤ 2 s      | Skip Rung 3 when necessary; degrade gracefully |
+
+**Phase 4 Completion** is achieved when:  
+- All unit tests in `tests/` pass.  
+- CI schema validation reports zero errors.  
+- Debug dashboard shows prune, intervention, and CF latencies within budgets.  
+- End-to-end causal analysis on 200 puzzles meets MVI-2 accuracy and latency targets.
+
+[1] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/6010715/f85bb9ce-0f1d-4083-86a7-d6a974339adb/projectreport.txt
+[2] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/6010715/a758f4d2-5f83-45ed-9da1-f66cd767bb12/A-Hybrid-AI-Architecture-for-Solving-Bongard-Problems.docx
+
+
+# Phase 5: Abstraction Mining & Concept Library – Detailed Implementation Guide
+
+**Objective & Scope**  
+Develop mid-level abstractions and curate a self-refining concept library on local hardware (zen 7, 16 GB RAM, RTX 3050 Ti). Achieve MVI-2 performance on 200 puzzles by extracting, clustering, and validating predicate-level schemas, analogical patterns, and relational hierarchies under a 2× relaxed latency budget (end-to-end abstraction cycle ≤ 60 s per puzzle).
+
+## 1. Repository & Folder Structure  
+
+```
+bongard-solver/
+├── data/
+│   ├── phase5_embeddings.npy           # 32-D UMAP embeddings of each puzzle context
+│   ├── phase5_graph_kernels.pkl        # WL kernel vectors for scene graphs
+│   ├── phase5_schema_tree.json         # hierarchical concept clusters
+│   └── phase5_analogy_pairs.json       # positive/negative pairs for analogy training
+├── src/
+│   ├── abstraction/
+│   │   ├── graph_kernel.py             # computes WL graph kernel embeddings
+│   │   ├── umap_reducer.py             # reduces fused feature vectors to 32 D
+│   │   ├── concept_hierarchy.py        # agglomerative clustering & tree builder
+│   │   ├── analogy_siamese_gnn.py      # defines & trains Siamese GNN
+│   │   ├── hame_early_exit.py          # early-exit filter for partial embeddings
+│   │   └── abstraction_miner.py        # orchestrates end-to-end extraction & promotion
+│   ├── drift_monitor.py                # sliding-window drift detection on embeddings
+│   └── concept_library.py              # load/query/persist curated concepts
+├── scripts/
+│   ├── compute_graph_kernels.py        # batch computes WL kernel vectors
+│   ├── reduce_embeddings.py            # runs UMAP on fused features
+│   ├── induce_hierarchy.py             # builds hierarchical clusters & novelty scores
+│   ├── train_analogy_gnn.py            # trains Siamese GNN on analogy pairs
+│   └── mine_abstractions.py            # end-to-end abstraction mining pipeline
+├── tests/
+│   ├── test_graph_kernel.py
+│   ├── test_umap_reducer.py
+│   ├── test_concept_hierarchy.py
+│   ├── test_analogy_siamese_gnn.py
+│   ├── test_hame_early_exit.py
+│   └── test_concept_library.py
+└── integration/
+    └── debug_dashboard.py              # panels: cluster purity, drift alerts, analogy accuracy
+```
+
+## 2. Step-by-Step Implementation  
+
+### 2.1 Fused Feature Embedding & UMAP Reduction  
+1. **File**: `src/abstraction/umap_reducer.py`  
+2. **Implement**:  
+   - Load fused cues + Tiny-CLIP + physics + causal scores per puzzle (Phase 4 outputs).  
+   - Use UMAP (n_components = 32, min_dist = 0.1) to embed into 32 D.  
+3. **Script**:  
+   ```bash
+   python scripts/reduce_embeddings.py \
+     --input data/phase4_fused_features.npy \
+     --out data/phase5_embeddings.npy \
+     --n-components 32
+   ```
+4. **Test**:  
+   ```bash
+   pytest tests/test_umap_reducer.py
+   ```
+5. **KPI**: Reduction time P95 ≤ 10 s; embedding drift RMS ≤ Δ_threshold.
+
+### 2.2 Weisfeiler–Lehman Graph Kernels  
+1. **File**: `src/abstraction/graph_kernel.py`  
+2. **Implement**:  
+   - Parse each puzzle’s scene graph (from Phase 3).  
+   - Compute WL kernel vector (h=3 iterations) for graph similarity.  
+3. **Script**:  
+   ```bash
+   python scripts/compute_graph_kernels.py \
+     --input data/scene_graphs_physics.pkl \
+     --out data/phase5_graph_kernels.pkl
+   ```
+4. **Test**:  
+   ```bash
+   pytest tests/test_graph_kernel.py
+   ```
+5. **KPI**: Kernel computation P95 ≤ 15 s per 200 puzzles bundle.
+
+### 2.3 Hierarchical Concept Clustering  
+1. **File**: `src/abstraction/concept_hierarchy.py`  
+2. **Implement**:  
+   - Load UMAP embeddings and graph kernels; concatenate per-puzzle vector (size 32 + K).  
+   - Apply agglomerative clustering (Ward linkage) to form a tree; compute novelty = distance to nearest cluster centroid.  
+   - Retain clusters where internal silhouette ≥ 0.6; annotate novelty scores.  
+3. **Script**:  
+   ```bash
+   python scripts/induce_hierarchy.py \
+     --embeddings data/phase5_embeddings.npy \
+     --kernels data/phase5_graph_kernels.pkl \
+     --out data/phase5_schema_tree.json
+   ```
+4. **Test**:  
+   ```bash
+   pytest tests/test_concept_hierarchy.py
+   ```
+5. **KPI**: Clustering time ≤ 30 s; cluster purity ≥ 0.7 on held-out 10%.
+
+### 2.4 Contrastive Analogy Training (Siamese GNN)  
+1. **File**: `src/abstraction/analogy_siamese_gnn.py`  
+2. **Implement**:  
+   - Build graph-based Siamese GNN that ingests scene graphs + embeddings.  
+   - Train on positive/negative pairs (`phase5_analogy_pairs.json`) with margin ranking loss (margin=0.5).  
+3. **Script**:  
+   ```bash
+   python scripts/train_analogy_gnn.py \
+     --pairs data/phase5_analogy_pairs.json \
+     --graphs data/scene_graphs_physics.pkl \
+     --epochs 50 \
+     --out model/analogy_gnn.pt
+   ```
+4. **Test**:  
+   ```bash
+   pytest tests/test_analogy_siamese_gnn.py
+   ```
+5. **KPI**: Validation accuracy ≥ 0.75; inference latency ≤ 100 ms per pair.
+
+### 2.5 HAME Early-Exit Filtering  
+1. **File**: `src/abstraction/hame_early_exit.py`  
+2. **Implement**:  
+   - For large-scale analogy or clustering, compute partial UMAP distance; if partial > threshold, skip full compute.  
+3. **Test**:  
+   ```bash
+   pytest tests/test_hame_early_exit.py
+   ```
+4. **KPI**: Early-exit rate ≥ 40%; false-positive skip rate ≤ 5%.
+
+### 2.6 Abstraction Miner Orchestration  
+1. **File**: `src/abstraction/abstraction_miner.py`  
+2. **Implement**:  
+   - Pipeline: UMAP → WL kernels → clustering → analogy scoring → novelty tagging.  
+   - Load drift monitor to compare new embeddings against running window; if drift > Z=2.0, retrigger reclustering.  
+   - Persist curated concepts to `data/concept_library.json`.  
+3. **Script**:  
+   ```bash
+   python scripts/mine_abstractions.py \
+     --hierarchy data/phase5_schema_tree.json \
+     --analogy-model model/analogy_gnn.pt \
+     --out data/concept_library.json
+   ```
+4. **Test**:  
+   ```bash
+   pytest tests/test_concept_library.py
+   ```
+5. **KPI**: End-to-end abstraction mining P95 ≤ 60 s; drift monitor alerts ≤ 1/week.
+
+## 3. Phase 5 Timeline (2 Months)  
+
+| Week | Deliverable                                       | Validation                               |
+|------|---------------------------------------------------|------------------------------------------|
+| 1    | UMAP reducer integration & tests                  | `test_umap_reducer.py`; ≤ 10 s           |
+| 2    | WL graph kernel computation & tests               | `test_graph_kernel.py`; ≤ 15 s bundle    |
+| 3    | Concept hierarchy induction & tests               | `test_concept_hierarchy.py`; ≥ 0.7 silhouette |
+| 4    | Train & validate Siamese GNN analogy model        | `test_analogy_siamese_gnn.py`; ≥ 0.75 acc |
+| 5    | HAME early-exit module & tests                    | `test_hame_early_exit.py`; ≥ 40% skip    |
+| 6    | AbstractionMiner orchestration & library output    | `test_concept_library.py`; JSON schema OK |
+| 7    | Drift monitor hooks & reclustering logic          | Drift alerts tested; ≤ 1/week            |
+| 8    | Dashboard panels & CI schema validation           | `integration/debug_dashboard.py`; CI green |
+
+## 4. Key KPIs & Risk Mitigation  
+
+| Risk                              | KPI Target                         | Mitigation                                     |
+|-----------------------------------|------------------------------------|------------------------------------------------|
+| Embedding drift                   | Z-score ≤ 2.0                      | Retrigger reclustering; archive old concepts   |
+| Clustering overfit                | Silhouette ≥ 0.6                   | Hold-out validation; prune small clusters      |
+| Analogy model underperformance    | Acc ≥ 0.75                         | Augment pairs; adjust margin & learning rate   |
+| Early-exit false skips            | FP rate ≤ 5%                       | Tune threshold; fallback full compute          |
+| Pipeline latency overshoot        | ≤ 60 s per puzzle (P95)           | Profile hotspots; parallelize                      |
+
+**Phase 5 Completion** is achieved when:  
+1. All unit tests in `tests/` pass.  
+2. CI schema checks for `concept_library.json` pass.  
+3. Debug dashboard shows cluster purity ≥ 0.7, analogy acc ≥ 0.75, drift within threshold, and overall abstraction mining within time budgets.  
+4. A curated concept library is ready for downstream Phase 6 refinement.
+
+[1] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/6010715/f85bb9ce-0f1d-4083-86a7-d6a974339adb/projectreport.txt
+[2] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/6010715/a758f4d2-5f83-45ed-9da1-f66cd767bb12/A-Hybrid-AI-Architecture-for-Solving-Bongard-Problems.docx
+
+
+# Phase 6: Nested RL-MCTS Refinement – Detailed Implementation Guide  
+
+**Objective & Scope**  
+Elevate the Bongard-Solver with a nested, elegance- and causal-aware Monte Tree Search (MCTS) refinement on local hardware (Ryzen 7, 16 GB RAM, RTX 3050 Ti). Achieve ≥85% accuracy on a 100-puzzle subset (MVI-3) within 2× relaxed latency budgets (per-puzzle refinement ≤2 s). Integrate policy/value networks, elegance penalties, nested AST composers, and dynamic grammar triggers under robust profiling and CI contracts.
+
+## 1. Repository & Folder Structure  
+
+```
+bongard-solver/
+├── src/
+│   ├── rl_mcts/
+│   │   ├── state_encoder.py          # Encodes puzzle context into MCTS state
+│   │   ├── elegance_uct.py           # UCT extension with elegance & prior biases
+│   │   ├── nested_composer.py        # Merges partial rule ASTs into nested trees
+│   │   ├── policy_value_net.py       # Defines & loads MLP policy/value models
+│   │   └── rl_mcts.py                # Main MCTS loop with nested actions
+│   ├── grammar_extender.py           # Triggers DSL growth on novelty cues
+│   └── utils/
+│       ├── timeout_manager.py        # Per-rollout deadlines enforcement
+│       └── profiling.py              # TaskProfiler hooks
+├── config/
+│   └── rl_config.yaml                # Hyperparameters: rollout budgets, penalties
+├── scripts/
+│   └── run_rl_mcts.py                # Orchestrates per-puzzle refinement
+├── tests/
+│   ├── test_state_encoder.py
+│   ├── test_elegance_uct.py
+│   ├── test_nested_composer.py
+│   ├── test_policy_value_net.py
+│   ├── test_rl_mcts.py
+│   └── test_timeout_manager.py
+└── integration/
+    └── debug_dashboard.py            # Panels: rollouts, Q-values, grammar triggers
+```
+
+## 2. Step-by-Step Implementation  
+
+### 2.1 State Encoding  
+1. **File:** `src/rl_mcts/state_encoder.py`  
+2. **Implement:**  
+   - Combine: Phase 5 UMAP embeddings (32 D), scene-graph WL kernels (K D), causal scores, cue-entropy, rule-depth, grammar complexity.  
+   - Output fixed-size tensor for policy/value nets.
+
+### 2.2 Policy/Value Networks  
+1. **File:** `src/rl_mcts/policy_value_net.py`  
+2. **Implement:**  
+   - MLP with two hidden layers (128→64) taking state vector; outputs:  
+     - Policy logits over DSL actions.  
+     - State-value scalar.  
+   - Load quantized INT4 weights via GPTQ.
+
+### 2.3 Elegance-Aware UCT Formula  
+1. **File:** `src/rl_mcts/elegance_uct.py`  
+2. **Implement:**  
+   - UCT score =  
+     $$
+     \frac{Q_i}{N_i} + c\sqrt{\frac{\ln N_p}{N_i}} - \lambda \frac{\text{AST\_size}_i}{\text{max\_size}}
+     $$  
+   - Prior bias term from policy logits.  
+   - Elegance penalty λ from `rl_config.yaml`.
+
+### 2.4 Nested Rule Composer  
+1. **File:** `src/rl_mcts/nested_composer.py`  
+2. **Implement:**  
+   - “Merge” action: combine two partial AST nodes under quantifier or logical operator.  
+   - Enforce max depth = 3.  
+   - Timeout guard: rollback if compose > 100 ms.
+
+### 2.5 MCTS Main Loop  
+1. **File:** `src/rl_mcts/rl_mcts.py`  
+2. **Implement:**  
+   - For each puzzle:  
+     1. Encode state.  
+     2. Run rollouts (budget 500 rollouts or 200 ms per rollout) in parallel threads (max 4).  
+     3. At each node, select via `elegance_uct`, expand via composer, evaluate leaf via value net.  
+     4. Backup values.  
+     5. If leaf introduces novel predicate beyond coverage threshold, call `grammar_extender.trigger()`, update DSL and restart rollout.  
+   - Early-exit: if best-found rule F1 > threshold, halt.
+
+### 2.6 Grammar Extender Integration  
+1. **File:** `src/grammar_extender.py`  
+2. **Implement:**  
+   - On novelty trigger: propose up to 3 new primitive predicates via template heuristics.  
+   - Validate proposals on held-out splits; integrate highest-scoring.
+
+### 2.7 Orchestration Script  
+1. **File:** `scripts/run_rl_mcts.py`  
+2. **Implement:**  
+   ```bash
+   python scripts/run_rl_mcts.py \
+     --puzzles data/phase5_schema_tree.json \
+     --models model/policy_value_int4.pt \
+     --config config/rl_config.yaml \
+     --out data/phase6_refined_rules.json
+   ```
+3. **Features:** batch puzzles, per-puzzle log of rollouts and chosen rule.
+
+### 2.8 Timeout & Profiling  
+- Use `utils/timeout_manager.py` to decorate per-rollout and composer calls.  
+- Insert `profiling` hooks at: state encoding, selection, expansion, evaluation, backup.  
+- Expose metrics to `integration/debug_dashboard.py`.
+
+## 3. Phase 6 Timeline (3 Months)  
+
+| Week | Deliverable                                 | Validation                              |
+|------|---------------------------------------------|-----------------------------------------|
+| 1–2  | StateEncoder & Policy/ValueNet modules      | `test_state_encoder.py` green; dims match config |
+| 3    | Implement EleganceUCT & associated tests    | `test_elegance_uct.py`; correct UCT scores       |
+| 4    | NestedComposer & timeout guards             | `test_nested_composer.py`; < 100 ms compose     |
+| 5–6  | MCTS loop core with parallel rollouts       | `test_rl_mcts.py`; 500 rollouts < 2 s/puzzle      |
+| 7    | GrammarExtender triggers & DSL update       | integration run shows DSL growth on novel cases |
+| 8    | Orchestration script & end-to-end smoke test| 100 puzzles refined under budget          |
+| 9    | Dashboard panels & profiling integration    | metrics: rollouts, Q-values, grammar events     |
+| 10–12| CI schema contracts, full regression tests  | All tests pass; CI green; coverage ≥90%         |
+
+## 4. Key KPIs & Risk Mitigation  
+
+| Risk                             | KPI Target                 | Mitigation                                     |
+|----------------------------------|----------------------------|------------------------------------------------|
+| Rollout latency overshoot        | 95% ≤ 2 s/puzzle           | Early-exit; reduce rollouts; lower depth       |
+| Composer timeouts                | < 1% rollouts              | Pre-check AST size; lower parallel threads     |
+| Policy/value net OOM             | GPU mem < 3.8 GB           | Quantized INT4; move select layers to CPU      |
+| Grammar drift explosion          | ≤ 5 new predicates/session | Hard limit & CI validation                     |
+| Profiling overhead               | < 5% runtime              | Lightweight hooks; sample profiles every 10 puzzles |
+
+**Phase 6 Completion** when:  
+- All unit and integration tests pass.  
+- CI schema validation for `phase6_refined_rules.json`.  
+- Debug dashboard confirms rollouts and grammar triggers within budgets.  
+- End-to-end MVI-3 slice (100 puzzles) ≥85% accuracy under 2 s average.
+
+[1] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/6010715/f85bb9ce-0f1d-4083-86a7-d6a974339adb/projectreport.txt
+[2] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/6010715/a758f4d2-5f83-45ed-9da1-f66cd767bb12/A-Hybrid-AI-Architecture-for-Solving-Bongard-Problems.docx
+
+
+# Phase 7: Meta-Controller & Antifragile Orchestration – Detailed Implementation Guide
+
+**Objective & Scope**  
+Implement a master orchestration layer that dynamically selects and tunes solving strategies puzzle, rapidly adapts via meta-learning, coordinates expert feedback on ambiguous cases, and drives continual self-improvement. Targets MVI-3 on a 100-puzzle subset: ≥85% accuracy within 30 s per puzzle on local hardware (Ryzen 7, 16 GB RAM, RTX 3050 Ti).
+
+## 1. Repository & Folder Structure
+
+```
+bongard-solver/
+├── data/
+│   ├── phase7_bandit_logs.csv         # fingerprint, strategy, reward history
+│   ├── phase7_maml_checkpoints/       # saved meta-parameter snapshots
+│   └── phase7_expert_queue.json       # puzzles flagged for review
+├── src/
+│   ├── meta/
+│   │   ├── fingerprint_extractor.py   # builds context vectors per puzzle
+│   │   ├── neural_bandit.py           # 2-layer contextual bandit network
+│   │   ├── maml_adaptor.py            # MAML inner/outer loops
+│   │   ├── meta_controller.py         # selects strategies and updates bandit
+│   │   ├── orchestrator.py            # dispatches to solvers and collects results
+│   │   ├── expert_collab.py           # manages expert-in-the-loop queue
+│   │   ├── self_improver.py           # detects drift/error and retrains modules
+│   │   └── apoe.py                    # Adaptive Performance Optimizer
+│   └── interactive/
+│       └── human_loop.py              # web widget for expert judgments
+├── config/
+│   └── phase7.yaml                    # hyperparameters: learning rates, thresholds
+├── scripts/
+│   └── run_phase7.py                  # end-to-end Phase 7 orchestration
+├── tests/
+│   ├── test_fingerprint_extractor.py
+│   ├── test_neural_bandit.py
+│   ├── test_maml_adaptor.py
+│   ├── test_meta_controller.py
+│   ├── test_orchestrator.py
+│   ├── test_expert_collab.py
+│   ├── test_self_improver.py
+│   ├── test_apoe.py
+│   └── test_human_loop.py
+└── integration/
+    └── debug_dashboard.py            # panels: strategy metrics, resource shifts, expert queue
+```
+
+## 2. Step-by-Step Implementation
+
+### 2.1 Fingerprint Extraction  
+1. **File:** `src/meta/fingerprint_extractor.py`  
+2. **Implement:**  
+   - Inputs: per-puzzle Phase 6 outputs (cue_entropy, rule_depth, causal_edges, RL_confidence, abstraction_novelty, grounding_latency).  
+   - Construct normalized feature vector of length 8.  
+   - Append current macro-risk Z-scores from KPIs.  
+   - Output: `phase7_bandit_logs.csv` rows: puzzle_id, fingerprint, timestamp.  
+3. **Test:**  
+   ```bash
+   pytest tests/test_fingerprint_extractor.py
+   ```
+
+### 2.2 Contextual Bandit Network  
+1. **File:** `src/meta/neural_bandit.py`  
+2. **Implement:**  
+   - Two-layer MLP (128→64 hidden) with softmax head producing probabilities over 5 strategies:  
+     * cue-only, grammar, causal+grammar, MCTS-refine, ask-LLM  
+   - Cross-entropy loss with reward shaping.  
+   - Use quantized INT8 weights for CPU inference.  
+3. **Test:**  
+   ```bash
+   pytest tests/test_neural_bandit.py
+   ```
+
+### 2.3 MAML Adaptor  
+1. **File:** `src/meta/maml_adaptor.py`  
+2. **Implement:**  
+   - Inner loop: 5 gradient steps on last 20 logged fingerprints, lr=1e-4.  
+   - Outer loop: update meta-parameters via first-order MAML after each batch of 100 puzzles.  
+   - Save checkpoints in `phase7_maml_checkpoints/`.  
+3. **Test:**  
+   ```bash
+   pytest tests/test_maml_adaptor.py
+   ```
+
+### 2.4 Meta-Controller Core  
+1. **File:** `src/meta/meta_controller.py`  
+2. **Implement:**  
+   - Method `select_strategy(fingerprint)` → (strategy, prob_dist).  
+   - After puzzle solves, receive reward (+1 correct within 30 s, –0.1 per second over 30 s).  
+   - Update bandit via gradient step.  
+   - Periodically call MAML adaptor to refresh weights.  
+3. **Test:**  
+   ```bash
+   pytest tests/test_meta_controller.py
+   ```
+
+### 2.5 Orchestrator Dispatcher  
+1. **File:** `src/meta/orchestrator.py`  
+2. **Implement:**  
+   - Routes puzzles to appropriate solver module:  
+     * ILPSolver, CodeletSystem, CausalEngine, RL_MCTS, Multimodal CoT  
+   - Monitors execution time; enforces fallback to System-1 if solver fails or times out.  
+   - Returns rule, confidence, latency.  
+3. **Test:**  
+   ```bash
+   pytest tests/test_orchestrator.py
+   ```
+
+### 2.6 Expert Collaboration Orchestrator (ECO)  
+1. **File:** `src/meta/expert_collab.py` & `src/interactive/human_loop.py`  
+2. **Implement:**  
+   - Criteria: puzzles with bandit confidence  ε.  
+   - Trigger targeted retraining: e.g., re-extract cues, re-fine DSL, retrain RL nets.  
+   - Log actions to `phase7_bandit_logs.csv`.  
+3. **Test:**  
+   ```bash
+   pytest tests/test_self_improver.py
+   ```
+
+### 2.8 Adaptive Performance Optimizer (APOE)  
+1. **File:** `src/meta/apoe.py`  
+2. **Implement:**  
+   - Read HIC and TaskProfiler metrics.  
+   - Dynamically reallocate CPU/GPU threads to bottlenecked modules.  
+   - Adjust early-exit thresholds when resource contention arises.  
+3. **Test:**  
+   ```bash
+   pytest tests/test_apoe.py
+   ```
+
+### 2.9 End-to-End Orchestration Script  
+1. **File:** `scripts/run_phase7.py`  
+2. **Implement:**  
+   ```bash
+   python scripts/run_phase7.py \
+     --puzzles data/phase6_refined_rules.json \
+     --config config/phase7.yaml \
+     --out data/phase7_results.json
+   ```
+   - Performs fingerprint extraction → strategy selection → solver dispatch → reward update → meta-learning → self-improvement → expert queueing → resource optimization.  
+3. **Smoke Test:**  
+   ```bash
+   pytest tests/test_orchestrator.py::test_end_to_end
+   ```
+
+## 3. Phase 7 Timeline (3 Months)
+
+| Week     | Deliverable                                                              |
+|----------|---------------------------------------------------------------------------|
+| 1–2      | FingerprintExtractor & NeuralBandit prototype; bandit training on logs    |
+| 3–4      | MAML adaptor integration; checkpointing and meta-parameter refresh         |
+| 5        | MetaController and Orchestrator core; strategy selection and dispatch     |
+| 6        | ExpertCollab queue and human_loop widget; integrate expert feedback loop  |
+| 7        | SelfImprover routines; validate targeted retraining triggers              |
+| 8        | APOE resource optimizer; dynamic thread reallocation under load           |
+| 9        | Orchestration script completed; end-to-end Phase 7 smoke test on 100 puzzles |
+| 10–12    | Full unit/integration tests; CI schema validation; debug dashboard panels; documentation and release |
+
+## 4. Key KPIs & Risk Mitigation
+
+| Risk                               | KPI Target                                | Mitigation                                                  |
+|------------------------------------|-------------------------------------------|-------------------------------------------------------------|
+| Bandit misallocation               | >60% puzzles routed optimally            | Increase exploration ε; retrain bandit with new data        |
+| MAML overfitting                   | Meta-loss Δ ≤ 0.02 over 100 puzzles       | Add regularization; limit inner-loop steps                  |
+| Expert queue backlog               | <5 puzzles awaiting review               | Prioritize high-impact puzzles; throttle expert invitations |
+| Self-improver instability          | Retrain success rate ≥ 80%                | Validate modules pre-retrain; rollback on failure           |
+| Resource thrashing                 | Utilization variance < 10%                | APOE early-exit; cap thread reassignments                   |
+
+**Phase 7 Completion** is achieved when:  
+- End-to-end run on 100 puzzles yields ≥85% accuracy within 30 s.  
+- Bandit improves strategy success rate by ≥10% vs. uniform baseline.  
+- Expert feedback cycles refine ≥5 grammar rules.  
+- All tests pass and CI reports zero schema errors.  
+- Debug dashboard displays stable resource allocations and low expert-queue latency.
+
+[1] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/6010715/f85bb9ce-0f1d-4083-86a7-d6a974339adb/projectreport.txt
+[2] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/6010715/a758f4d2-5f83-45ed-9da1-f66cd767bb12/A-Hybrid-AI-Architecture-for-Solving-Bongard-Problems.docx

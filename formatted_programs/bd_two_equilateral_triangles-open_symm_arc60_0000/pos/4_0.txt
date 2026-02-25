@@ -1,0 +1,5 @@
+line_zigzag_1.000-0.500
+line_zigzag_0.500-0.833
+line_circle_0.500-0.833
+line_normal_0.500-0.167
+line_zigzag_0.500-0.833

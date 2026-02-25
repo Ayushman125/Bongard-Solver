@@ -1,0 +1,5 @@
+line_circle_1.000-0.500
+line_circle_0.630-0.801
+line_square_0.280-0.824
+line_triangle_0.450-0.301
+line_square_0.630-0.773
