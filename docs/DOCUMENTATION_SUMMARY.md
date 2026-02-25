@@ -465,7 +465,7 @@ Upload to `docs/images/`:
 
 **Documentation Issues:**
 If any documentation is unclear, incomplete, or incorrect:
-1. Open issue: [GitHub Issues](https://github.com/YOUR_USERNAME/BongardSolver/issues)
+1. Open issue: [GitHub Issues](https://github.com/Ayushman125/Bongard-Solver/issues)
 2. Tag with `documentation` label
 3. Reference specific file and line number
 

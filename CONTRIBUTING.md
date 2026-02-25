@@ -49,7 +49,7 @@ We welcome contributions in the following areas:
    - API documentation
 
 4. **Bug Fixes**:
-   - See [GitHub Issues](https://github.com/YOUR_USERNAME/BongardSolver/issues)
+   - See [GitHub Issues](https://github.com/Ayushman125/Bongard-Solver/issues)
 
 5. **Benchmarking**:
    - Other few-shot learning datasets
