@@ -6,10 +6,79 @@
 
 > **A neuro-symbolic architecture combining fast neural learning with deliberative Bayesian reasoning for human-level visual concept learning**
 
-<div align="center">
-  <img src="docs/images/architecture_overview.png" alt="Dual-System Architecture" width="800"/>
-  <p><i>Figure 1: Hybrid dual-system architecture integrating System 1 (neural) and System 2 (symbolic)</i></p>
-</div>
+## 🧠 Dual-System Architecture
+
+The solver combines two complementary cognitive systems:
+
+```
+                          BONGARD-LOGO PROBLEM
+                     (Concept Learning from Examples)
+                                  │
+                ┌─────────────────┴─────────────────┐
+                │                                   │
+         ┌──────▼──────┐                    ┌──────▼──────┐
+         │  SYSTEM 1   │                    │  SYSTEM 2   │
+         │   (Neural)  │                    │  (Symbolic) │
+         └──────┬──────┘                    └──────┬──────┘
+                │                                   │
+      ┌─────────▼────────────┐          ┌──────────▼──────────┐
+      │ CNN Image Features   │          │ Program Synthesis   │
+      ├─────────────────────┤          ├─────────────────────┤
+      │ • ResNet18/50       │          │ • Bayesian Rule     │
+      │ • 64D embeddings    │          │   Induction         │
+      │ • Fast inference    │          │ • Logical patterns  │
+      │ • Robust to noise   │          │ • Interpretable     │
+      │ • Pre-trained       │          │ • Symbolic rules    │
+      └─────────┬───────────┘          └──────────┬──────────┘
+                │                                   │
+      ┌─────────▼────────────┐          ┌──────────▼──────────┐
+      │ P(positive) via      │          │ P(positive) via     │
+      │ Image Features S1    │          │ Rule Check S2       │
+      │                      │          │                     │
+      │ Score: S1_prob       │          │ Score: S2_prob      │
+      └─────────┬────────────┘          └──────────┬──────────┘
+                │                                   │
+                └─────────────────┬─────────────────┘
+                                  │
+                    ┌─────────────▼─────────────┐
+                    │  ADAPTIVE ARBITRATION     │
+                    ├───────────────────────────┤
+                    │ Learned Weights:          │
+                    │ • w₁ for System 1 (S1)   │
+                    │ • w₂ for System 2 (S2)   │
+                    │                           │
+                    │ Combined Score:           │
+                    │ score = w₁·S1 + w₂·S2    │
+                    │ (weights adapted per task)│
+                    └─────────────┬─────────────┘
+                                  │
+                    ┌─────────────▼─────────────┐
+                    │  FINAL PREDICTION         │
+                    ├───────────────────────────┤
+                    │ If score > threshold:     │
+                    │   → Concept = POSITIVE   │
+                    │ Else:                     │
+                    │   → Concept = NEGATIVE   │
+                    └───────────────────────────┘
+```
+
+### System 1: Fast Neural Recognition
+- **CNN Image Features** - ResNet-based visual embeddings
+- **Training**: Pre-trained on ImageNet, fine-tuned on Bongard examples
+- **Strength**: Robust to visual noise, rapid inference
+- **Speed**: ~1-5ms per problem instance
+
+### System 2: Deliberative Symbolic Reasoning  
+- **Bayesian Program Synthesis** - Infers logical rules from patterns
+- **Training**: Learns rules from positive/negative examples through guided search
+- **Strength**: Interpretable decisions, captures exact logical structure
+- **Speed**: ~50-200ms per problem instance (more deliberative)
+
+### Adaptive Arbitration
+- **Dynamic Weighting** - Learns optimal balance between systems
+- **Per-Task Adaptation** - Weights vary based on problem difficulty
+- **Confidence Fusion** - Combines predictions weighted by reliability
+- **Result**: Complementary strengths → superior performance
 
 ---
 
