@@ -543,9 +543,40 @@ pip install -r requirements.txt
 ### Quick Start
 
 **1. Download BONGARD-LOGO Dataset**:
+
+The official BONGARD-LOGO dataset is available at: https://github.com/NVlabs/Bongard-LOGO
+
 ```bash
-# Place ShapeBongard_V2 in data/raw/
-# Structure: data/raw/ShapeBongard_V2/{train,val,test_ff,test_bd,test_hd_comb,test_hd_novel}/
+# Clone the official repository
+git clone https://github.com/NVlabs/Bongard-LOGO.git
+
+# Extract the ShapeBongard_V2 dataset
+cd Bongard-LOGO
+# Follow instructions in their README to generate/download the dataset
+
+# Copy to our project structure
+cp -r Bongard-LOGO/data/ShapeBongard_V2 /path/to/BongardSolver/data/raw/
+
+# Or manually download and place in:
+# data/raw/ShapeBongard_V2/{train,val,test_ff,test_bd,test_hd_comb,test_hd_novel}/
+```
+
+**Alternative**: Direct download from official source:
+```bash
+# Create data directory
+mkdir -p data/raw
+
+# Download dataset (if direct link is available from NVlabs/Bongard-LOGO releases)
+# Check https://github.com/NVlabs/Bongard-LOGO/releases for direct download links
+
+# Expected structure:
+# data/raw/ShapeBongard_V2/
+# ├── train/          # Training episodes
+# ├── val/            # Validation episodes  
+# ├── test_ff/        # Free-form test (our focus: 100% accuracy)
+# ├── test_bd/        # Basic test (92.7% accuracy)
+# ├── test_hd_comb/   # Human-designed combined (73.0% accuracy)
+# └── test_hd_novel/  # Human-designed novel (73.4% accuracy)
 ```
 
 **2. Run Pretrained Model** (uses checkpoint):
