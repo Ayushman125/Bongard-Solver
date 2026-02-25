@@ -1,0 +1,17 @@
+{
+  "creation_timestamp": "2026-02-25T16:31:50.435123",
+  "evaluation_source": "run_20260225_145400.json",
+  "evaluation_timestamp": "20260225_145400",
+  "splits_processed": [
+    "test_ff",
+    "test_bd",
+    "test_hd_comb",
+    "test_hd_novel"
+  ],
+  "total_episodes": 1800,
+  "output_files": {
+    "comprehensive_results": "comprehensive_results.json",
+    "baseline_comparison": "baseline_comparison.json",
+    "notebook": "analysis_comprehensive_results.ipynb"
+  }
+}

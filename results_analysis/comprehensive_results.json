@@ -1,0 +1,132 @@
+{
+  "metadata": {
+    "timestamp": "2026-02-25T16:31:50.432119",
+    "evaluation_data": "run_20260225_145400.json",
+    "evaluation_timestamp": "20260225_145400"
+  },
+  "performance": {
+    "test_ff": {
+      "accuracy": 100.0,
+      "episodes": 600,
+      "margin": 0.6883961506274122,
+      "s2_usage": 1.0
+    },
+    "test_bd": {
+      "accuracy": 92.70833333333334,
+      "episodes": 480,
+      "margin": 0.4665970367943244,
+      "s2_usage": 1.0
+    },
+    "test_hd_comb": {
+      "accuracy": 73.0,
+      "episodes": 400,
+      "margin": 0.17141401619302127,
+      "s2_usage": 1.0
+    },
+    "test_hd_novel": {
+      "accuracy": 74.375,
+      "episodes": 320,
+      "margin": 0.21857688788371568,
+      "s2_usage": 1.0
+    }
+  },
+  "baseline_comparison": {
+    "Method": [
+      "Your Hybrid Dual-System \u2b50",
+      "Meta-Baseline-PS",
+      "Meta-Baseline-MoCo",
+      "ProtoNet",
+      "SNAIL",
+      "MetaOptNet",
+      "ANIL",
+      "WReN-Bongard",
+      "CNN-Baseline",
+      "Human (Expert)",
+      "Human (Amateur)"
+    ],
+    "test_ff": [
+      100.0,
+      68.2,
+      65.9,
+      64.6,
+      56.3,
+      60.3,
+      56.6,
+      50.1,
+      51.9,
+      92.1,
+      88.0
+    ],
+    "test_bd": [
+      92.70833333333334,
+      75.7,
+      72.2,
+      72.4,
+      60.2,
+      71.7,
+      59.0,
+      50.9,
+      56.6,
+      99.3,
+      90.0
+    ],
+    "test_hd_comb": [
+      73.0,
+      67.4,
+      63.9,
+      62.4,
+      60.1,
+      61.7,
+      59.6,
+      53.8,
+      53.6,
+      90.7,
+      71.0
+    ],
+    "test_hd_novel": [
+      74.375,
+      71.5,
+      64.7,
+      65.4,
+      61.3,
+      63.3,
+      61.0,
+      54.3,
+      57.6,
+      90.7,
+      71.0
+    ]
+  },
+  "improvements": {
+    "test_ff": 31.799999999999997,
+    "test_bd": 17.00833333333334,
+    "test_hd_comb": 5.599999999999994,
+    "test_hd_novel": 2.875
+  },
+  "bootstrap_ci": {
+    "test_ff": {
+      "observed": 100.0,
+      "ci_lower": 100.0,
+      "ci_upper": 100.0,
+      "std_error": 0.0
+    },
+    "test_bd": {
+      "observed": 92.70833333333334,
+      "ci_lower": 90.41145833333334,
+      "ci_upper": 95.0,
+      "std_error": 1.1816873639172365
+    },
+    "test_hd_comb": {
+      "observed": 73.0,
+      "ci_lower": 68.5,
+      "ci_upper": 77.25,
+      "std_error": 2.197327567182463
+    },
+    "test_hd_novel": {
+      "observed": 74.375,
+      "ci_lower": 69.375,
+      "ci_upper": 79.0625,
+      "std_error": 2.4136599381178367
+    }
+  }
+}
