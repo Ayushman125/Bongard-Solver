@@ -528,7 +528,7 @@ for cap in cap_grid:
 ```bash
 # Clone repository
 git clone https://github.com/Ayushman125/Bongard-Solver.git
-cd BongardSolver
+cd Bongard-Solver
 
 # Create virtual environment
 python -m venv venv
@@ -726,9 +726,9 @@ If you use this work in your research, please cite:
 ```bibtex
 @misc{bongard-dual-system-2026,
   title={Hybrid Dual-System Architecture for Human-Level Visual Concept Learning},
-  author={Your Name},
+  author={Ayushman Saini},
   year={2026},
-  howpublished={\url{https://github.com/yourusername/BongardSolver}},
+  howpublished={\url{https://github.com/Ayushman125/Bongard-Solver}},
   note={Achieves SOTA on BONGARD-LOGO benchmark with 100\% accuracy on free-form shapes}
 }
 ```
@@ -777,8 +777,9 @@ MIT License - see `LICENSE` for details.
 ## 📧 Contact
 
 For questions, issues, or collaboration:
-- **GitHub Issues**: [Project Issues](https://github.com/yourusername/BongardSolver/issues)
-- **Email**: your.email@example.com
+- **GitHub Issues**: [Project Issues](https://github.com/Ayushman125/Bongard-Solver/issues)
+- **GitHub Discussions**: [Discussions](https://github.com/Ayushman125/Bongard-Solver/discussions)
+- **Email**: ayushmansaini120@gmail.com
 
 ---
 

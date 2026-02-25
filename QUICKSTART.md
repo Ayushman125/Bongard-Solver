@@ -436,7 +436,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 - **Documentation**: [README.md](README.md), [docs/](docs/)
 - **Issues**: [GitHub Issues](https://github.com/Ayushman125/Bongard-Solver/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/Ayushman125/Bongard-Solver/discussions)
-- **Email**: bongard.solver@example.com
+- **Email**: ayushmansaini120@gmail.com
 
 ---
 

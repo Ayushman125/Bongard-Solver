@@ -3,8 +3,9 @@ message: "If you use this software, please cite it as below."
 title: "Hybrid Dual-System Solver for BONGARD-LOGO"
 abstract: "A neuro-symbolic architecture combining fast neural pattern recognition (System 1, ResNet-15 with self-supervised rotation pretraining) with deliberative Bayesian rule induction (System 2) via meta-learned arbitration. Achieves state-of-the-art performance on BONGARD-LOGO benchmark: 100%/92.7%/73.0%/73.4% on test_ff/bd/hd_comb/hd_novel splits, surpassing previous SOTA by +31.8% on free-form concepts."
 authors:
-  - family-names: "BongardSolver"
-    given-names: "Contributors"
+  - family-names: "Saini"
+    given-names: "Ayushman"
+    email: "ayushmansaini120@gmail.com"
 repository-code: "https://github.com/Ayushman125/Bongard-Solver"
 keywords:
   - few-shot learning
